@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "npm run build -w bots/gaia"
+    "buildCommand": "npm run build -w packages/shared && npm run build -w bots/gaia"
   },
   "deploy": {
     "startCommand": "node bots/gaia/dist/index.js",
