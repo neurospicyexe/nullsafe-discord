@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "paths": {
+      "@nullsafe/shared": ["../../packages/shared/src/index.js"],
+      "@nullsafe/shared/*": ["../../packages/shared/src/*.js"]
+    }
+  },
+  "include": ["src"]
+}

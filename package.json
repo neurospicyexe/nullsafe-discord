@@ -1,0 +1,9 @@
+{
+  "name": "nullsafe-discord",
+  "private": true,
+  "workspaces": ["packages/*", "bots/*"],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm test --workspaces --if-present"
+  }
+}
