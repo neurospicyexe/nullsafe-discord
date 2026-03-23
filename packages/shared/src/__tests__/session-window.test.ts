@@ -1,3 +1,4 @@
+import { jest, describe, it, expect } from "@jest/globals";
 import { SessionWindow } from "../session-window.js";
 
 describe("SessionWindow", () => {

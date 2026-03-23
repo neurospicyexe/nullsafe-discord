@@ -1,3 +1,4 @@
+import { describe, it, expect } from "@jest/globals";
 import { shouldRespond, ChannelConfigCache } from "../channel-config.js";
 
 const config = {

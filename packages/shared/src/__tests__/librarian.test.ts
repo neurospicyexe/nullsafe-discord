@@ -1,3 +1,4 @@
+import { jest, describe, it, expect } from "@jest/globals";
 import { LibrarianClient } from "../librarian.js";
 
 describe("LibrarianClient.ask()", () => {

@@ -1,3 +1,4 @@
+import { jest, describe, it, expect } from "@jest/globals";
 import { createAdapter } from "../inference.js";
 import type { ChatMessage } from "../types.js";
 

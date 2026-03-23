@@ -1,3 +1,4 @@
+import { describe, it, expect } from "@jest/globals";
 import { meetsNoteThreshold } from "../memory.js";
 
 describe("meetsNoteThreshold()", () => {

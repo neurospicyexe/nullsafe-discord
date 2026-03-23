@@ -1,3 +1,4 @@
+import { jest, describe, it, expect } from "@jest/globals";
 import { resolveAttribution } from "../pluralkit.js";
 import type { Attribution } from "../types.js";
 

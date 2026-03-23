@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest --passWithNoTests"
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --passWithNoTests"
   },
   "devDependencies": {
     "typescript": "^5.4.0",
