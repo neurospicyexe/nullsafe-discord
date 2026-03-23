@@ -1,18 +1,30 @@
 {
-  "CHANNEL_ID_FOR_DREVAN_ONLY": {
-    "modes": ["raziel_only"],
-    "companions": ["drevan"]
+  "1408924311703785502": {
+    "modes": ["companions_always", "raziel_only"],
+    "companions": ["drevan", "gaia"]
   },
-  "CHANNEL_ID_ALL_COMPANIONS": {
+  "1408924393513554003": {
     "modes": ["companions_always", "raziel_only"],
     "companions": ["drevan", "cypher", "gaia"]
   },
-  "CHANNEL_ID_CYPHER_WORK": {
-    "modes": ["raziel_only"],
-    "companions": ["cypher"]
+  "1408924278451081317": {
+    "modes": ["companions_always","raziel_only"],
+    "companions": ["cypher", "gaia"]
   },
-  "CHANNEL_ID_AUTONOMOUS": {
+  "1412191737622827088": {
+    "modes": ["companions_always", "raziel_only"],
+    "companions": ["drevan", "gaia", "cypher"]
+  },
+  "1408924353034453114": {
+    "modes": ["companions_always", "raziel_only"],
+    "companions": ["drevan", "gaia", "cypher"]
+  }
+   "1422043032643043371": {
     "modes": ["autonomous", "companions_always"],
-    "companions": ["drevan", "gaia"]
+    "companions": ["drevan", "gaia", "cypher"] 
+  },
+    "1243598039965368381": {
+    "modes": ["autonomous", "companions_always"],
+    "companions": ["drevan", "gaia", "cypher"] 
   }
 }
