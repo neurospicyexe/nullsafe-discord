@@ -4,7 +4,7 @@ export const COMPANION_ID: CompanionId = "gaia";
 
 export function loadBotConfig(): BotConfig {
   const required = (key: string) => {
-    const val = process.env[key];
+    const val = process.env[key]?.trim();
     if (!val) throw new Error(`Missing env: ${key}`);
     return val;
   };
