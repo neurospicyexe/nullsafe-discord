@@ -8,32 +8,32 @@ describe("resolveAttribution()", () => {
   it("non-webhook Raziel message → direct attribution", async () => {
     const msg = { webhookId: null, author: { id: RAZIEL_ID, bot: false }, id: "m1" };
     const result = await resolveAttribution(msg as any, RAZIEL_ID, mockFetch());
-    expect(result).toMatchObject<Partial<Attribution>>({
+    expect(result).toMatchObject({
       isRaziel: true, source: "direct", frontState: "unknown"
-    });
+    } satisfies Partial<Attribution>);
   });
 
   it("PK webhook for Raziel → pluralkit attribution with member", async () => {
     const pkData = { sender: RAZIEL_ID, member: { name: "Ash" } };
     const msg = { webhookId: "wh1", author: { id: "wh1", bot: true }, id: "m2" };
     const result = await resolveAttribution(msg as any, RAZIEL_ID, mockFetch(pkData));
-    expect(result).toMatchObject<Partial<Attribution>>({
+    expect(result).toMatchObject({
       isRaziel: true, source: "pluralkit", frontMember: "Ash", frontState: "known"
-    });
+    } satisfies Partial<Attribution>);
   });
 
   it("PK API timeout → fallback as Raziel direct, frontState unknown", async () => {
     const msg = { webhookId: "wh1", author: { id: "wh1", bot: true }, id: "m3" };
     const result = await resolveAttribution(msg as any, RAZIEL_ID, mockFetch(null, true));
-    expect(result).toMatchObject<Partial<Attribution>>({
+    expect(result).toMatchObject({
       isRaziel: true, source: "fallback", frontState: "unknown"
-    });
+    } satisfies Partial<Attribution>);
   });
 
   it("non-Raziel user → isRaziel false", async () => {
     const msg = { webhookId: null, author: { id: "other", bot: false }, id: "m4" };
     const result = await resolveAttribution(msg as any, RAZIEL_ID, mockFetch());
-    expect(result).toMatchObject<Partial<Attribution>>({ isRaziel: false });
+    expect(result).toMatchObject({ isRaziel: false } satisfies Partial<Attribution>);
   });
 });
 
