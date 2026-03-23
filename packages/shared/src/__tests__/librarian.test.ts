@@ -9,7 +9,7 @@ describe("LibrarianClient.ask()", () => {
         jsonrpc: "2.0", id: 1,
         result: { content: [{ type: "text", text: JSON.stringify({ session_id: "s1" }) }] },
       }),
-    });
+    } as any);
     const client = new LibrarianClient({
       url: "https://example.com",
       secret: "test-secret",
@@ -21,7 +21,7 @@ describe("LibrarianClient.ask()", () => {
   });
 
   it("throws after retry on 5xx", async () => {
-    const mockFetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+    const mockFetch = jest.fn().mockResolvedValue({ ok: false, status: 503 } as any);
     const client = new LibrarianClient({
       url: "https://example.com",
       secret: "test-secret",
