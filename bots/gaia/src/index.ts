@@ -26,19 +26,20 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     companionId: COMPANION_ID,
   });
 
+  const cache = JSON.parse(readFileSync(join(__dir, "../identity-cache.json"), "utf8")) as { system_prompt: string };
   try {
     const state = await librarian.sessionOpen("work");
     const sessionId = String(state["session_id"] ?? "unknown");
-    const systemPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "");
+    const rawPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "").trim();
+    const systemPrompt = rawPrompt || cache.system_prompt;
     const frontState = String(state["front_state"] ?? "unknown");
-    console.log(`[gaia] session opened: ${sessionId}, front: ${frontState}`);
+    console.log(`[gaia] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "halseth" : "cache"}`);
     return {
-      bootCtx: { companionId: COMPANION_ID, systemPrompt, sessionId, frontState, fromCache: false },
+      bootCtx: { companionId: COMPANION_ID, systemPrompt, sessionId, frontState, fromCache: !rawPrompt },
       librarian,
     };
   } catch (e) {
     console.warn("[gaia] Halseth unreachable at boot, loading identity cache:", e);
-    const cache = JSON.parse(readFileSync(join(__dir, "../identity-cache.json"), "utf8")) as { system_prompt: string };
     return {
       bootCtx: {
         companionId: COMPANION_ID,
