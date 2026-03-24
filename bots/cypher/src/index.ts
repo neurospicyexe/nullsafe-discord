@@ -26,12 +26,15 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     companionId: COMPANION_ID,
   });
 
-  const cache = JSON.parse(readFileSync(join(__dir, "../identity-cache.json"), "utf8")) as { system_prompt: string };
+  let cache: { system_prompt: string } | null = null;
+  try { cache = JSON.parse(readFileSync(join(__dir, "../identity-cache.json"), "utf8")); }
+  catch { console.warn("[cypher] identity-cache.json missing or corrupt, cache fallback unavailable"); }
+
   try {
     const state = await librarian.sessionOpen("work");
     const sessionId = String(state["session_id"] ?? "unknown");
     const rawPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "").trim();
-    const systemPrompt = rawPrompt || cache.system_prompt;
+    const systemPrompt = rawPrompt || cache?.system_prompt || IN_CHARACTER_FALLBACK;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[cypher] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "halseth" : "cache"}`);
     return {
@@ -43,7 +46,7 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     return {
       bootCtx: {
         companionId: COMPANION_ID,
-        systemPrompt: cache.system_prompt,
+        systemPrompt: cache?.system_prompt ?? IN_CHARACTER_FALLBACK,
         sessionId: "cached",
         frontState: "unknown",
         fromCache: true,
@@ -90,6 +93,9 @@ async function main() {
     30 * 60 * 1000,
     (channelId: string) => { onChannelInactive(channelId, channelHistory, librarian, inference).catch(() => {}); },
   );
+  // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
+  const sentIds = new Set<string>();
+  const SENT_IDS_CAP = 500;
 
   let systemPrompt = bootCtx.systemPrompt;
 
@@ -125,7 +131,8 @@ async function main() {
       isMentioned: message.mentions.has(client.user!.id),
     };
 
-    if (!shouldRespond(message.channelId, senderCtx, COMPANION_ID, channelConfig)) return;
+    const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
+    if (!isReplyToMe && !shouldRespond(message.channelId, senderCtx, COMPANION_ID, channelConfig)) return;
 
     const history = channelHistory.get(message.channelId) ?? [];
     const memberLabel = attribution.frontMember
@@ -156,7 +163,9 @@ async function main() {
       return;
     }
 
-    await ch.send(response);
+    const sent = await ch.send(response);
+    sentIds.add(sent.id);
+    if (sentIds.size > SENT_IDS_CAP) sentIds.delete(sentIds.values().next().value!);
     history.push({ role: "assistant", content: response });
     channelHistory.set(message.channelId, history);
 

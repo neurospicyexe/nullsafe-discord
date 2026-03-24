@@ -1,5 +1,7 @@
 import type { ChannelConfig, ChannelMode, CompanionId } from "./types.js";
 
+// Mirrors channel-config.json -- keep in sync manually.
+// Used as fallback when channelConfigUrl is unreachable (network hiccup, private URL misconfigured).
 export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1408924311703785502": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "gaia"] },
   "1408924393513554003": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "cypher", "gaia"] },

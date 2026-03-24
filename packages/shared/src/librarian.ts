@@ -59,7 +59,9 @@ export class LibrarianClient {
       const contentType = res.headers.get("content-type") ?? "";
       let rawBody: string;
       if (contentType.includes("text/event-stream")) {
-        // MCP StreamableHTTP returns SSE -- extract last data: line
+        // MCP StreamableHTTP returns SSE -- extract last data: line.
+        // Assumes single-event responses; if Librarian ever streams multi-event SSE,
+        // earlier events are discarded. Revisit if that changes.
         const body = await res.text();
         const dataLine = body.split("\n").filter(l => l.startsWith("data:")).pop();
         rawBody = dataLine ? dataLine.slice(5).trim() : "{}";
@@ -68,7 +70,10 @@ export class LibrarianClient {
       }
 
       let json: { result?: { content: Array<{ type: string; text: string }> }; error?: { message: string } };
-      try { json = JSON.parse(rawBody); } catch { return { raw: rawBody }; }
+      try { json = JSON.parse(rawBody); } catch (e) {
+        console.warn("[librarian] JSON parse failed:", String(e), "raw:", rawBody.slice(0, 200));
+        throw new Error(`Librarian response unparseable: ${rawBody.slice(0, 100)}`);
+      }
 
       if (json.error) throw new Error(`Librarian error: ${json.error.message}`);
 
@@ -110,6 +115,28 @@ export class LibrarianClient {
 
   async bridgePull() {
     return this.ask("check bridge events");
+  }
+
+  // ── Drevan v2 state ────────────────────────────────────────────────────────
+
+  async getDrevanState() {
+    return this.ask("get drevan state");
+  }
+
+  async addLiveThread(params: { name: string; flavor?: string; charge?: string; notes?: string }) {
+    return this.ask("add live thread", JSON.stringify(params));
+  }
+
+  async closeLiveThread(threadId: string) {
+    return this.ask("close live thread", JSON.stringify({ id: threadId }));
+  }
+
+  async vetoProposedThread(threadId: string) {
+    return this.ask("veto thread", JSON.stringify({ id: threadId }));
+  }
+
+  async setAnticipation(params: { active: boolean; target?: string; intensity?: number }) {
+    return this.ask("set anticipation", JSON.stringify(params));
   }
 }
 
