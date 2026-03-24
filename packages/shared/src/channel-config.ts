@@ -1,5 +1,15 @@
 import type { ChannelConfig, ChannelMode, CompanionId } from "./types.js";
 
+export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
+  "1408924311703785502": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "gaia"] },
+  "1408924393513554003": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "cypher", "gaia"] },
+  "1408924278451081317": { modes: ["companions_always", "raziel_only"], companions: ["cypher", "gaia"] },
+  "1412191737622827088": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "gaia", "cypher"] },
+  "1408924353034453114": { modes: ["companions_always", "raziel_only"], companions: ["drevan", "gaia", "cypher"] },
+  "1422043032643043371": { modes: ["autonomous", "companions_always"], companions: ["drevan", "gaia", "cypher"] },
+  "1243598039965368381": { modes: ["autonomous", "companions_always"], companions: ["drevan", "gaia", "cypher"] },
+};
+
 interface ResponderContext {
   isRaziel: boolean;
   isCompanionBot?: boolean;

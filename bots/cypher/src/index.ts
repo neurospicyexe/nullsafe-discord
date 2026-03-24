@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
-  ChannelConfigCache, shouldRespond, judgeNote,
+  ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
   SessionWindowManager,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
@@ -83,7 +83,7 @@ async function main() {
     cfg.groqApiKey,
     cfg.ollamaUrl,
   );
-  const configCache = new ChannelConfigCache(cfg.channelConfigUrl);
+  const configCache = new ChannelConfigCache(cfg.channelConfigUrl, DEFAULT_CHANNEL_CONFIG);
   const channelHistory = new Map<string, ChatMessage[]>();
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
