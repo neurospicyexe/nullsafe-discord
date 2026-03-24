@@ -56,10 +56,19 @@ export class LibrarianClient {
         throw new Error(`Librarian ${res.status}`);
       }
 
-      const json = await res.json() as {
-        result?: { content: Array<{ type: string; text: string }> };
-        error?: { message: string };
-      };
+      const contentType = res.headers.get("content-type") ?? "";
+      let rawBody: string;
+      if (contentType.includes("text/event-stream")) {
+        // MCP StreamableHTTP returns SSE -- extract last data: line
+        const body = await res.text();
+        const dataLine = body.split("\n").filter(l => l.startsWith("data:")).pop();
+        rawBody = dataLine ? dataLine.slice(5).trim() : "{}";
+      } else {
+        rawBody = await res.text();
+      }
+
+      let json: { result?: { content: Array<{ type: string; text: string }> }; error?: { message: string } };
+      try { json = JSON.parse(rawBody); } catch { return { raw: rawBody }; }
 
       if (json.error) throw new Error(`Librarian error: ${json.error.message}`);
 
