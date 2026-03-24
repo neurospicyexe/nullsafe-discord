@@ -1,15 +1,14 @@
 export type CompanionId = "drevan" | "cypher" | "gaia";
 
 export type ChannelMode =
-  | "raziel_only"
-  | "open"
-  | "companions_always"
-  | "companions_mentioned"
-  | "autonomous";
+  | "raziel_only"      // only Raziel messages trigger responses
+  | "open"             // anyone triggers responses; default when no config entry
+  | "inter_companion"  // companions respond to each other (loop-guarded by chain limit)
+  | "autonomous";      // companion may proactively post
 
 export interface ChannelEntry {
-  modes: ChannelMode[];
-  companions: CompanionId[];
+  companions?: CompanionId[];  // which companions are active; absent = all three
+  modes?: ChannelMode[];       // absent = ["open"]
 }
 
 export type ChannelConfig = Record<string, ChannelEntry>;

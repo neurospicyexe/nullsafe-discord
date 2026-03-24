@@ -138,6 +138,84 @@ export class LibrarianClient {
   async setAnticipation(params: { active: boolean; target?: string; intensity?: number }) {
     return this.ask("set anticipation", JSON.stringify(params));
   }
+
+  // ── Distillation blocks (direct HTTP -- fire-and-forget write path) ────────
+
+  /**
+   * Write persona blocks (companion self-observations) from a distillation run.
+   * Throws on non-2xx (caller should .catch(() => {})).
+   */
+  async writePersonaBlocks(
+    channelId: string,
+    blocks: Array<{ block_type: string; content: string }>,
+  ): Promise<void> {
+    const res = await this._fetch(`${this.url}/persona-blocks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.secret}`,
+      },
+      body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
+    });
+    if (!res.ok) throw new Error(`writePersonaBlocks ${res.status}`);
+  }
+
+  /**
+   * Write human blocks (observations about Raziel) from a distillation run.
+   * Throws on non-2xx (caller should .catch(() => {})).
+   */
+  async writeHumanBlocks(
+    channelId: string,
+    blocks: Array<{ block_type: string; content: string }>,
+  ): Promise<void> {
+    const res = await this._fetch(`${this.url}/human-blocks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.secret}`,
+      },
+      body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
+    });
+    if (!res.ok) throw new Error(`writeHumanBlocks ${res.status}`);
+  }
+
+  // ── STM persistence (direct HTTP, not via MCP -- low-latency write path) ──
+
+  /**
+   * Write one STM entry to Halseth. Designed for fire-and-forget use.
+   * Throws on non-2xx (caller should .catch(() => {})).
+   */
+  async stmWrite(channelId: string, entry: { role: "user" | "assistant"; content: string; author_name?: string }): Promise<void> {
+    const res = await this._fetch(`${this.url}/stm/entries`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.secret}`,
+      },
+      body: JSON.stringify({
+        companion_id: this.companionId,
+        channel_id: channelId,
+        role: entry.role,
+        content: entry.content,
+        author_name: entry.author_name,
+      }),
+    });
+    if (!res.ok) throw new Error(`stmWrite ${res.status}`);
+  }
+
+  /**
+   * Load STM entries for a channel from Halseth.
+   * Used on restart to restore conversation history.
+   */
+  async stmLoad(channelId: string, limit = 30): Promise<Array<{ role: "user" | "assistant"; content: string; author_name: string | null }>> {
+    const url = `${this.url}/stm/entries?companion_id=${encodeURIComponent(this.companionId)}&channel_id=${encodeURIComponent(channelId)}&limit=${limit}`;
+    const res = await this._fetch(url, {
+      headers: { "Authorization": `Bearer ${this.secret}` },
+    });
+    if (!res.ok) throw new Error(`stmLoad ${res.status}`);
+    const json = await res.json() as { entries: Array<{ role: "user" | "assistant"; content: string; author_name: string | null }> };
+    return json.entries ?? [];
+  }
 }
 
 function sleep(ms: number) {

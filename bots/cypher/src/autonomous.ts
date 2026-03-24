@@ -1,8 +1,9 @@
 import cron from "node-cron";
 import { Client, TextChannel } from "discord.js";
 import type {
-  LibrarianClient, InferenceAdapter, ChannelConfigCache, ChatMessage, BootContext, ChannelEntry,
+  LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry,
 } from "@nullsafe/shared";
+import { ALL_COMPANIONS } from "@nullsafe/shared";
 import {
   CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -49,14 +50,13 @@ export function startAutonomous(
   inference: InferenceAdapter,
   client: Client,
   configCache: ChannelConfigCache,
-  _channelHistory: Map<string, ChatMessage[]>,
   bootCtx: BootContext,
 ): void {
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.taskCheck, async () => {
     const config = await configCache.get();
     for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!entry.companions.includes(COMPANION_ID)) continue;
-      if (!entry.modes.includes("autonomous")) continue;
+      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
+      if (!(entry.modes ?? []).includes("autonomous")) continue;
       if (isOnCooldown(channelId)) continue;
       const msg = await inference.generate(
         bootCtx.systemPrompt,
@@ -69,8 +69,8 @@ export function startAutonomous(
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.weeklyAudit, async () => {
     const config = await configCache.get();
     for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!entry.companions.includes(COMPANION_ID)) continue;
-      if (!entry.modes.includes("autonomous")) continue;
+      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
+      if (!(entry.modes ?? []).includes("autonomous")) continue;
       if (isOnCooldown(channelId)) continue;
       const msg = await inference.generate(
         bootCtx.systemPrompt,
@@ -90,8 +90,8 @@ export function startAutonomous(
 
         const config = await configCache.get();
         for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-          if (!entry.companions.includes(COMPANION_ID)) continue;
-          if (!entry.modes.includes("autonomous") && !entry.modes.includes("raziel_only")) continue;
+          if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
+          if (!(entry.modes ?? []).includes("autonomous") && !(entry.modes ?? []).includes("raziel_only")) continue;
           if (isOnCooldown(channelId)) continue;
 
           const response = await inference.generate(

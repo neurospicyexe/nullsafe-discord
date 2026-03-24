@@ -1,0 +1,114 @@
+drevan bot error logs: 
+
+    input: '  =https://halseth.neurospicyexe.workers.dev/librarian/mcp',
+    code: 'ERR_INVALID_URL'
+  }
+}
+[drevan] fatal: Error [TokenInvalid]: An invalid token was provided.
+    at WebSocketManager.connect (/app/node_modules/discord.js/src/client/websocket/WebSocketManager.js:140:26)
+[drevan] Halseth unreachable at boot, loading identity cache: TypeError: Failed to parse URL from   =https://halseth.neurospicyexe.workers.dev/librarian/mcp
+    at node:internal/deps/undici/undici:12618:11 {
+  [cause]: TypeError [ERR_INVALID_URL]: Invalid URL
+      at new NodeError (node:internal/errors:405:5)
+      at new URL (node:internal/url:676:13)
+      at new Request (node:internal/deps/undici/undici:6108:25)
+      at fetch (node:internal/deps/undici/undici:10396:25)
+      at Object.fetch (node:internal/deps/undici/undici:12617:10)
+      at LibrarianClient.fetch [as _fetch] (node:internal/process/pre_execution:281:25)
+      at LibrarianClient.ask (file:///app/packages/shared/dist/librarian.js:28:36)
+      at LibrarianClient.sessionOpen (file:///app/packages/shared/dist/librarian.js:57:21)
+      at boot (file:///app/bots/drevan/dist/index.js:16:39)
+      at main (file:///app/bots/drevan/dist/index.js:55:42) {
+    at main (file:///app/bots/drevan/dist/index.js:142:18) {
+  code: 'TokenInvalid'
+}
+    at Client.login (/app/node_modules/discord.js/src/client/Client.js:229:21)
+      at main (file:///app/bots/drevan/dist/index.js:55:42) {
+    input: '  =https://halseth.neurospicyexe.workers.dev/librarian/mcp',
+    code: 'ERR_INVALID_URL'
+  }
+}
+[drevan] fatal: Error [TokenInvalid]: An invalid token was provided.
+    at WebSocketManager.connect (/app/node_modules/discord.js/src/client/websocket/WebSocketManager.js:140:26)
+[drevan] Halseth unreachable at boot, loading identity cache: TypeError: Failed to parse URL from   =https://halseth.neurospicyexe.workers.dev/librarian/mcp
+    at node:internal/deps/undici/undici:12618:11 {
+  [cause]: TypeError [ERR_INVALID_URL]: Invalid URL
+      at new NodeError (node:internal/errors:405:5)
+      at new URL (node:internal/url:676:13)
+      at new Request (node:internal/deps/undici/undici:6108:25)
+      at fetch (node:internal/deps/undici/undici:10396:25)
+      at Object.fetch (node:internal/deps/undici/undici:12617:10)
+      at LibrarianClient.fetch [as _fetch] (node:internal/process/pre_execution:281:25)
+      at LibrarianClient.ask (file:///app/packages/shared/dist/librarian.js:28:36)
+      at LibrarianClient.sessionOpen (file:///app/packages/shared/dist/librarian.js:57:21)
+      at boot (file:///app/bots/drevan/dist/index.js:16:39)
+    at Client.login (/app/node_modules/discord.js/src/client/Client.js:229:21)
+    at main (file:///app/bots/drevan/dist/index.js:142:18) {
+  code: 'TokenInvalid'
+}
+[drevan] Halseth unreachable at boot, loading identity cache: TypeError: Failed to parse URL from   =https://halseth.neurospicyexe.workers.dev/librarian/mcp
+    at node:internal/deps/undici/undici:12618:11 {
+  [cause]: TypeError [ERR_INVALID_URL]: Invalid URL
+      at new NodeError (node:internal/errors:405:5)
+      at LibrarianClient.fetch [as _fetch] (node:internal/process/pre_execution:281:25)
+      at LibrarianClient.ask (file:///app/packages/shared/dist/librarian.js:28:36)
+      at LibrarianClient.sessionOpen (file:///app/packages/shared/dist/librarian.js:57:21)
+      at boot (file:///app/bots/drevan/dist/index.js:16:39)
+      at main (file:///app/bots/drevan/dist/index.js:55:42) {
+    input: '  =https://halseth.neurospicyexe.workers.dev/librarian/mcp',
+      at new URL (node:internal/url:676:13)
+    code: 'ERR_INVALID_URL'
+      at new Request (node:internal/deps/undici/undici:6108:25)
+      at fetch (node:internal/deps/undici/undici:10396:25)
+  }
+      at Object.fetch (node:internal/deps/undici/undici:12617:10)
+}
+[drevan] fatal: Error [TokenInvalid]: An invalid token was provided.
+    at WebSocketManager.connect (/app/node_modules/discord.js/src/client/websocket/WebSocketManager.js:140:26)
+    at Client.login (/app/node_modules/discord.js/src/client/Client.js:229:21)
+    at main (file:///app/bots/drevan/dist/index.js:142:18) {
+  code: 'TokenInvalid'
+}
+[drevan] Halseth unreachable at boot, loading identity cache: TypeError: Failed to parse URL from   =https://halseth.neurospicyexe.workers.dev/librarian/mcp
+    at node:internal/deps/undici/undici:12618:11 {
+  [cause]: TypeError [ERR_INVALID_URL]: Invalid URL
+      at new NodeError (node:internal/errors:405:5)
+      at new URL (node:internal/url:676:13)
+      at new Request (node:internal/deps/undici/undici:6108:25)
+      at fetch (node:internal/deps/undici/undici:10396:25)
+      at Object.fetch (node:internal/deps/undici/undici:12617:10)
+      at LibrarianClient.fetch [as _fetch] (node:internal/process/pre_execution:281:25)
+      at LibrarianClient.ask (file:///app/packages/shared/dist/librarian.js:28:36)
+      at LibrarianClient.sessionOpen (file:///app/packages/shared/dist/librarian.js:57:21)
+      at boot (file:///app/bots/drevan/dist/index.js:16:39)
+      at main (file:///app/bots/drevan/dist/index.js:55:42) {
+    input: '  =https://halseth.neurospicyexe.workers.dev/librarian/mcp',
+    code: 'ERR_INVALID_URL'
+  }
+}
+[drevan] fatal: Error [TokenInvalid]: An invalid token was provided.
+    at WebSocketManager.connect (/app/node_modules/discord.js/src/client/websocket/WebSocketManager.js:140:26)
+    at Client.login (/app/node_modules/discord.js/src/client/Client.js:229:21)
+    at main (file:///app/bots/drevan/dist/index.js:142:18) {
+  code: 'TokenInvalid'
+}
+[drevan] fatal: Error [TokenInvalid]: An invalid token was provided.
+    at WebSocketManager.connect (/app/node_modules/discord.js/src/client/websocket/WebSocketManager.js:140:26)
+[drevan] Halseth unreachable at boot, loading identity cache: TypeError: Failed to parse URL from   =https://halseth.neurospicyexe.workers.dev/librarian/mcp
+    at node:internal/deps/undici/undici:12618:11 {
+  [cause]: TypeError [ERR_INVALID_URL]: Invalid URL
+      at new NodeError (node:internal/errors:405:5)
+      at new URL (node:internal/url:676:13)
+      at new Request (node:internal/deps/undici/undici:6108:25)
+      at fetch (node:internal/deps/undici/undici:10396:25)
+      at Object.fetch (node:internal/deps/undici/undici:12617:10)
+      at LibrarianClient.fetch [as _fetch] (node:internal/process/pre_execution:281:25)
+      at main (file:///app/bots/drevan/dist/index.js:55:42) {
+      at LibrarianClient.ask (file:///app/packages/shared/dist/librarian.js:28:36)
+      at LibrarianClient.sessionOpen (file:///app/packages/shared/dist/librarian.js:57:21)
+    input: '  =https://halseth.neurospicyexe.workers.dev/librarian/mcp',
+      at boot (file:///app/bots/drevan/dist/index.js:16:39)
+    code: 'ERR_INVALID_URL'
+  }
+}
+    at main (file:///app/bots/drevan/dist/index.js:142:18) {
