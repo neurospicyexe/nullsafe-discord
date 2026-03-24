@@ -5,3 +5,4 @@ export * from "./inference.js";
 export * from "./channel-config.js";
 export * from "./memory.js";
 export * from "./session-window.js";
+export * from "./stm.js";

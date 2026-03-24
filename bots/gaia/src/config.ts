@@ -38,4 +38,5 @@ export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 export const COOLDOWN_MS = 60 * 1000;
 export const CONTEXT_WINDOW_SIZE = 10;
+export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "present.";

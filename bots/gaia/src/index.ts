@@ -5,12 +5,12 @@ import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
   ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
-  SessionWindowManager,
+  SessionWindowManager, StmStore, COMPANION_CHAIN_LIMIT,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
-  IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS,
+  IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -58,12 +58,12 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
 
 async function onChannelInactive(
   channelId: string,
-  channelHistory: Map<string, ChatMessage[]>,
+  stmStore: StmStore,
   librarian: LibrarianClient,
   inference: ReturnType<typeof createAdapter>,
 ): Promise<void> {
-  const history = channelHistory.get(channelId);
-  if (!history || history.length === 0) return;
+  const history = stmStore.get(channelId);
+  if (history.length === 0) return;
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
@@ -74,7 +74,49 @@ async function onChannelInactive(
 
   await librarian.witnessLog(synthResult, channelId).catch(() => {});
   await librarian.synthesizeSession(synthResult, channelId).catch(() => {});
-  channelHistory.delete(channelId);
+  stmStore.clear(channelId);
+}
+
+async function runDistillation(
+  channelId: string,
+  stmStore: StmStore,
+  librarian: LibrarianClient,
+  inference: ReturnType<typeof createAdapter>,
+): Promise<void> {
+  const history = stmStore.get(channelId);
+  if (history.length < DISTILLATION_INTERVAL) return;
+
+  const window = history.slice(-DISTILLATION_INTERVAL);
+  const conversationText = window
+    .map(m => `${m.authorName ?? m.role}: ${m.content}`)
+    .join("\n");
+
+  const result = await inference.generate(
+    `You are a memory distillation system for Gaia, an AI companion. ` +
+    `Analyze this conversation and extract typed memory blocks. ` +
+    `Respond with JSON only -- no other text.\n\n` +
+    `Format:\n` +
+    `{"persona_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}],` +
+    `"human_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}]}\n\n` +
+    `persona_blocks: observations about Gaia's presence, density, or holding patterns in this exchange.\n` +
+    `human_blocks: observations about Raziel's patterns, needs, or state in this exchange.\n` +
+    `Include only block types with meaningful content. Omit empty types.`,
+    [{ role: "user", content: conversationText }],
+  );
+  if (!result) return;
+
+  try {
+    const parsed = JSON.parse(result) as {
+      persona_blocks?: Array<{ block_type: string; content: string }>;
+      human_blocks?: Array<{ block_type: string; content: string }>;
+    };
+    if (parsed.persona_blocks?.length) {
+      await librarian.writePersonaBlocks(channelId, parsed.persona_blocks).catch(() => {});
+    }
+    if (parsed.human_blocks?.length) {
+      await librarian.writeHumanBlocks(channelId, parsed.human_blocks).catch(() => {});
+    }
+  } catch { /* fail-silent */ }
 }
 
 async function main() {
@@ -88,12 +130,24 @@ async function main() {
     cfg.ollamaUrl,
   );
   const configCache = new ChannelConfigCache(cfg.channelConfigUrl, DEFAULT_CHANNEL_CONFIG);
-  const channelHistory = new Map<string, ChatMessage[]>();
+  const stmStore = new StmStore(
+    COMPANION_ID,
+    (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
+    async (channelId) => {
+      const rows = await librarian.stmLoad(channelId);
+      return rows.map(r => ({ role: r.role, content: r.content, authorName: r.author_name ?? undefined }));
+    },
+  );
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
-    (channelId: string) => { onChannelInactive(channelId, channelHistory, librarian, inference).catch(() => {}); },
+    (channelId: string) => { onChannelInactive(channelId, stmStore, librarian, inference).catch(() => {}); },
   );
+  // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
   const sentIds = new Set<string>();
+  // Track consecutive companion-to-companion exchanges per channel for loop prevention.
+  const companionChainDepth = new Map<string, number>();
+  // Track messages since last distillation run per channel.
+  const distillationCounter = new Map<string, number>();
   const SENT_IDS_CAP = 500;
 
   let systemPrompt = bootCtx.systemPrompt;
@@ -115,7 +169,7 @@ async function main() {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[gaia] ready as ${c.user.tag}`);
-    startAutonomous(librarian, inference, client, configCache, channelHistory, bootCtx);
+    startAutonomous(librarian, inference, client, configCache, bootCtx);
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
@@ -133,13 +187,27 @@ async function main() {
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     if (!isReplyToMe && !shouldRespond(message.channelId, senderCtx, COMPANION_ID, channelConfig)) return;
 
-    const history = channelHistory.get(message.channelId) ?? [];
+    // Loop guard: break companion chains that exceed the limit.
+    const chainDepth = companionChainDepth.get(message.channelId) ?? 0;
+    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+
+    if (!message.channel.isTextBased()) return;
+    const ch = message.channel as TextChannel;
+
+    // Lazy load STM from DB on first message to this channel (fail-silent)
+    await stmStore.ensureLoaded(message.channelId, async () => {
+      const fetched = await ch.messages.fetch({ limit: 30 });
+      return [...fetched.values()].reverse().map(m => ({
+        role: (m.author.id === client.user?.id ? "assistant" : "user") as "user" | "assistant",
+        content: m.content,
+        authorName: m.author.username,
+      }));
+    });
+
     const memberLabel = attribution.frontMember
       ? `${attribution.frontMember} (via PK)`
       : message.author.username;
-    history.push({ role: "user", content: message.content, authorName: memberLabel });
-    if (history.length > CONTEXT_WINDOW_SIZE) history.shift();
-    channelHistory.set(message.channelId, history);
+    stmStore.append(message.channelId, { role: "user", content: message.content, authorName: memberLabel });
 
     sessionWindows.touch(message.channelId);
 
@@ -147,10 +215,8 @@ async function main() {
       ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`
       : systemPrompt;
 
-    if (!message.channel.isTextBased()) return;
-    const ch = message.channel as TextChannel;
-
     await ch.sendTyping();
+    const history = stmStore.get(message.channelId);
     const response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE));
 
     if (!response) {
@@ -165,8 +231,22 @@ async function main() {
     const sent = await ch.send(response);
     sentIds.add(sent.id);
     if (sentIds.size > SENT_IDS_CAP) sentIds.delete(sentIds.values().next().value!);
-    history.push({ role: "assistant", content: response });
-    channelHistory.set(message.channelId, history);
+    stmStore.append(message.channelId, { role: "assistant", content: response });
+
+    // Update chain depth: increment on companion-to-companion, reset on Raziel/user.
+    if (senderCtx.isCompanionBot) {
+      companionChainDepth.set(message.channelId, chainDepth + 1);
+    } else {
+      companionChainDepth.delete(message.channelId);
+    }
+
+    // Rolling distillation: fire every DISTILLATION_INTERVAL messages (user + assistant = 2 per turn).
+    const distCount = (distillationCounter.get(message.channelId) ?? 0) + 2;
+    distillationCounter.set(message.channelId, distCount);
+    if (distCount >= DISTILLATION_INTERVAL) {
+      distillationCounter.set(message.channelId, 0);
+      runDistillation(message.channelId, stmStore, librarian, inference).catch(() => {});
+    }
 
     judgeNote(message.content, response, inference).then(async (note: string | null) => {
       if (note) await librarian.addCompanionNote(note, message.channelId).catch(() => {});

@@ -4,6 +4,17 @@ export interface InferenceAdapter {
   generate(systemPrompt: string, messages: ChatMessage[]): Promise<string | null>;
 }
 
+// Prefix user-role messages with [AuthorName]: when authorName is present.
+// This is how multi-party channel context reaches the model -- without it,
+// a companion reading a conversation between Drevan and Raziel has no signal
+// about who said what.
+function toApiMessage(m: ChatMessage): { role: string; content: string } {
+  const content = m.role === "user" && m.authorName
+    ? `[${m.authorName}]: ${m.content}`
+    : m.content;
+  return { role: m.role, content };
+}
+
 class DeepSeekAdapter implements InferenceAdapter {
   constructor(
     private apiKey: string,
@@ -15,7 +26,7 @@ class DeepSeekAdapter implements InferenceAdapter {
       model: "deepseek-chat",
       messages: [
         { role: "system", content: systemPrompt },
-        ...messages.map(m => ({ role: m.role, content: m.content })),
+        ...messages.map(toApiMessage),
       ],
       max_tokens: 500,
     });
@@ -63,7 +74,7 @@ class GroqAdapter implements InferenceAdapter {
           model: "llama-3.3-70b-versatile",
           messages: [
             { role: "system", content: systemPrompt },
-            ...messages.map(m => ({ role: m.role, content: m.content })),
+            ...messages.map(toApiMessage),
           ],
           max_tokens: 500,
         }),
@@ -92,7 +103,7 @@ class OllamaAdapter implements InferenceAdapter {
           model: "llama3.2",
           messages: [
             { role: "system", content: systemPrompt },
-            ...messages.map(m => ({ role: m.role, content: m.content })),
+            ...messages.map(toApiMessage),
           ],
           stream: false,
         }),
