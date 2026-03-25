@@ -83,6 +83,7 @@ async function onChannelInactive(
 
   await librarian.witnessLog(synthResult, channelId).catch(() => {});
   await librarian.synthesizeSession(synthResult, channelId).catch(() => {});
+  await librarian.updatePromptContext(synthResult).catch(() => {});
   stmStore.clear(channelId);
 }
 

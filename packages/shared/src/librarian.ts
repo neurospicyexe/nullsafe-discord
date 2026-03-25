@@ -101,6 +101,10 @@ export class LibrarianClient {
     return this.ask("my state");
   }
 
+  async updatePromptContext(text: string) {
+    return this.ask("update my state", JSON.stringify({ prompt_context: text }));
+  }
+
   async addCompanionNote(note: string, channel?: string) {
     return this.ask("add companion note", JSON.stringify({ note, channel }));
   }
