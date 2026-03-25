@@ -35,7 +35,7 @@ export interface BotConfig {
   deepseekApiKey: string;
   razielDiscordId: string;
   pluralkitSystemId: string;
-  channelConfigUrl: string;
+  channelConfigUrl?: string;
   inferenceProvider: "deepseek" | "groq" | "ollama";
   groqApiKey?: string;
   ollamaUrl?: string;
