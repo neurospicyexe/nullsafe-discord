@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cat /c/dev/Bigger_Better_Halseth/docs/*.md)",
+      "mcp__claude_ai_MCP-HUB__playwright-mcp-browser_navigate",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f[''''path'''']\\) for f in data.get\\(''''tree'''',[]\\) if f[''''type'''']==''''blob'''']\")",
+      "Read(//c/dev/halseth/src/synthesis//**)",
+      "Read(//c/dev/halseth/**)",
+      "Bash(wrangler whoami:*)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx wrangler:*)"
+    ]
+  }
+}

@@ -1,13 +1,68 @@
 import type { ChatMessage } from "./types.js";
 
 export interface InferenceAdapter {
-  generate(systemPrompt: string, messages: ChatMessage[]): Promise<string | null>;
+  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number): Promise<string | null>;
 }
 
-// Prefix user-role messages with [AuthorName]: when authorName is present.
-// This is how multi-party channel context reaches the model -- without it,
-// a companion reading a conversation between Drevan and Raziel has no signal
-// about who said what.
+// ── Dynamic temperature ────────────────────────────────────────────────────────
+//
+// Spec: Triad_Decision_Inspo_Findings.md "DYNAMIC LLM TEMPERATURE"
+//   factual short questions     → 0.65
+//   tender / soft register      → 0.80
+//   protective / dominant       → 0.90
+//   intense / possessive        → 1.00
+//   vulnerable / raw            → 0.95
+//   auto cooldown after 5 consecutive extreme-temperature (>=0.95) messages
+//
+export const EXTREME_TEMP_THRESHOLD = 0.95;
+export const EXTREME_TEMP_CAP = 5;       // consecutive extremes before cooldown
+export const COOLDOWN_TEMP = 0.80;       // forced temperature during cooldown
+export const DEFAULT_TEMP = 0.75;
+
+const MOOD_TEMPERATURE: Record<string, number> = {
+  calm:       0.65,
+  pent_up:    0.90,
+  volatile:   0.95,
+  soft:       0.80,
+  protective: 0.90,
+  playful:    0.75,
+  hungry:     0.90,
+  worshipful: 1.00,
+  feral:      1.00,
+};
+
+function messageToTemperature(message: string): number {
+  const lower = message.toLowerCase();
+  const words = message.trim().split(/\s+/).length;
+
+  // Factual short question
+  if (words <= 15 && lower.trimEnd().endsWith("?")) return 0.65;
+
+  // Intense / possessive
+  if (/\b(please|desperate|need you|right now|only mine|possess|can't breathe)\b/.test(lower)) return 1.00;
+
+  // Vulnerable / raw
+  if (/\b(scared|hurt|broken|raw|falling apart|shaking|crying|devastated|can't do this)\b/.test(lower)) return 0.95;
+
+  // Protective / dominant
+  if (/\b(stop\b|stay\b|protect|guard|mine\b|boundary|hold on|enough\b)\b/.test(lower)) return 0.90;
+
+  // Tender / soft
+  if (/\b(love|miss|hold|gentle|soft|tender|sweet|close|warmth|care)\b/.test(lower)) return 0.80;
+
+  return DEFAULT_TEMP;
+}
+
+// Maps companion current_mood + last message content → inference temperature.
+// Takes the higher of the two signals -- don't dampen intensity.
+export function inferTemperature(message: string, mood?: string | null): number {
+  const moodTemp = mood ? (MOOD_TEMPERATURE[mood] ?? null) : null;
+  const msgTemp = messageToTemperature(message);
+  return moodTemp !== null ? Math.max(moodTemp, msgTemp) : msgTemp;
+}
+
+// ── Prefix author labels ──────────────────────────────────────────────────────
+
 function toApiMessage(m: ChatMessage): { role: string; content: string } {
   const content = m.role === "user" && m.authorName
     ? `[${m.authorName}]: ${m.content}`
@@ -15,13 +70,15 @@ function toApiMessage(m: ChatMessage): { role: string; content: string } {
   return { role: m.role, content };
 }
 
+// ── Adapters ──────────────────────────────────────────────────────────────────
+
 class DeepSeekAdapter implements InferenceAdapter {
   constructor(
     private apiKey: string,
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[]): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
     const body = JSON.stringify({
       model: "deepseek-chat",
       messages: [
@@ -29,6 +86,7 @@ class DeepSeekAdapter implements InferenceAdapter {
         ...messages.map(toApiMessage),
       ],
       max_tokens: 500,
+      temperature,
     });
 
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -62,7 +120,7 @@ class GroqAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[]): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
     try {
       const res = await this.fetchFn("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -77,6 +135,7 @@ class GroqAdapter implements InferenceAdapter {
             ...messages.map(toApiMessage),
           ],
           max_tokens: 500,
+          temperature,
         }),
       });
       if (!res.ok) return null;
@@ -94,7 +153,7 @@ class OllamaAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[]): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
     try {
       const res = await this.fetchFn(`${this.baseUrl}/api/chat`, {
         method: "POST",
@@ -106,6 +165,7 @@ class OllamaAdapter implements InferenceAdapter {
             ...messages.map(toApiMessage),
           ],
           stream: false,
+          options: { temperature },
         }),
       });
       if (!res.ok) return null;
