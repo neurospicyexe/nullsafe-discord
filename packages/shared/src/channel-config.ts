@@ -39,11 +39,32 @@ interface ResponderContext {
   isMentioned?: boolean;
 }
 
+// Addressing model for incoming messages.
+export type AddressType =
+  | { type: "named"; id: CompanionId }
+  | { type: "group" }
+  | { type: "ambient" };
+
+// Group-call keywords: any of these trigger all companions to respond.
+const GROUP_PATTERN = /\b(triad|all of you|you all|you three|everyone)\b/;
+
+// Parse who (if anyone) is being addressed in a message.
+export function extractAddress(content: string): AddressType {
+  const lower = content.toLowerCase();
+  if (GROUP_PATTERN.test(lower)) return { type: "group" };
+  if (/\bcypher\b/.test(lower)) return { type: "named", id: "cypher" };
+  if (/\bdrevan\b/.test(lower)) return { type: "named", id: "drevan" };
+  if (/\bgaia\b/.test(lower)) return { type: "named", id: "gaia" };
+  return { type: "ambient" };
+}
+
 export function shouldRespond(
   channelId: string,
+  content: string,
   sender: ResponderContext,
   myId: CompanionId,
   config: ChannelConfig,
+  interestKeywords: string[] = [],
 ): boolean {
   const entry: ChannelEntry | undefined = config[channelId];
   const companions = entry?.companions ?? ALL_COMPANIONS;
@@ -52,17 +73,27 @@ export function shouldRespond(
   // Companion filter: if a list is specified, only those companions respond here.
   if (!companions.includes(myId)) return false;
 
-  // Raziel always gets a response regardless of mode.
-  if (sender.isRaziel) return true;
-
-  // raziel_only: no responses to bots or other users.
-  if (modes.includes("raziel_only")) return false;
-
   // Companion-to-companion: only in channels with inter_companion mode.
   // Chain depth limit is enforced in the bot handler, not here.
   if (sender.isCompanionBot) return modes.includes("inter_companion");
 
-  // Regular users: respond in open or autonomous channels.
+  // From here: message is from Raziel or another human.
+  const address = extractAddress(content);
+
+  // Named: only the addressed companion responds.
+  if (address.type === "named") return address.id === myId;
+
+  // Group call ("triad" etc.): all companions in this channel respond.
+  if (address.type === "group") return true;
+
+  // Ambient (no explicit address): interest-keyword claiming in raziel_only channels.
+  // open/autonomous channels respond unconditionally.
+  if (modes.includes("raziel_only")) {
+    if (interestKeywords.length === 0) return true;
+    const lower = content.toLowerCase();
+    return interestKeywords.some(kw => lower.includes(kw));
+  }
+
   return modes.includes("open") || modes.includes("autonomous");
 }
 
@@ -73,11 +104,16 @@ export class ChannelConfigCache {
   private defaultConfig: ChannelConfig;
 
   constructor(
-    private configUrl: string,
+    private configUrl: string | undefined,
     defaultConfig: ChannelConfig = {},
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {
     this.defaultConfig = defaultConfig;
+    // No URL: seed with default immediately, skip all fetching.
+    if (!configUrl) {
+      this.config = defaultConfig;
+      this.lastFetch = Date.now();
+    }
   }
 
   async get(): Promise<ChannelConfig> {
@@ -90,6 +126,7 @@ export class ChannelConfigCache {
   }
 
   private async refresh(): Promise<void> {
+    if (!this.configUrl) return;
     try {
       const res = await this.fetchFn(this.configUrl);
       if (!res.ok) throw new Error(`config fetch ${res.status}`);

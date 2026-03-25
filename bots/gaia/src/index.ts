@@ -13,6 +13,7 @@ import {
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
+  GAIA_INTEREST_KEYWORDS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -36,9 +37,15 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     const state = await librarian.sessionOpen("work");
     const sessionId = String(state["session_id"] ?? "unknown");
     const rawPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "").trim();
-    const systemPrompt = rawPrompt || cache?.system_prompt || IN_CHARACTER_FALLBACK;
+    const baseIdentity = cache?.system_prompt || IN_CHARACTER_FALLBACK;
+    if (rawPrompt) {
+      console.log(`[gaia] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
+    }
+    const systemPrompt = rawPrompt
+      ? `${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+      : baseIdentity;
     const frontState = String(state["front_state"] ?? "unknown");
-    console.log(`[gaia] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "halseth" : "cache"}`);
+    console.log(`[gaia] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
     return {
       bootCtx: { companionId: COMPANION_ID, systemPrompt, sessionId, frontState, fromCache: !rawPrompt },
       librarian,
@@ -131,7 +138,11 @@ async function main() {
     cfg.groqApiKey,
     cfg.ollamaUrl,
   );
-  const configCache = new ChannelConfigCache(cfg.channelConfigUrl, DEFAULT_CHANNEL_CONFIG);
+  let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;
+  try {
+    diskChannelConfig = JSON.parse(readFileSync(join(__dir, "../../../channel-config.json"), "utf8"));
+  } catch { console.warn("[gaia] channel-config.json not found on disk, using hardcoded default"); }
+  const configCache = new ChannelConfigCache(cfg.channelConfigUrl, diskChannelConfig);
   const stmStore = new StmStore(
     COMPANION_ID,
     (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
@@ -156,13 +167,14 @@ async function main() {
   const extremeTempCount = new Map<string, number>();
   const SENT_IDS_CAP = 500;
 
+  const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
   let systemPrompt = bootCtx.systemPrompt;
   let currentMood: string | null = null;
 
   setInterval(async () => {
     try {
       const state = await librarian.getState();
-      if (state["prompt_context"]) systemPrompt = String(state["prompt_context"]);
+      if (state["prompt_context"]) systemPrompt = `${identityBase}\n\n---\n\n${String(state["prompt_context"])}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`;
       if (state["current_mood"] !== undefined) currentMood = (state["current_mood"] as string | null) ?? null;
     } catch { /* keep cached */ }
   }, SOMA_REFRESH_INTERVAL_MS);
@@ -193,7 +205,7 @@ async function main() {
     };
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
-    if (!isReplyToMe && !shouldRespond(message.channelId, senderCtx, COMPANION_ID, channelConfig)) return;
+    if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, GAIA_INTEREST_KEYWORDS)) return;
 
     // Loop guard: break companion chains that exceed the limit.
     const chainDepth = companionChainDepth.get(message.channelId) ?? 0;

@@ -17,7 +17,7 @@ export function loadBotConfig(): BotConfig {
     deepseekApiKey: required("DEEPSEEK_API_KEY"),
     razielDiscordId: required("RAZIEL_DISCORD_ID"),
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
-    channelConfigUrl: required("CHANNEL_CONFIG_URL"),
+    channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {
       const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
       const valid = ["deepseek", "groq", "ollama"] as const;
