@@ -167,6 +167,9 @@ async function main() {
   const botPingpongCooldownUntil = new Map<string, number>();
   const extremeTempCount = new Map<string, number>();
   const SENT_IDS_CAP = 500;
+  // PluralKit dedup: hold direct Raziel messages briefly so PK proxy can cancel them.
+  const pkPending = new Map<string, boolean>();
+  const PK_HOLD_MS = 1000;
 
   // Base identity is always the foundation; Halseth context layers on top.
   const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
@@ -196,6 +199,18 @@ async function main() {
 
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.id === client.user?.id) return;
+
+    const dedupKey = `${message.channelId}:${message.content}`;
+    if (message.webhookId && pkPending.has(dedupKey)) {
+      pkPending.set(dedupKey, true);
+    }
+    if (!message.webhookId && message.author.id === cfg.razielDiscordId) {
+      pkPending.set(dedupKey, false);
+      await new Promise<void>(resolve => setTimeout(resolve, PK_HOLD_MS));
+      const skip = pkPending.get(dedupKey) ?? false;
+      pkPending.delete(dedupKey);
+      if (skip) return;
+    }
 
     const channelConfig = await configCache.get();
     const attribution = await resolveAttribution(message, cfg.razielDiscordId);
