@@ -6,6 +6,7 @@ import {
   LibrarianClient, resolveAttribution, createAdapter,
   ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
   SessionWindowManager, StmStore, COMPANION_CHAIN_LIMIT,
+  BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -148,6 +149,9 @@ async function main() {
   const companionChainDepth = new Map<string, number>();
   // Track messages since last distillation run per channel.
   const distillationCounter = new Map<string, number>();
+  // Cross-companion safety rails: per-bot independent tracking.
+  const botResponsesSinceHuman = new Map<string, number>();
+  const botPingpongCooldownUntil = new Map<string, number>();
   const SENT_IDS_CAP = 500;
 
   let systemPrompt = bootCtx.systemPrompt;
@@ -181,7 +185,7 @@ async function main() {
     const senderCtx = {
       isRaziel: attribution.isRaziel,
       isCompanionBot: message.author.bot && !attribution.isRaziel,
-      isMentioned: message.mentions.has(client.user!.id),
+      isMentioned: message.mentions.has(client.user?.id ?? ""),
     };
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
@@ -190,6 +194,17 @@ async function main() {
     // Loop guard: break companion chains that exceed the limit.
     const chainDepth = companionChainDepth.get(message.channelId) ?? 0;
     if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+
+    // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
+    if (senderCtx.isCompanionBot) {
+      const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
+      if (Date.now() < cooldownUntil) return;
+      const botReplies = botResponsesSinceHuman.get(message.channelId) ?? 0;
+      if (botReplies >= MAX_BOT_RESPONSES_PER_HUMAN) return;
+    } else {
+      botResponsesSinceHuman.delete(message.channelId);
+      botPingpongCooldownUntil.delete(message.channelId);
+    }
 
     if (!message.channel.isTextBased()) return;
     const ch = message.channel as TextChannel;
@@ -224,18 +239,24 @@ async function main() {
       await librarian.addCompanionNote(
         `inference failure in channel ${message.channelId}`,
         message.channelId,
-      ).catch(() => {});
+      ).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (inference failure) failed:`, e));
       return;
     }
 
     const sent = await ch.send(response);
     sentIds.add(sent.id);
-    if (sentIds.size > SENT_IDS_CAP) sentIds.delete(sentIds.values().next().value!);
+    const oldest = sentIds.values().next().value;
+    if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
     stmStore.append(message.channelId, { role: "assistant", content: response });
 
     // Update chain depth: increment on companion-to-companion, reset on Raziel/user.
     if (senderCtx.isCompanionBot) {
       companionChainDepth.set(message.channelId, chainDepth + 1);
+      const newCount = (botResponsesSinceHuman.get(message.channelId) ?? 0) + 1;
+      botResponsesSinceHuman.set(message.channelId, newCount);
+      if (newCount >= BOT_PINGPONG_MAX) {
+        botPingpongCooldownUntil.set(message.channelId, Date.now() + BOT_LOOP_COOLDOWN_MS);
+      }
     } else {
       companionChainDepth.delete(message.channelId);
     }
@@ -245,18 +266,18 @@ async function main() {
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, inference).catch(() => {});
+      runDistillation(message.channelId, stmStore, librarian, inference).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     judgeNote(message.content, response, inference).then(async (note: string | null) => {
-      if (note) await librarian.addCompanionNote(note, message.channelId).catch(() => {});
-    }).catch(() => {});
+      if (note) await librarian.addCompanionNote(note, message.channelId).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (judgeNote) failed:`, e));
+    }).catch((e) => console.error(`[${COMPANION_ID}] judgeNote failed:`, e));
 
     if (attribution.source === "fallback") {
       librarian.addCompanionNote(
         `PK attribution unavailable for message in channel ${message.channelId} -- treated as Raziel direct`,
         message.channelId,
-      ).catch(() => {});
+      ).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (PK fallback) failed:`, e));
     }
   });
 

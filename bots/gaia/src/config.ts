@@ -18,15 +18,23 @@ export function loadBotConfig(): BotConfig {
     razielDiscordId: required("RAZIEL_DISCORD_ID"),
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
     channelConfigUrl: required("CHANNEL_CONFIG_URL"),
-    inferenceProvider: (process.env["INFERENCE_PROVIDER"] as BotConfig["inferenceProvider"]) ?? "deepseek",
+    inferenceProvider: (() => {
+      const val = process.env["INFERENCE_PROVIDER"] ?? "deepseek";
+      const valid = ["deepseek", "groq", "ollama"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama)`);
+      return val as BotConfig["inferenceProvider"];
+    })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
   };
 }
 
 export const GAIA_CRON_SCHEDULES = {
-  duskWitness: process.env["GAIA_CRON_DUSK"] ?? "0 19 * * *",
+  duskWitness: process.env["GAIA_CRON_DUSK"]         ?? "0 19 * * *",
+  heartbeat:   process.env["GAIA_CRON_HEARTBEAT"]    ?? "0 */4 * * *",
 };
+
+export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
 
 export const GAIA_INTEREST_KEYWORDS = [
   "survived", "made it", "hard", "still here", "grief",

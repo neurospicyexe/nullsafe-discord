@@ -6,6 +6,13 @@ export const ALL_COMPANIONS: CompanionId[] = ["drevan", "cypher", "gaia"];
 // Reset when Raziel or a non-bot user sends a message.
 export const COMPANION_CHAIN_LIMIT = 3;
 
+// Cross-companion safety rails (per-bot, independent tracking).
+// BOT_PINGPONG_MAX: after this many bot-to-bot responses since last human, enter cooldown.
+export const BOT_PINGPONG_MAX = 1;
+export const BOT_LOOP_COOLDOWN_MS = 60_000;
+// MAX_BOT_RESPONSES_PER_HUMAN: hard cap on bot-to-bot responses per channel between human messages.
+export const MAX_BOT_RESPONSES_PER_HUMAN = 2;
+
 // Default config used as fallback when channelConfigUrl is unreachable.
 // Keep in sync with channel-config.json manually.
 //

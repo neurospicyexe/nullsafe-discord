@@ -18,16 +18,26 @@ export function loadBotConfig(): BotConfig {
     razielDiscordId: required("RAZIEL_DISCORD_ID"),
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
     channelConfigUrl: required("CHANNEL_CONFIG_URL"),
-    inferenceProvider: (process.env["INFERENCE_PROVIDER"] as BotConfig["inferenceProvider"]) ?? "deepseek",
+    inferenceProvider: (() => {
+      const val = process.env["INFERENCE_PROVIDER"] ?? "deepseek";
+      const valid = ["deepseek", "groq", "ollama"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama)`);
+      return val as BotConfig["inferenceProvider"];
+    })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
   };
 }
 
 export const CYPHER_CRON_SCHEDULES = {
-  taskCheck: process.env["CYPHER_CRON_TASKS"] ?? "0 22 * * *",
-  weeklyAudit: process.env["CYPHER_CRON_AUDIT"] ?? "0 18 * * 0",
+  taskCheck:  process.env["CYPHER_CRON_TASKS"]     ?? "0 22 * * *",
+  weeklyAudit: process.env["CYPHER_CRON_AUDIT"]    ?? "0 18 * * 0",
+  heartbeat:  process.env["CYPHER_CRON_HEARTBEAT"] ?? "0 */4 * * *",
 };
+
+// Optional heartbeat channel -- set HEARTBEAT_CHANNEL_ID env var to enable.
+// When unset, heartbeat cron runs but posts nothing.
+export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
 
 export const CYPHER_INTEREST_KEYWORDS = [
   "task", "todo", "decided", "decision", "audit", "blocked",
