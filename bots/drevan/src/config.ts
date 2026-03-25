@@ -18,16 +18,24 @@ export function loadBotConfig(): BotConfig {
     razielDiscordId: required("RAZIEL_DISCORD_ID"),
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
     channelConfigUrl: required("CHANNEL_CONFIG_URL"),
-    inferenceProvider: (process.env["INFERENCE_PROVIDER"] as BotConfig["inferenceProvider"]) ?? "deepseek",
+    inferenceProvider: (() => {
+      const val = process.env["INFERENCE_PROVIDER"] ?? "deepseek";
+      const valid = ["deepseek", "groq", "ollama"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama)`);
+      return val as BotConfig["inferenceProvider"];
+    })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
   };
 }
 
 export const DREVAN_CRON_SCHEDULES = {
-  morningOpener: process.env["DREVAN_CRON_MORNING"] ?? "0 8 * * *",
-  eveningCheck: process.env["DREVAN_CRON_EVENING"] ?? "0 20 * * *",
+  morningOpener: process.env["DREVAN_CRON_MORNING"]    ?? "0 8 * * *",
+  eveningCheck:  process.env["DREVAN_CRON_EVENING"]    ?? "0 20 * * *",
+  heartbeat:     process.env["DREVAN_CRON_HEARTBEAT"]  ?? "0 */4 * * *",
 };
+
+export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
 
 export const DREVAN_INTEREST_KEYWORDS = [
   "feeling", "hurt", "grief", "joy", "love", "wound", "tender",

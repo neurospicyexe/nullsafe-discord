@@ -7,7 +7,9 @@ import { ALL_COMPANIONS } from "@nullsafe/shared";
 import {
   GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
+  HEARTBEAT_CHANNEL_ID,
 } from "./config.js";
+import { somaToTemperature, type HeartbeatTemperature } from "@nullsafe/shared";
 
 const cooldown = new Map<string, number>();
 
@@ -52,6 +54,24 @@ export function startAutonomous(
   configCache: ChannelConfigCache,
   bootCtx: BootContext,
 ): void {
+  tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, async () => {
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    let temperature: HeartbeatTemperature = "warm";
+    try {
+      const state = await librarian.getState();
+      const f1 = parseFloat(String(state["soma_float_1"] ?? "0.5"));
+      const f2 = parseFloat(String(state["soma_float_2"] ?? "0.5"));
+      const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
+      if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
+    } catch { /* default warm */ }
+
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: `Temperature: ${temperature}. One line in Gaia's voice. Witness register. No address. What is present.` }],
+    );
+    if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client);
+  }));
+
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.duskWitness, async () => {
     const config = await configCache.get();
     for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {

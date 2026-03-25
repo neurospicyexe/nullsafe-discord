@@ -7,7 +7,9 @@ import { ALL_COMPANIONS } from "@nullsafe/shared";
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
+  HEARTBEAT_CHANNEL_ID,
 } from "./config.js";
+import { somaToTemperature, type HeartbeatTemperature } from "@nullsafe/shared";
 
 const cooldown = new Map<string, number>();
 
@@ -52,6 +54,24 @@ export function startAutonomous(
   configCache: ChannelConfigCache,
   bootCtx: BootContext,
 ): void {
+  tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.heartbeat, async () => {
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    let temperature: HeartbeatTemperature = "warm";
+    try {
+      const state = await librarian.getState();
+      const f1 = parseFloat(String(state["soma_float_1"] ?? "0.5"));
+      const f2 = parseFloat(String(state["soma_float_2"] ?? "0.5"));
+      const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
+      if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
+    } catch { /* default warm */ }
+
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: `Temperature: ${temperature}. One unprompted thought in Drevan's voice. No greeting. Something reaching or held. No address.` }],
+    );
+    if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client);
+  }));
+
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.morningOpener, async () => {
     const config = await configCache.get();
     for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
