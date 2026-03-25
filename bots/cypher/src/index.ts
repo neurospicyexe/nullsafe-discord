@@ -7,6 +7,7 @@ import {
   ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
   SessionWindowManager, StmStore, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
+  inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -152,14 +153,17 @@ async function main() {
   // Cross-companion safety rails: per-bot independent tracking.
   const botResponsesSinceHuman = new Map<string, number>();
   const botPingpongCooldownUntil = new Map<string, number>();
+  const extremeTempCount = new Map<string, number>();
   const SENT_IDS_CAP = 500;
 
   let systemPrompt = bootCtx.systemPrompt;
+  let currentMood: string | null = null;
 
   setInterval(async () => {
     try {
       const state = await librarian.getState();
       if (state["prompt_context"]) systemPrompt = String(state["prompt_context"]);
+      if (state["current_mood"] !== undefined) currentMood = (state["current_mood"] as string | null) ?? null;
     } catch { /* keep cached */ }
   }, SOMA_REFRESH_INTERVAL_MS);
 
@@ -233,7 +237,16 @@ async function main() {
 
     await ch.sendTyping();
     const history = stmStore.get(message.channelId);
-    const response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE));
+    const rawTemp = inferTemperature(message.content, currentMood);
+    const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
+    const temperature = (rawTemp >= EXTREME_TEMP_THRESHOLD && extremeCount >= EXTREME_TEMP_CAP)
+      ? COOLDOWN_TEMP : rawTemp;
+    if (rawTemp >= EXTREME_TEMP_THRESHOLD) {
+      extremeTempCount.set(message.channelId, extremeCount + 1);
+    } else {
+      extremeTempCount.delete(message.channelId);
+    }
+    const response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
 
     if (!response) {
       await ch.send(IN_CHARACTER_FALLBACK);
