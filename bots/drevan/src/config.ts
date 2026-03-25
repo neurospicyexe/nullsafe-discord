@@ -19,7 +19,7 @@ export function loadBotConfig(): BotConfig {
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
     channelConfigUrl: required("CHANNEL_CONFIG_URL"),
     inferenceProvider: (() => {
-      const val = process.env["INFERENCE_PROVIDER"] ?? "deepseek";
+      const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
       const valid = ["deepseek", "groq", "ollama"] as const;
       if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama)`);
       return val as BotConfig["inferenceProvider"];
