@@ -73,31 +73,23 @@ export function startAutonomous(
   }));
 
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.taskCheck, async () => {
-    const config = await configCache.get();
-    for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-      if (!(entry.modes ?? []).includes("autonomous")) continue;
-      if (isOnCooldown(channelId)) continue;
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "Check in on open tasks. One line in Cypher's voice. Direct." }],
-      );
-      if (msg) await sendAutonomousMessage(channelId, msg, client);
-    }
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    if (isOnCooldown(HEARTBEAT_CHANNEL_ID)) return;
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "Check in on open tasks. One line in Cypher's voice. Direct." }],
+    );
+    if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client);
   }));
 
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.weeklyAudit, async () => {
-    const config = await configCache.get();
-    for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-      if (!(entry.modes ?? []).includes("autonomous")) continue;
-      if (isOnCooldown(channelId)) continue;
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "Brief audit-mode check-in. What needs attention this week. One or two lines, Cypher's voice." }],
-      );
-      if (msg) await sendAutonomousMessage(channelId, msg, client);
-    }
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    if (isOnCooldown(HEARTBEAT_CHANNEL_ID)) return;
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "Brief audit-mode check-in. What needs attention this week. One or two lines, Cypher's voice." }],
+    );
+    if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client);
   }));
 
   pollInterval = setInterval(async () => {
@@ -111,7 +103,7 @@ export function startAutonomous(
         const config = await configCache.get();
         for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
           if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-          if (!(entry.modes ?? []).includes("autonomous") && !(entry.modes ?? []).includes("raziel_only")) continue;
+          if (!(entry.modes ?? []).includes("autonomous")) continue;
           if (isOnCooldown(channelId)) continue;
 
           const response = await inference.generate(

@@ -20,11 +20,15 @@
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1422043032643043371": {
-    "modes": ["autonomous", "open"],
+    "modes": ["open"],
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1243598039965368381": {
     "modes": ["autonomous", "open"],
+    "companions": ["drevan", "gaia", "cypher"]
+  },
+  "1486853365462733004": {
+    "modes": ["autonomous"],
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1486217438105436260": {

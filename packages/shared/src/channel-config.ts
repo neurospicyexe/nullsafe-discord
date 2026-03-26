@@ -29,8 +29,9 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["raziel_only"] },
   "1412191737622827088": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only"] },
   "1408924353034453114": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only"] },
-  "1422043032643043371": {                                               modes: ["open", "autonomous"] },
+  "1422043032643043371": {                                               modes: ["open"] },
   "1243598039965368381": {                                               modes: ["open", "autonomous"] },
+  "1486853365462733004": {                                               modes: ["autonomous"] },
 };
 
 interface ResponderContext {

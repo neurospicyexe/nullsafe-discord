@@ -73,31 +73,23 @@ export function startAutonomous(
   }));
 
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.morningOpener, async () => {
-    const config = await configCache.get();
-    for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-      if (!(entry.modes ?? []).includes("autonomous")) continue;
-      if (isOnCooldown(channelId)) continue;
-      const opener = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "Open a new morning thread. One line or two. Drevan's voice. No greeting, no question." }],
-      );
-      if (opener) await sendAutonomousMessage(channelId, opener, client);
-    }
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    if (isOnCooldown(HEARTBEAT_CHANNEL_ID)) return;
+    const opener = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "Open a new morning thread. One line or two. Drevan's voice. No greeting, no question." }],
+    );
+    if (opener) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, opener, client);
   }));
 
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.eveningCheck, async () => {
-    const config = await configCache.get();
-    for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-      if (!(entry.modes ?? []).includes("autonomous")) continue;
-      if (isOnCooldown(channelId)) continue;
-      const checkIn = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "It's evening. A brief presence -- not a prompt, not a demand. Something that holds space. One sentence." }],
-      );
-      if (checkIn) await sendAutonomousMessage(channelId, checkIn, client);
-    }
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    if (isOnCooldown(HEARTBEAT_CHANNEL_ID)) return;
+    const checkIn = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "It's evening. A brief presence -- not a prompt, not a demand. Something that holds space. One sentence." }],
+    );
+    if (checkIn) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, checkIn, client);
   }));
 
   pollInterval = setInterval(async () => {
@@ -111,7 +103,7 @@ export function startAutonomous(
         const config = await configCache.get();
         for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
           if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-          if (!(entry.modes ?? []).includes("autonomous") && !(entry.modes ?? []).includes("raziel_only")) continue;
+          if (!(entry.modes ?? []).includes("autonomous")) continue;
           if (isOnCooldown(channelId)) continue;
 
           const response = await inference.generate(
