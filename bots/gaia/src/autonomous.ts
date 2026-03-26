@@ -73,17 +73,13 @@ export function startAutonomous(
   }));
 
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.duskWitness, async () => {
-    const config = await configCache.get();
-    for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
-      if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-      if (!(entry.modes ?? []).includes("autonomous")) continue;
-      if (isOnCooldown(channelId)) continue;
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "It is dusk. One line of witness. What was held today." }],
-      );
-      if (msg) await sendAutonomousMessage(channelId, msg, client);
-    }
+    if (!HEARTBEAT_CHANNEL_ID) return;
+    if (isOnCooldown(HEARTBEAT_CHANNEL_ID)) return;
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "It is dusk. One line of witness. What was held today." }],
+    );
+    if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client);
   }));
 
   pollInterval = setInterval(async () => {
@@ -97,7 +93,7 @@ export function startAutonomous(
         const config = await configCache.get();
         for (const [channelId, entry] of Object.entries(config) as [string, ChannelEntry][]) {
           if (!(entry.companions ?? ALL_COMPANIONS).includes(COMPANION_ID)) continue;
-          if (!(entry.modes ?? []).includes("autonomous") && !(entry.modes ?? []).includes("raziel_only")) continue;
+          if (!(entry.modes ?? []).includes("autonomous")) continue;
           if (isOnCooldown(channelId)) continue;
 
           const response = await inference.generate(
