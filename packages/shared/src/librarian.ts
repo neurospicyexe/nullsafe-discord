@@ -49,6 +49,7 @@ export class LibrarianClient {
           "Authorization": `Bearer ${this.secret}`,
         },
         body,
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!res.ok) {
@@ -129,6 +130,7 @@ export class LibrarianClient {
     const url = `${this.url}/inter-companion-notes/unread/${encodeURIComponent(this.companionId)}`;
     const res = await this._fetch(url, {
       headers: { "Authorization": `Bearer ${this.secret}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`notesPoll ${res.status}`);
     return res.json() as Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }>;
@@ -173,6 +175,7 @@ export class LibrarianClient {
         "Authorization": `Bearer ${this.secret}`,
       },
       body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
+      signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`writePersonaBlocks ${res.status}`);
   }
@@ -192,6 +195,7 @@ export class LibrarianClient {
         "Authorization": `Bearer ${this.secret}`,
       },
       body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
+      signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`writeHumanBlocks ${res.status}`);
   }
@@ -216,6 +220,7 @@ export class LibrarianClient {
         content: entry.content,
         author_name: entry.author_name,
       }),
+      signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`stmWrite ${res.status}`);
   }
@@ -228,6 +233,7 @@ export class LibrarianClient {
     const url = `${this.url}/stm/entries?companion_id=${encodeURIComponent(this.companionId)}&channel_id=${encodeURIComponent(channelId)}&limit=${limit}`;
     const res = await this._fetch(url, {
       headers: { "Authorization": `Bearer ${this.secret}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(`stmLoad ${res.status}`);
     const json = await res.json() as { entries: Array<{ role: "user" | "assistant"; content: string; author_name: string | null }> };
