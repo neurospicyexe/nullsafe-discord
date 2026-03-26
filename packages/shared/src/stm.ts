@@ -14,6 +14,7 @@
 // more context than a single inference window -- useful for reconnecting.
 
 import type { ChatMessage } from "./types.js";
+import type { WriteQueue } from "./write-queue.js";
 
 export const STM_BUFFER_SIZE = 50;
 
@@ -26,6 +27,7 @@ export class StmStore {
     private companionId: string,
     private writeFn: (channelId: string, entry: ChatMessage) => Promise<void>,
     private loadFn:  (channelId: string) => Promise<ChatMessage[]>,
+    private writeQueue?: WriteQueue,
   ) {}
 
   /** True if we've attempted a load for this channel (loaded or empty) */
@@ -78,8 +80,15 @@ export class StmStore {
     this.memory.set(channelId, history);
     this.loaded.add(channelId);
 
-    // Fire-and-forget -- never block the message handler on DB write
-    this.writeFn(channelId, message).catch(() => {});
+    // Fire-and-forget with retry buffer if WriteQueue is available
+    if (this.writeQueue) {
+      this.writeQueue.fireAndForget(
+        `stm:${channelId}`,
+        () => this.writeFn(channelId, message),
+      );
+    } else {
+      this.writeFn(channelId, message).catch(() => {});
+    }
   }
 
   /**
