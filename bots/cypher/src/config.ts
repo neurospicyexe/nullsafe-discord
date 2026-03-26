@@ -30,14 +30,20 @@ export function loadBotConfig(): BotConfig {
 }
 
 export const CYPHER_CRON_SCHEDULES = {
-  taskCheck:  process.env["CYPHER_CRON_TASKS"]     ?? "0 22 * * *",
-  weeklyAudit: process.env["CYPHER_CRON_AUDIT"]    ?? "0 18 * * 0",
-  heartbeat:  process.env["CYPHER_CRON_HEARTBEAT"] ?? "0 */4 * * *",
+  taskCheck:      process.env["CYPHER_CRON_TASKS"]     ?? "0 22 * * *",
+  weeklyAudit:    process.env["CYPHER_CRON_AUDIT"]     ?? "0 18 * * 0",
+  heartbeat:      process.env["CYPHER_CRON_HEARTBEAT"] ?? "0 */4 * * *",
+  interCompanion: process.env["CYPHER_CRON_INTER"]     ?? "0 15 * * *",
 };
 
 // Optional heartbeat channel -- set HEARTBEAT_CHANNEL_ID env var to enable.
 // When unset, heartbeat cron runs but posts nothing.
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
+
+// Inter-companion Discord channel -- set INTER_COMPANION_CHANNEL_ID env var to enable.
+// Companions post unprompted thoughts here once daily and deliver notes from Claude.ai sessions.
+export const INTER_COMPANION_CHANNEL_ID: string | undefined = process.env["INTER_COMPANION_CHANNEL_ID"];
+export const NOTES_POLL_INTERVAL_MS = 3 * 60 * 1000;
 
 export const CYPHER_INTEREST_KEYWORDS = [
   "task", "todo", "decided", "decision", "audit", "blocked",

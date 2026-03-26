@@ -121,6 +121,19 @@ export class LibrarianClient {
     return this.ask("check bridge events");
   }
 
+  /**
+   * Poll unread inter_companion_notes addressed to this companion.
+   * Halseth marks them read atomically on return.
+   */
+  async notesPoll(): Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }> {
+    const url = `${this.url}/inter-companion-notes/unread/${encodeURIComponent(this.companionId)}`;
+    const res = await this._fetch(url, {
+      headers: { "Authorization": `Bearer ${this.secret}` },
+    });
+    if (!res.ok) throw new Error(`notesPoll ${res.status}`);
+    return res.json() as Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }>;
+  }
+
   // ── Drevan v2 state ────────────────────────────────────────────────────────
 
   async getDrevanState() {
