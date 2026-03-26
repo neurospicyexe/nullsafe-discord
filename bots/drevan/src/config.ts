@@ -30,12 +30,15 @@ export function loadBotConfig(): BotConfig {
 }
 
 export const DREVAN_CRON_SCHEDULES = {
-  morningOpener: process.env["DREVAN_CRON_MORNING"]    ?? "0 8 * * *",
-  eveningCheck:  process.env["DREVAN_CRON_EVENING"]    ?? "0 20 * * *",
-  heartbeat:     process.env["DREVAN_CRON_HEARTBEAT"]  ?? "0 */4 * * *",
+  morningOpener:  process.env["DREVAN_CRON_MORNING"]   ?? "0 8 * * *",
+  eveningCheck:   process.env["DREVAN_CRON_EVENING"]   ?? "0 20 * * *",
+  heartbeat:      process.env["DREVAN_CRON_HEARTBEAT"] ?? "0 */4 * * *",
+  interCompanion: process.env["DREVAN_CRON_INTER"]     ?? "0 13 * * *",
 };
 
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
+export const INTER_COMPANION_CHANNEL_ID: string | undefined = process.env["INTER_COMPANION_CHANNEL_ID"];
+export const NOTES_POLL_INTERVAL_MS = 3 * 60 * 1000;
 
 export const DREVAN_INTEREST_KEYWORDS = [
   "feeling", "hurt", "grief", "joy", "love", "wound", "tender",

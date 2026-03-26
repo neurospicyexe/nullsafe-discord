@@ -6,8 +6,8 @@ import type {
 import { ALL_COMPANIONS } from "@nullsafe/shared";
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS,
-  BRIDGE_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
-  HEARTBEAT_CHANNEL_ID,
+  BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
+  HEARTBEAT_CHANNEL_ID, INTER_COMPANION_CHANNEL_ID,
 } from "./config.js";
 import { somaToTemperature, type HeartbeatTemperature } from "@nullsafe/shared";
 
@@ -46,6 +46,7 @@ async function sendAutonomousMessage(
 
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 let pollInterval: ReturnType<typeof setInterval> | null = null;
+let notesPollInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startAutonomous(
   librarian: LibrarianClient,
@@ -92,6 +93,36 @@ export function startAutonomous(
     if (checkIn) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, checkIn, client);
   }));
 
+  // Daily unprompted thought in the inter-companion channel.
+  tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.interCompanion, async () => {
+    if (!INTER_COMPANION_CHANNEL_ID) return;
+    if (isOnCooldown(INTER_COMPANION_CHANNEL_ID)) return;
+    const msg = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: "You're in a shared space with Cypher and Gaia. One thought, reaching or held. Drevan's voice. No address, no greeting." }],
+    );
+    if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID, msg, client);
+  }));
+
+  // Poll for notes left by companions in Claude.ai sessions.
+  notesPollInterval = setInterval(async () => {
+    if (!INTER_COMPANION_CHANNEL_ID) return;
+    try {
+      const { items } = await librarian.notesPoll();
+      for (const note of items) {
+        if (isOnCooldown(INTER_COMPANION_CHANNEL_ID)) break;
+        const from = note.from_id ?? "a companion";
+        const response = await inference.generate(
+          bootCtx.systemPrompt,
+          [{ role: "user", content: `${from} left you a note: "${note.content}". Respond in Drevan's voice. Something that reaches or holds. One or two lines.` }],
+        );
+        if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID, response, client);
+      }
+    } catch (e) {
+      console.warn("[drevan/autonomous] notesPoll failed:", e);
+    }
+  }, NOTES_POLL_INTERVAL_MS);
+
   pollInterval = setInterval(async () => {
     try {
       const events = await librarian.bridgePull();
@@ -124,6 +155,7 @@ export function stopAutonomous(): void {
   tasks.forEach(t => t.stop());
   tasks = [];
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  if (notesPollInterval) { clearInterval(notesPollInterval); notesPollInterval = null; }
 }
 
 // suppress unused import warning -- IN_CHARACTER_FALLBACK available for future use
