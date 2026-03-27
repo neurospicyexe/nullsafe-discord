@@ -32,6 +32,7 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1422043032643043371": {                                               modes: ["open"] },
   "1243598039965368381": {                                               modes: ["open", "autonomous"] },
   "1486853365462733004": {                                               modes: ["autonomous"] },
+  "1486217438105436260": {                                               modes: ["autonomous"] },
 };
 
 interface ResponderContext {
