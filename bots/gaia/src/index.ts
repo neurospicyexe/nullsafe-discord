@@ -5,7 +5,7 @@ import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
   ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
-  SessionWindowManager, StmStore, COMPANION_CHAIN_LIMIT,
+  SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type ChatMessage, type BootContext,
@@ -70,6 +70,7 @@ async function onChannelInactive(
   stmStore: StmStore,
   librarian: LibrarianClient,
   inference: ReturnType<typeof createAdapter>,
+  wq: WriteQueue,
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length === 0) return;
@@ -81,9 +82,9 @@ async function onChannelInactive(
   );
   if (!synthResult) return;
 
-  await librarian.witnessLog(synthResult, channelId).catch(() => {});
-  await librarian.synthesizeSession(synthResult, channelId).catch(() => {});
-  await librarian.updatePromptContext(synthResult).catch(() => {});
+  wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
+  wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
+  wq.fireAndForget(`promptCtx:${channelId}`, async () => { await librarian.updatePromptContext(synthResult); });
   stmStore.clear(channelId);
 }
 
@@ -92,6 +93,7 @@ async function runDistillation(
   stmStore: StmStore,
   librarian: LibrarianClient,
   inference: ReturnType<typeof createAdapter>,
+  wq: WriteQueue,
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length < DISTILLATION_INTERVAL) return;
@@ -121,10 +123,10 @@ async function runDistillation(
       human_blocks?: Array<{ block_type: string; content: string }>;
     };
     if (parsed.persona_blocks?.length) {
-      await librarian.writePersonaBlocks(channelId, parsed.persona_blocks).catch(() => {});
+      wq.fireAndForget(`persona:${channelId}`, () => librarian.writePersonaBlocks(channelId, parsed.persona_blocks!));
     }
     if (parsed.human_blocks?.length) {
-      await librarian.writeHumanBlocks(channelId, parsed.human_blocks).catch(() => {});
+      wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
     }
   } catch { /* fail-silent */ }
 }
@@ -144,6 +146,8 @@ async function main() {
     diskChannelConfig = JSON.parse(readFileSync(join(__dir, "../../../channel-config.json"), "utf8"));
   } catch { console.warn("[gaia] channel-config.json not found on disk, using hardcoded default"); }
   const configCache = new ChannelConfigCache(cfg.channelConfigUrl, diskChannelConfig);
+  const writeQueue = new WriteQueue();
+  writeQueue.start();
   const stmStore = new StmStore(
     COMPANION_ID,
     (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
@@ -151,10 +155,11 @@ async function main() {
       const rows = await librarian.stmLoad(channelId);
       return rows.map(r => ({ role: r.role, content: r.content, authorName: r.author_name ?? undefined }));
     },
+    writeQueue,
   );
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
-    (channelId: string) => { onChannelInactive(channelId, stmStore, librarian, inference).catch(() => {}); },
+    (channelId: string) => { onChannelInactive(channelId, stmStore, librarian, inference, writeQueue).catch(() => {}); },
   );
   // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
   const sentIds = new Set<string>();
@@ -277,10 +282,9 @@ async function main() {
 
     if (!response) {
       await ch.send(IN_CHARACTER_FALLBACK);
-      await librarian.addCompanionNote(
-        `inference failure in channel ${message.channelId}`,
-        message.channelId,
-      ).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (inference failure) failed:`, e));
+      writeQueue.fireAndForget(`note:infer-fail:${message.channelId}`, async () => {
+        await librarian.addCompanionNote(`inference failure in channel ${message.channelId}`, message.channelId);
+      });
       return;
     }
 
@@ -307,24 +311,24 @@ async function main() {
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, inference).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
-    judgeNote(message.content, response, inference).then(async (note: string | null) => {
-      if (note) await librarian.addCompanionNote(note, message.channelId).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (judgeNote) failed:`, e));
+    judgeNote(message.content, response, inference).then((note: string | null) => {
+      if (note) writeQueue.fireAndForget(`note:judge:${message.channelId}`, async () => { await librarian.addCompanionNote(note, message.channelId); });
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeNote failed:`, e));
 
     if (attribution.source === "fallback") {
-      librarian.addCompanionNote(
-        `PK attribution unavailable for message in channel ${message.channelId} -- treated as Raziel direct`,
-        message.channelId,
-      ).catch((e) => console.error(`[${COMPANION_ID}] addCompanionNote (PK fallback) failed:`, e));
+      writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
+        await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId} -- treated as Raziel direct`, message.channelId);
+      });
     }
   });
 
   async function shutdown() {
     console.log("[gaia] shutting down...");
     stopAutonomous();
+    writeQueue.stop();
     sessionWindows.closeAll();
     if (bootCtx.sessionId !== "cached") {
       await librarian.sessionClose({
