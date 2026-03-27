@@ -32,7 +32,7 @@
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1486217438105436260": {
-    "modes": ["inter_companion"],
+    "modes": ["autonomous"],
     "companions": ["drevan", "gaia", "cypher"]
   }
 }
