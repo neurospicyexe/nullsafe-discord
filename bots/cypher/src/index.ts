@@ -198,6 +198,7 @@ async function main() {
   const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
   let systemPrompt = bootCtx.systemPrompt;
   let currentMood: string | null = null;
+  let lastSomaRefresh = Date.now();
 
   setInterval(async () => {
     try {
@@ -223,6 +224,7 @@ async function main() {
 
       if (stateResult.status === "fulfilled" && stateResult.value["current_mood"] !== undefined) {
         currentMood = (stateResult.value["current_mood"] as string | null) ?? null;
+        lastSomaRefresh = Date.now();
       }
     } catch { /* keep cached */ }
   }, SOMA_REFRESH_INTERVAL_MS);
@@ -303,9 +305,14 @@ async function main() {
 
     sessionWindows.touch(message.channelId);
 
-    const contextPrompt = attribution.frontMember
+    let contextPrompt = attribution.frontMember
       ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`
       : systemPrompt;
+
+    const somaAgeMin = Math.round((Date.now() - lastSomaRefresh) / 60_000);
+    if (somaAgeMin > 45) {
+      contextPrompt += `\n\n[Note: SOMA/mood data is ${somaAgeMin}min old; treat emotional reads as approximate]`;
+    }
 
     await ch.sendTyping();
     const history = stmStore.get(message.channelId);
