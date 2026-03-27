@@ -8,6 +8,7 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
+  formatRecentContext,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -22,6 +23,7 @@ const __dir = dirname(fileURLToPath(import.meta.url));
 async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
   bootCtx: BootContext;
   librarian: LibrarianClient;
+  recentContextRef: { value: string };
 }> {
   const librarian = new LibrarianClient({
     url: cfg.halsethUrl,
@@ -46,9 +48,23 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       : baseIdentity;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[cypher] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
+
+    // Warm boot: fetch recent context (synthesis + WebMind ground + RAG)
+    let recentContext = "";
+    try {
+      const orient = await librarian.botOrient();
+      recentContext = formatRecentContext(orient);
+      if (recentContext) console.log(`[cypher] botOrient: ${recentContext.length} chars loaded`);
+    } catch { console.warn("[cypher] botOrient failed at boot, starting cold"); }
+
+    const systemPromptWithContext = recentContext
+      ? `${systemPrompt}\n\n---\n\n${recentContext}`
+      : systemPrompt;
+
     return {
-      bootCtx: { companionId: COMPANION_ID, systemPrompt, sessionId, frontState, fromCache: !rawPrompt },
+      bootCtx: { companionId: COMPANION_ID, systemPrompt: systemPromptWithContext, sessionId, frontState, fromCache: !rawPrompt },
       librarian,
+      recentContextRef: { value: recentContext },
     };
   } catch (e) {
     console.warn("[cypher] Halseth unreachable at boot, loading identity cache:", e);
@@ -61,6 +77,7 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
         fromCache: true,
       },
       librarian,
+      recentContextRef: { value: "" },
     };
   }
 }
@@ -133,7 +150,7 @@ async function runDistillation(
 
 async function main() {
   const cfg = loadBotConfig();
-  const { bootCtx, librarian } = await boot(cfg);
+  const { bootCtx, librarian, recentContextRef } = await boot(cfg);
 
   const inference = createAdapter(
     cfg.inferenceProvider,
@@ -184,9 +201,29 @@ async function main() {
 
   setInterval(async () => {
     try {
-      const state = await librarian.getState();
-      if (state["prompt_context"]) systemPrompt = `${identityBase}\n\n---\n\n${String(state["prompt_context"])}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`;
-      if (state["current_mood"] !== undefined) currentMood = (state["current_mood"] as string | null) ?? null;
+      const [stateResult, orientResult] = await Promise.allSettled([
+        librarian.getState(),
+        librarian.botOrient(),
+      ]);
+
+      const freshPromptCtx = stateResult.status === "fulfilled" && stateResult.value["prompt_context"]
+        ? String(stateResult.value["prompt_context"])
+        : null;
+      const freshRecentCtx = orientResult.status === "fulfilled"
+        ? formatRecentContext(orientResult.value)
+        : recentContextRef.value;
+
+      recentContextRef.value = freshRecentCtx;
+
+      const newBase = freshPromptCtx
+        ? `${identityBase}\n\n---\n\n${freshPromptCtx}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+        : identityBase;
+      systemPrompt = freshRecentCtx ? `${newBase}\n\n---\n\n${freshRecentCtx}` : newBase;
+      bootCtx.systemPrompt = systemPrompt;
+
+      if (stateResult.status === "fulfilled" && stateResult.value["current_mood"] !== undefined) {
+        currentMood = (stateResult.value["current_mood"] as string | null) ?? null;
+      }
     } catch { /* keep cached */ }
   }, SOMA_REFRESH_INTERVAL_MS);
 
