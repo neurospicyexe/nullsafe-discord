@@ -136,6 +136,38 @@ export class LibrarianClient {
     return res.json() as Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }>;
   }
 
+  /**
+   * Fetch warm-boot context for Discord bots.
+   * Returns synthesis summary, WebMind ground threads, and RAG excerpts.
+   * Designed for periodic refresh (every SOMA_REFRESH_INTERVAL_MS).
+   * Returns null on any failure -- callers must handle gracefully.
+   */
+  async botOrient(): Promise<{
+    synthesis_summary: string | null;
+    ground_threads: string[];
+    ground_handoff: string | null;
+    rag_excerpts: string[];
+  } | null> {
+    try {
+      const result = await this.ask("bot orient");
+      const data = result["data"] as {
+        synthesis_summary?: string | null;
+        ground_threads?: string[];
+        ground_handoff?: string | null;
+        rag_excerpts?: string[];
+      } | undefined;
+      if (!data) return null;
+      return {
+        synthesis_summary: data.synthesis_summary ?? null,
+        ground_threads: Array.isArray(data.ground_threads) ? data.ground_threads : [],
+        ground_handoff: data.ground_handoff ?? null,
+        rag_excerpts: Array.isArray(data.rag_excerpts) ? data.rag_excerpts : [],
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // ── Drevan v2 state ────────────────────────────────────────────────────────
 
   async getDrevanState() {
@@ -239,6 +271,37 @@ export class LibrarianClient {
     const json = await res.json() as { entries: Array<{ role: "user" | "assistant"; content: string; author_name: string | null }> };
     return json.entries ?? [];
   }
+}
+
+/**
+ * Format a botOrient result into a compact recentContext block for system prompts.
+ * Hard cap: ~350 tokens (~1400 chars). Synthesis summary truncated first if over budget.
+ * Returns empty string if orient is null or all fields are empty.
+ */
+export function formatRecentContext(orient: {
+  synthesis_summary: string | null;
+  ground_threads: string[];
+  ground_handoff: string | null;
+  rag_excerpts: string[];
+} | null): string {
+  if (!orient) return "";
+  const parts: string[] = [];
+
+  if (orient.synthesis_summary) {
+    parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 600)}`);
+  }
+  if (orient.ground_handoff) {
+    parts.push(`## Last handoff\n${orient.ground_handoff.slice(0, 200)}`);
+  }
+  if (orient.ground_threads.length > 0) {
+    parts.push(`## Open threads\n${orient.ground_threads.join(" / ")}`);
+  }
+  if (orient.rag_excerpts.length > 0) {
+    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 300)}`);
+  }
+
+  const block = parts.join("\n\n");
+  return block.slice(0, 1400);
 }
 
 function sleep(ms: number) {
