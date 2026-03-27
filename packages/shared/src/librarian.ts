@@ -124,7 +124,7 @@ export class LibrarianClient {
 
   /**
    * Poll unread inter_companion_notes addressed to this companion.
-   * Halseth marks them read atomically on return.
+   * Halseth no longer marks them read; call notesAck() after processing.
    */
   async notesPoll(): Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }> {
     const url = `${this.url}/inter-companion-notes/unread/${encodeURIComponent(this.companionId)}`;
@@ -134,6 +134,25 @@ export class LibrarianClient {
     });
     if (!res.ok) throw new Error(`notesPoll ${res.status}`);
     return res.json() as Promise<{ items: Array<{ id: string; from_id: string; to_id: string | null; content: string; created_at: string }> }>;
+  }
+
+  /**
+   * Acknowledge receipt of inter-companion notes.
+   * Marks the given IDs as read so they won't be returned again.
+   */
+  async notesAck(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const url = `${this.url}/inter-companion-notes/ack`;
+    const res = await this._fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.secret}`,
+      },
+      body: JSON.stringify({ ids }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`notesAck ${res.status}`);
   }
 
   /**

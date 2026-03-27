@@ -118,6 +118,11 @@ export function startAutonomous(
         );
         if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID, response, client);
       }
+      // Ack all notes after processing (mark-on-ack pattern)
+      if (items.length > 0) {
+        await librarian.notesAck(items.map(n => n.id)).catch((e: unknown) =>
+          console.warn(`[cypher/autonomous] notesAck failed:`, e));
+      }
     } catch (e) {
       console.warn("[cypher/autonomous] notesPoll failed:", e);
     }
