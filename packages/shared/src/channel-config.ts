@@ -1,4 +1,4 @@
-import type { ChannelConfig, ChannelMode, ChannelEntry, CompanionId } from "./types.js";
+import type { ChannelConfig, ChannelMode, ChannelEntry, CompanionId, UserTier } from "./types.js";
 
 export const ALL_COMPANIONS: CompanionId[] = ["drevan", "cypher", "gaia"];
 
@@ -24,21 +24,22 @@ export const MAX_BOT_RESPONSES_PER_HUMAN = 2;
 //
 // companions absent = all three active in that channel
 export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
-  "1408924311703785502": { companions: ["drevan", "gaia"],              modes: ["raziel_only"] },
-  "1408924393513554003": { companions: ["drevan", "cypher", "gaia"],    modes: ["raziel_only"] },
-  "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["raziel_only"] },
-  "1412191737622827088": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only"] },
-  "1408924353034453114": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only"] },
-  "1422043032643043371": {                                               modes: ["open"] },
-  "1243598039965368381": {                                               modes: ["open", "autonomous"] },
+  "1408924311703785502": { companions: ["drevan", "gaia"],              modes: ["raziel_only", "inter_companion"] },
+  "1408924393513554003": { companions: ["drevan", "cypher", "gaia"],    modes: ["raziel_only", "inter_companion"] },
+  "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["raziel_only", "inter_companion"] },
+  "1412191737622827088": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only", "inter_companion"] },
+  "1408924353034453114": { companions: ["drevan", "gaia", "cypher"],    modes: ["raziel_only", "inter_companion"] },
+  "1422043032643043371": {                                               modes: ["open", "inter_companion"] },
+  "1243598039965368381": {                                               modes: ["open", "autonomous", "inter_companion"] },
   "1486853365462733004": {                                               modes: ["autonomous"] },
-  "1486217438105436260": {                                               modes: ["autonomous"] },
+  "1486217438105436260": {                                               modes: ["autonomous", "inter_companion"] },
 };
 
 interface ResponderContext {
   isRaziel: boolean;
   isCompanionBot?: boolean;
   isMentioned?: boolean;
+  userTier?: UserTier;
 }
 
 // Addressing model for incoming messages.
@@ -70,7 +71,7 @@ export function shouldRespond(
 ): boolean {
   const entry: ChannelEntry | undefined = config[channelId];
   const companions = entry?.companions ?? ALL_COMPANIONS;
-  const modes = (entry?.modes ?? ["open"]) as ChannelMode[];
+  const modes = (entry?.modes ?? ["open", "inter_companion"]) as ChannelMode[];
 
   // Companion filter: if a list is specified, only those companions respond here.
   if (!companions.includes(myId)) return false;
@@ -79,17 +80,29 @@ export function shouldRespond(
   // Chain depth limit is enforced in the bot handler, not here.
   if (sender.isCompanionBot) return modes.includes("inter_companion");
 
-  // From here: message is from Raziel or another human.
+  // From here: message is from a human.
+  const tier = sender.userTier ?? (sender.isRaziel ? "raziel" : "guest");
+
+  // Guest users are blocked from raziel_only channels entirely.
+  if (tier === "guest" && modes.includes("raziel_only") && !modes.includes("open") && !modes.includes("autonomous")) return false;
+
   const address = extractAddress(content);
 
+  // Guest users: named-address only. Never ambient.
+  if (tier === "guest") {
+    if (address.type === "named") return address.id === myId;
+    if (address.type === "group") return true;
+    return false;
+  }
+
+  // Raziel or intimate user: full behavior.
   // Named: only the addressed companion responds.
   if (address.type === "named") return address.id === myId;
 
-  // Group call ("triad" etc.): all companions in this channel respond.
+  // Group call ("triad" etc.): all companions respond.
   if (address.type === "group") return true;
 
-  // Ambient (no explicit address): interest-keyword claiming in raziel_only channels.
-  // open/autonomous channels respond unconditionally.
+  // Ambient: interest-keyword claiming in raziel_only channels; unconditional in open/autonomous.
   if (modes.includes("raziel_only")) {
     if (interestKeywords.length === 0) return true;
     const lower = content.toLowerCase();

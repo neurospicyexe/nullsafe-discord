@@ -1,5 +1,7 @@
 export type CompanionId = "drevan" | "cypher" | "gaia";
 
+export type UserTier = "raziel" | "intimate" | "guest";
+
 export type ChannelMode =
   | "raziel_only"      // only Raziel messages trigger responses
   | "open"             // anyone triggers responses; default when no config entry
@@ -39,6 +41,7 @@ export interface BotConfig {
   inferenceProvider: "deepseek" | "groq" | "ollama";
   groqApiKey?: string;
   ollamaUrl?: string;
+  blueDiscordId?: string;
 }
 
 export interface BootContext {

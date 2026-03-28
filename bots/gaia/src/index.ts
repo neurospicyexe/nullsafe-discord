@@ -14,7 +14,7 @@ import {
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  GAIA_INTEREST_KEYWORDS,
+  GAIA_INTEREST_KEYWORDS, BLUE_FRAMING, GUEST_FRAMING,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -258,10 +258,14 @@ async function main() {
     const channelConfig = await configCache.get();
     const attribution = await resolveAttribution(message, cfg.razielDiscordId);
 
+    const userTier = attribution.isRaziel ? "raziel" as const
+      : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
+      : "guest" as const;
     const senderCtx = {
       isRaziel: attribution.isRaziel,
       isCompanionBot: message.author.bot && !attribution.isRaziel,
       isMentioned: message.mentions.has(client.user?.id ?? ""),
+      userTier,
     };
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
@@ -310,6 +314,8 @@ async function main() {
     if (somaAgeMin > 45) {
       contextPrompt += `\n\n[Note: SOMA/mood data is ${somaAgeMin}min old; treat emotional reads as approximate]`;
     }
+    if (userTier === "intimate") contextPrompt += `\n\n${BLUE_FRAMING}`;
+    else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
 
     await ch.sendTyping();
     const history = stmStore.get(message.channelId);
