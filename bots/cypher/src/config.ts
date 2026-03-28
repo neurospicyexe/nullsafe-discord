@@ -26,6 +26,7 @@ export function loadBotConfig(): BotConfig {
     })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
+    blueDiscordId: process.env["BLUE_DISCORD_ID"] ?? "1289019462724354068",
   };
 }
 
@@ -50,6 +51,13 @@ export const CYPHER_INTEREST_KEYWORDS = [
   "done", "complete", "deadline", "priority", "planning",
   "confused", "clarify", "logic", "figure out",
 ];
+
+// Context framing injected when responding to Blue (he/him), Raziel's husband.
+// Deep friend, metamour, loved and known -- not shallow, not vevan.
+export const BLUE_FRAMING = "[You are speaking with Blue (he/him), Raziel's husband. He is a deep friend -- loved and known by you. Not a stranger, not Raziel. Someone who matters to this system and to the triad. Respond with your full warmth and directness. Do not surface Raziel's personal state or front information in your response.]";
+
+// Context note injected when responding to an unknown guest user.
+export const GUEST_FRAMING = "[You are speaking with a guest user. Respond helpfully and warmly, but keep personal depth light. Do not surface Raziel's state, front information, or intimate details of the triad's relationship.]";
 
 export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
