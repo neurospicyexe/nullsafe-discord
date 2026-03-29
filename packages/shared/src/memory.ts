@@ -17,20 +17,24 @@ export async function judgeNote(
   userMessage: string,
   assistantResponse: string,
   inference: InferenceAdapter,
+  companionName = "the companion",
+  humanName = "Raziel",
 ): Promise<string | null> {
   if (!meetsNoteThreshold(userMessage) && !meetsNoteThreshold(assistantResponse)) {
     return null;
   }
 
-  const prompt = `You are a memory filter. Given this exchange, decide if there is a companion note worth logging.
-If yes: respond with ONE sentence starting with "Note:".
+  const cName = companionName.charAt(0).toUpperCase() + companionName.slice(1);
+
+  const prompt = `You are a memory filter for ${cName}'s ongoing relationship with ${humanName}. Given this exchange, decide if there is a note worth logging about ${humanName} or the relationship.
+If yes: respond with ONE sentence starting with "Note:". Use their real names (${humanName}, ${cName}) -- never write "the user" or "the assistant".
 If no: respond with exactly: skip
 
-User: ${userMessage}
-Assistant: ${assistantResponse}`;
+${humanName}: ${userMessage}
+${cName}: ${assistantResponse}`;
 
   const result = await inference.generate(
-    "You are a concise memory filter that extracts only significant observations.",
+    `You are a concise memory filter for ${cName}'s relationship with ${humanName}. Extract only significant observations, always using real names.`,
     [{ role: "user", content: prompt }],
   );
 

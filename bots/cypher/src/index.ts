@@ -368,7 +368,7 @@ async function main() {
       runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
-    judgeNote(message.content, response, inference).then((note: string | null) => {
+    judgeNote(message.content, response, inference, COMPANION_ID).then((note: string | null) => {
       if (note) writeQueue.fireAndForget(`note:judge:${message.channelId}`, async () => { await librarian.addCompanionNote(note, message.channelId); });
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeNote failed:`, e));
 
