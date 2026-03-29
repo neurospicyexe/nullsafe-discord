@@ -106,8 +106,8 @@ export class LibrarianClient {
     return this.ask("update my state", JSON.stringify({ prompt_context: text }));
   }
 
-  async addCompanionNote(note: string, channel?: string) {
-    return this.ask("add companion note", JSON.stringify({ note, channel }));
+  async addCompanionNote(note: string, _channel?: string) {
+    return this.ask("add companion note", note);
   }
 
   async witnessLog(entry: string, channel?: string) {
