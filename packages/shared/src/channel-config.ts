@@ -76,9 +76,16 @@ export function shouldRespond(
   // Companion filter: if a list is specified, only those companions respond here.
   if (!companions.includes(myId)) return false;
 
-  // Companion-to-companion: only in channels with inter_companion mode.
-  // Chain depth limit is enforced in the bot handler, not here.
-  if (sender.isCompanionBot) return modes.includes("inter_companion");
+  // Companion-to-companion: only in channels with inter_companion mode,
+  // AND only when explicitly named or group-called. Ambient bot statements
+  // (no name address) do not trigger other companions -- that's what causes loops.
+  if (sender.isCompanionBot) {
+    if (!modes.includes("inter_companion")) return false;
+    const addr = extractAddress(content);
+    if (addr.type === "named") return addr.id === myId;
+    if (addr.type === "group") return true;
+    return false; // ambient bot message -- no response
+  }
 
   // From here: message is from a human.
   const tier = sender.userTier ?? (sender.isRaziel ? "raziel" : "guest");
