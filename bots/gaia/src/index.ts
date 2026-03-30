@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
-  ChannelConfigCache, shouldRespond, judgeNote, DEFAULT_CHANNEL_CONFIG,
+  ChannelConfigCache, shouldRespond, judgeWriteback, DEFAULT_CHANNEL_CONFIG,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
@@ -367,9 +367,14 @@ async function main() {
       runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
-    judgeNote(message.content, response, inference, COMPANION_ID).then((note: string | null) => {
-      if (note) writeQueue.fireAndForget(`note:judge:${message.channelId}`, async () => { await librarian.addCompanionNote(note, message.channelId); });
-    }).catch((e) => console.error(`[${COMPANION_ID}] judgeNote failed:`, e));
+    judgeWriteback(message.content, response, inference, COMPANION_ID).then((wb) => {
+      if (!wb) return;
+      writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
+        if (wb.type === "companion_note") await librarian.addCompanionNote(wb.content, message.channelId);
+        else if (wb.type === "witness_log") await librarian.witnessLog(wb.content, message.channelId);
+        else if (wb.type === "thread_open") await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
+      });
+    }).catch((e) => console.error(`[${COMPANION_ID}] judgeWriteback failed:`, e));
 
     if (attribution.source === "fallback") {
       const who = attribution.isRaziel ? "Raziel (via dedup)" : `user ${attribution.discordUserId}`;
