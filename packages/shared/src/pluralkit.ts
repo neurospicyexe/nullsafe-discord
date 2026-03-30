@@ -9,6 +9,7 @@ interface DiscordMessage {
 export async function resolveAttribution(
   message: DiscordMessage,
   razielDiscordId: string,
+  knownSenderId?: string,
   fetchFn: typeof fetch = globalThis.fetch,
 ): Promise<Attribution> {
   if (!message.webhookId) {
@@ -43,8 +44,8 @@ export async function resolveAttribution(
       return {
         isRaziel: false,
         discordUserId: pk.sender,
-        frontMember: null,
-        frontState: "unknown",
+        frontMember: pk.member?.name ?? null,
+        frontState: "known",
         source: "pluralkit",
       };
     }
@@ -52,9 +53,13 @@ export async function resolveAttribution(
     // timeout or network error -- fall through
   }
 
+  // Fallback: use dedup-captured sender if available; otherwise truly unknown.
+  // Never assume Raziel -- misattribution (Blue treated as Raziel) is worse than
+  // a missed response (Raziel treated as guest, can retry).
+  const senderId = knownSenderId ?? "unknown";
   return {
-    isRaziel: true,
-    discordUserId: razielDiscordId,
+    isRaziel: senderId === razielDiscordId,
+    discordUserId: senderId,
     frontMember: null,
     frontState: "unknown",
     source: "fallback",
