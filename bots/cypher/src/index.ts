@@ -190,8 +190,9 @@ async function main() {
   const botPingpongCooldownUntil = new Map<string, number>();
   const extremeTempCount = new Map<string, number>();
   const SENT_IDS_CAP = 500;
-  // PluralKit dedup: hold direct Raziel messages briefly so PK proxy can cancel them.
-  const pkPending = new Map<string, boolean>();
+  // PK dedup: hold ALL non-bot direct messages briefly so PK proxy can cancel them.
+  // Stores original sender ID so fallback attribution knows who actually sent it.
+  const pkPending = new Map<string, { skip: boolean; senderId: string }>();
   const PK_HOLD_MS = 1000;
 
   // Base identity is always the foundation; Halseth context layers on top.
@@ -247,18 +248,20 @@ async function main() {
 
     const dedupKey = `${message.channelId}:${message.content}`;
     if (message.webhookId && pkPending.has(dedupKey)) {
-      pkPending.set(dedupKey, true);
+      const entry = pkPending.get(dedupKey)!;
+      pkPending.set(dedupKey, { ...entry, skip: true });
     }
-    if (!message.webhookId && message.author.id === cfg.razielDiscordId) {
-      pkPending.set(dedupKey, false);
+    if (!message.webhookId && !message.author.bot) {
+      pkPending.set(dedupKey, { skip: false, senderId: message.author.id });
       await new Promise<void>(resolve => setTimeout(resolve, PK_HOLD_MS));
-      const skip = pkPending.get(dedupKey) ?? false;
+      const entry = pkPending.get(dedupKey);
       pkPending.delete(dedupKey);
-      if (skip) return;
+      if (entry?.skip) return;
     }
 
+    const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
     const channelConfig = await configCache.get();
-    const attribution = await resolveAttribution(message, cfg.razielDiscordId);
+    const attribution = await resolveAttribution(message, cfg.razielDiscordId, knownSenderId);
 
     const userTier = attribution.isRaziel ? "raziel" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
@@ -373,8 +376,9 @@ async function main() {
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeNote failed:`, e));
 
     if (attribution.source === "fallback") {
+      const who = attribution.isRaziel ? "Raziel (via dedup)" : `user ${attribution.discordUserId}`;
       writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
-        await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId} -- treated as Raziel direct`, message.channelId);
+        await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
       });
     }
   });
