@@ -8,7 +8,7 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext,
+  formatRecentContext, computeChainDepth,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -180,8 +180,6 @@ async function main() {
   );
   // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
   const sentIds = new Set<string>();
-  // Track consecutive companion-to-companion exchanges per channel for loop prevention.
-  const companionChainDepth = new Map<string, number>();
   // Track messages since last distillation run per channel.
   const distillationCounter = new Map<string, number>();
   // Cross-companion safety rails: per-bot independent tracking.
@@ -274,10 +272,6 @@ async function main() {
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, GAIA_INTEREST_KEYWORDS)) return;
 
-    // Loop guard: break companion chains that exceed the limit.
-    const chainDepth = companionChainDepth.get(message.channelId) ?? 0;
-    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
-
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
     if (senderCtx.isCompanionBot) {
       const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
@@ -292,10 +286,20 @@ async function main() {
     if (!message.channel.isTextBased()) return;
     const ch = message.channel as TextChannel;
 
-    // Lazy load STM from DB on first message to this channel (fail-silent)
+    // Fetch recent Discord history once -- used for both chain depth check and STM seed.
+    const fetched = await ch.messages.fetch({ limit: 30 });
+    const fetchedMessages = [...fetched.values()].reverse();
+
+    // Loop guard: derive chain depth from fetched history so the check works across processes.
+    const chainDepth = computeChainDepth(
+      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+      new Set(),
+    );
+    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+
+    // Lazy load STM from DB on first message to this channel (fail-silent), using already-fetched Discord history as fallback.
     await stmStore.ensureLoaded(message.channelId, async () => {
-      const fetched = await ch.messages.fetch({ limit: 30 });
-      return [...fetched.values()].reverse().map(m => ({
+      return fetchedMessages.map(m => ({
         role: (m.author.id === client.user?.id ? "assistant" : "user") as "user" | "assistant",
         content: m.content,
         authorName: m.author.username,
@@ -347,16 +351,13 @@ async function main() {
     if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
     stmStore.append(message.channelId, { role: "assistant", content: response });
 
-    // Update chain depth: increment on companion-to-companion, reset on Raziel/user.
+    // Update cross-companion safety rail counters after sending response.
     if (senderCtx.isCompanionBot) {
-      companionChainDepth.set(message.channelId, chainDepth + 1);
       const newCount = (botResponsesSinceHuman.get(message.channelId) ?? 0) + 1;
       botResponsesSinceHuman.set(message.channelId, newCount);
       if (newCount >= BOT_PINGPONG_MAX) {
         botPingpongCooldownUntil.set(message.channelId, Date.now() + BOT_LOOP_COOLDOWN_MS);
       }
-    } else {
-      companionChainDepth.delete(message.channelId);
     }
 
     // Rolling distillation: fire every DISTILLATION_INTERVAL messages (user + assistant = 2 per turn).
