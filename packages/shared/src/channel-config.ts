@@ -13,6 +13,28 @@ export const BOT_LOOP_COOLDOWN_MS = 60_000;
 // MAX_BOT_RESPONSES_PER_HUMAN: hard cap on bot-to-bot responses per channel between human messages.
 export const MAX_BOT_RESPONSES_PER_HUMAN = 2;
 
+/**
+ * Count consecutive bot-authored messages at the tail of a message list.
+ * Used to derive chain depth from fetched Discord history instead of per-process memory.
+ * @param messages Chronological list of recent messages (oldest first).
+ * @param botIds Set of Discord user IDs that are companion bots (optional, authorIsBot flag is also checked).
+ */
+export function computeChainDepth(
+  messages: Array<{ authorId: string; authorIsBot: boolean }>,
+  botIds: ReadonlySet<string>,
+): number {
+  let depth = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.authorIsBot || botIds.has(m.authorId)) {
+      depth++;
+    } else {
+      break;
+    }
+  }
+  return depth;
+}
+
 // Default config used as fallback when channelConfigUrl is unreachable.
 // Keep in sync with channel-config.json manually.
 //
