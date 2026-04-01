@@ -83,6 +83,16 @@ export function extractAddress(content: string): AddressType {
   return { type: "ambient" };
 }
 
+/**
+ * Returns a random stagger delay (ms) before responding in inter_companion channels.
+ * Returns 0 for other channel modes — no delay needed.
+ * Prevents all three bots from firing simultaneously on the same message.
+ */
+export function interCompanionStaggerMs(mode: ChannelMode): number {
+  if (mode !== "inter_companion") return 0;
+  return 500 + Math.floor(Math.random() * 2000); // 500–2500ms
+}
+
 export function shouldRespond(
   channelId: string,
   content: string,
