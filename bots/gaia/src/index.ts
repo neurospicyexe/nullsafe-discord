@@ -8,7 +8,7 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext, computeChainDepth,
+  formatRecentContext, computeChainDepth, interCompanionStaggerMs,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -325,6 +325,27 @@ async function main() {
     else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
 
     await ch.sendTyping();
+
+    // Stagger in inter_companion channels to prevent simultaneous responses.
+    const channelEntry = channelConfig[message.channelId];
+    const channelModes = (channelEntry?.modes ?? ["open"]);
+    const activeMode = channelModes.includes("inter_companion") ? "inter_companion" as const : channelModes[0] as import("@nullsafe/shared").ChannelMode;
+    const staggerDelay = interCompanionStaggerMs(activeMode);
+    if (staggerDelay > 0) {
+      await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
+      // Collision check: if another bot posted after we decided to respond, abort.
+      const lastMsg = ch.lastMessage;
+      if (
+        lastMsg &&
+        lastMsg.id !== message.id &&
+        lastMsg.author.bot &&
+        lastMsg.author.id !== client.user?.id &&
+        Date.now() - lastMsg.createdTimestamp < staggerDelay + 1000
+      ) {
+        return;
+      }
+    }
+
     const history = stmStore.get(message.channelId);
     const rawTemp = inferTemperature(message.content, currentMood);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
