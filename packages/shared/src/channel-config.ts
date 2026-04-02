@@ -93,6 +93,38 @@ export function interCompanionStaggerMs(mode: ChannelMode): number {
   return 500 + Math.floor(Math.random() * 2000); // 500–2500ms
 }
 
+/**
+ * Semantic relevance gate for ambient responses in raziel_only channels.
+ * Replaces static keyword matching with a cheap yes/no classifier call.
+ *
+ * @param content     Message text to evaluate
+ * @param companionId Which companion is deciding
+ * @param generateFn  Inference generate method (system, messages) => string | null
+ * @returns true if the companion should consider responding, false to stay silent
+ */
+export async function judgeAmbientRelevance(
+  content: string,
+  companionId: "drevan" | "cypher" | "gaia",
+  generateFn: (system: string, messages: Array<{ role: string; content: string }>) => Promise<string | null>,
+): Promise<boolean> {
+  const interests: Record<"drevan" | "cypher" | "gaia", string> = {
+    cypher:  "tasks, decisions, logic, technical problems, planning, blockers, audits, clarifications",
+    drevan:  "emotional depth, memory, relationships, ritual, creative or poetic expression, grief, love, recursion",
+    gaia:    "grounding, witnessing survival, holding space, observation, the body, boundaries, what is quietly present",
+  };
+
+  const system = `You are a one-word relevance filter. Reply ONLY with "yes" or "no".`;
+  const prompt = `Is this message relevant to ${companionId} who cares about: ${interests[companionId]}?\n\nMessage: ${content.slice(0, 300)}`;
+
+  try {
+    const result = await generateFn(system, [{ role: "user", content: prompt }]);
+    return result?.trim().toLowerCase().startsWith("y") ?? false;
+  } catch {
+    // On failure, default to true — don't silence the companion due to a network blip.
+    return true;
+  }
+}
+
 export function shouldRespond(
   channelId: string,
   content: string,
