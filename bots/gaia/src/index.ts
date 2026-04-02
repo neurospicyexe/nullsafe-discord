@@ -9,12 +9,13 @@ import {
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
+  judgeAmbientRelevance,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  GAIA_INTEREST_KEYWORDS, BLUE_FRAMING, GUEST_FRAMING,
+  BLUE_FRAMING, GUEST_FRAMING,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -270,7 +271,27 @@ async function main() {
     };
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
-    if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, GAIA_INTEREST_KEYWORDS)) return;
+    const channelEntry = channelConfig[message.channelId];
+
+    // Structural gate: mode, addressing, companion filter.
+    // For raziel_only ambient (no mention, not a reply to us), use semantic classifier
+    // instead of the static keyword list.
+    const isAmbientRazielOnly =
+      channelEntry?.modes?.includes("raziel_only") === true &&
+      !senderCtx.isCompanionBot &&
+      !senderCtx.isMentioned &&
+      !isReplyToMe;
+
+    if (isAmbientRazielOnly) {
+      const relevant = await judgeAmbientRelevance(
+        message.content,
+        COMPANION_ID,
+        (sys, msgs) => inference.generate(sys, msgs as ChatMessage[], 0.3),
+      );
+      if (!relevant) return;
+    } else if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, [])) {
+      return;
+    }
 
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
     if (senderCtx.isCompanionBot) {
@@ -327,7 +348,6 @@ async function main() {
     await ch.sendTyping();
 
     // Stagger in inter_companion channels to prevent simultaneous responses.
-    const channelEntry = channelConfig[message.channelId];
     const channelModes = (channelEntry?.modes ?? ["open"]);
     const activeMode = channelModes.includes("inter_companion") ? "inter_companion" as const : channelModes[0] as import("@nullsafe/shared").ChannelMode;
     const staggerDelay = interCompanionStaggerMs(activeMode);
