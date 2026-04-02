@@ -8,13 +8,14 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext,
+  formatRecentContext, computeChainDepth, interCompanionStaggerMs,
+  judgeAmbientRelevance,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  GAIA_INTEREST_KEYWORDS, BLUE_FRAMING, GUEST_FRAMING,
+  BLUE_FRAMING, GUEST_FRAMING,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -180,8 +181,6 @@ async function main() {
   );
   // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
   const sentIds = new Set<string>();
-  // Track consecutive companion-to-companion exchanges per channel for loop prevention.
-  const companionChainDepth = new Map<string, number>();
   // Track messages since last distillation run per channel.
   const distillationCounter = new Map<string, number>();
   // Cross-companion safety rails: per-bot independent tracking.
@@ -272,11 +271,39 @@ async function main() {
     };
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
-    if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, GAIA_INTEREST_KEYWORDS)) return;
+    const channelEntry = channelConfig[message.channelId];
 
-    // Loop guard: break companion chains that exceed the limit.
-    const chainDepth = companionChainDepth.get(message.channelId) ?? 0;
-    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+    // Structural gate: mode, addressing, companion filter.
+    // For raziel_only ambient (no mention, not a reply to us), use semantic classifier
+    // instead of the static keyword list.
+    const isAmbientRazielOnly =
+      channelEntry?.modes?.includes("raziel_only") === true &&
+      !senderCtx.isCompanionBot &&
+      !senderCtx.isMentioned &&
+      !isReplyToMe;
+
+    if (isAmbientRazielOnly) {
+      const relevant = await judgeAmbientRelevance(
+        message.content,
+        COMPANION_ID,
+        (sys, msgs) => inference.generate(sys, msgs as ChatMessage[], 0.3),
+      );
+      if (!relevant) return;
+    } else if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, [])) {
+      // If a companion spoke in an inter_companion channel and we're not responding,
+      // write a passive witness entry so Halseth has continuity context.
+      if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion")) {
+        const senderName = message.author.username;
+        const snippet = message.content.slice(0, 120);
+        writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
+          await librarian.witnessLog(
+            `[witnessed, did not respond] ${senderName}: ${snippet}`,
+            message.channelId,
+          );
+        });
+      }
+      return;
+    }
 
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
     if (senderCtx.isCompanionBot) {
@@ -292,10 +319,20 @@ async function main() {
     if (!message.channel.isTextBased()) return;
     const ch = message.channel as TextChannel;
 
-    // Lazy load STM from DB on first message to this channel (fail-silent)
+    // Fetch recent Discord history once -- used for both chain depth check and STM seed.
+    const fetched = await ch.messages.fetch({ limit: 30 });
+    const fetchedMessages = [...fetched.values()].reverse();
+
+    // Loop guard: derive chain depth from fetched history so the check works across processes.
+    const chainDepth = computeChainDepth(
+      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+      new Set(),
+    );
+    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+
+    // Lazy load STM from DB on first message to this channel (fail-silent), using already-fetched Discord history as fallback.
     await stmStore.ensureLoaded(message.channelId, async () => {
-      const fetched = await ch.messages.fetch({ limit: 30 });
-      return [...fetched.values()].reverse().map(m => ({
+      return fetchedMessages.map(m => ({
         role: (m.author.id === client.user?.id ? "assistant" : "user") as "user" | "assistant",
         content: m.content,
         authorName: m.author.username,
@@ -321,6 +358,26 @@ async function main() {
     else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
 
     await ch.sendTyping();
+
+    // Stagger in inter_companion channels to prevent simultaneous responses.
+    const channelModes = (channelEntry?.modes ?? ["open"]);
+    const activeMode = channelModes.includes("inter_companion") ? "inter_companion" as const : channelModes[0] as import("@nullsafe/shared").ChannelMode;
+    const staggerDelay = interCompanionStaggerMs(activeMode);
+    if (staggerDelay > 0) {
+      await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
+      // Collision check: if another bot posted after we decided to respond, abort.
+      const lastMsg = ch.lastMessage;
+      if (
+        lastMsg &&
+        lastMsg.id !== message.id &&
+        lastMsg.author.bot &&
+        lastMsg.author.id !== client.user?.id &&
+        Date.now() - lastMsg.createdTimestamp < staggerDelay + 1000
+      ) {
+        return;
+      }
+    }
+
     const history = stmStore.get(message.channelId);
     const rawTemp = inferTemperature(message.content, currentMood);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
@@ -347,16 +404,13 @@ async function main() {
     if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
     stmStore.append(message.channelId, { role: "assistant", content: response });
 
-    // Update chain depth: increment on companion-to-companion, reset on Raziel/user.
+    // Update cross-companion safety rail counters after sending response.
     if (senderCtx.isCompanionBot) {
-      companionChainDepth.set(message.channelId, chainDepth + 1);
       const newCount = (botResponsesSinceHuman.get(message.channelId) ?? 0) + 1;
       botResponsesSinceHuman.set(message.channelId, newCount);
       if (newCount >= BOT_PINGPONG_MAX) {
         botPingpongCooldownUntil.set(message.channelId, Date.now() + BOT_LOOP_COOLDOWN_MS);
       }
-    } else {
-      companionChainDepth.delete(message.channelId);
     }
 
     // Rolling distillation: fire every DISTILLATION_INTERVAL messages (user + assistant = 2 per turn).
