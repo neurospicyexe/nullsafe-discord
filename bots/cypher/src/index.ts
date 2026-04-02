@@ -291,6 +291,18 @@ async function main() {
       );
       if (!relevant) return;
     } else if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, [])) {
+      // If a companion spoke in an inter_companion channel and we're not responding,
+      // write a passive witness entry so Halseth has continuity context.
+      if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion")) {
+        const senderName = message.author.username;
+        const snippet = message.content.slice(0, 120);
+        writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
+          await librarian.witnessLog(
+            `[witnessed, did not respond] ${senderName}: ${snippet}`,
+            message.channelId,
+          );
+        });
+      }
       return;
     }
 
