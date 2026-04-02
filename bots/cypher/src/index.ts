@@ -331,7 +331,7 @@ async function main() {
 
     // Stagger in inter_companion channels to prevent simultaneous responses.
     const channelEntry = channelConfig[message.channelId];
-    const channelModes = (channelEntry?.modes ?? ["open", "inter_companion"]);
+    const channelModes = (channelEntry?.modes ?? ["open"]);
     const activeMode = channelModes.includes("inter_companion") ? "inter_companion" as const : channelModes[0] as import("@nullsafe/shared").ChannelMode;
     const staggerDelay = interCompanionStaggerMs(activeMode);
     if (staggerDelay > 0) {
