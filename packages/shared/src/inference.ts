@@ -210,12 +210,16 @@ class LMStudioAdapter implements InferenceAdapter {
 
 // Tries each adapter in order, returns first non-null result.
 class FallbackAdapter implements InferenceAdapter {
-  constructor(private adapters: InferenceAdapter[]) {}
+  constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number): Promise<string | null> {
-    for (const adapter of this.adapters) {
+    for (const { name, adapter } of this.adapters) {
       const result = await adapter.generate(systemPrompt, messages, temperature);
-      if (result !== null) return result;
+      if (result !== null) {
+        console.log(`[inference] ${name} responded`);
+        return result;
+      }
+      console.warn(`[inference] ${name} failed, trying next`);
     }
     return null;
   }
@@ -242,7 +246,10 @@ export function createAdapter(
       const local = new LMStudioAdapter(lmstudioUrl ?? "http://localhost:1234", fetchFn);
       // Auto-chain: if DeepSeek key is present, it's the fallback when local is unreachable.
       if (deepseekKey) {
-        return new FallbackAdapter([local, new DeepSeekAdapter(deepseekKey, fetchFn)]);
+        return new FallbackAdapter([
+          { name: "lmstudio", adapter: local },
+          { name: "deepseek", adapter: new DeepSeekAdapter(deepseekKey, fetchFn) },
+        ]);
       }
       return local;
     }
