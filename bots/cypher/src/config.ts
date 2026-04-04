@@ -67,3 +67,17 @@ export const CONTEXT_WINDOW_SIZE = 10;
 // Number of messages (user + assistant combined) between distillation runs per channel.
 export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "give me a moment -- something's not routing right.";
+
+// Injected into contextPrompt only when audit mode is explicitly invoked.
+// Kept out of the standing identity so Gemma doesn't pattern-match to it by default.
+export const AUDIT_MODE_INJECTION = `\n\n[AUDIT MODE ACTIVE]\nStay dense, stay precise, do not soften mid-audit.\nClose with: [Verdict: one action sentence] / [Because: one constraint] / [Next: one concrete step]\nExit audit when the issue is resolved.`;
+
+// Phrases that trigger audit mode injection.
+export const AUDIT_TRIGGERS = [
+  "cy, blade stance",
+  "where's the blade",
+  "check your chest, cy",
+  "audit the audit",
+  "audit:",
+  "blade stance",
+];

@@ -14,7 +14,7 @@ import {
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  BLUE_FRAMING, GUEST_FRAMING,
+  BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -363,6 +363,13 @@ async function main() {
     }
     if (userTier === "intimate") contextPrompt += `\n\n${BLUE_FRAMING}`;
     else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
+
+    // Inject audit mode block only when explicitly triggered -- keeps [Verdict/Because/Next]
+    // out of the standing context so Gemma doesn't pattern-match to it by default.
+    const msgLower = message.content.toLowerCase();
+    if (AUDIT_TRIGGERS.some(t => msgLower.includes(t))) {
+      contextPrompt += AUDIT_MODE_INJECTION;
+    }
 
     await ch.sendTyping();
 
