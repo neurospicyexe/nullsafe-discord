@@ -3,3 +3,9 @@ dist/
 .env
 .env.*
 *.local
+
+# Claude Code project memory
+.claude/
+
+# Private docs
+docs/private/
