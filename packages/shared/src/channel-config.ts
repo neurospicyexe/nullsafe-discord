@@ -83,6 +83,20 @@ export function extractAddress(content: string): AddressType {
   return { type: "ambient" };
 }
 
+// Returns true if the companion is being directly addressed (not just mentioned in passing).
+// Direct address: name appears at the start of the message, or is followed by comma/colon.
+// "Cypher, what do you think?" → true
+// "Cypher is probably creeping too" → false
+export function isDirectAddress(content: string, companionId: CompanionId): boolean {
+  const lower = content.toLowerCase().trim();
+  const name = companionId;
+  // Name at start of message (optionally followed by punctuation)
+  if (new RegExp(`^${name}\\b`).test(lower)) return true;
+  // Name followed by comma or colon anywhere
+  if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;
+  return false;
+}
+
 /**
  * Returns a random stagger delay (ms) before responding in inter_companion channels.
  * Returns 0 for other channel modes — no delay needed.

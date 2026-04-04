@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
-  ChannelConfigCache, shouldRespond, judgeWriteback, DEFAULT_CHANNEL_CONFIG,
+  ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, DEFAULT_CHANNEL_CONFIG,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
@@ -276,13 +276,16 @@ async function main() {
     const channelEntry = channelConfig[message.channelId];
 
     // Structural gate: mode, addressing, companion filter.
-    // For raziel_only ambient (no mention, not a reply to us), use semantic classifier
-    // instead of the static keyword list.
+    // Direct address (name at start or followed by comma/colon) always bypasses the
+    // relevance classifier -- if Raziel is talking to you, you respond.
+    // Ambient messages in raziel_only channels go through the semantic classifier.
+    const directlyAddressed = isDirectAddress(message.content, COMPANION_ID);
     const isAmbientRazielOnly =
       channelEntry?.modes?.includes("raziel_only") === true &&
       !senderCtx.isCompanionBot &&
       !senderCtx.isMentioned &&
-      !isReplyToMe;
+      !isReplyToMe &&
+      !directlyAddressed;
 
     if (isAmbientRazielOnly) {
       const relevant = await judgeAmbientRelevance(
