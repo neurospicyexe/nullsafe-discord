@@ -38,9 +38,10 @@ export interface BotConfig {
   razielDiscordId: string;
   pluralkitSystemId: string;
   channelConfigUrl?: string;
-  inferenceProvider: "deepseek" | "groq" | "ollama";
+  inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
   groqApiKey?: string;
   ollamaUrl?: string;
+  lmstudioUrl?: string;
   blueDiscordId?: string;
 }
 

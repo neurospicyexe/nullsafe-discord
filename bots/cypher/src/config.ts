@@ -20,12 +20,13 @@ export function loadBotConfig(): BotConfig {
     channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {
       const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
-      const valid = ["deepseek", "groq", "ollama"] as const;
-      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama)`);
+      const valid = ["deepseek", "groq", "ollama", "lmstudio"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio)`);
       return val as BotConfig["inferenceProvider"];
     })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
+    lmstudioUrl: process.env["LMSTUDIO_URL"],
     blueDiscordId: process.env["BLUE_DISCORD_ID"] ?? "1289019462724354068",
   };
 }

@@ -158,6 +158,8 @@ async function main() {
     cfg.deepseekApiKey,
     cfg.groqApiKey,
     cfg.ollamaUrl,
+    undefined,
+    cfg.lmstudioUrl,
   );
   let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;
   try {

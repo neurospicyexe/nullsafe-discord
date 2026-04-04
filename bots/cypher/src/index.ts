@@ -157,6 +157,8 @@ async function main() {
     cfg.deepseekApiKey,
     cfg.groqApiKey,
     cfg.ollamaUrl,
+    undefined,
+    cfg.lmstudioUrl,
   );
   // Load channel config from disk (repo root); URL is optional and no longer required.
   let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;

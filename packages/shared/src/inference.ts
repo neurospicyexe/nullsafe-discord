@@ -177,12 +177,57 @@ class OllamaAdapter implements InferenceAdapter {
   }
 }
 
+// OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
+// Uses /v1/chat/completions -- distinct from Ollama's /api/chat format.
+class LMStudioAdapter implements InferenceAdapter {
+  constructor(
+    private baseUrl: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+    try {
+      const res = await this.fetchFn(`${this.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: 500,
+          temperature,
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      return data.choices?.[0]?.message?.content ?? null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+// Tries each adapter in order, returns first non-null result.
+class FallbackAdapter implements InferenceAdapter {
+  constructor(private adapters: InferenceAdapter[]) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number): Promise<string | null> {
+    for (const adapter of this.adapters) {
+      const result = await adapter.generate(systemPrompt, messages, temperature);
+      if (result !== null) return result;
+    }
+    return null;
+  }
+}
+
 export function createAdapter(
-  provider: "deepseek" | "groq" | "ollama",
+  provider: "deepseek" | "groq" | "ollama" | "lmstudio",
   deepseekKey?: string,
   groqKey?: string,
   ollamaUrl?: string,
   fetchFn?: typeof fetch,
+  lmstudioUrl?: string,
 ): InferenceAdapter {
   switch (provider) {
     case "deepseek":
@@ -193,6 +238,14 @@ export function createAdapter(
       return new GroqAdapter(groqKey, fetchFn);
     case "ollama":
       return new OllamaAdapter(ollamaUrl ?? "http://localhost:11434", fetchFn);
+    case "lmstudio": {
+      const local = new LMStudioAdapter(lmstudioUrl ?? "http://localhost:1234", fetchFn);
+      // Auto-chain: if DeepSeek key is present, it's the fallback when local is unreachable.
+      if (deepseekKey) {
+        return new FallbackAdapter([local, new DeepSeekAdapter(deepseekKey, fetchFn)]);
+      }
+      return local;
+    }
   }
 }
 
