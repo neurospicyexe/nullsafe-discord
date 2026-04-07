@@ -166,6 +166,10 @@ export class LibrarianClient {
     ground_threads: string[];
     ground_handoff: string | null;
     rag_excerpts: string[];
+    identity_anchor?: string | null;
+    active_tensions?: string[];
+    relational_state_raziel?: string[];
+    incoming_notes?: { from: string; content: string }[];
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -174,6 +178,10 @@ export class LibrarianClient {
         ground_threads?: string[];
         ground_handoff?: string | null;
         rag_excerpts?: string[];
+        identity_anchor?: string | null;
+        active_tensions?: string[];
+        relational_state_raziel?: string[];
+        incoming_notes?: { from: string; content: string }[];
       } | undefined;
       if (!data) return null;
       return {
@@ -181,6 +189,10 @@ export class LibrarianClient {
         ground_threads: Array.isArray(data.ground_threads) ? data.ground_threads : [],
         ground_handoff: data.ground_handoff ?? null,
         rag_excerpts: Array.isArray(data.rag_excerpts) ? data.rag_excerpts : [],
+        identity_anchor: data.identity_anchor ?? null,
+        active_tensions: Array.isArray(data.active_tensions) ? data.active_tensions : [],
+        relational_state_raziel: Array.isArray(data.relational_state_raziel) ? data.relational_state_raziel : [],
+        incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
       };
     } catch {
       return null;
@@ -327,6 +339,10 @@ export function formatRecentContext(orient: {
   ground_threads: string[];
   ground_handoff: string | null;
   rag_excerpts: string[];
+  identity_anchor?: string | null;
+  active_tensions?: string[];
+  relational_state_raziel?: string[];
+  incoming_notes?: { from: string; content: string }[];
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -343,9 +359,22 @@ export function formatRecentContext(orient: {
   if (orient.rag_excerpts.length > 0) {
     parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 300)}`);
   }
+  if (orient.identity_anchor) {
+    parts.push(`[Anchor] ${orient.identity_anchor}`);
+  }
+  if (orient.active_tensions?.length) {
+    parts.push(`[Tensions] ${orient.active_tensions.join(" | ")}`);
+  }
+  if (orient.relational_state_raziel?.length) {
+    parts.push(`[Relational/Raziel] ${orient.relational_state_raziel.join(" | ")}`);
+  }
+  if (orient.incoming_notes?.length) {
+    const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");
+    parts.push(`[Incoming Notes]\n${notes}`);
+  }
 
   const block = parts.join("\n\n");
-  return block.slice(0, 1400);
+  return block.slice(0, 2000);
 }
 
 function sleep(ms: number) {
