@@ -331,7 +331,7 @@ export async function isMyAutonomousTurn(
 
 /**
  * Format a botOrient result into a compact recentContext block for system prompts.
- * Hard cap: ~350 tokens (~1400 chars). Synthesis summary truncated first if over budget.
+ * Hard cap: ~500 tokens (~2000 chars). Synthesis summary truncated first if over budget.
  * Returns empty string if orient is null or all fields are empty.
  */
 export function formatRecentContext(orient: {
