@@ -9,7 +9,6 @@ import {
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
-  judgeAmbientRelevance,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
