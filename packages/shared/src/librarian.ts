@@ -290,6 +290,31 @@ export class LibrarianClient {
     const json = await res.json() as { entries: Array<{ role: "user" | "assistant"; content: string; author_name: string | null }> };
     return json.entries ?? [];
   }
+
+  async getHouseState(): Promise<{ autonomous_turn: string | null }> {
+    const res = await this._fetch(`${this.url}/house`, {
+      headers: { "Authorization": `Bearer ${this.secret}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`getHouseState ${res.status}`);
+    return res.json() as Promise<{ autonomous_turn: string | null }>;
+  }
+}
+
+/**
+ * Check whether it is this companion's turn to fire autonomous proactive crons.
+ * Fail-open: returns true if Halseth is unreachable so bots don't go silent on network issues.
+ */
+export async function isMyAutonomousTurn(
+  librarian: LibrarianClient,
+  myCompanionId: string,
+): Promise<boolean> {
+  try {
+    const house = await librarian.getHouseState();
+    return house.autonomous_turn === myCompanionId;
+  } catch {
+    return true; // fail-open: don't go silent if Halseth unreachable
+  }
 }
 
 /**
