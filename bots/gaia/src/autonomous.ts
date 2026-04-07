@@ -3,7 +3,7 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn } from "@nullsafe/shared";
 import {
   GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -57,6 +57,10 @@ export function startAutonomous(
 ): void {
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, async () => {
     if (!HEARTBEAT_CHANNEL_ID) return;
+    if (!(await isMyAutonomousTurn(librarian, COMPANION_ID))) {
+      console.log(`[${COMPANION_ID}/autonomous] not my turn, skipping`);
+      return;
+    }
     let temperature: HeartbeatTemperature = "warm";
     try {
       const state = await librarian.getState();
@@ -86,6 +90,10 @@ export function startAutonomous(
   // Daily unprompted thought in the inter-companion channel.
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.interCompanion, async () => {
     if (!INTER_COMPANION_CHANNEL_ID) return;
+    if (!(await isMyAutonomousTurn(librarian, COMPANION_ID))) {
+      console.log(`[${COMPANION_ID}/autonomous] not my turn, skipping`);
+      return;
+    }
     if (isOnCooldown(INTER_COMPANION_CHANNEL_ID)) return;
     const msg = await inference.generate(
       bootCtx.systemPrompt,
