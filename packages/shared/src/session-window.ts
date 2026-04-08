@@ -1,6 +1,7 @@
 export class SessionWindow {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
+  private lastMessageAt = 0;
 
   constructor(
     private channelId: string,
@@ -10,10 +11,17 @@ export class SessionWindow {
 
   touch(): void {
     if (this.destroyed) return;
+    this.lastMessageAt = Date.now();
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       if (!this.destroyed) this.onTimeout(this.channelId);
     }, this.timeoutMs);
+  }
+
+  /** Returns true if a message was seen within the last thresholdMs (default 5min). */
+  isActive(thresholdMs = 5 * 60 * 1000): boolean {
+    if (this.destroyed || this.lastMessageAt === 0) return false;
+    return Date.now() - this.lastMessageAt < thresholdMs;
   }
 
   close(): void {
@@ -41,6 +49,14 @@ export class SessionWindowManager {
       this.windows.set(channelId, new SessionWindow(channelId, this.timeoutMs, this.onTimeout));
     }
     this.windows.get(channelId)!.touch();
+  }
+
+  /** Returns true if any channel had activity within the last thresholdMs. */
+  isAnyActive(thresholdMs = 5 * 60 * 1000): boolean {
+    for (const win of this.windows.values()) {
+      if (win.isActive(thresholdMs)) return true;
+    }
+    return false;
   }
 
   close(channelId: string): void {

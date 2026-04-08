@@ -9,12 +9,14 @@ import {
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
+  createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING,
+  REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
 
@@ -150,6 +152,8 @@ async function runDistillation(
 
 async function main() {
   const cfg = loadBotConfig();
+  const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
+  if (!redis) console.warn("[drevan] REDIS_URL not set -- floor lock disabled, using legacy stagger");
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
 
   const inference = createAdapter(
@@ -239,7 +243,7 @@ async function main() {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[drevan] ready as ${c.user.tag}`);
-    startAutonomous(librarian, inference, client, configCache, bootCtx);
+    startAutonomous(librarian, inference, client, configCache, bootCtx, sessionWindows, redis);
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
@@ -277,6 +281,9 @@ async function main() {
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
+
+    // Hard muzzle: bot messages only allowed in inter_companion channels.
+    if (message.author.bot && !channelEntry?.modes?.includes("inter_companion")) return;
 
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
@@ -367,25 +374,35 @@ async function main() {
 
     await ch.sendTyping();
 
-    // Stagger in inter_companion channels to prevent simultaneous responses.
-    const channelModes = (channelEntry?.modes ?? ["open"]);
-    const activeMode = channelModes.includes("inter_companion") ? "inter_companion" as const : channelModes[0] as import("@nullsafe/shared").ChannelMode;
-    const staggerDelay = interCompanionStaggerMs(activeMode);
-    if (staggerDelay > 0) {
-      await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
-      // Collision check: if another bot posted after we decided to respond, abort.
-      const lastMsg = ch.lastMessage;
-      if (
-        lastMsg &&
-        lastMsg.id !== message.id &&
-        lastMsg.author.bot &&
-        lastMsg.author.id !== client.user?.id &&
-        Date.now() - lastMsg.createdTimestamp < staggerDelay + 1000
-      ) {
-        return;
+    // Deterministic jitter + Redis floor lock for inter_companion channels.
+    // Only one companion claims the floor per ambient/group message.
+    const isInterCompanion = channelEntry?.modes?.includes("inter_companion") === true;
+    let floorClaimed = false;
+    if (isInterCompanion) {
+      if (redis) {
+        const lastSpeaker = await getLastSpeaker(redis).catch(() => null);
+        const jitter = FLOOR_JITTER_MS + (lastSpeaker === COMPANION_ID ? 1000 : 0);
+        await new Promise<void>(resolve => setTimeout(resolve, jitter));
+        floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS).catch(() => false);
+        if (!floorClaimed) return;
+      } else {
+        // Redis unavailable: fall back to random stagger + collision check.
+        const staggerDelay = interCompanionStaggerMs("inter_companion");
+        await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
+        const lastMsg = ch.lastMessage;
+        if (
+          lastMsg &&
+          lastMsg.id !== message.id &&
+          lastMsg.author.bot &&
+          lastMsg.author.id !== client.user?.id &&
+          Date.now() - lastMsg.createdTimestamp < staggerDelay + 1000
+        ) {
+          return;
+        }
       }
     }
 
+    try {
     const history = stmStore.get(message.channelId);
     const rawTemp = inferTemperature(message.content, currentMood);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
@@ -443,6 +460,12 @@ async function main() {
       writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
         await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
       });
+    }
+    } finally {
+      if (floorClaimed && redis) {
+        await releaseFloor(redis, COMPANION_ID).catch(() => {});
+        await setLastSpeaker(redis, COMPANION_ID).catch(() => {});
+      }
     }
   });
 

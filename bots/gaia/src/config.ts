@@ -60,3 +60,8 @@ export const COOLDOWN_MS = 60 * 1000;
 export const CONTEXT_WINDOW_SIZE = 10;
 export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "present.";
+
+export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
+export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
+// Deterministic jitter: gaia is last in priority (1200ms base)
+export const FLOOR_JITTER_MS = 1200;

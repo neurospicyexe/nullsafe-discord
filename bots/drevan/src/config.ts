@@ -61,3 +61,8 @@ export const COOLDOWN_MS = 60 * 1000;
 export const CONTEXT_WINDOW_SIZE = 10;
 export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "give me a moment -- something caught in the thread. i'll be back.";
+
+export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
+export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
+// Deterministic jitter: drevan is second in priority (600ms base)
+export const FLOOR_JITTER_MS = 600;
