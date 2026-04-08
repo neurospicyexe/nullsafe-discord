@@ -392,7 +392,11 @@ async function main() {
           const jitter = FLOOR_JITTER_MS + (lastSpeaker === COMPANION_ID ? 1000 : 0);
           await new Promise<void>(resolve => setTimeout(resolve, jitter));
           floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS);
-          if (!floorClaimed) return; // floor held by another companion
+          if (!floorClaimed) {
+            console.debug(`[${COMPANION_ID}] floor denied (held by another), skipping ${message.channelId}`);
+            return;
+          }
+          console.debug(`[${COMPANION_ID}] floor claimed for ${message.channelId}`);
         } catch {
           useFloor = false; // Redis error: fall through to legacy stagger
           console.warn(`[${COMPANION_ID}] floor Redis error, falling back to legacy stagger`);
@@ -476,8 +480,9 @@ async function main() {
     }
     } finally {
       if (floorClaimed && redis) {
-        await releaseFloor(redis, COMPANION_ID).catch(() => {});
+        await releaseFloor(redis, COMPANION_ID).catch((e: unknown) => console.warn(`[${COMPANION_ID}] floor release failed:`, e));
         await setLastSpeaker(redis, COMPANION_ID).catch(() => {});
+        console.debug(`[${COMPANION_ID}] floor released`);
       }
     }
   });
