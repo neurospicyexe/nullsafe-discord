@@ -81,3 +81,8 @@ export const AUDIT_TRIGGERS = [
   "audit:",
   "blade stance",
 ];
+
+export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
+export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
+// Deterministic jitter: cypher is the fastest responder (200ms base)
+export const FLOOR_JITTER_MS = 200;
