@@ -343,6 +343,8 @@ export function formatRecentContext(orient: {
   active_tensions?: string[];
   relational_state_raziel?: string[];
   incoming_notes?: { from: string; content: string }[];
+  recent_growth?: { type: string; content: string }[];
+  active_patterns?: string[];
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -371,6 +373,13 @@ export function formatRecentContext(orient: {
   if (orient.incoming_notes?.length) {
     const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");
     parts.push(`[Incoming Notes]\n${notes}`);
+  }
+  if (orient.recent_growth?.length) {
+    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 400);
+    parts.push(`## Recent growth\n${entries}`);
+  }
+  if (orient.active_patterns?.length) {
+    parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
   }
 
   const block = parts.join("\n\n");
