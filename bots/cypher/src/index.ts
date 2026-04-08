@@ -385,14 +385,21 @@ async function main() {
     const isInterCompanion = channelEntry?.modes?.includes("inter_companion") === true;
     let floorClaimed = false;
     if (isInterCompanion) {
+      let useFloor = !!redis;
       if (redis) {
-        const lastSpeaker = await getLastSpeaker(redis).catch(() => null);
-        const jitter = FLOOR_JITTER_MS + (lastSpeaker === COMPANION_ID ? 1000 : 0);
-        await new Promise<void>(resolve => setTimeout(resolve, jitter));
-        floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS).catch(() => false);
-        if (!floorClaimed) return;
-      } else {
-        // Redis unavailable: fall back to random stagger + collision check.
+        try {
+          const lastSpeaker = await getLastSpeaker(redis).catch(() => null);
+          const jitter = FLOOR_JITTER_MS + (lastSpeaker === COMPANION_ID ? 1000 : 0);
+          await new Promise<void>(resolve => setTimeout(resolve, jitter));
+          floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS);
+          if (!floorClaimed) return; // floor held by another companion
+        } catch {
+          useFloor = false; // Redis error: fall through to legacy stagger
+          console.warn(`[${COMPANION_ID}] floor Redis error, falling back to legacy stagger`);
+        }
+      }
+      if (!useFloor) {
+        // No Redis or Redis errored: legacy stagger + collision check.
         const staggerDelay = interCompanionStaggerMs("inter_companion");
         await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
         const lastMsg = ch.lastMessage;
