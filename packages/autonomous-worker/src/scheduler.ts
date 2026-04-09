@@ -1,0 +1,71 @@
+import cron from "node-cron";
+import type { Redis } from "@nullsafe/shared";
+import { createRedisClient } from "@nullsafe/shared";
+import { isConversationActive } from "./idle-check.js";
+import { claimFloor, releaseFloor } from "@nullsafe/shared";
+import { runPipeline } from "./pipeline.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS } from "./config.js";
+import type { CompanionId } from "./types.js";
+
+/** Guards against overlapping runs for the same companion. */
+const running = new Set<CompanionId>();
+
+async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<void> {
+  if (running.has(companionId)) {
+    console.log(`[scheduler/${companionId}] already running, skipping`);
+    return;
+  }
+
+  // Idle check: skip if humans were active recently
+  if (redis) {
+    const active = await isConversationActive(redis).catch(() => false);
+    if (active) {
+      console.log(`[scheduler/${companionId}] conversation active, skipping`);
+      return;
+    }
+  }
+
+  // Floor claim: ensure only one bot is running autonomously at a time
+  let floorClaimed = false;
+  if (redis) {
+    floorClaimed = await claimFloor(redis, `autonomous:${companionId}`, FLOOR_LOCK_DURATION_MS).catch(() => false);
+    if (!floorClaimed) {
+      console.log(`[scheduler/${companionId}] floor held by another process, skipping`);
+      return;
+    }
+  }
+
+  running.add(companionId);
+  try {
+    await runPipeline(companionId, "exploration");
+  } finally {
+    running.delete(companionId);
+    if (redis && floorClaimed) {
+      await releaseFloor(redis, `autonomous:${companionId}`).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Register per-companion cron jobs.
+ * Reads CRON_SCHEDULES from config (env-overridable).
+ */
+export function startScheduler(): void {
+  const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
+  if (!redis) {
+    console.warn("[scheduler] REDIS_URL not set -- idle check and floor lock disabled");
+  }
+
+  for (const companionId of COMPANIONS) {
+    const schedule = CRON_SCHEDULES[companionId];
+    console.log(`[scheduler] ${companionId} → cron "${schedule}"`);
+
+    cron.schedule(schedule, () => {
+      fireRun(companionId, redis).catch(e =>
+        console.error(`[scheduler/${companionId}] unhandled error:`, e)
+      );
+    });
+  }
+
+  console.log("[scheduler] all companions scheduled");
+}

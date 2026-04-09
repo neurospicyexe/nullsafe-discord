@@ -77,3 +77,22 @@ export async function setLastSpeaker(
 ): Promise<void> {
   await redis.set(LAST_SPEAKER_KEY, botName, "EX", LAST_SPEAKER_TTL_S);
 }
+
+// ---------------------------------------------------------------------------
+// Conversation activity signal -- set by Discord bots on every messageCreate,
+// read by the autonomous worker to skip runs when humans are actively present.
+// ---------------------------------------------------------------------------
+
+const LAST_ACTIVITY_KEY = "ns:session:last_activity";
+const LAST_ACTIVITY_TTL_S = 3600; // 1 hour -- auto-expires if bots go down
+
+export async function setLastActivity(redis: Redis): Promise<void> {
+  await redis.set(LAST_ACTIVITY_KEY, Date.now().toString(), "EX", LAST_ACTIVITY_TTL_S);
+}
+
+export async function getLastActivityMs(redis: Redis): Promise<number | null> {
+  const val = await redis.get(LAST_ACTIVITY_KEY);
+  if (!val) return null;
+  const n = parseInt(val, 10);
+  return isNaN(n) ? null : n;
+}
