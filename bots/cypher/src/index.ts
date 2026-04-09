@@ -9,7 +9,7 @@ import {
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
-  createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker,
+  createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker, setLastActivity,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -262,6 +262,8 @@ async function main() {
       pkPending.delete(dedupKey);
       if (entry?.skip) return;
     }
+    // Signal conversation activity so autonomous worker skips runs while humans are present
+    if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
 
     const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
     const channelConfig = await configCache.get();

@@ -170,6 +170,8 @@ export class LibrarianClient {
     active_tensions?: string[];
     relational_state_raziel?: string[];
     incoming_notes?: { from: string; content: string }[];
+    recent_growth?: { type: string; content: string }[];
+    active_patterns?: string[];
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -182,6 +184,8 @@ export class LibrarianClient {
         active_tensions?: string[];
         relational_state_raziel?: string[];
         incoming_notes?: { from: string; content: string }[];
+        recent_growth?: { type: string; content: string }[];
+        active_patterns?: string[];
       } | undefined;
       if (!data) return null;
       return {
@@ -193,6 +197,8 @@ export class LibrarianClient {
         active_tensions: Array.isArray(data.active_tensions) ? data.active_tensions : [],
         relational_state_raziel: Array.isArray(data.relational_state_raziel) ? data.relational_state_raziel : [],
         incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
+        recent_growth: Array.isArray(data.recent_growth) ? data.recent_growth : [],
+        active_patterns: Array.isArray(data.active_patterns) ? data.active_patterns : [],
       };
     } catch {
       return null;
