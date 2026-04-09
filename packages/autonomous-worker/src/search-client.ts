@@ -1,4 +1,4 @@
-import { TAVILY_API_KEY } from "./config.js";
+import { TAVILY_API_KEY, TAVILY_MAX_PER_DAY } from "./config.js";
 import type { TavilyResult } from "./types.js";
 
 interface TavilySearchOptions {
@@ -6,11 +6,28 @@ interface TavilySearchOptions {
   searchDepth?: "basic" | "advanced";
 }
 
+/** Daily usage counter -- resets when the calendar date changes. */
+const dailyCounter = {
+  date: "",
+  count: 0,
+  check(): boolean {
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.date !== today) { this.date = today; this.count = 0; }
+    if (this.count >= TAVILY_MAX_PER_DAY) return false;
+    this.count++;
+    return true;
+  },
+};
+
 /**
  * Search the web via Tavily.
- * Free tier: 1000 searches/month (~11/day across 3 companions).
+ * Free tier: 1000 searches/month. Daily cap enforced via TAVILY_MAX_PER_DAY (default 5).
  */
 export async function search(query: string, opts: TavilySearchOptions = {}): Promise<TavilyResult[]> {
+  if (!dailyCounter.check()) {
+    console.warn(`[search] daily cap reached (${TAVILY_MAX_PER_DAY}), skipping search`);
+    return [];
+  }
   if (!TAVILY_API_KEY) {
     console.warn("[search] TAVILY_API_KEY not set, returning empty results");
     return [];

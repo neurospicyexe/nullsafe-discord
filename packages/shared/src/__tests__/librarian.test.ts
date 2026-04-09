@@ -5,7 +5,8 @@ describe("LibrarianClient.ask()", () => {
   it("returns data on 200 response", async () => {
     const mockFetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
         jsonrpc: "2.0", id: 1,
         result: { content: [{ type: "text", text: JSON.stringify({ session_id: "s1" }) }] },
       }),
