@@ -8,6 +8,9 @@ export const DEEPSEEK_API_KEY = process.env["DEEPSEEK_API_KEY"] ?? "";
 export const DEEPSEEK_BASE_URL = process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1";
 export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-chat";
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
+// Hard cap on Tavily calls per calendar day -- protects free tier (1000/month)
+// Default 5: 3 scheduled + 2 headroom for manual test runs
+export const TAVILY_MAX_PER_DAY = parseInt(process.env["TAVILY_MAX_PER_DAY"] ?? "5", 10);
 export const REDIS_URL = process.env["REDIS_URL"];
 
 // How long to hold the floor during an autonomous run
