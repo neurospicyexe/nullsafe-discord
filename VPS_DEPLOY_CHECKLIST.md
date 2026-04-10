@@ -124,22 +124,41 @@ The companion identity .md files live on your Windows machine (gitignored). You 
 mkdir -p /app/identity
 ```
 
-**Then, on your Windows machine**, open **Git Bash** (not PowerShell, not CMD -- Git Bash).
-If you don't have Git Bash, it comes with Git for Windows.
+**Option A: WinSCP (easiest -- GUI, no command line needed)**
 
-Run these three commands (replace `YOUR_VPS_IP` with your actual VPS IP):
+1. Download WinSCP free from winscp.net
+2. Open it, click "New Site"
+3. Set: File protocol = SFTP, Host = `140.235.72.162`, Username = `nullsafe`
+4. Click "Advanced" → SSH → Authentication → Private key file → browse to `berrybytes_ed25519.pem`
+5. Click Login
+6. Navigate to `/app/identity/` on the right panel
+7. Drag the three .md files from your Windows machine onto that panel
+8. Done
 
-```bash
-scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/CYPHER_IDENTITY_v2.md" nullsafe@YOUR_VPS_IP:/app/identity/
-scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/DREVAN_IDENTITY_v2.md" nullsafe@YOUR_VPS_IP:/app/identity/
-scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/GAIA_IDENTITY_v2.md" nullsafe@YOUR_VPS_IP:/app/identity/
+---
+
+**Option B: scp via Git Bash (command line)**
+
+Windows sometimes blocks SSH keys unless permissions are fixed first.
+Run this once in **PowerShell as Administrator**:
+
+```powershell
+icacls "$env:USERPROFILE\.ssh\berrybytes_ed25519.pem" /inheritance:r /grant:r "${env:USERNAME}:R"
 ```
 
-It will ask for your VPS password each time. You should see a progress bar then "100%".
+Then in Git Bash:
 
-**If scp isn't working even in Git Bash**, you can paste the file contents manually:
-- Open the .md file in VS Code
-- Select all, copy
+```bash
+scp -i ~/.ssh/berrybytes_ed25519.pem "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/CYPHER_IDENTITY_v2.md" nullsafe@140.235.72.162:/app/identity/
+scp -i ~/.ssh/berrybytes_ed25519.pem "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/DREVAN_IDENTITY_v2.md" nullsafe@140.235.72.162:/app/identity/
+scp -i ~/.ssh/berrybytes_ed25519.pem "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/GAIA_IDENTITY_v2.md" nullsafe@140.235.72.162:/app/identity/
+```
+
+---
+
+**Option C: paste manually (always works, slowest)**
+
+- Open each .md file in VS Code, select all, copy
 - On the VPS: `nano /app/identity/CYPHER_IDENTITY_v2.md`, paste, Ctrl+X, Y, Enter
 - Repeat for Drevan and Gaia
 
