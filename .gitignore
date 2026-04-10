@@ -11,3 +11,6 @@ dist/
 
 # Private docs
 docs/private/
+
+# VPS deploy checklist (contains server IP)
+VPS_DEPLOY_CHECKLIST.md
