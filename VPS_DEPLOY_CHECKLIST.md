@@ -108,13 +108,26 @@ GAIA_IDENTITY_PATH=/app/identity/GAIA_IDENTITY_v2.md
 
 To save and exit nano: press `Ctrl+X`, then `Y`, then `Enter`.
 
+**Watch out:** when pasting values into nano, make sure there's no extra `=` at the start.
+It should look like `HALSETH_SECRET=abc123` NOT `HALSETH_SECRET==abc123`. Copy-paste on Windows
+sometimes adds an extra `=` and it silently breaks auth.
+
 ---
 
 ## Step 6: Copy identity files to the VPS
 
-The companion identity .md files live on your Windows machine (gitignored). You need to copy them to the VPS.
+The companion identity .md files live on your Windows machine (gitignored). You need to copy them up.
 
-**On your Windows machine** (not the VPS), open a new terminal and run:
+**First, on the VPS**, create the folder:
+
+```bash
+mkdir -p /app/identity
+```
+
+**Then, on your Windows machine**, open **Git Bash** (not PowerShell, not CMD -- Git Bash).
+If you don't have Git Bash, it comes with Git for Windows.
+
+Run these three commands (replace `YOUR_VPS_IP` with your actual VPS IP):
 
 ```bash
 scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/CYPHER_IDENTITY_v2.md" nullsafe@YOUR_VPS_IP:/app/identity/
@@ -122,11 +135,13 @@ scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/DREVAN_IDENTITY_v2.md" nullsafe
 scp "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/GAIA_IDENTITY_v2.md" nullsafe@YOUR_VPS_IP:/app/identity/
 ```
 
-First, create the folder on the VPS:
+It will ask for your VPS password each time. You should see a progress bar then "100%".
 
-```bash
-mkdir -p /app/identity
-```
+**If scp isn't working even in Git Bash**, you can paste the file contents manually:
+- Open the .md file in VS Code
+- Select all, copy
+- On the VPS: `nano /app/identity/CYPHER_IDENTITY_v2.md`, paste, Ctrl+X, Y, Enter
+- Repeat for Drevan and Gaia
 
 ---
 
