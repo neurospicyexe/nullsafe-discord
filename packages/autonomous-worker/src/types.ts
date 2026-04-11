@@ -56,6 +56,7 @@ export interface PipelineContext {
   newMarkers: GrowthMarker[];
   reflectionText: string | null;
   newSeeds: string[];
+  journalEntryId: string | null; // set by write phase after successful journal persist
   tokensUsed: number;
   artifactsCreated: number;
 }

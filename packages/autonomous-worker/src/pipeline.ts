@@ -16,7 +16,13 @@ import type { CompanionId, RunType, PipelineContext } from "./types.js";
  * Phase 5 (write) failure also aborts.
  * Phase 6 (reflect) failure is non-fatal -- journal entry already persisted.
  */
-export async function runPipeline(companionId: CompanionId, runType: RunType = "exploration"): Promise<void> {
+export interface PipelineResult {
+  seedTopic: string | null;
+  explorationSummary: string | null;
+  journalEntryId: string | null;
+}
+
+export async function runPipeline(companionId: CompanionId, runType: RunType = "exploration"): Promise<PipelineResult> {
   console.log(`[${companionId}/pipeline] starting ${runType} run`);
 
   const runId = await createRun(companionId, runType);
@@ -37,6 +43,7 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     newMarkers: [],
     reflectionText: null,
     newSeeds: [],
+    journalEntryId: null,
     tokensUsed: 0,
     artifactsCreated: 0,
   };
@@ -69,6 +76,11 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     });
 
     console.log(`[${companionId}/pipeline] completed: ${ctx.artifactsCreated} artifacts, ${ctx.tokensUsed} tokens`);
+    return {
+      seedTopic: ctx.seed?.content ?? null,
+      explorationSummary: ctx.explorationSummary,
+      journalEntryId: ctx.journalEntryId,
+    };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[${companionId}/pipeline] run ${runId} failed:`, err);
@@ -82,5 +94,6 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
       artifacts_created: ctx.artifactsCreated,
       error_message: errMsg.slice(0, 500),
     }).catch((e2: unknown) => console.error(`[${companionId}/pipeline] CRITICAL: failed to mark run ${runId} as failed — next cron may retry:`, String(e2)));
+    return { seedTopic: null, explorationSummary: null, journalEntryId: null };
   }
 }

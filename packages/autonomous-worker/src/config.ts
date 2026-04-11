@@ -13,6 +13,12 @@ export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
 export const TAVILY_MAX_PER_DAY = parseInt(process.env["TAVILY_MAX_PER_DAY"] ?? "5", 10);
 export const REDIS_URL = process.env["REDIS_URL"];
 
+// Optional: second-brain HTTP server for CouchDB corpus ingest.
+// When set, exploration summaries are POSTed to /ingest/text after each run,
+// making them searchable in future Librarian semantic searches.
+export const SECOND_BRAIN_URL = process.env["SECOND_BRAIN_URL"]?.replace(/\/$/, "");
+export const SECOND_BRAIN_SECRET = process.env["SECOND_BRAIN_SECRET"];
+
 // How long to hold the floor during an autonomous run
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "120000", 10);
 
