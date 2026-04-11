@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import type { Redis } from "@nullsafe/shared";
-import { createRedisClient } from "@nullsafe/shared";
+import { createRedisClient, publishRunComplete, setPresence } from "@nullsafe/shared";
 import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
@@ -36,8 +36,24 @@ async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<v
   }
 
   running.add(companionId);
+  // Signal presence so bots know autonomous work is happening
+  if (redis) setPresence(redis, `autonomous:${companionId}`).catch(() => {});
+
+  const startedAt = Date.now();
   try {
     await runPipeline(companionId, "exploration");
+
+    // Notify all bot processes that a run completed — they refresh their orient context
+    if (redis) {
+      await publishRunComplete(redis, {
+        companionId,
+        runId: `${companionId}:${startedAt}`,
+        runType: "exploration",
+        artifactsCreated: 0, // pipeline tracks internally; bots only need the signal
+        tokensUsed: 0,
+        completedAt: new Date().toISOString(),
+      }).catch(() => {}); // non-fatal
+    }
   } finally {
     running.delete(companionId);
     if (redis && floorClaimed) {

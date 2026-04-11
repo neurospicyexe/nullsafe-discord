@@ -20,7 +20,18 @@ const FLOOR_KEY = "ns:floor:lock";
 const LAST_SPEAKER_KEY = "ns:floor:last_speaker";
 const LAST_SPEAKER_TTL_S = 3600; // 1 hour
 
-/** Create a Redis client with error-logging and reconnect backoff. */
+// Lua script for atomic floor release. Executes server-side as a single
+// Redis operation: only DEL if the key still belongs to us. Prevents
+// the GET→DEL race where another companion claims between our read and delete.
+const RELEASE_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`;
+
+/** Create a Redis client with error-logging, reconnect backoff, and custom commands. */
 export function createRedisClient(url: string): Redis {
   const client = new Redis(url, {
     enableReadyCheck: false,
@@ -30,6 +41,8 @@ export function createRedisClient(url: string): Redis {
   client.on("error", (e: Error) =>
     console.warn("[floor] redis error:", e.message),
   );
+  // Register atomic release as a named command so call sites stay clean.
+  client.defineCommand("atomicRelease", { numberOfKeys: 1, lua: RELEASE_LUA });
   return client;
 }
 
@@ -53,18 +66,17 @@ export async function checkFloor(redis: Redis): Promise<string | null> {
 }
 
 /**
- * Release the floor. Checks current holder before deleting to avoid
- * clearing another companion's lock if ours expired mid-inference.
- * Not atomic (no Lua), but the race window is negligible vs 60s lock TTL.
+ * Release the floor atomically. Delegates to the Lua script registered in
+ * createRedisClient so the ownership check and delete are a single Redis op.
+ * Returns 1 if the key was deleted (we held it), 0 if it had already expired
+ * or been claimed by someone else.
  */
 export async function releaseFloor(
   redis: Redis,
   botName: string,
 ): Promise<void> {
-  const current = await redis.get(FLOOR_KEY);
-  if (current === botName) {
-    await redis.del(FLOOR_KEY);
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await (redis as any).atomicRelease(FLOOR_KEY, botName);
 }
 
 export async function getLastSpeaker(redis: Redis): Promise<string | null> {

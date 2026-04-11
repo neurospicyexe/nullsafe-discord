@@ -65,8 +65,8 @@ module.exports = {
       script: "dist/index.js",
       interpreter: "node",
       restart_delay: 10000,
-      max_restarts: 5,
-      exp_backoff_restart_delay: 100,
+      max_restarts: 10,
+      exp_backoff_restart_delay: 1000,
       env: {
         ...shared,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,

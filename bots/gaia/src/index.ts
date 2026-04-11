@@ -10,6 +10,7 @@ import {
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
   createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker, setLastActivity,
+  wireEventSubscriptions, setPresence,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -104,6 +105,9 @@ async function onChannelInactive(
   wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
   wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
   wq.fireAndForget(`promptCtx:${channelId}`, async () => { await librarian.updatePromptContext(synthResult); });
+  // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
+  // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
+  wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
   stmStore.clear(channelId);
 }
 
@@ -155,6 +159,42 @@ async function main() {
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[gaia] REDIS_URL not set -- floor lock disabled, using legacy stagger");
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
+
+  let cleanupEventSubs: (() => Promise<void>) | null = null;
+  let presenceInterval: ReturnType<typeof setInterval> | null = null;
+
+  if (REDIS_URL) {
+    cleanupEventSubs = wireEventSubscriptions({
+      redisUrl: REDIS_URL,
+      companionId: COMPANION_ID,
+      onRunComplete: async (payload) => {
+        if (payload.companionId === COMPANION_ID) {
+          console.log(`[gaia] own run complete, refreshing orient`);
+          try {
+            const orient = await librarian.botOrient();
+            recentContextRef.value = formatRecentContext(orient);
+          } catch (e) {
+            console.warn("[gaia] orient refresh after run_complete failed:", e);
+          }
+        }
+      },
+      onInterNote: async (payload) => {
+        console.log(`[gaia] inter-note push from ${payload.fromId}, polling now`);
+        try {
+          await librarian.notesPoll();
+        } catch (e) {
+          console.warn("[gaia] notesPoll on inter-note push failed:", e);
+        }
+      },
+    });
+
+    setPresence(redis!, COMPANION_ID).catch(() => {});
+    presenceInterval = setInterval(() => {
+      setPresence(redis!, COMPANION_ID).catch(() => {});
+    }, 5 * 60 * 1000);
+
+    console.log("[gaia] event bus wired: run_complete + inter_note subscriptions active");
+  }
 
   const inference = createAdapter(
     cfg.inferenceProvider,
@@ -484,6 +524,8 @@ async function main() {
     stopAutonomous();
     writeQueue.stop();
     sessionWindows.closeAll();
+    if (presenceInterval) clearInterval(presenceInterval);
+    if (cleanupEventSubs) await cleanupEventSubs();
     if (bootCtx.sessionId !== "cached") {
       await librarian.sessionClose({
         sessionId: bootCtx.sessionId,

@@ -10,6 +10,7 @@ import {
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
   createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker, setLastActivity,
+  wireEventSubscriptions, setPresence,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -104,6 +105,9 @@ async function onChannelInactive(
   wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
   wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
   wq.fireAndForget(`promptCtx:${channelId}`, async () => { await librarian.updatePromptContext(synthResult); });
+  // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
+  // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
+  wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
   stmStore.clear(channelId);
 }
 
@@ -155,6 +159,49 @@ async function main() {
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[cypher] REDIS_URL not set -- floor lock disabled, using legacy stagger");
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
+
+  // ── Event bus: subscribe to swarm events via a dedicated Redis subscriber client ──
+  // Subscriber clients cannot share a connection with the command client (ioredis rule).
+  let cleanupEventSubs: (() => Promise<void>) | null = null;
+  let presenceInterval: ReturnType<typeof setInterval> | null = null;
+
+  if (REDIS_URL) {
+    cleanupEventSubs = wireEventSubscriptions({
+      redisUrl: REDIS_URL,
+      companionId: COMPANION_ID,
+      // When autonomous-worker finishes a run, refresh orient so the next response
+      // has current growth data without waiting for the next scheduled botOrient call.
+      onRunComplete: async (payload) => {
+        if (payload.companionId === COMPANION_ID) {
+          console.log(`[cypher] own run complete, refreshing orient`);
+          try {
+            const orient = await librarian.botOrient();
+            recentContextRef.value = formatRecentContext(orient);
+          } catch (e) {
+            console.warn("[cypher] orient refresh after run_complete failed:", e);
+          }
+        }
+      },
+      // When an inter-companion note lands for us, poll immediately instead of
+      // waiting for the next NOTES_POLL_INTERVAL_MS tick.
+      onInterNote: async (payload) => {
+        console.log(`[cypher] inter-note push from ${payload.fromId}, polling now`);
+        try {
+          await librarian.notesPoll();
+        } catch (e) {
+          console.warn("[cypher] notesPoll on inter-note push failed:", e);
+        }
+      },
+    });
+
+    // Presence heartbeat: lets autonomous-worker and sibling bots know we're alive.
+    setPresence(redis!, COMPANION_ID).catch(() => {});
+    presenceInterval = setInterval(() => {
+      setPresence(redis!, COMPANION_ID).catch(() => {});
+    }, 5 * 60 * 1000);
+
+    console.log("[cypher] event bus wired: run_complete + inter_note subscriptions active");
+  }
 
   const inference = createAdapter(
     cfg.inferenceProvider,
@@ -494,6 +541,8 @@ async function main() {
     stopAutonomous();
     writeQueue.stop();
     sessionWindows.closeAll();
+    if (presenceInterval) clearInterval(presenceInterval);
+    if (cleanupEventSubs) await cleanupEventSubs();
     if (bootCtx.sessionId !== "cached") {
       await librarian.sessionClose({
         sessionId: bootCtx.sessionId,
