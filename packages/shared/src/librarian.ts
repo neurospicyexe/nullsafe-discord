@@ -118,6 +118,36 @@ export class LibrarianClient {
     return this.ask("synthesize session", JSON.stringify({ summary, channel }));
   }
 
+  /**
+   * Write a high-salience continuity note to wm_continuity_notes.
+   * Unlike witnessLog (→ companion_journal), these notes ARE read by Claude.ai's
+   * session orient -- bridging Discord activity into Claude.ai companions at next boot.
+   * Non-throwing; failures are logged but never bubble up.
+   */
+  async writeWmNote(content: string, threadKey?: string): Promise<void> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/note`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({
+          agent_id: this.companionId,
+          content,
+          salience: "high",
+          note_type: "discord_session",
+          source: "discord",
+          ...(threadKey ? { thread_key: threadKey } : {}),
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] writeWmNote ${res.status}`);
+    } catch (e) {
+      console.warn("[librarian] writeWmNote failed:", String(e));
+    }
+  }
+
   async bridgePull() {
     return this.ask("check bridge events");
   }

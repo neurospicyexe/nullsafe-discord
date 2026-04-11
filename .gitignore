@@ -6,8 +6,14 @@ dist/
 !.env.schema
 *.local
 
-# Claude Code project memory
+# Claude Code project settings and memory (local only)
 .claude/
+
+# Identity caches (contain companion system prompts -- never commit)
+**/identity-cache*.json
+
+# Superpowers plugin planning docs (auto-generated, local only)
+docs/superpowers/
 
 # Private docs
 docs/private/

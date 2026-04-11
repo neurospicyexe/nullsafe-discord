@@ -73,13 +73,14 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[${companionId}/pipeline] run ${runId} failed:`, err);
 
-    await appendLog(runId, "pipeline:error", errMsg).catch(() => {});
+    await appendLog(runId, "pipeline:error", errMsg)
+      .catch((e2: unknown) => console.error(`[${companionId}/pipeline] appendLog failed for run ${runId}:`, String(e2)));
     await updateRun(runId, {
       status: "failed",
       completed_at: new Date().toISOString(),
       tokens_used: ctx.tokensUsed,
       artifacts_created: ctx.artifactsCreated,
       error_message: errMsg.slice(0, 500),
-    }).catch(() => {});
+    }).catch((e2: unknown) => console.error(`[${companionId}/pipeline] CRITICAL: failed to mark run ${runId} as failed — next cron may retry:`, String(e2)));
   }
 }
