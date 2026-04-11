@@ -62,7 +62,7 @@ async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<v
           fromCompanionId: companionId,
           seedTopic: result.seedTopic,
           explorationSummary: result.explorationSummary.slice(0, 800),
-          journalEntryId: result.journalEntryId ?? "",
+          journalEntryId: result.journalEntryId ?? "none",
           exploredAt: completedAt,
         }).catch(() => {});
       }

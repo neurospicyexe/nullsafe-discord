@@ -9,6 +9,7 @@ async function hFetch(path: string, method = "GET", body?: unknown): Promise<unk
       "Authorization": `Bearer ${HALSETH_SECRET}`,
     },
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
