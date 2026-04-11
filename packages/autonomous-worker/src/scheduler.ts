@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import type { Redis } from "@nullsafe/shared";
-import { createRedisClient, publishRunComplete, setPresence } from "@nullsafe/shared";
+import { createRedisClient, publishRunComplete, publishExplorationPulse, setPresence } from "@nullsafe/shared";
 import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
@@ -41,18 +41,31 @@ async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<v
 
   const startedAt = Date.now();
   try {
-    await runPipeline(companionId, "exploration");
+    const result = await runPipeline(companionId, "exploration");
+    const completedAt = new Date().toISOString();
 
-    // Notify all bot processes that a run completed — they refresh their orient context
     if (redis) {
+      // Notify all bot processes that a run completed — they refresh their orient context
       await publishRunComplete(redis, {
         companionId,
         runId: `${companionId}:${startedAt}`,
         runType: "exploration",
-        artifactsCreated: 0, // pipeline tracks internally; bots only need the signal
+        artifactsCreated: 0,
         tokensUsed: 0,
-        completedAt: new Date().toISOString(),
-      }).catch(() => {}); // non-fatal
+        completedAt,
+      }).catch(() => {});
+
+      // Broadcast exploration content so sibling bots can write continuity notes
+      // without waiting for the next botOrient poll cycle.
+      if (result.seedTopic && result.explorationSummary) {
+        await publishExplorationPulse(redis, {
+          fromCompanionId: companionId,
+          seedTopic: result.seedTopic,
+          explorationSummary: result.explorationSummary.slice(0, 800),
+          journalEntryId: result.journalEntryId ?? "",
+          exploredAt: completedAt,
+        }).catch(() => {});
+      }
     }
   } finally {
     running.delete(companionId);

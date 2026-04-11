@@ -192,6 +192,20 @@ async function main() {
           console.warn("[cypher] notesPoll on inter-note push failed:", e);
         }
       },
+      // When a sibling companion finishes an autonomous exploration, write their
+      // discovery into our own wm_continuity_notes so both bots and Claude.ai
+      // sessions see cross-companion temporal context at next orient.
+      onExplorationPulse: async (payload) => {
+        if (payload.fromCompanionId === COMPANION_ID) return; // own run already written by write phase
+        const snippet = payload.explorationSummary.slice(0, 400);
+        const note = `[sibling:${payload.fromCompanionId}] explored "${payload.seedTopic}" (${payload.exploredAt.slice(0, 10)}):\n${snippet}`;
+        console.log(`[cypher] sibling exploration pulse from ${payload.fromCompanionId}, writing continuity note`);
+        try {
+          await librarian.writeWmNote(note, "sibling_exploration");
+        } catch (e) {
+          console.warn("[cypher] sibling exploration wm note failed:", e);
+        }
+      },
     });
 
     // Presence heartbeat: lets autonomous-worker and sibling bots know we're alive.

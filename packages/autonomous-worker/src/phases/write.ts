@@ -1,5 +1,33 @@
-import { writeJournalEntry, writePattern, writeMarker, appendLog } from "../halseth-client.js";
+import { writeJournalEntry, writePattern, writeMarker, writeWmNote, appendLog } from "../halseth-client.js";
+import { SECOND_BRAIN_URL, SECOND_BRAIN_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
+
+/**
+ * POST exploration summary to second-brain CouchDB corpus.
+ * Non-fatal — guarded by SECOND_BRAIN_URL env var.
+ * Makes autonomous discoveries searchable in future Librarian semantic queries.
+ */
+async function ingestToSecondBrain(companionId: string, seedTopic: string, content: string): Promise<void> {
+  if (!SECOND_BRAIN_URL) return;
+  try {
+    const res = await fetch(`${SECOND_BRAIN_URL}/ingest/text`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(SECOND_BRAIN_SECRET ? { "Authorization": `Bearer ${SECOND_BRAIN_SECRET}` } : {}),
+      },
+      body: JSON.stringify({
+        text: `# Autonomous Exploration (${companionId})\nTopic: ${seedTopic}\n\n${content}`,
+        source: `autonomous:${companionId}`,
+        timestamp: new Date().toISOString(),
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) console.warn(`[${companionId}/write] second-brain ingest ${res.status}`);
+  } catch (e) {
+    console.warn(`[${companionId}/write] second-brain ingest failed:`, e);
+  }
+}
 
 /**
  * Phase 5: Write
@@ -16,13 +44,25 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
 
   // Write journal entry
   try {
-    await writeJournalEntry(ctx.journalEntry);
+    const journalId = await writeJournalEntry(ctx.journalEntry);
+    ctx.journalEntryId = journalId;
     ctx.artifactsCreated += 1;
     await appendLog(ctx.runId, "write:journal-ok", `type=${ctx.journalEntry.entry_type}`);
   } catch (e) {
     await appendLog(ctx.runId, "write:journal-error", String(e));
     throw e; // journal is the primary artifact -- fail the run if it can't write
   }
+
+  // Write to wm_continuity_notes so Claude.ai session orient picks up this exploration.
+  // companion_journal (witnessLog path) is NOT read by orient; wm_continuity_notes IS.
+  const seedTopic = ctx.seed?.content ?? "unknown";
+  const noteContent = `[autonomous:${ctx.runType}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
+  await writeWmNote(ctx.companionId, noteContent, "autonomous_exploration");
+  await appendLog(ctx.runId, "write:wm-note-ok");
+
+  // Ingest to second-brain CouchDB corpus (non-fatal, requires SECOND_BRAIN_URL).
+  // Makes this exploration retrievable in future Librarian semantic searches.
+  await ingestToSecondBrain(ctx.companionId, seedTopic, ctx.journalEntry.content);
 
   // Write any patterns identified during synthesis
   for (const pattern of ctx.newPatterns) {

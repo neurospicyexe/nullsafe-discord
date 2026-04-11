@@ -20,11 +20,12 @@ import { Redis } from "ioredis";
 // ── Channel names ────────────────────────────────────────────────────────────
 
 export const CHANNEL = {
-  runComplete:    "ns:events:run_complete",
-  interNote:      (targetId: string) => `ns:events:inter_note:${targetId}`,
-  sessionClose:   (companionId: string) => `ns:events:session_close:${companionId}`,
-  sessionPulse:   "ns:events:session_pulse",
-  presence:       (companionId: string) => `ns:events:presence:${companionId}`,
+  runComplete:       "ns:events:run_complete",
+  interNote:         (targetId: string) => `ns:events:inter_note:${targetId}`,
+  sessionClose:      (companionId: string) => `ns:events:session_close:${companionId}`,
+  sessionPulse:      "ns:events:session_pulse",
+  presence:          (companionId: string) => `ns:events:presence:${companionId}`,
+  explorationPulse:  "ns:events:exploration_pulse",
 } as const;
 
 // Presence TTL: if a companion doesn't pulse within this window, it's considered inactive.
@@ -61,6 +62,14 @@ export interface SessionPulsePayload {
   at: string;
 }
 
+export interface ExplorationPulsePayload {
+  fromCompanionId: string;
+  seedTopic: string;
+  explorationSummary: string; // truncated to ~800 chars by publisher
+  journalEntryId: string;
+  exploredAt: string; // ISO 8601
+}
+
 // ── Publisher ─────────────────────────────────────────────────────────────────
 
 /**
@@ -90,6 +99,15 @@ export async function publishSessionClose(redis: Redis, payload: SessionClosePay
 
 export async function publishSessionPulse(redis: Redis, payload: SessionPulsePayload): Promise<void> {
   await publish(redis, CHANNEL.sessionPulse, payload);
+}
+
+/**
+ * Broadcast an exploration pulse after a companion's autonomous pipeline completes.
+ * Carries the seed topic + synthesis summary so sibling bots can write continuity notes
+ * without waiting for the next botOrient poll cycle.
+ */
+export async function publishExplorationPulse(redis: Redis, payload: ExplorationPulsePayload): Promise<void> {
+  await publish(redis, CHANNEL.explorationPulse, payload);
 }
 
 /**
@@ -154,8 +172,15 @@ export function wireEventSubscriptions(params: {
   onRunComplete?: EventHandler<RunCompletePayload>;
   onInterNote?: EventHandler<InterNotePayload>;
   onSessionClose?: EventHandler<SessionClosePayload>;
+  onExplorationPulse?: EventHandler<ExplorationPulsePayload>;
 }): () => Promise<void> {
-  const { redisUrl, companionId, onRunComplete: handleRunComplete, onInterNote: handleInterNote, onSessionClose: handleSessionClose } = params;
+  const {
+    redisUrl, companionId,
+    onRunComplete: handleRunComplete,
+    onInterNote: handleInterNote,
+    onSessionClose: handleSessionClose,
+    onExplorationPulse: handleExplorationPulse,
+  } = params;
   const subscriber = createSubscriberClient(redisUrl);
   const cleanups: Array<() => void> = [];
 
@@ -167,6 +192,9 @@ export function wireEventSubscriptions(params: {
   }
   if (handleSessionClose) {
     cleanups.push(onSessionClose(subscriber, companionId, handleSessionClose));
+  }
+  if (handleExplorationPulse) {
+    cleanups.push(onExplorationPulse(subscriber, handleExplorationPulse));
   }
 
   return async () => {
@@ -214,6 +242,25 @@ export function onRunComplete(subscriber: Redis, handler: EventHandler<RunComple
   subscriber.on("message", listener);
   return () => {
     subscriber.unsubscribe(CHANNEL.runComplete).catch(() => {});
+    subscriber.off("message", listener);
+  };
+}
+
+/**
+ * Subscribe to exploration pulse events (broadcast channel).
+ * All companions receive every pulse; handlers should filter by fromCompanionId if needed.
+ */
+export function onExplorationPulse(subscriber: Redis, handler: EventHandler<ExplorationPulsePayload>): () => void {
+  subscriber.subscribe(CHANNEL.explorationPulse).catch((e) =>
+    console.error("[events] subscribe explorationPulse failed:", e)
+  );
+  const listener = (_channel: string, message: string) => {
+    try { handler(JSON.parse(message) as ExplorationPulsePayload); }
+    catch (e) { console.warn("[events] explorationPulse parse error:", e); }
+  };
+  subscriber.on("message", listener);
+  return () => {
+    subscriber.unsubscribe(CHANNEL.explorationPulse).catch(() => {});
     subscriber.off("message", listener);
   };
 }

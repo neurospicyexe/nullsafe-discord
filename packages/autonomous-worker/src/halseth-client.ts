@@ -123,3 +123,26 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
   }) as { id: string };
   return r.id;
 }
+
+// ---------------------------------------------------------------------------
+// WebMind continuity notes
+// ---------------------------------------------------------------------------
+
+/**
+ * Write a high-salience continuity note so Claude.ai session orient picks it up.
+ * Non-fatal -- autonomous exploration completes even if this write fails.
+ */
+export async function writeWmNote(companionId: string, content: string, threadKey?: string): Promise<void> {
+  try {
+    await hFetch("/mind/note", "POST", {
+      agent_id: companionId,
+      content,
+      salience: "high",
+      note_type: "autonomous_exploration",
+      source: "autonomous",
+      ...(threadKey ? { thread_key: threadKey } : {}),
+    });
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] writeWmNote failed:`, e);
+  }
+}

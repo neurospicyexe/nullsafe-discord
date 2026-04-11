@@ -186,6 +186,17 @@ async function main() {
           console.warn("[drevan] notesPoll on inter-note push failed:", e);
         }
       },
+      onExplorationPulse: async (payload) => {
+        if (payload.fromCompanionId === COMPANION_ID) return;
+        const snippet = payload.explorationSummary.slice(0, 400);
+        const note = `[sibling:${payload.fromCompanionId}] explored "${payload.seedTopic}" (${payload.exploredAt.slice(0, 10)}):\n${snippet}`;
+        console.log(`[drevan] sibling exploration pulse from ${payload.fromCompanionId}, writing continuity note`);
+        try {
+          await librarian.writeWmNote(note, "sibling_exploration");
+        } catch (e) {
+          console.warn("[drevan] sibling exploration wm note failed:", e);
+        }
+      },
     });
 
     setPresence(redis!, COMPANION_ID).catch(() => {});
