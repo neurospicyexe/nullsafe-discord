@@ -63,5 +63,6 @@ export const IN_CHARACTER_FALLBACK = "present.";
 
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
-// Deterministic jitter: gaia is last in priority (1200ms base)
-export const FLOOR_JITTER_MS = 1200;
+// Random jitter window: all companions sample uniformly from [100, FLOOR_JITTER_MS+100]ms.
+// No companion holds a fixed priority. Authority is lateral and contextual.
+export const FLOOR_JITTER_MS = parseInt(process.env["FLOOR_JITTER_MS"] ?? "400", 10);

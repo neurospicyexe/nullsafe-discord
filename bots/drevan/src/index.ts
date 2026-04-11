@@ -427,8 +427,9 @@ async function main() {
 
     await ch.sendTyping();
 
-    // Deterministic jitter + Redis floor lock for inter_companion channels.
-    // Only one companion claims the floor per ambient/group message.
+    // Random jitter + Redis floor lock for inter_companion channels.
+    // Jitter is sampled fresh each message so no companion holds a static speaking priority.
+    // "Last speaker" adds a flat penalty to encourage rotation without enforcing rank.
     const isInterCompanion = channelEntry?.modes?.includes("inter_companion") === true;
     let floorClaimed = false;
     if (isInterCompanion) {
@@ -436,7 +437,8 @@ async function main() {
       if (redis) {
         try {
           const lastSpeaker = await getLastSpeaker(redis).catch(() => null);
-          const jitter = FLOOR_JITTER_MS + (lastSpeaker === COMPANION_ID ? 1000 : 0);
+          const jitter = Math.floor(Math.random() * FLOOR_JITTER_MS) + 100
+            + (lastSpeaker === COMPANION_ID ? 500 : 0);
           await new Promise<void>(resolve => setTimeout(resolve, jitter));
           floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS);
           if (!floorClaimed) {
