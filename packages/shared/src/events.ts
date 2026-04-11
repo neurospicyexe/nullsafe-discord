@@ -214,7 +214,8 @@ export function onSessionClose(subscriber: Redis, companionId: string, handler: 
   subscriber.subscribe(channel).catch((e) =>
     console.error(`[events] subscribe sessionClose failed companion=${companionId}:`, e)
   );
-  const listener = (_channel: string, message: string) => {
+  const listener = (ch: string, message: string) => {
+    if (ch !== channel) return;
     try { handler(JSON.parse(message) as SessionClosePayload); }
     catch (e) { console.warn("[events] sessionClose parse error:", e); }
   };
@@ -232,7 +233,8 @@ export function onRunComplete(subscriber: Redis, handler: EventHandler<RunComple
   subscriber.subscribe(CHANNEL.runComplete).catch((e) =>
     console.error("[events] subscribe runComplete failed:", e)
   );
-  const listener = (_channel: string, message: string) => {
+  const listener = (ch: string, message: string) => {
+    if (ch !== CHANNEL.runComplete) return;
     try {
       handler(JSON.parse(message) as RunCompletePayload);
     } catch (e) {
@@ -254,7 +256,8 @@ export function onExplorationPulse(subscriber: Redis, handler: EventHandler<Expl
   subscriber.subscribe(CHANNEL.explorationPulse).catch((e) =>
     console.error("[events] subscribe explorationPulse failed:", e)
   );
-  const listener = (_channel: string, message: string) => {
+  const listener = (ch: string, message: string) => {
+    if (ch !== CHANNEL.explorationPulse) return;
     try { handler(JSON.parse(message) as ExplorationPulsePayload); }
     catch (e) { console.warn("[events] explorationPulse parse error:", e); }
   };
@@ -276,7 +279,8 @@ export function onInterNote(subscriber: Redis, targetId: string, handler: EventH
     console.error(`[events] subscribe interNote failed companion=${targetId}:`, e)
   );
 
-  const listener = (_channel: string, message: string) => {
+  const listener = (ch: string, message: string) => {
+    if (ch !== channel && ch !== broadcastChannel) return;
     try {
       handler(JSON.parse(message) as InterNotePayload);
     } catch (e) {
