@@ -101,6 +101,7 @@ export async function writeJournalEntry(entry: GrowthJournalEntry): Promise<stri
     content: entry.content,
     source: entry.source,
     tags: entry.tags ?? [],
+    ...(entry.run_id ? { run_id: entry.run_id } : {}),
   }) as { id: string };
   return r.id;
 }
@@ -111,6 +112,7 @@ export async function writePattern(pattern: GrowthPattern): Promise<string> {
     pattern_text: pattern.pattern_text,
     evidence: pattern.evidence ?? [],
     strength: pattern.strength ?? 1,
+    ...(pattern.run_id ? { run_id: pattern.run_id } : {}),
   }) as { id: string };
   return r.id;
 }
@@ -121,6 +123,7 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
     marker_type: marker.marker_type,
     description: marker.description,
     related_pattern_id: marker.related_pattern_id,
+    ...(marker.run_id ? { run_id: marker.run_id } : {}),
   }) as { id: string };
   return r.id;
 }

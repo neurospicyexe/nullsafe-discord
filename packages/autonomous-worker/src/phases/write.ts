@@ -42,6 +42,11 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
 
   await appendLog(ctx.runId, "write:start");
 
+  // Stamp run_id onto all artifacts before writing so growth entries link back to this run.
+  ctx.journalEntry.run_id = ctx.runId;
+  for (const p of ctx.newPatterns) p.run_id = ctx.runId;
+  for (const m of ctx.newMarkers) m.run_id = ctx.runId;
+
   // Write journal entry
   try {
     const journalId = await writeJournalEntry(ctx.journalEntry);

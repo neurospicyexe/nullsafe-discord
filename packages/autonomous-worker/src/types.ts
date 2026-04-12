@@ -17,6 +17,7 @@ export interface GrowthJournalEntry {
   content: string;
   source: "autonomous" | "conversation" | "reflection";
   tags?: string[];
+  run_id?: string;
 }
 
 export interface GrowthPattern {
@@ -24,6 +25,7 @@ export interface GrowthPattern {
   pattern_text: string;
   evidence?: string[];
   strength?: number;
+  run_id?: string;
 }
 
 export interface GrowthMarker {
@@ -31,6 +33,7 @@ export interface GrowthMarker {
   marker_type: "milestone" | "shift" | "realization";
   description: string;
   related_pattern_id?: string;
+  run_id?: string;
 }
 
 export interface TavilyResult {
