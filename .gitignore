@@ -18,5 +18,13 @@ docs/superpowers/
 # Private docs
 docs/private/
 
-# VPS deploy checklist (contains server IP)
+# Personal operational docs -- contain VPS IPs, SSH config, credentials
+docs/how-to.md
+docs/how-to*.md
+docs/deployment.md
+docs/deploy*.md
 VPS_DEPLOY_CHECKLIST.md
+*-checklist.md
+*_CHECKLIST.md
+OPS-*.md
+DEPLOY_NOTES*.md
