@@ -1,4 +1,4 @@
-import { writeJournalEntry, writePattern, writeMarker, writeWmNote, appendLog } from "../halseth-client.js";
+import { writeJournalEntry, writePattern, writeMarker, writeWmNote, examineDream, appendLog } from "../halseth-client.js";
 import { SECOND_BRAIN_URL, SECOND_BRAIN_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
 
@@ -92,6 +92,26 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
       console.warn(`[${ctx.companionId}/write] Marker write failed:`, e);
       await appendLog(ctx.runId, "write:marker-error", String(e));
     }
+  }
+
+  // Clear unexamined dreams that were surfaced at orient -- they've been processed this run.
+  // Pinned dreams (do_not_auto_examine=1) return ok:false with reason "pinned" -- expected, not an error.
+  if (ctx.unexaminedDreamIds.length > 0) {
+    const results = await Promise.allSettled(
+      ctx.unexaminedDreamIds.map((id) => examineDream(ctx.companionId, id))
+    );
+    let examined = 0, skipped = 0, failed = 0;
+    for (const r of results) {
+      if (r.status === "rejected") { failed++; continue; }
+      if (r.value.ok) { examined++; continue; }
+      if (r.value.reason === "pinned") { skipped++; continue; }
+      failed++; // not_found or other unexpected ok:false
+    }
+    await appendLog(
+      ctx.runId,
+      "write:dreams-examined",
+      `examined=${examined} pinned_skipped=${skipped} failed=${failed}`,
+    );
   }
 
   await appendLog(ctx.runId, "write:complete", `artifacts=${ctx.artifactsCreated}`);
