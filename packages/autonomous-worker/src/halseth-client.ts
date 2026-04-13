@@ -129,6 +129,30 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Dream examination
+// ---------------------------------------------------------------------------
+
+/**
+ * Mark a companion dream as examined so it stops appearing in orient.
+ * Returns { ok: boolean; reason?: string } where reason can be "pinned" (do_not_auto_examine=1), "not_found", etc.
+ * Non-fatal -- autonomous pipeline proceeds even if this fails.
+ */
+export async function examineDream(
+  companionId: string,
+  dreamId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  try {
+    const r = await hFetch(`/mind/dream/${dreamId}/examine`, "POST", {
+      companion_id: companionId,
+    }) as { ok: boolean; reason?: string };
+    return r;
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] examineDream ${dreamId} failed:`, e);
+    return { ok: false, reason: "request_failed" };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // WebMind continuity notes
 // ---------------------------------------------------------------------------
 
