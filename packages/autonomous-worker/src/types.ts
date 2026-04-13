@@ -51,6 +51,7 @@ export interface PipelineContext {
   orientSummary: string;
   recentGrowth: Array<{ type: string; content: string }>;
   activePatterns: string[];
+  unexaminedDreamIds: string[]; // dream IDs surfaced at orient -- cleared after successful write
   seed: Seed | null;
   searchResults: TavilyResult[];
   explorationSummary: string | null;

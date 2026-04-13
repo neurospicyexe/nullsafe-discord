@@ -35,6 +35,7 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     orientSummary: "",
     recentGrowth: [],
     activePatterns: [],
+    unexaminedDreamIds: [],
     seed: null,
     searchResults: [],
     explorationSummary: null,
