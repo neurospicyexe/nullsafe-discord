@@ -50,7 +50,7 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       ? `${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
       : baseIdentity;
     const frontState = String(state["front_state"] ?? "unknown");
-    console.log(`[drevan] session opened: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
+    console.log(`[drevan] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
     // Warm boot: fetch recent context (synthesis + WebMind ground + RAG)
     let recentContext = "";
