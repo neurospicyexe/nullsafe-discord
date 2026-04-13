@@ -28,12 +28,22 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     ctx.orientSummary = formatRecentContext(orient);
     ctx.recentGrowth = orient.recent_growth ?? [];
     ctx.activePatterns = orient.active_patterns ?? [];
+
+    // Extract unexamined dream IDs from ready_prompt so write phase can clear them.
+    // Format in ready_prompt: [Unexamined dream [autonomous] id:UUID] «text»
+    const readyPrompt = (orient as { ready_prompt?: string }).ready_prompt ?? "";
+    const dreamIdRe = /\[Unexamined dream[^\]]*\bid:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/gi;
+    const dreamIds: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = dreamIdRe.exec(readyPrompt)) !== null) dreamIds.push(m[1]);
+    ctx.unexaminedDreamIds = dreamIds;
   } else {
     console.warn(`[${ctx.companionId}/orient] botOrient returned null -- proceeding with empty context`);
     ctx.orientSummary = "";
     ctx.recentGrowth = [];
     ctx.activePatterns = [];
+    ctx.unexaminedDreamIds = [];
   }
 
-  await appendLog(ctx.runId, "orient:complete", `identity=${ctx.identityText.length}chars orient=${ctx.orientSummary.length}chars growth=${ctx.recentGrowth.length}entries`);
+  await appendLog(ctx.runId, "orient:complete", `identity=${ctx.identityText.length}chars orient=${ctx.orientSummary.length}chars growth=${ctx.recentGrowth.length}entries dreams=${ctx.unexaminedDreamIds.length}`);
 }
