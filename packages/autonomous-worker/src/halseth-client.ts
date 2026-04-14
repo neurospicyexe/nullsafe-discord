@@ -174,3 +174,26 @@ export async function writeWmNote(companionId: string, content: string, threadKe
     console.warn(`[${companionId}/halseth] writeWmNote failed:`, e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Memory compression
+// ---------------------------------------------------------------------------
+
+export interface CompressibleNote {
+  note_id: string;
+  content: string;
+  created_at: string;
+}
+
+export async function getEligibleNotes(agentId: string): Promise<CompressibleNote[]> {
+  const result = await hFetch(`/mind/notes/compress-eligible?agent_id=${encodeURIComponent(agentId)}`) as { notes: CompressibleNote[] };
+  return result.notes ?? [];
+}
+
+export async function archiveNotes(
+  agentId: string,
+  notes: CompressibleNote[],
+  summary: string,
+): Promise<{ archived: number; skipped: string }> {
+  return hFetch("/mind/notes/archive", "POST", { agent_id: agentId, notes, summary }) as Promise<{ archived: number; skipped: string }>;
+}
