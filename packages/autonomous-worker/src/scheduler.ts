@@ -4,6 +4,7 @@ import { createRedisClient, publishRunComplete, publishExplorationPulse, setPres
 import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
+import { runCompress } from "./phases/compress.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -90,9 +91,11 @@ export function startScheduler(): void {
     console.log(`[scheduler] ${companionId} → cron "${schedule}"`);
 
     cron.schedule(schedule, () => {
-      fireRun(companionId, redis).catch(e =>
-        console.error(`[scheduler/${companionId}] unhandled error:`, e)
-      );
+      fireRun(companionId, redis)
+        .then(() => runCompress(companionId))
+        .catch(e =>
+          console.error(`[scheduler/${companionId}] unhandled error:`, e)
+        );
     });
   }
 
