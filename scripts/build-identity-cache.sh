@@ -6,11 +6,16 @@
 set -e
 
 ENV_FILE="/app/nullsafe-discord/.env"
+# Extract only the three paths we need -- avoids sourcing the full .env
+# (source fails when values contain backticks or other special characters).
+extract_env() {
+  local key="$1"
+  grep -E "^${key}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'"
+}
 if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
+  [[ -z "${CYPHER_IDENTITY_PATH:-}" ]] && CYPHER_IDENTITY_PATH=$(extract_env CYPHER_IDENTITY_PATH)
+  [[ -z "${DREVAN_IDENTITY_PATH:-}" ]]  && DREVAN_IDENTITY_PATH=$(extract_env DREVAN_IDENTITY_PATH)
+  [[ -z "${GAIA_IDENTITY_PATH:-}" ]]    && GAIA_IDENTITY_PATH=$(extract_env GAIA_IDENTITY_PATH)
 fi
 
 fail=0
