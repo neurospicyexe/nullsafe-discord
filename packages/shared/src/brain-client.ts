@@ -67,7 +67,8 @@ export function buildThoughtPacket(
     metadata: {
       channel_id: channelId,
       system_prompt: systemPrompt,
-      // History without the current message (Brain appends it internally).
+      // Full history including the current user message (already appended to stmStore).
+      // Brain replaces meta_messages[-1] with cleaned_message (strips override prefixes).
       messages: history.map(m => ({ role: m.role, content: m.content })),
       temperature,
       is_raziel: opts?.isRaziel,
