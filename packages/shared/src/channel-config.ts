@@ -134,8 +134,9 @@ export async function judgeAmbientRelevance(
     const result = await generateFn(system, [{ role: "user", content: prompt }]);
     return result?.trim().toLowerCase().startsWith("y") ?? false;
   } catch {
-    // On failure, default to true — don't silence the companion due to a network blip.
-    return true;
+    // On failure, default to false — a transient LLM blip should not trigger ambient responses.
+    // Companions respond when explicitly named regardless; silent failure is correct for ambient.
+    return false;
   }
 }
 

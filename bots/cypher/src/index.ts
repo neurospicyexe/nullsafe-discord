@@ -16,7 +16,7 @@ import {
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS,
+  BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
@@ -47,8 +47,8 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       console.log(`[cypher] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
     }
     const systemPrompt = rawPrompt
-      ? `${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-      : baseIdentity;
+      ? `${DISCORD_COMPANION_PREFIX}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+      : `${DISCORD_COMPANION_PREFIX}${baseIdentity}`;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[cypher] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
@@ -150,6 +150,10 @@ async function runDistillation(
     }
     if (parsed.human_blocks?.length) {
       wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
+      // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
+      // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
+      const noteText = `[discord:distillation] ${parsed.human_blocks.map(b => b.content).join(" ")}`;
+      wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
     }
   } catch { /* fail-silent -- malformed JSON from inference is acceptable loss */ }
 }
@@ -531,7 +535,12 @@ async function main() {
     judgeWriteback(message.content, response, inference, COMPANION_ID).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
-        if (wb.type === "companion_note") await librarian.addCompanionNote(wb.content, message.channelId);
+        if (wb.type === "companion_note") {
+          await librarian.addCompanionNote(wb.content, message.channelId);
+          // companion_journal is not read by Claude.ai orient; wm_continuity_notes is.
+          // Write relational observations to both so Claude.ai sees them at next boot.
+          await librarian.writeWmNote(`[discord:observation] ${wb.content}`, message.channelId);
+        }
         else if (wb.type === "witness_log") await librarian.witnessLog(wb.content, message.channelId);
         else if (wb.type === "thread_open") await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
       });
