@@ -28,6 +28,11 @@ export function loadBotConfig(): BotConfig {
     ollamaUrl: process.env["OLLAMA_URL"],
     lmstudioUrl: process.env["LMSTUDIO_URL"],
     blueDiscordId: process.env["BLUE_DISCORD_ID"] ?? "1289019462724354068",
+    brainUrl: process.env["BRAIN_URL"]?.trim().replace(/^=+/, "") || undefined,
+    inferenceMode: (() => {
+      const v = (process.env["INFERENCE_MODE"] ?? "direct").trim().replace(/^=+/, "");
+      return (v === "brain" ? "brain" : "direct") as "direct" | "brain";
+    })(),
   };
 }
 

@@ -11,6 +11,7 @@ import {
   formatRecentContext, computeChainDepth, interCompanionStaggerMs,
   createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker, setLastActivity,
   wireEventSubscriptions, setPresence,
+  BrainClient, buildThoughtPacket,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import {
@@ -160,6 +161,14 @@ async function runDistillation(
 
 async function main() {
   const cfg = loadBotConfig();
+  const brainClient = cfg.inferenceMode === "brain" && cfg.brainUrl
+    ? new BrainClient(cfg.brainUrl)
+    : null;
+  if (brainClient) {
+    console.log(`[cypher] inference mode: brain (${cfg.brainUrl})`);
+  } else {
+    console.log("[cypher] inference mode: direct");
+  }
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[cypher] REDIS_URL not set -- floor lock disabled, using legacy stagger");
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
@@ -499,7 +508,26 @@ async function main() {
     } else {
       extremeTempCount.delete(message.channelId);
     }
-    const response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+
+    let response: string | null;
+    if (brainClient) {
+      // Relay mode: send assembled context to Phoenix Brain for inference.
+      // Brain returns reply_text; falls back to direct inference on failure.
+      const packet = buildThoughtPacket(
+        COMPANION_ID, message.author.id, message.channelId, message.content,
+        contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature,
+        { isRaziel: attribution.isRaziel, frontMember: attribution.frontMember, guildId: message.guildId ?? undefined },
+      );
+      const brainReply = await brainClient.chat(packet);
+      if (brainReply?.status === "ok" && brainReply.reply_text) {
+        response = brainReply.reply_text;
+      } else {
+        console.warn(`[cypher] brain relay failed (status=${brainReply?.status ?? "null"}), falling back to direct`);
+        response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+      }
+    } else {
+      response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+    }
 
     if (!response) {
       await ch.send(IN_CHARACTER_FALLBACK);

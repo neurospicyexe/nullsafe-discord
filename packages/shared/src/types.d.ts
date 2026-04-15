@@ -25,10 +25,14 @@ export interface BotConfig {
     deepseekApiKey: string;
     razielDiscordId: string;
     pluralkitSystemId: string;
-    channelConfigUrl: string;
-    inferenceProvider: "deepseek" | "groq" | "ollama";
+    channelConfigUrl?: string;
+    inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
     groqApiKey?: string;
     ollamaUrl?: string;
+    lmstudioUrl?: string;
+    blueDiscordId?: string;
+    brainUrl?: string;
+    inferenceMode?: "direct" | "brain";
 }
 export interface BootContext {
     companionId: CompanionId;
