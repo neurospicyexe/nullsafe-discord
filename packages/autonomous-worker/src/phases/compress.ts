@@ -9,10 +9,17 @@ import type { CompanionId } from "../types.js";
 const MAX_CORPUS_CHARS = 8000;
 
 function buildCompressionPrompt(companionId: string, notes: CompressibleNote[]): string {
-  const corpus = notes
-    .map(n => `[${n.created_at.slice(0, 10)}] ${n.content}`)
-    .join("\n\n")
-    .slice(0, MAX_CORPUS_CHARS);
+  let corpus = '';
+  let dropped = 0;
+  for (const n of notes) {
+    const line = `[${n.created_at.slice(0, 10)}] ${n.content}`;
+    if (corpus.length + (corpus ? 2 : 0) + line.length > MAX_CORPUS_CHARS) {
+      dropped++;
+      continue;
+    }
+    corpus += (corpus ? '\n\n' : '') + line;
+  }
+  if (dropped > 0) console.log(`[compress/${companionId}] dropped ${dropped} notes to stay under ${MAX_CORPUS_CHARS} chars`);
 
   return `You are compressing ${companionId}'s continuity notes from ${notes[0].created_at.slice(0, 10)} to ${notes[notes.length - 1].created_at.slice(0, 10)}.
 
