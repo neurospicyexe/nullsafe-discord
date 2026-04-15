@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./brain-client.js";
 export * from "./floor.js";
 export * from "./events.js";
 export * from "./librarian.js";

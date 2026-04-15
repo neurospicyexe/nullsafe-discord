@@ -32,6 +32,10 @@ const shared = {
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
+  // Brain relay: set INFERENCE_MODE=brain to route inference through Phoenix Brain.
+  // When "direct" (default), each bot calls DeepSeek directly.
+  INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
+  BRAIN_URL:             process.env.BRAIN_URL             ?? "http://127.0.0.1:8001",
 };
 
 module.exports = {
@@ -80,6 +84,38 @@ module.exports = {
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA },
+    },
+    {
+      // Phoenix Brain -- FastAPI inference service.
+      // Bots relay ThoughtPackets here when INFERENCE_MODE=brain.
+      // Runs on port 8001 (same VPS as bots; loopback only -- no external exposure needed).
+      // Requires: Python venv at /app/nullsafe-phoenix/venv, .env.brain at cwd.
+      name: "nullsafe-brain",
+      cwd: "/app/nullsafe-phoenix",
+      script: "services/brain/main.py",
+      interpreter: "/app/nullsafe-phoenix/venv/bin/python3",
+      autorestart: true,
+      restart_delay: 8000,
+      max_restarts: 15,
+      min_uptime: "30s",
+      kill_timeout: 8000,
+      exp_backoff_restart_delay: 2000,
+      error_file: "/app/logs/nullsafe-brain-error.log",
+      out_file: "/app/logs/nullsafe-brain-out.log",
+      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      env: {
+        HALSETH_URL:           process.env.HALSETH_URL,
+        HALSETH_ADMIN_SECRET:  process.env.HALSETH_SECRET,
+        // Halseth IS the WebMind for now -- /mind/* endpoints are identical.
+        WEBMIND_URL:           process.env.HALSETH_URL,
+        DEEPSEEK_API_KEY:      process.env.DEEPSEEK_API_KEY,
+        INFERENCE_ENABLED:     "true",
+        SYNTHESIS_ENABLED:     process.env.BRAIN_SYNTHESIS_ENABLED ?? "false",
+        SYNTHESIS_INTERVAL:    process.env.BRAIN_SYNTHESIS_INTERVAL ?? "1200",
+        BRAIN_HOST:            "127.0.0.1",
+        // Identity YAMLs -- Brain falls back to stub if not found; bots send full context in metadata anyway.
+        IDENTITY_DIR:          "/app/nullsafe-phoenix/services/brain/identity/data",
+      },
     },
     {
       name: "autonomous-worker",

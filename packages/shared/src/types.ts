@@ -43,6 +43,10 @@ export interface BotConfig {
   ollamaUrl?: string;
   lmstudioUrl?: string;
   blueDiscordId?: string;
+  /** When set, bot relays inference to Phoenix Brain instead of calling DeepSeek directly. */
+  brainUrl?: string;
+  /** "brain" = relay to Phoenix Brain; "direct" (default) = bot handles inference. */
+  inferenceMode?: "direct" | "brain";
 }
 
 export interface BootContext {
