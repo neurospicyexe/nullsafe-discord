@@ -104,6 +104,8 @@ module.exports = {
       out_file: "/app/logs/nullsafe-brain-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: {
+        // shared/contracts.py lives at repo root -- PYTHONPATH must include it.
+        PYTHONPATH:            "/app/nullsafe-phoenix",
         HALSETH_URL:           process.env.HALSETH_URL,
         HALSETH_ADMIN_SECRET:  process.env.HALSETH_SECRET,
         // Halseth IS the WebMind for now -- /mind/* endpoints are identical.
@@ -113,7 +115,6 @@ module.exports = {
         SYNTHESIS_ENABLED:     process.env.BRAIN_SYNTHESIS_ENABLED ?? "false",
         SYNTHESIS_INTERVAL:    process.env.BRAIN_SYNTHESIS_INTERVAL ?? "1200",
         BRAIN_HOST:            "127.0.0.1",
-        // Identity YAMLs -- Brain falls back to stub if not found; bots send full context in metadata anyway.
         IDENTITY_DIR:          "/app/nullsafe-phoenix/services/brain/identity/data",
       },
     },
