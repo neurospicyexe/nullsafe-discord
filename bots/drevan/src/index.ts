@@ -150,6 +150,10 @@ async function runDistillation(
     }
     if (parsed.human_blocks?.length) {
       wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
+      // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
+      // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
+      const noteText = `[discord:distillation] ${parsed.human_blocks.map(b => b.content).join(" ")}`;
+      wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
     }
   } catch { /* fail-silent */ }
 }
@@ -515,7 +519,12 @@ async function main() {
     judgeWriteback(message.content, response, inference, COMPANION_ID).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
-        if (wb.type === "companion_note") await librarian.addCompanionNote(wb.content, message.channelId);
+        if (wb.type === "companion_note") {
+          await librarian.addCompanionNote(wb.content, message.channelId);
+          // companion_journal is not read by Claude.ai orient; wm_continuity_notes is.
+          // Write relational observations to both so Claude.ai sees them at next boot.
+          await librarian.writeWmNote(`[discord:observation] ${wb.content}`, message.channelId);
+        }
         else if (wb.type === "witness_log") await librarian.witnessLog(wb.content, message.channelId);
         else if (wb.type === "thread_open") await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
       });

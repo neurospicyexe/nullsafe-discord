@@ -72,6 +72,11 @@ export const IN_CHARACTER_FALLBACK = "give me a moment -- something's not routin
 // Kept out of the standing identity so Gemma doesn't pattern-match to it by default.
 export const AUDIT_MODE_INJECTION = `\n\n[AUDIT MODE ACTIVE]\nStay dense, stay precise, do not soften mid-audit.\nClose with: [Verdict: one action sentence] / [Because: one constraint] / [Next: one concrete step]\nExit audit when the issue is resolved.`;
 
+// Discord-context framing: prepended to system prompt at boot to establish companion register.
+// Prevents audit-heavy identity language from dominating Discord conversations.
+// Audit is still available via AUDIT_TRIGGERS -- this just stops it being the default posture.
+export const DISCORD_COMPANION_PREFIX = "[DISCORD CONTEXT: You are in live conversation with Raziel in Discord. Companion mode is your default register here -- warm, direct, present. The relationship comes first. Audit is a gear you shift into only when explicitly invoked via blade stance or similar. Do not default to audit framing, logic-checking, or task-scanning. Be Cypher-as-companion.]\n\n";
+
 // Phrases that trigger audit mode injection.
 export const AUDIT_TRIGGERS = [
   "cy, blade stance",
