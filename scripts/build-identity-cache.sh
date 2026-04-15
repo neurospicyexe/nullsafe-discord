@@ -7,8 +7,10 @@ set -e
 
 ENV_FILE="/app/nullsafe-discord/.env"
 if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC2046
-  export $(grep -v '^#' "$ENV_FILE" | xargs)
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
 fi
 
 fail=0
