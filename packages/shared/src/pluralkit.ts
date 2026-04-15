@@ -11,6 +11,8 @@ export async function resolveAttribution(
   razielDiscordId: string,
   knownSenderId?: string,
   fetchFn: typeof fetch = globalThis.fetch,
+  blueDiscordId?: string,
+  bluePkSystemId?: string,
 ): Promise<Attribution> {
   if (!message.webhookId) {
     return {
@@ -31,7 +33,7 @@ export async function resolveAttribution(
     ).finally(() => clearTimeout(timeout));
 
     if (res.ok) {
-      const pk = await res.json() as { sender: string; member?: { name: string } };
+      const pk = await res.json() as { sender: string; member?: { name: string }; system?: { id: string } };
       if (pk.sender === razielDiscordId) {
         return {
           isRaziel: true,
@@ -41,9 +43,12 @@ export async function resolveAttribution(
           source: "pluralkit",
         };
       }
+      // Blue's system: match by Discord ID or PK system ID (belt-and-suspenders).
+      const isBlue = (blueDiscordId && pk.sender === blueDiscordId)
+        || (bluePkSystemId && pk.system?.id === bluePkSystemId);
       return {
         isRaziel: false,
-        discordUserId: pk.sender,
+        discordUserId: isBlue ? (blueDiscordId ?? pk.sender) : pk.sender,
         frontMember: pk.member?.name ?? null,
         frontState: "known",
         source: "pluralkit",

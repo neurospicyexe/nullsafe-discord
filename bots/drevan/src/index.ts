@@ -324,7 +324,7 @@ async function main() {
     // Capture dedup sender before any awaits (entry deleted by direct-message path above).
     const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
     const channelConfig = await configCache.get();
-    const attribution = await resolveAttribution(message, cfg.razielDiscordId, knownSenderId);
+    const attribution = await resolveAttribution(message, cfg.razielDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"]);
 
     const userTier = attribution.isRaziel ? "raziel" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
