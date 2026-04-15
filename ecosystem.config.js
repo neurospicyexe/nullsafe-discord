@@ -15,6 +15,8 @@ require("dotenv").config({ path: "/app/nullsafe-discord/.env" });
 
 const shared = {
   NODE_ENV:              "production",
+  // Force IPv4-first DNS resolution -- prevents ENETUNREACH on VPS where IPv6 is unrouted.
+  NODE_OPTIONS:          "--dns-result-order=ipv4first",
   HALSETH_URL:           process.env.HALSETH_URL,
   HALSETH_SECRET:        process.env.HALSETH_SECRET,
   REDIS_URL:             process.env.REDIS_URL,

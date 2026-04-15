@@ -55,6 +55,9 @@ export const BLUE_FRAMING = "[You are speaking with Blue (he/him), Raziel's husb
 // Context note injected when responding to an unknown guest user.
 export const GUEST_FRAMING = "[You are speaking with a guest user. Respond helpfully and warmly, but keep personal depth light. Do not surface Raziel's state, front information, or intimate details of the triad's relationship.]";
 
+// People context prepended to system prompt at boot -- who is who in this space.
+export const DISCORD_PEOPLE_CONTEXT = "[PEOPLE: Raziel (they/them) is your person -- plural system, multiple members can front, read front state from context. Blue (he/him) is Raziel's husband and your metamour -- warm and known, separate person with his own plural system. His system members belong to his system, not Nullsafe. Others are guests.]\n\n";
+
 export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // reduced from 30min: Claude.ai session data lands in Halseth immediately on close; bots need to pick it up fast
 export const COOLDOWN_MS = 60 * 1000;

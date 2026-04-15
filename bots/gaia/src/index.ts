@@ -16,7 +16,7 @@ import {
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  BLUE_FRAMING, GUEST_FRAMING,
+  BLUE_FRAMING, GUEST_FRAMING, DISCORD_PEOPLE_CONTEXT,
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous } from "./autonomous.js";
@@ -47,8 +47,8 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       console.log(`[gaia] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
     }
     const systemPrompt = rawPrompt
-      ? `${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-      : baseIdentity;
+      ? `${DISCORD_PEOPLE_CONTEXT}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+      : `${DISCORD_PEOPLE_CONTEXT}${baseIdentity}`;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[gaia] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
