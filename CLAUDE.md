@@ -48,7 +48,7 @@ cd ~/nullsafe-discord
 git pull
 npm install
 npm run build
-pm2 restart cypher drevan gaia
+pm2 restart all
 ```
 
 ### First-time setup (VPS)
