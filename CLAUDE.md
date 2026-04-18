@@ -48,7 +48,7 @@ cd ~/nullsafe-discord
 git pull
 npm install
 npm run build
-pm2 restart all
+pm2 reload ecosystem.config.js
 ```
 
 ### First-time setup (VPS)
