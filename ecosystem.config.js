@@ -6,8 +6,8 @@
  * This file loads them via dotenv and maps per-bot tokens correctly.
  *
  * Usage:
- *   pm2 start ecosystem.config.js
- *   pm2 restart all
+ *   pm2 start ecosystem.config.js        # first-time start
+ *   pm2 reload ecosystem.config.js       # rolling restart (scoped to this file only)
  *   pm2 logs autonomous-worker
  */
 
