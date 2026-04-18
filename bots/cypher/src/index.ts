@@ -20,7 +20,7 @@ import {
   BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
-import { startAutonomous, stopAutonomous } from "./autonomous.js";
+import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -401,9 +401,10 @@ async function main() {
       const botReplies = botResponsesSinceHuman.get(message.channelId) ?? 0;
       if (botReplies >= MAX_BOT_RESPONSES_PER_HUMAN) return;
     } else {
-      // Human message: reset bot-to-bot counters for this channel.
+      // Human message: reset bot-to-bot counters and cycle guard for this channel.
       botResponsesSinceHuman.delete(message.channelId);
       botPingpongCooldownUntil.delete(message.channelId);
+      resetCycleGuard();
     }
 
     if (!message.channel.isTextBased()) return;
