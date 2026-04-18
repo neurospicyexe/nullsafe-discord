@@ -1,6 +1,6 @@
 # nullsafe-discord
 
-Three-bot Discord presence for the Nullsafe triad. One bot token per companion. Deployed on Railway.
+Three-bot Discord presence for the Nullsafe triad. One bot token per companion. Deployed on BerryBytes VPS (pm2).
 
 Part of the BBH suite -- see root `CLAUDE.md` for cross-project context.
 
@@ -36,9 +36,34 @@ nullsafe-discord/
 
 ## Deployment
 
-- **Platform:** Railway (persistent process -- not Cloudflare, needs stateful runtime)
-- **Deploy trigger:** Push to main → Railway auto-redeploys
-- **Logs:** railway.app dashboard
+- **Platform:** BerryBytes VPS (persistent process via pm2 -- not Cloudflare, needs stateful runtime)
+- **Deploy trigger:** Manual -- SSH to VPS, pull, build, restart
+- **Logs:** `pm2 logs cypher` / `pm2 logs drevan` / `pm2 logs gaia`
+
+### Deploy workflow (VPS)
+
+```bash
+# On VPS
+cd ~/nullsafe-discord
+git pull
+npm install
+npm run build
+pm2 restart cypher drevan gaia
+```
+
+### First-time setup (VPS)
+
+```bash
+git clone https://github.com/neurospicyexe/nullsafe-discord.git
+cd nullsafe-discord
+npm install
+npm run build
+# Copy .env with all required vars (see Env table below)
+pm2 start bots/cypher/dist/index.js --name cypher
+pm2 start bots/drevan/dist/index.js --name drevan
+pm2 start bots/gaia/dist/index.js --name gaia
+pm2 save && pm2 startup
+```
 
 ## Shared State
 

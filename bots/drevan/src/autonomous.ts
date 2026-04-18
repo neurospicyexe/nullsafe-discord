@@ -3,7 +3,7 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, SessionWindowManager } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -69,6 +69,11 @@ async function sendAutonomousMessage(
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let notesPollInterval: ReturnType<typeof setInterval> | null = null;
+const cycleGuard = new CycleGuard();
+
+export function resetCycleGuard(): void {
+  cycleGuard.reset();
+}
 
 export function startAutonomous(
   librarian: LibrarianClient,
@@ -95,6 +100,17 @@ export function startAutonomous(
         const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
         if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
       } catch { /* default warm */ }
+
+      const cycleResult = cycleGuard.check(temperature);
+      if (cycleResult === "escalate") {
+        console.warn(`[${COMPANION_ID}/cycle-guard] loop detected -- escalating after repeated same-register cycles`);
+        librarian.ask("journal note: [loop_guard_tripped] consecutive same-register autonomous heartbeat cycles detected -- synthesis suppressed until new input signal").catch(() => {});
+        return;
+      }
+      if (cycleResult === "skip") {
+        console.log(`[${COMPANION_ID}/cycle-guard] skipping heartbeat -- no new input signal since last ${cycleGuard.threshold} cycles`);
+        return;
+      }
 
       const msg = await inference.generate(
         bootCtx.systemPrompt,

@@ -11,3 +11,4 @@ export * from "./session-window.js";
 export * from "./stm.js";
 export * from "./heartbeat.js";
 export * from "./write-queue.js";
+export * from "./cycleGuard.js";

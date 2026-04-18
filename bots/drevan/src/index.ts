@@ -20,7 +20,7 @@ import {
   BLUE_FRAMING, GUEST_FRAMING, DISCORD_PEOPLE_CONTEXT,
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
-import { startAutonomous, stopAutonomous } from "./autonomous.js";
+import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -395,6 +395,7 @@ async function main() {
     } else {
       botResponsesSinceHuman.delete(message.channelId);
       botPingpongCooldownUntil.delete(message.channelId);
+      resetCycleGuard();
     }
 
     if (!message.channel.isTextBased()) return;
