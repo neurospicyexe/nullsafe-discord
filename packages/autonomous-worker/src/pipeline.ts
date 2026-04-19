@@ -5,6 +5,7 @@ import { runExplore } from "./phases/explore.js";
 import { runSynthesize } from "./phases/synthesize.js";
 import { runWrite } from "./phases/write.js";
 import { runReflect } from "./phases/reflect.js";
+import { runSomaUpdate } from "./phases/soma.js";
 import type { CompanionId, RunType, PipelineContext } from "./types.js";
 
 /**
@@ -81,6 +82,9 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
 
     // Phase 6: Reflection + new seed generation (non-fatal)
     await runReflect(ctx);
+
+    // Phase 7: SOMA state update (non-fatal) -- close the read/write gap
+    await runSomaUpdate(ctx);
 
     // Mark run complete
     await updateRun(runId, {
