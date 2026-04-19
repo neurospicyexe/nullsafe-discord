@@ -456,7 +456,10 @@ async function main() {
     }
 
     // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
-    const sbSearchPromise = librarian.searchForMessage(message.content).catch(() => null);
+    // Skip for short messages (< 20 chars) -- searches on "ok" or "lol" produce noise.
+    const sbSearchPromise = message.content.length >= 20
+      ? librarian.searchForMessage(message.content).catch(() => null)
+      : Promise.resolve(null);
 
     await ch.sendTyping();
 
