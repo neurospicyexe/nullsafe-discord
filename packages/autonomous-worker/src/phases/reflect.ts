@@ -110,7 +110,7 @@ async function handleThreadLifecycle(
 
     if (decision === "conclude") {
       // Concluded thread deserves a marker -- it's a real arc of becoming
-      const threadTitle = ctx.activeThreads.find(t => t.id === ctx.threadId)?.title
+      const threadTitle = ctx.activeThreads.find(t => t.thread_key === ctx.threadId)?.title
         ?? ctx.seed?.content?.slice(0, 80)
         ?? "exploration thread";
       await writeMarker({

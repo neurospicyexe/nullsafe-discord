@@ -175,6 +175,27 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// SOMA state
+// ---------------------------------------------------------------------------
+
+export interface SomaUpdate {
+  soma_float_1?: number;
+  soma_float_2?: number;
+  soma_float_3?: number;
+  heat?: string;
+  reach?: string;
+  weight?: string;
+  current_mood?: string;
+  compound_state?: string;
+  surface_emotion?: string;
+  surface_intensity?: number;
+}
+
+export async function updateSomaState(companionId: string, fields: SomaUpdate): Promise<void> {
+  await hFetch(`/soma/${encodeURIComponent(companionId)}`, "PATCH", fields);
+}
+
+// ---------------------------------------------------------------------------
 // Dream examination
 // ---------------------------------------------------------------------------
 
