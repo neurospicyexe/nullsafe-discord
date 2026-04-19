@@ -435,6 +435,9 @@ async function main() {
     if (userTier === "intimate") contextPrompt += `\n\n${BLUE_FRAMING}`;
     else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
 
+    // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
+    const sbSearchPromise = librarian.searchForMessage(message.content).catch(() => null);
+
     await ch.sendTyping();
 
     // Random jitter + Redis floor lock for inter_companion channels.
@@ -489,6 +492,9 @@ async function main() {
     } else {
       extremeTempCount.delete(message.channelId);
     }
+
+    const sbHit = await sbSearchPromise;
+    if (sbHit) contextPrompt += `\n\n[Memory -- Second Brain retrieved for this message:\n${sbHit.slice(0, 800)}]`;
 
     let response: string | null;
     if (brainClient) {

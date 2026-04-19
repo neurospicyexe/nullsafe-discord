@@ -148,6 +148,28 @@ export class LibrarianClient {
     }
   }
 
+  /**
+   * Thalamus pattern: semantic search against Second Brain before inference.
+   * Fires through Halseth so the Worker handles MCP session management.
+   * Returns the raw sb_search result string, or null on miss/error.
+   * Callers should fire this before sendTyping so the await cost overlaps with floor jitter.
+   */
+  async searchForMessage(query: string): Promise<string | null> {
+    try {
+      const url = new URL(`${this.url}/mind/search`);
+      url.searchParams.set("query", query.slice(0, 500));
+      const res = await this._fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(6_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { result: string | null };
+      return data.result ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async bridgePull() {
     return this.ask("check bridge events");
   }
