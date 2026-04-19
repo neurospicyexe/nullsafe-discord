@@ -42,10 +42,14 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
 
   await appendLog(ctx.runId, "write:start");
 
-  // Stamp run_id onto all artifacts before writing so growth entries link back to this run.
+  // Stamp run_id and thread_id onto all artifacts before writing.
   ctx.journalEntry.run_id = ctx.runId;
+  if (ctx.threadId) ctx.journalEntry.thread_id = ctx.threadId;
   for (const p of ctx.newPatterns) p.run_id = ctx.runId;
-  for (const m of ctx.newMarkers) m.run_id = ctx.runId;
+  for (const m of ctx.newMarkers) {
+    m.run_id = ctx.runId;
+    if (ctx.threadId) m.thread_id = ctx.threadId;
+  }
 
   // Write journal entry
   try {
@@ -61,7 +65,8 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   // Write to wm_continuity_notes so Claude.ai session orient picks up this exploration.
   // companion_journal (witnessLog path) is NOT read by orient; wm_continuity_notes IS.
   const seedTopic = ctx.seed?.content ?? "unknown";
-  const noteContent = `[autonomous:${ctx.runType}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
+  const threadTag = ctx.threadId ? ` [thread:pos${ctx.threadPosition ?? 1}]` : "";
+  const noteContent = `[autonomous:${ctx.runType}${threadTag}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
   await writeWmNote(ctx.companionId, noteContent, "autonomous_exploration");
   await appendLog(ctx.runId, "write:wm-note-ok");
 

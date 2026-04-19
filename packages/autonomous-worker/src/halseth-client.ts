@@ -1,5 +1,5 @@
 import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
-import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker } from "./types.js";
+import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker, ActiveThread } from "./types.js";
 
 async function hFetch(path: string, method = "GET", body?: unknown): Promise<unknown> {
   const res = await fetch(`${HALSETH_URL}${path}`, {
@@ -22,8 +22,17 @@ async function hFetch(path: string, method = "GET", body?: unknown): Promise<unk
 // Autonomy runs
 // ---------------------------------------------------------------------------
 
-export async function createRun(companionId: string, runType: string): Promise<string> {
-  const r = await hFetch("/mind/autonomy/runs", "POST", { companion_id: companionId, run_type: runType }) as { id: string };
+export async function createRun(
+  companionId: string,
+  runType: string,
+  threadId?: string | null,
+  threadPosition?: number | null,
+): Promise<string> {
+  const r = await hFetch("/mind/autonomy/runs", "POST", {
+    companion_id: companionId,
+    run_type: runType,
+    ...(threadId ? { thread_id: threadId, thread_position: threadPosition ?? 1 } : {}),
+  }) as { id: string };
   return r.id;
 }
 
@@ -33,6 +42,8 @@ export async function updateRun(id: string, updates: {
   tokens_used?: number;
   artifacts_created?: number;
   error_message?: string;
+  thread_id?: string | null;
+  thread_position?: number | null;
 }): Promise<void> {
   await hFetch(`/mind/autonomy/runs/${id}`, "PATCH", updates);
 }
@@ -72,6 +83,39 @@ export async function createSeed(
   });
 }
 
+export async function createClaim(
+  companionId: string,
+  content: string,
+  justification: string,
+  claimSource: string,
+): Promise<void> {
+  await hFetch("/mind/autonomy/seeds", "POST", {
+    companion_id: companionId,
+    content,
+    seed_type: "topic",
+    claim_source: claimSource,
+    justification,
+  });
+}
+
+export async function getActiveThreads(companionId: string): Promise<ActiveThread[]> {
+  try {
+    const r = await hFetch(`/mind/autonomy/threads/${companionId}`) as { threads: ActiveThread[] };
+    return r.threads ?? [];
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getActiveThreads failed:`, e);
+    return [];
+  }
+}
+
+export async function updateThreadStatus(
+  threadKey: string,
+  status: "open" | "paused" | "resolved",
+  companionId: string,
+): Promise<void> {
+  await hFetch(`/mind/thread/${encodeURIComponent(threadKey)}/status`, "PATCH", { agent_id: companionId, status });
+}
+
 // ---------------------------------------------------------------------------
 // Reflections
 // ---------------------------------------------------------------------------
@@ -102,6 +146,7 @@ export async function writeJournalEntry(entry: GrowthJournalEntry): Promise<stri
     source: entry.source,
     tags: entry.tags ?? [],
     ...(entry.run_id ? { run_id: entry.run_id } : {}),
+    ...(entry.thread_id ? { thread_id: entry.thread_id } : {}),
   }) as { id: string };
   return r.id;
 }
@@ -124,6 +169,7 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
     description: marker.description,
     related_pattern_id: marker.related_pattern_id,
     ...(marker.run_id ? { run_id: marker.run_id } : {}),
+    ...(marker.thread_id ? { thread_id: marker.thread_id } : {}),
   }) as { id: string };
   return r.id;
 }
