@@ -113,13 +113,15 @@ async function handleThreadLifecycle(
       const threadTitle = ctx.activeThreads.find(t => t.thread_key === ctx.threadId)?.title
         ?? ctx.seed?.content?.slice(0, 80)
         ?? "exploration thread";
-      await writeMarker({
+      const marker = {
         companion_id: ctx.companionId,
-        marker_type: "milestone",
+        marker_type: "milestone" as const,
         description: `Concluded exploration thread: "${threadTitle}" after ${ctx.threadPosition ?? "?"} runs.`,
         run_id: ctx.runId,
         thread_id: ctx.threadId ?? undefined,
-      }).catch(e => console.warn(`[${ctx.companionId}/reflect] marker write failed:`, e));
+      };
+      await writeMarker(marker).catch(e => console.warn(`[${ctx.companionId}/reflect] marker write failed:`, e));
+      ctx.newMarkers.push(marker);
       await appendLog(ctx.runId, "reflect:thread-concluded", `thread=${ctx.threadId}`);
     }
   } catch (e) {
