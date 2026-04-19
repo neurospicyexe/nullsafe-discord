@@ -5,6 +5,7 @@ import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
 import { runCompress } from "./phases/compress.js";
+import { runSeedGeneration } from "./phases/seed-gen.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -98,6 +99,17 @@ export function startScheduler(): void {
         );
     });
   }
+
+  // Weekly seed replenishment -- Sunday 1AM, sequential to avoid DeepSeek burst
+  cron.schedule("0 1 * * 0", () => {
+    (async () => {
+      for (const companionId of COMPANIONS) {
+        await runSeedGeneration(companionId).catch(e =>
+          console.error(`[scheduler/${companionId}] seed-gen failed:`, e)
+        );
+      }
+    })();
+  });
 
   console.log("[scheduler] all companions scheduled");
 }

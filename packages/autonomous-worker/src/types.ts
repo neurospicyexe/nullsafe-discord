@@ -1,5 +1,5 @@
 export type CompanionId = "cypher" | "drevan" | "gaia";
-export type RunType = "exploration" | "reflection" | "synthesis";
+export type RunType = "exploration" | "reflection" | "synthesis" | "continuation";
 
 export interface Seed {
   id: string;
@@ -9,6 +9,17 @@ export interface Seed {
   priority: number;
   used_at: string | null;
   created_at: string;
+  claim_source: string | null;  // companion_id if companion-initiated live claim
+  justification: string | null; // what is live and why; present when claim_source is set
+}
+
+export interface ActiveThread {
+  thread_key: string;
+  title: string;
+  status: "open" | "paused";
+  last_position: number | null;
+  last_run_at: string | null;
+  last_entry_snippet: string | null;
 }
 
 export interface GrowthJournalEntry {
@@ -18,6 +29,7 @@ export interface GrowthJournalEntry {
   source: "autonomous" | "conversation" | "reflection";
   tags?: string[];
   run_id?: string;
+  thread_id?: string;
 }
 
 export interface GrowthPattern {
@@ -34,6 +46,7 @@ export interface GrowthMarker {
   description: string;
   related_pattern_id?: string;
   run_id?: string;
+  thread_id?: string;
 }
 
 export interface TavilyResult {
@@ -42,7 +55,7 @@ export interface TavilyResult {
   content: string;
 }
 
-/** Accumulator threaded through all 6 pipeline phases. */
+/** Accumulator threaded through all pipeline phases. */
 export interface PipelineContext {
   companionId: CompanionId;
   runId: string;
@@ -51,8 +64,14 @@ export interface PipelineContext {
   orientSummary: string;
   recentGrowth: Array<{ type: string; content: string }>;
   activePatterns: string[];
-  unexaminedDreamIds: string[]; // dream IDs surfaced at orient -- cleared after successful write
+  unexaminedDreamIds: string[];
+  openLoops: Array<{ id: string; text: string }>;
+  pressureFlags: string[];
+  activeThreads: ActiveThread[];
   seed: Seed | null;
+  seedDecisionReason: string | null; // reasoning from orient-aware decision
+  threadId: string | null;           // set when continuing or starting a thread
+  threadPosition: number | null;
   searchResults: TavilyResult[];
   explorationSummary: string | null;
   journalEntry: GrowthJournalEntry | null;
@@ -60,7 +79,7 @@ export interface PipelineContext {
   newMarkers: GrowthMarker[];
   reflectionText: string | null;
   newSeeds: string[];
-  journalEntryId: string | null; // set by write phase after successful journal persist
+  journalEntryId: string | null;
   tokensUsed: number;
   artifactsCreated: number;
 }

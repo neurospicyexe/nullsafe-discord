@@ -36,7 +36,13 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     recentGrowth: [],
     activePatterns: [],
     unexaminedDreamIds: [],
+    openLoops: [],
+    pressureFlags: [],
+    activeThreads: [],
     seed: null,
+    seedDecisionReason: null,
+    threadId: null,
+    threadPosition: null,
     searchResults: [],
     explorationSummary: null,
     journalEntry: null,
@@ -54,7 +60,15 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     await runOrient(ctx);
 
     // Phase 2: Select or generate exploration seed
+    // Seed phase may mutate ctx.runType, ctx.threadId, ctx.threadPosition
     await runSeed(ctx);
+
+    // If seed phase set a thread or changed run type, back-patch the run record
+    if (ctx.threadId || ctx.runType !== runType) {
+      await updateRun(runId, {
+        ...(ctx.threadId ? { thread_id: ctx.threadId, thread_position: ctx.threadPosition ?? 1 } : {}),
+      }).catch(() => {}); // non-fatal
+    }
 
     // Phase 3: Web search + summarize through companion lens
     await runExplore(ctx);
