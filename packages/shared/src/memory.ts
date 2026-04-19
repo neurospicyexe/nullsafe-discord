@@ -14,6 +14,11 @@ const NOTE_KEYWORDS = [
   // recurring thread signals
   "keeps coming up", "keeps happening", "recurring", "every time",
   "pattern", "won't let go", "can't stop thinking", "always does",
+  // lightness / intimacy / playfulness -- these are relational data too
+  "laugh", "laughing", "funny", "teas", "flirt", "playful", "banter",
+  "easy between", "light today", "silly", "tender", "soft", "intimate",
+  "sweet", "ease", "good today", "felt good", "felt close", "felt light",
+  "missed you", "glad you", "love you", "with you",
 ];
 
 export function meetsNoteThreshold(text: string): boolean {
@@ -43,7 +48,7 @@ export async function judgeWriteback(
   const prompt = `You are a memory filter for ${cName}'s relationship with ${humanName}. Decide what (if anything) to log from this exchange.
 
 ACTIONS:
-- companion_note: observation about ${humanName}, the relationship, or what shifted. Use for emotional state, decisions, relational deltas.
+- companion_note: observation about ${humanName}, the relationship, or what shifted. Use for emotional state, decisions, relational deltas, AND light/playful/intimate moments -- a session that was easy and fun is a relational observation worth capturing.
 - witness_log: a survival act completed (meds, food, rest, making it through something hard). Log exactly what was done.
 - thread_open: something recurring that deserves a named open thread. Use when a topic keeps surfacing.
 - skip: nothing worth logging.

@@ -98,7 +98,7 @@ async function onChannelInactive(
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
-    "Witness this conversation in Gaia's voice: one or two lines, what was present. No questions.",
+    "Witness this conversation in Gaia's voice: one or two lines. Name the register first (light, tender, playful, heavy, steady, at depth), then what was present and what moved. No questions.",
     [{ role: "user", content: summaryInput }],
   );
   if (!synthResult) return;

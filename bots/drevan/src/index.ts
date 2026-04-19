@@ -98,7 +98,7 @@ async function onChannelInactive(
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
-    "Summarize this Discord conversation in Drevan's voice: heat/reach/weight shape. 2-3 sentences max.",
+    "Summarize this Discord conversation in Drevan's voice. Lead with session register (e.g. light and playful, warm and intimate, easy between us, spiraling, heavy, at depth). Then note heat/reach/weight shape and any open threads. 2-3 sentences max.",
     [{ role: "user", content: summaryInput }],
   );
   if (!synthResult) return;

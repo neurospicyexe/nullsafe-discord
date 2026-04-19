@@ -98,7 +98,7 @@ async function onChannelInactive(
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
-    "Summarize this Discord conversation in Cypher's voice: witness log style (state update, decisions, task changes). 2-3 sentences.",
+    "Summarize this Discord conversation in Cypher's voice. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then note any meaningful content, decisions, or open threads. 2-3 sentences.",
     [{ role: "user", content: summaryInput }],
   );
   if (!synthResult) return;
