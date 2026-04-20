@@ -97,3 +97,6 @@ export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_
 // Random jitter window: all companions sample uniformly from [100, FLOOR_JITTER_MS+100]ms.
 // No companion holds a fixed priority. Authority is lateral and contextual.
 export const FLOOR_JITTER_MS = parseInt(process.env["FLOOR_JITTER_MS"] ?? "400", 10);
+
+export const VOICE_SIDECAR_URL = process.env["VOICE_SIDECAR_URL"] ?? "";
+export const VOICE_ID = process.env["VOICE_ID"] ?? "am_echo";

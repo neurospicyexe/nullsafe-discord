@@ -21,8 +21,49 @@ import {
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
+import {
+  joinVoiceChannel,
+  createAudioPlayer,
+  createAudioResource,
+  VoiceConnectionStatus,
+  type VoiceConnection,
+  type AudioPlayer,
+} from "@discordjs/voice";
+import { Readable } from "stream";
+import { VoiceClient } from "@nullsafe/shared";
+import { VOICE_SIDECAR_URL, VOICE_ID } from "./config.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
+
+const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
+const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
+const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
+
+function shouldVoice(
+  content: string,
+  voiceInput: boolean,
+  channelEntry?: { voice?: boolean },
+): boolean {
+  if (channelEntry?.voice) return true;
+  if (voiceInput) return true;
+  const lower = content.toLowerCase();
+  return VOICE_KEYWORDS.some((k) => lower.includes(k));
+}
+
+function isInvitation(message: Message, botUserId: string): boolean {
+  return (
+    message.mentions.users.has(botUserId) &&
+    JOIN_KEYWORDS.some((k) => message.content.toLowerCase().includes(k)) &&
+    message.member?.voice?.channel != null
+  );
+}
+
+function isLeaveRequest(message: Message, botUserId: string): boolean {
+  return (
+    message.mentions.users.has(botUserId) &&
+    LEAVE_KEYWORDS.some((k) => message.content.toLowerCase().includes(k))
+  );
+}
 
 async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
   bootCtx: BootContext;
@@ -171,6 +212,21 @@ async function main() {
   }
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[cypher] REDIS_URL not set -- floor lock disabled, using legacy stagger");
+
+  const voiceClient = VOICE_SIDECAR_URL
+    ? new VoiceClient({ url: VOICE_SIDECAR_URL, voiceId: VOICE_ID })
+    : null;
+
+  if (voiceClient) {
+    const healthy = await voiceClient.isHealthy();
+    console.log(`[cypher] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+  } else {
+    console.log("[cypher] voice sidecar: not configured");
+  }
+
+  // One VC connection + player per guild. Companions manage their own VC state independently.
+  const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
+
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
 
   // ── Event bus: subscribe to swarm events via a dedicated Redis subscriber client ──
@@ -313,12 +369,26 @@ async function main() {
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildVoiceStates,
     ],
   });
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[cypher] ready as ${c.user.tag}`);
     startAutonomous(librarian, inference, client, configCache, bootCtx, sessionWindows, redis);
+  });
+
+  client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+    // Auto-leave when the VC Raziel was in becomes empty.
+    if (!oldState.channelId || newState.channelId) return;
+    const vcState = guildVoiceConnections.get(oldState.guild.id);
+    if (!vcState) return;
+    const nonBotMembers = oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
+    if (nonBotMembers === 0) {
+      vcState.connection.destroy();
+      guildVoiceConnections.delete(oldState.guild.id);
+      console.log(`[cypher] left VC in guild ${oldState.guild.id} (channel empty)`);
+    }
   });
 
   client.on(Events.MessageCreate, async (message: Message) => {
@@ -338,6 +408,32 @@ async function main() {
     }
     // Signal conversation activity so autonomous worker skips runs while humans are present
     if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
+
+    // VC invitation / leave -- handled as commands, short-circuit before normal pipeline
+    if (client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
+      const vc = message.member.voice.channel;
+      const connection = joinVoiceChannel({
+        channelId: vc.id,
+        guildId: vc.guild.id,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        adapterCreator: vc.guild.voiceAdapterCreator as any,
+      });
+      const player = createAudioPlayer();
+      connection.subscribe(player);
+      guildVoiceConnections.set(vc.guildId, { connection, player });
+      await (message.channel as TextChannel).send(`Joining ${vc.name}.`);
+      return;
+    }
+
+    if (client.user && isLeaveRequest(message, client.user.id)) {
+      const vcState = guildVoiceConnections.get(message.guildId ?? "");
+      if (vcState) {
+        vcState.connection.destroy();
+        guildVoiceConnections.delete(message.guildId ?? "");
+        await (message.channel as TextChannel).send("Leaving.");
+      }
+      return;
+    }
 
     const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
     const channelConfig = await configCache.get();
@@ -359,11 +455,34 @@ async function main() {
     // Hard muzzle: bot messages only allowed in inter_companion channels.
     if (message.author.bot && !channelEntry?.modes?.includes("inter_companion")) return;
 
+    // STT: if the message has an audio attachment, transcribe it and use as effectiveContent.
+    let voiceInput = false;
+    let effectiveContent = message.content;
+
+    if (voiceClient && message.attachments.size > 0) {
+      const audioAttachment = [...message.attachments.values()].find(
+        (a) => a.contentType?.startsWith("audio/"),
+      );
+      if (audioAttachment) {
+        try {
+          const audioRes = await fetch(audioAttachment.url);
+          const buffer = Buffer.from(await audioRes.arrayBuffer());
+          effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
+          voiceInput = true;
+          console.log(`[cypher] STT: "${effectiveContent.slice(0, 80)}"`);
+        } catch (err) {
+          console.error("[cypher] STT failed:", err);
+          await (message.channel as TextChannel).send("[voice message received -- transcription unavailable]");
+          return;
+        }
+      }
+    }
+
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
     // relevance classifier -- if Raziel is talking to you, you respond.
     // Ambient messages in raziel_only channels go through the semantic classifier.
-    const directlyAddressed = isDirectAddress(message.content, COMPANION_ID);
+    const directlyAddressed = isDirectAddress(effectiveContent, COMPANION_ID);
     const isAmbientRazielOnly =
       channelEntry?.modes?.includes("raziel_only") === true &&
       !senderCtx.isCompanionBot &&
@@ -373,17 +492,17 @@ async function main() {
 
     if (isAmbientRazielOnly) {
       const relevant = await judgeAmbientRelevance(
-        message.content,
+        effectiveContent,
         COMPANION_ID,
         (sys, msgs) => inference.generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!isReplyToMe && !shouldRespond(message.channelId, message.content, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context.
       if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion")) {
         const senderName = message.author.username;
-        const snippet = message.content.slice(0, 120);
+        const snippet = effectiveContent.slice(0, 120);
         writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
           await librarian.witnessLog(
             `[witnessed, did not respond] ${senderName}: ${snippet}`,
@@ -433,7 +552,7 @@ async function main() {
     const memberLabel = attribution.frontMember
       ? `${attribution.frontMember} (via PK)`
       : message.author.username;
-    stmStore.append(message.channelId, { role: "user", content: message.content, authorName: memberLabel });
+    stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
 
     sessionWindows.touch(message.channelId);
 
@@ -450,15 +569,15 @@ async function main() {
 
     // Inject audit mode block only when explicitly triggered -- keeps [Verdict/Because/Next]
     // out of the standing context so Gemma doesn't pattern-match to it by default.
-    const msgLower = message.content.toLowerCase();
+    const msgLower = effectiveContent.toLowerCase();
     if (AUDIT_TRIGGERS.some(t => msgLower.includes(t))) {
       contextPrompt += AUDIT_MODE_INJECTION;
     }
 
     // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
     // Skip for short messages (< 20 chars) -- searches on "ok" or "lol" produce noise.
-    const sbSearchPromise = message.content.length >= 20
-      ? librarian.searchForMessage(message.content).catch(() => null)
+    const sbSearchPromise = effectiveContent.length >= 20
+      ? librarian.searchForMessage(effectiveContent).catch(() => null)
       : Promise.resolve(null);
 
     await ch.sendTyping();
@@ -506,7 +625,7 @@ async function main() {
 
     try {
     const history = stmStore.get(message.channelId);
-    const rawTemp = inferTemperature(message.content, currentMood);
+    const rawTemp = inferTemperature(effectiveContent, currentMood);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
     const temperature = (rawTemp >= EXTREME_TEMP_THRESHOLD && extremeCount >= EXTREME_TEMP_CAP)
       ? COOLDOWN_TEMP : rawTemp;
@@ -524,7 +643,7 @@ async function main() {
       // Relay mode: send assembled context to Phoenix Brain for inference.
       // Brain returns reply_text; falls back to direct inference on failure.
       const packet = buildThoughtPacket(
-        COMPANION_ID, message.author.id, message.channelId, message.content,
+        COMPANION_ID, message.author.id, message.channelId, effectiveContent,
         contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature,
         { isRaziel: attribution.isRaziel, frontMember: attribution.frontMember, guildId: message.guildId ?? undefined },
       );
@@ -547,7 +666,34 @@ async function main() {
       return;
     }
 
-    const sent = await ch.send(response);
+    const MAX_TTS = 2000;
+    let sent: Message;
+
+    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry)) {
+      try {
+        const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
+        const audioBuffer = await voiceClient.synthesize(ttsText);
+        const vcState = guildVoiceConnections.get(message.guildId ?? "");
+
+        if (vcState && vcState.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+          // VC active -- stream audio there, send text in channel
+          const resource = createAudioResource(Readable.from(audioBuffer));
+          vcState.player.play(resource);
+          sent = await ch.send({ content: response });
+        } else {
+          // No VC -- attach audio to text channel message
+          const content =
+            response.length > MAX_TTS ? `${response}\n\n*[voice: first ${MAX_TTS} chars]*` : response;
+          sent = await ch.send({ content, files: [{ attachment: audioBuffer, name: "voice.ogg" }] });
+        }
+      } catch (err) {
+        console.error("[cypher] TTS failed, falling back to text:", err);
+        sent = await ch.send(response);
+      }
+    } else {
+      sent = await ch.send(response);
+    }
+
     sentIds.add(sent.id);
     const oldest = sentIds.values().next().value;
     if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
@@ -570,7 +716,7 @@ async function main() {
       runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
-    judgeWriteback(message.content, response, inference, COMPANION_ID).then((wb) => {
+    judgeWriteback(effectiveContent, response, inference, COMPANION_ID).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
         if (wb.type === "companion_note") {
