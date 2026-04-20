@@ -124,6 +124,24 @@ async def tts(req: TTSRequest):
     return Response(content=ogg_data, media_type="audio/ogg")
 
 
+@app.post("/stt")
+async def stt(audio: UploadFile = File(...)):
+    if _stt_model is None:
+        raise HTTPException(status_code=503, detail="STT unavailable")
+
+    ext = (audio.filename or "voice.ogg").rsplit(".", 1)[-1]
+    with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
+        f.write(await audio.read())
+        tmp_path = f.name
+
+    try:
+        segments, info = _stt_model.transcribe(tmp_path)
+        text = " ".join(seg.text.strip() for seg in segments)
+        return {"text": text, "language": info.language}
+    finally:
+        os.unlink(tmp_path)
+
+
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "127.0.0.1")

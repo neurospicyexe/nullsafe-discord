@@ -78,3 +78,36 @@ def test_tts_500_when_ffmpeg_fails():
         resp = client.post("/tts", json={"text": "hello", "voice_id": "am_echo"})
 
     assert resp.status_code == 500
+
+
+def test_stt_returns_transcript():
+    fake_segment = MagicMock()
+    fake_segment.text = " hello world"
+    fake_info = MagicMock()
+    fake_info.language = "en"
+    mock_stt = MagicMock()
+    mock_stt.transcribe.return_value = ([fake_segment], fake_info)
+
+    server._tts_pipelines = {"a": MagicMock()}
+    server._stt_model = mock_stt
+
+    client = TestClient(server.app)
+    resp = client.post(
+        "/stt",
+        files={"audio": ("voice.ogg", io.BytesIO(b"fake-audio"), "audio/ogg")},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["text"] == "hello world"
+    assert data["language"] == "en"
+
+
+def test_stt_503_when_no_model():
+    server._tts_pipelines = {}
+    server._stt_model = None
+    client = TestClient(server.app)
+    resp = client.post(
+        "/stt",
+        files={"audio": ("voice.ogg", io.BytesIO(b"fake"), "audio/ogg")},
+    )
+    assert resp.status_code == 503
