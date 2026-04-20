@@ -176,7 +176,7 @@ async function runDistillation(
     `{"persona_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}],` +
     `"human_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}]}\n\n` +
     `persona_blocks: observations about Cypher's patterns, reasoning style, or state in this exchange.\n` +
-    `human_blocks: observations about Raziel's patterns, needs, or state in this exchange.\n` +
+    `human_blocks: observations about the primary user's patterns, needs, or state in this exchange.\n` +
     `Include only block types with meaningful content. Omit empty types.`,
     [{ role: "user", content: conversationText }],
   );
@@ -379,7 +379,7 @@ async function main() {
   });
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-    // Auto-leave when the VC Raziel was in becomes empty.
+    // Auto-leave when the VC owner was in becomes empty.
     if (!oldState.channelId || newState.channelId) return;
     const vcState = guildVoiceConnections.get(oldState.guild.id);
     if (!vcState) return;
@@ -437,14 +437,14 @@ async function main() {
 
     const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
     const channelConfig = await configCache.get();
-    const attribution = await resolveAttribution(message, cfg.razielDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"]);
+    const attribution = await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"]);
 
-    const userTier = attribution.isRaziel ? "raziel" as const
+    const userTier = attribution.isOwner ? "owner" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
       : "guest" as const;
     const senderCtx = {
-      isRaziel: attribution.isRaziel,
-      isCompanionBot: message.author.bot && !attribution.isRaziel,
+      isOwner: attribution.isOwner,
+      isCompanionBot: message.author.bot && !attribution.isOwner,
       isMentioned: message.mentions.has(client.user?.id ?? ""),
       userTier,
     };
@@ -480,17 +480,17 @@ async function main() {
 
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
-    // relevance classifier -- if Raziel is talking to you, you respond.
-    // Ambient messages in raziel_only channels go through the semantic classifier.
+    // relevance classifier -- if the owner is talking to you, you respond.
+    // Ambient messages in owner_only channels go through the semantic classifier.
     const directlyAddressed = isDirectAddress(effectiveContent, COMPANION_ID);
-    const isAmbientRazielOnly =
-      channelEntry?.modes?.includes("raziel_only") === true &&
+    const isAmbientOwnerOnly =
+      channelEntry?.modes?.includes("owner_only") === true &&
       !senderCtx.isCompanionBot &&
       !senderCtx.isMentioned &&
       !isReplyToMe &&
       !directlyAddressed;
 
-    if (isAmbientRazielOnly) {
+    if (isAmbientOwnerOnly) {
       const relevant = await judgeAmbientRelevance(
         effectiveContent,
         COMPANION_ID,
@@ -645,7 +645,7 @@ async function main() {
       const packet = buildThoughtPacket(
         COMPANION_ID, message.author.id, message.channelId, effectiveContent,
         contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature,
-        { isRaziel: attribution.isRaziel, frontMember: attribution.frontMember, guildId: message.guildId ?? undefined },
+        { isOwner: attribution.isOwner, frontMember: attribution.frontMember, guildId: message.guildId ?? undefined },
       );
       const brainReply = await brainClient.chat(packet);
       if (brainReply?.status === "ok" && brainReply.reply_text) {
@@ -731,7 +731,7 @@ async function main() {
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeWriteback failed:`, e));
 
     if (attribution.source === "fallback") {
-      const who = attribution.isRaziel ? "Raziel (via dedup)" : `user ${attribution.discordUserId}`;
+      const who = attribution.isOwner ? "owner (via dedup)" : `user ${attribution.discordUserId}`;
       writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
         await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
       });

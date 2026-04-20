@@ -8,7 +8,7 @@ interface DiscordMessage {
 
 export async function resolveAttribution(
   message: DiscordMessage,
-  razielDiscordId: string,
+  ownerDiscordId: string,
   knownSenderId?: string,
   fetchFn: typeof fetch = globalThis.fetch,
   blueDiscordId?: string,
@@ -16,7 +16,7 @@ export async function resolveAttribution(
 ): Promise<Attribution> {
   if (!message.webhookId) {
     return {
-      isRaziel: message.author.id === razielDiscordId,
+      isOwner: message.author.id === ownerDiscordId,
       discordUserId: message.author.id,
       frontMember: null,
       frontState: "unknown",
@@ -34,9 +34,9 @@ export async function resolveAttribution(
 
     if (res.ok) {
       const pk = await res.json() as { sender: string; member?: { name: string }; system?: { id: string } };
-      if (pk.sender === razielDiscordId) {
+      if (pk.sender === ownerDiscordId) {
         return {
-          isRaziel: true,
+          isOwner: true,
           discordUserId: pk.sender,
           frontMember: pk.member?.name ?? null,
           frontState: "known",
@@ -47,7 +47,7 @@ export async function resolveAttribution(
       const isBlue = (blueDiscordId && pk.sender === blueDiscordId)
         || (bluePkSystemId && pk.system?.id === bluePkSystemId);
       return {
-        isRaziel: false,
+        isOwner: false,
         discordUserId: isBlue ? (blueDiscordId ?? pk.sender) : pk.sender,
         frontMember: pk.member?.name ?? null,
         frontState: "known",
@@ -59,11 +59,11 @@ export async function resolveAttribution(
   }
 
   // Fallback: use dedup-captured sender if available; otherwise truly unknown.
-  // Never assume Raziel -- misattribution (Blue treated as Raziel) is worse than
-  // a missed response (Raziel treated as guest, can retry).
+  // Never assume owner -- misattribution (Blue treated as owner) is worse than
+  // a missed response (owner treated as guest, can retry).
   const senderId = knownSenderId ?? "unknown";
   return {
-    isRaziel: senderId === razielDiscordId,
+    isOwner: senderId === ownerDiscordId,
     discordUserId: senderId,
     frontMember: null,
     frontState: "unknown",

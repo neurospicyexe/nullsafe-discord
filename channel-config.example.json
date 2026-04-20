@@ -1,14 +1,14 @@
 {
   "CHANNEL_ID_FOR_DREVAN_ONLY": {
-    "modes": ["raziel_only"],
+    "modes": ["owner_only"],
     "companions": ["drevan"]
   },
   "CHANNEL_ID_ALL_COMPANIONS": {
-    "modes": ["companions_always", "raziel_only"],
+    "modes": ["companions_always", "owner_only"],
     "companions": ["drevan", "cypher", "gaia"]
   },
   "CHANNEL_ID_CYPHER_WORK": {
-    "modes": ["raziel_only"],
+    "modes": ["owner_only"],
     "companions": ["cypher"]
   },
   "CHANNEL_ID_AUTONOMOUS": {

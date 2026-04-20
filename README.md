@@ -71,7 +71,7 @@ Each bot gets its own `.env` file in its directory (`bots/bot-name/.env`). The a
 | `HALSETH_URL` | Your deployed Halseth URL |
 | `HALSETH_SECRET` | Your Halseth `ADMIN_SECRET` |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
-| `RAZIEL_DISCORD_ID` | Discord user ID of the primary user (right-click your name > Copy ID) |
+| `OWNER_DISCORD_ID` | Discord user ID of the primary user (right-click your name > Copy ID) |
 | `PLURALKIT_SYSTEM_ID` | Your PluralKit system ID (if using PluralKit) |
 | `REDIS_URL` | Redis connection string (e.g. `redis://localhost:6379`) |
 | `INFERENCE_PROVIDER` | `deepseek` (default), `groq`, `ollama`, or `lmstudio` |
@@ -148,7 +148,7 @@ Bots read channel config from a JSON URL (`CHANNEL_CONFIG_URL`). The config is a
     "voice": true
   },
   "987654321098765432": {
-    "modes": ["raziel_only"]
+    "modes": ["owner_only"]
   }
 }
 ```
@@ -157,7 +157,7 @@ Bots read channel config from a JSON URL (`CHANNEL_CONFIG_URL`). The config is a
 
 **`modes`**:
 - `open` -- anyone triggers responses (default)
-- `raziel_only` -- only the primary user triggers responses
+- `owner_only` -- only the primary user triggers responses
 - `inter_companion` -- bots respond to each other (loop-guarded)
 - `autonomous` -- bots may post proactively
 

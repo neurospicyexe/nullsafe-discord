@@ -1,12 +1,12 @@
 export type CompanionId = "drevan" | "cypher" | "gaia";
-export type ChannelMode = "raziel_only" | "open" | "companions_always" | "companions_mentioned" | "autonomous";
+export type ChannelMode = "owner_only" | "open" | "inter_companion" | "autonomous";
 export interface ChannelEntry {
     modes: ChannelMode[];
     companions: CompanionId[];
 }
 export type ChannelConfig = Record<string, ChannelEntry>;
 export interface Attribution {
-    isRaziel: boolean;
+    isOwner: boolean;
     discordUserId: string;
     frontMember: string | null;
     frontState: "known" | "unknown";
@@ -23,7 +23,7 @@ export interface BotConfig {
     halsethUrl: string;
     halsethSecret: string;
     deepseekApiKey: string;
-    razielDiscordId: string;
+    ownerDiscordId: string;
     pluralkitSystemId: string;
     channelConfigUrl?: string;
     inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
