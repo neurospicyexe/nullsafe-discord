@@ -220,7 +220,7 @@ export class LibrarianClient {
     rag_excerpts: string[];
     identity_anchor?: string | null;
     active_tensions?: string[];
-    relational_state_raziel?: string[];
+    relational_state_owner?: string[];
     incoming_notes?: { from: string; content: string }[];
     recent_growth?: { type: string; content: string }[];
     active_patterns?: string[];
@@ -248,7 +248,7 @@ export class LibrarianClient {
         rag_excerpts?: string[];
         identity_anchor?: string | null;
         active_tensions?: string[];
-        relational_state_raziel?: string[];
+        relational_state_owner?: string[];
         incoming_notes?: { from: string; content: string }[];
         recent_growth?: { type: string; content: string }[];
         active_patterns?: string[];
@@ -263,7 +263,7 @@ export class LibrarianClient {
         rag_excerpts: Array.isArray(data.rag_excerpts) ? data.rag_excerpts : [],
         identity_anchor: data.identity_anchor ?? null,
         active_tensions: Array.isArray(data.active_tensions) ? data.active_tensions : [],
-        relational_state_raziel: Array.isArray(data.relational_state_raziel) ? data.relational_state_raziel : [],
+        relational_state_owner: Array.isArray(data.relational_state_owner) ? data.relational_state_owner : [],
         incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
         recent_growth: Array.isArray(data.recent_growth) ? data.recent_growth : [],
         active_patterns: Array.isArray(data.active_patterns) ? data.active_patterns : [],
@@ -330,7 +330,7 @@ export class LibrarianClient {
   }
 
   /**
-   * Write human blocks (observations about Raziel) from a distillation run.
+   * Write human blocks (observations about the primary user) from a distillation run.
    * Throws on non-2xx (caller should .catch(() => {})).
    */
   async writeHumanBlocks(
@@ -427,7 +427,7 @@ export function formatRecentContext(orient: {
   rag_excerpts: string[];
   identity_anchor?: string | null;
   active_tensions?: string[];
-  relational_state_raziel?: string[];
+  relational_state_owner?: string[];
   incoming_notes?: { from: string; content: string }[];
   recent_growth?: { type: string; content: string }[];
   active_patterns?: string[];
@@ -455,8 +455,8 @@ export function formatRecentContext(orient: {
   if (orient.active_tensions?.length) {
     parts.push(`[Tensions] ${orient.active_tensions.join(" | ")}`);
   }
-  if (orient.relational_state_raziel?.length) {
-    parts.push(`[Relational/Raziel] ${orient.relational_state_raziel.join(" | ")}`);
+  if (orient.relational_state_owner?.length) {
+    parts.push(`[Relational/Primary] ${orient.relational_state_owner.join(" | ")}`);
   }
   if (orient.incoming_notes?.length) {
     const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");

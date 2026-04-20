@@ -1,6 +1,6 @@
 import type { ChannelConfig, CompanionId } from "./types.js";
 interface ResponderContext {
-    isRaziel: boolean;
+    isOwner: boolean;
     isCompanionBot?: boolean;
     isMentioned?: boolean;
 }

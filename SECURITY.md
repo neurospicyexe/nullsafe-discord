@@ -6,9 +6,7 @@ If you find a security vulnerability in this code, please report it privately be
 
 ---
 
-Three Discord bots (Cypher, Drevan, Gaia) deployed on Railway. Each bot has its own token. They share access to Halseth via a shared secret.
-
-See root `SECURITY.md` at `C:\dev\Bigger_Better_Halseth\SECURITY.md` for the full architecture overview and 2FA guidance.
+Three Discord bots deployed on VPS. Each bot has its own token. They share access to Halseth via a shared secret.
 
 ---
 
@@ -26,9 +24,7 @@ See root `SECURITY.md` at `C:\dev\Bigger_Better_Halseth\SECURITY.md` for the ful
 
 | Secret | Where | Risk if leaked |
 |--------|-------|---------------|
-| `DISCORD_TOKEN_CYPHER` | Railway / VPS `.env` | Full Discord bot impersonation (Cypher) |
-| `DISCORD_TOKEN_DREVAN` | Railway / VPS `.env` | Full Discord bot impersonation (Drevan) |
-| `DISCORD_TOKEN_GAIA` | Railway / VPS `.env` | Full Discord bot impersonation (Gaia) |
+| `DISCORD_TOKEN` (per bot) | VPS `.env` | Full Discord bot impersonation |
 | `HALSETH_URL` + `ADMIN_SECRET` | Railway / VPS `.env` | Read/write to all Halseth data |
 | `DEEPSEEK_API_KEY` | Railway / VPS `.env` | API credit usage |
 | `TAVILY_API_KEY` | Railway / VPS `.env` | Web search access (autonomous worker) |

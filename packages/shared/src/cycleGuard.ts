@@ -58,7 +58,7 @@ export class CycleGuard {
     return "proceed";
   }
 
-  // Call when a human signal arrives (Discord message from Raziel, session event, etc.)
+  // Call when a human signal arrives (Discord message from owner, session event, etc.)
   // Clears the window so the next cycle is always allowed through.
   reset(): void {
     this.cycles = [];

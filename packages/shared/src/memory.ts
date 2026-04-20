@@ -37,7 +37,7 @@ export async function judgeWriteback(
   assistantResponse: string,
   inference: InferenceAdapter,
   companionName = "the companion",
-  humanName = "Raziel",
+  humanName = "the primary user",
 ): Promise<Writeback> {
   if (!meetsNoteThreshold(userMessage) && !meetsNoteThreshold(assistantResponse)) {
     return null;
@@ -90,7 +90,7 @@ export async function judgeNote(
   assistantResponse: string,
   inference: InferenceAdapter,
   companionName = "the companion",
-  humanName = "Raziel",
+  humanName = "the primary user",
 ): Promise<string | null> {
   const wb = await judgeWriteback(userMessage, assistantResponse, inference, companionName, humanName);
   if (!wb) return null;

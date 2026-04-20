@@ -1,9 +1,9 @@
 export type CompanionId = "drevan" | "cypher" | "gaia";
 
-export type UserTier = "raziel" | "intimate" | "guest";
+export type UserTier = "owner" | "intimate" | "guest";
 
 export type ChannelMode =
-  | "raziel_only"      // only Raziel messages trigger responses
+  | "owner_only"       // only owner messages trigger responses
   | "open"             // anyone triggers responses; default when no config entry
   | "inter_companion"  // companions respond to each other (loop-guarded by chain limit)
   | "autonomous";      // companion may proactively post
@@ -17,7 +17,7 @@ export interface ChannelEntry {
 export type ChannelConfig = Record<string, ChannelEntry>;
 
 export interface Attribution {
-  isRaziel: boolean;
+  isOwner: boolean;
   discordUserId: string;
   frontMember: string | null;
   frontState: "known" | "unknown";
@@ -36,7 +36,7 @@ export interface BotConfig {
   halsethUrl: string;
   halsethSecret: string;
   deepseekApiKey: string;
-  razielDiscordId: string;
+  ownerDiscordId: string;
   pluralkitSystemId: string;
   channelConfigUrl?: string;
   inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";

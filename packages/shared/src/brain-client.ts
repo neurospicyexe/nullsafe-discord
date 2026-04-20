@@ -18,7 +18,7 @@ export interface ThoughtPacketMetadata {
   system_prompt?: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   temperature?: number;
-  is_raziel?: boolean;
+  is_owner?: boolean;
   front_member?: string | null;
   guild_id?: string;
 }
@@ -51,7 +51,7 @@ export function buildThoughtPacket(
   history: ChatMessage[],
   temperature: number,
   opts?: {
-    isRaziel?: boolean;
+    isOwner?: boolean;
     frontMember?: string | null;
     guildId?: string;
   },
@@ -71,7 +71,7 @@ export function buildThoughtPacket(
       // Brain replaces meta_messages[-1] with cleaned_message (strips override prefixes).
       messages: history.map(m => ({ role: m.role, content: m.content })),
       temperature,
-      is_raziel: opts?.isRaziel,
+      is_owner: opts?.isOwner,
       front_member: opts?.frontMember,
       guild_id: opts?.guildId,
     },

@@ -7,5 +7,5 @@ interface DiscordMessage {
         bot: boolean;
     };
 }
-export declare function resolveAttribution(message: DiscordMessage, razielDiscordId: string, fetchFn?: typeof fetch): Promise<Attribution>;
+export declare function resolveAttribution(message: DiscordMessage, ownerDiscordId: string, fetchFn?: typeof fetch): Promise<Attribution>;
 export {};

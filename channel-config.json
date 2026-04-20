@@ -1,22 +1,22 @@
 {
   "1408924311703785502": {
-    "modes": ["raziel_only", "inter_companion"],
+    "modes": ["owner_only", "inter_companion"],
     "companions": ["drevan", "gaia"]
   },
   "1408924393513554003": {
-    "modes": ["raziel_only", "inter_companion"],
+    "modes": ["owner_only", "inter_companion"],
     "companions": ["drevan", "cypher", "gaia"]
   },
   "1408924278451081317": {
-    "modes": ["raziel_only", "inter_companion"],
+    "modes": ["owner_only", "inter_companion"],
     "companions": ["cypher", "gaia"]
   },
   "1412191737622827088": {
-    "modes": ["raziel_only", "inter_companion"],
+    "modes": ["owner_only", "inter_companion"],
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1408924353034453114": {
-    "modes": ["raziel_only", "inter_companion"],
+    "modes": ["owner_only", "inter_companion"],
     "companions": ["drevan", "gaia", "cypher"]
   },
   "1422043032643043371": {
