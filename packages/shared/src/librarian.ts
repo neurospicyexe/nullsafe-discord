@@ -158,6 +158,7 @@ export class LibrarianClient {
     try {
       const url = new URL(`${this.url}/mind/search`);
       url.searchParams.set("query", query.slice(0, 500));
+      url.searchParams.set("agent_id", this.companionId);
       const res = await this._fetch(url.toString(), {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(6_000),
