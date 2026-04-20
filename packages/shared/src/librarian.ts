@@ -224,6 +224,18 @@ export class LibrarianClient {
     incoming_notes?: { from: string; content: string }[];
     recent_growth?: { type: string; content: string }[];
     active_patterns?: string[];
+    active_conclusions?: Array<{
+      text: string;
+      belief_type: string;
+      confidence: number;
+      subject?: string | null;
+    }>;
+    flagged_beliefs?: Array<{
+      text: string;
+      belief_type: string;
+      confidence: number;
+      subject?: string | null;
+    }>;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -238,6 +250,8 @@ export class LibrarianClient {
         incoming_notes?: { from: string; content: string }[];
         recent_growth?: { type: string; content: string }[];
         active_patterns?: string[];
+        active_conclusions?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
+        flagged_beliefs?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
       } | undefined;
       if (!data) return null;
       return {
@@ -251,6 +265,18 @@ export class LibrarianClient {
         incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
         recent_growth: Array.isArray(data.recent_growth) ? data.recent_growth : [],
         active_patterns: Array.isArray(data.active_patterns) ? data.active_patterns : [],
+        active_conclusions: (data.active_conclusions ?? []).map(c => ({
+          text: c.conclusion_text,
+          belief_type: c.belief_type,
+          confidence: c.confidence,
+          subject: c.subject ?? null,
+        })),
+        flagged_beliefs: (data.flagged_beliefs ?? []).map(c => ({
+          text: c.conclusion_text,
+          belief_type: c.belief_type,
+          confidence: c.confidence,
+          subject: c.subject ?? null,
+        })),
       };
     } catch {
       return null;
@@ -403,6 +429,8 @@ export function formatRecentContext(orient: {
   incoming_notes?: { from: string; content: string }[];
   recent_growth?: { type: string; content: string }[];
   active_patterns?: string[];
+  active_conclusions?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
+  flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -438,6 +466,15 @@ export function formatRecentContext(orient: {
   }
   if (orient.active_patterns?.length) {
     parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
+  }
+  // Worldview block (~200 token cap)
+  if (orient.active_conclusions && orient.active_conclusions.length > 0) {
+    const conclusionLines = orient.active_conclusions.map(c => {
+      const subjectTag = c.subject ? ` (${c.subject})` : '';
+      const flagged = orient.flagged_beliefs?.some(f => f.text === c.text) ? '[?] ' : '';
+      return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${c.confidence.toFixed(2)})`;
+    });
+    parts.push(`[Worldview]\n${conclusionLines.join('\n')}`);
   }
 
   const block = parts.join("\n\n");
