@@ -8,6 +8,9 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Heavy deps (numpy, soundfile) are imported lazily inside /tts and /stt handlers
 # so that tests can import this module without requiring model downloads.
 
@@ -42,18 +45,18 @@ async def lifespan(app: FastAPI):
         try:
             from kokoro import KPipeline
             _tts_pipelines[lang] = KPipeline(lang_code=lang)
-            print(f"[voice-sidecar] Kokoro lang={lang} loaded")
+            logger.info(f"Kokoro lang={lang} loaded")
         except Exception as exc:
-            print(f"[voice-sidecar] Kokoro lang={lang} failed: {exc}")
+            logger.error(f"Kokoro lang={lang} failed: {exc}")
 
     # Load faster-whisper
     whisper_model = os.getenv("WHISPER_MODEL", "base")
     try:
         from faster_whisper import WhisperModel
         _stt_model = WhisperModel(whisper_model, device="cpu", compute_type="int8")
-        print(f"[voice-sidecar] faster-whisper ({whisper_model}) loaded")
+        logger.info(f"faster-whisper ({whisper_model}) loaded")
     except Exception as exc:
-        print(f"[voice-sidecar] faster-whisper failed: {exc}")
+        logger.error(f"faster-whisper failed: {exc}")
 
     yield
 
