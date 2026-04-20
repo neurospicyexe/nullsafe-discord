@@ -225,12 +225,14 @@ export class LibrarianClient {
     recent_growth?: { type: string; content: string }[];
     active_patterns?: string[];
     active_conclusions?: Array<{
+      // Renamed from conclusion_text (Halseth wire format) -- text is Discord-layer only
       text: string;
       belief_type: string;
       confidence: number;
       subject?: string | null;
     }>;
     flagged_beliefs?: Array<{
+      // Renamed from conclusion_text (Halseth wire format) -- text is Discord-layer only
       text: string;
       belief_type: string;
       confidence: number;
