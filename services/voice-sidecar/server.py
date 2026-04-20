@@ -113,6 +113,9 @@ async def tts(req: TTSRequest):
         )
         with open(ogg_path, "rb") as f:
             ogg_data = f.read()
+    except subprocess.CalledProcessError as exc:
+        logger.error("[voice-sidecar] ffmpeg failed: %s", exc.stderr.decode(errors="replace"))
+        raise HTTPException(status_code=500, detail="audio conversion failed")
     finally:
         os.unlink(wav_path)
         if os.path.exists(ogg_path):
