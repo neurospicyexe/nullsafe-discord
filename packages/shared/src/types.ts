@@ -11,6 +11,7 @@ export type ChannelMode =
 export interface ChannelEntry {
   companions?: CompanionId[];  // which companions are active; absent = all three
   modes?: ChannelMode[];       // absent = ["open"]
+  voice?: boolean;             // enable voice note processing in this channel
 }
 
 export type ChannelConfig = Record<string, ChannelEntry>;

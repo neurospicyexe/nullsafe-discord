@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import logging
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ async def health():
 class TTSRequest(BaseModel):
     text: str
     voice_id: str
-    speed: float = 1.0
+    speed: float = Field(1.0, ge=0.1, le=4.0)
 
 
 @app.post("/tts")
@@ -99,13 +99,13 @@ async def tts(req: TTSRequest):
 
     audio = np.concatenate(audio_chunks)
 
-    wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    wav_path = wav_file.name
-    wav_file.close()
-    sf.write(wav_path, audio, 24000)
-
-    ogg_path = wav_path.replace(".wav", ".ogg")
+    wav_path = None
+    ogg_path = None
     try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as wav_file:
+            wav_path = wav_file.name
+        sf.write(wav_path, audio, 24000)
+        ogg_path = wav_path.replace(".wav", ".ogg")
         subprocess.run(
             ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "64k", ogg_path],
             check=True,
@@ -117,8 +117,9 @@ async def tts(req: TTSRequest):
         logger.error("[voice-sidecar] ffmpeg failed: %s", exc.stderr.decode(errors="replace"))
         raise HTTPException(status_code=500, detail="audio conversion failed")
     finally:
-        os.unlink(wav_path)
-        if os.path.exists(ogg_path):
+        if wav_path and os.path.exists(wav_path):
+            os.unlink(wav_path)
+        if ogg_path and os.path.exists(ogg_path):
             os.unlink(ogg_path)
 
     return Response(content=ogg_data, media_type="audio/ogg")

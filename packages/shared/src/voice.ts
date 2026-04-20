@@ -33,7 +33,7 @@ export class VoiceClient {
 
   async transcribe(audio: Buffer, filename: string): Promise<string> {
     const form = new FormData();
-    form.append("audio", new Blob([audio as unknown as ArrayBuffer]), filename);
+    form.append("audio", new Blob([new Uint8Array(audio)]), filename);
     const res = await this._fetch(`${this.url}/stt`, {
       method: "POST",
       body: form,
