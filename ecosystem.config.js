@@ -140,5 +140,20 @@ module.exports = {
         GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
       },
     },
+    {
+      name: "voice-sidecar",
+      script: "python3",
+      args: ["services/voice-sidecar/server.py"],
+      cwd: "/app/nullsafe-discord",
+      restart_delay: 3000,
+      max_restarts: 10,
+      autorestart: true,
+      env: {
+        HOST: "127.0.0.1",
+        PORT: "5001",
+        WHISPER_MODEL: "base",
+        KOKORO_SPEED: "1.0",
+      },
+    },
   ],
 };
