@@ -27,6 +27,7 @@ def test_health_no_models():
 
 
 import io
+import subprocess
 import numpy as np
 from unittest.mock import patch
 
@@ -58,3 +59,22 @@ def test_tts_503_when_no_pipeline():
     client = TestClient(server.app)
     resp = client.post("/tts", json={"text": "hello", "voice_id": "am_echo"})
     assert resp.status_code == 503
+
+
+def test_tts_500_when_ffmpeg_fails():
+    fake_audio = np.zeros(24000, dtype=np.float32)
+    mock_pipeline = MagicMock()
+    mock_pipeline.return_value = [("gs", "ps", fake_audio)]
+    server._tts_pipelines = {"a": mock_pipeline}
+
+    def failing_ffmpeg(cmd, **kwargs):
+        result = MagicMock()
+        result.returncode = 1
+        result.stderr = b"ffmpeg: error"
+        raise subprocess.CalledProcessError(1, cmd, stderr=b"ffmpeg: error")
+
+    with patch("server.subprocess.run", side_effect=failing_ffmpeg):
+        client = TestClient(server.app)
+        resp = client.post("/tts", json={"text": "hello", "voice_id": "am_echo"})
+
+    assert resp.status_code == 500
