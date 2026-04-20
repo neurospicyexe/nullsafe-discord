@@ -23,7 +23,7 @@ import {
   type AudioPlayer,
 } from "@discordjs/voice";
 import { Readable } from "stream";
-import { VoiceClient } from "@nullsafe/shared";
+import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
@@ -34,36 +34,6 @@ import {
 import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-
-const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
-const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
-const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
-
-function shouldVoice(
-  content: string,
-  voiceInput: boolean,
-  channelEntry?: { voice?: boolean },
-): boolean {
-  if (channelEntry?.voice) return true;
-  if (voiceInput) return true;
-  const lower = content.toLowerCase();
-  return VOICE_KEYWORDS.some((k) => lower.includes(k));
-}
-
-function isInvitation(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    JOIN_KEYWORDS.some((k) => message.content.toLowerCase().includes(k)) &&
-    message.member?.voice?.channel != null
-  );
-}
-
-function isLeaveRequest(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    LEAVE_KEYWORDS.some((k) => message.content.toLowerCase().includes(k))
-  );
-}
 
 async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
   bootCtx: BootContext;
@@ -218,8 +188,9 @@ async function main() {
     : null;
 
   if (voiceClient) {
-    const healthy = await voiceClient.isHealthy();
-    console.log(`[gaia] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    voiceClient.isHealthy().then((healthy) => {
+      console.log(`[gaia] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    });
   } else {
     console.log("[gaia] voice sidecar: not configured");
   }
@@ -433,7 +404,6 @@ async function main() {
       userTier,
     };
 
-    // STT: transcribe audio attachments before any content-dependent logic
     let voiceInput = false;
     let effectiveContent = message.content;
 
@@ -443,7 +413,7 @@ async function main() {
       );
       if (audioAttachment) {
         try {
-          const audioRes = await fetch(audioAttachment.url);
+          const audioRes = await fetch(audioAttachment.url, { signal: AbortSignal.timeout(30_000) });
           const buffer = Buffer.from(await audioRes.arrayBuffer());
           effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
           voiceInput = true;
@@ -640,11 +610,10 @@ async function main() {
       return;
     }
 
-    const channelEntry2 = channelConfig[message.channelId];
     const MAX_TTS = 2000;
     let sent: Message;
 
-    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry2)) {
+    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
         const audioBuffer = await voiceClient.synthesize(ttsText);
