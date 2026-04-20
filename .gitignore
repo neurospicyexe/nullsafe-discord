@@ -31,3 +31,4 @@ DEPLOY_NOTES*.md
 
 # Git worktrees
 .worktrees/
+README_Raz.md
