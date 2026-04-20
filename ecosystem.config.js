@@ -143,8 +143,8 @@ module.exports = {
     },
     {
       name: "voice-sidecar",
-      script: "python3",
-      args: ["services/voice-sidecar/server.py"],
+      script: "services/voice-sidecar/server.py",
+      interpreter: "/app/nullsafe-discord/services/voice-sidecar/venv/bin/python3",
       cwd: "/app/nullsafe-discord",
       restart_delay: 3000,
       max_restarts: 10,
