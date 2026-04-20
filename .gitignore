@@ -28,3 +28,6 @@ VPS_DEPLOY_CHECKLIST.md
 *_CHECKLIST.md
 OPS-*.md
 DEPLOY_NOTES*.md
+
+# Git worktrees
+.worktrees/
