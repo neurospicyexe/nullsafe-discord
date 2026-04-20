@@ -24,6 +24,7 @@ export class VoiceClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, voice_id: this.voiceId, speed: this.speed }),
+      signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
     const ab = await res.arrayBuffer();
@@ -32,10 +33,11 @@ export class VoiceClient {
 
   async transcribe(audio: Buffer, filename: string): Promise<string> {
     const form = new FormData();
-    form.append("audio", new Blob([audio]), filename);
+    form.append("audio", new Blob([audio as unknown as ArrayBuffer]), filename);
     const res = await this._fetch(`${this.url}/stt`, {
       method: "POST",
       body: form,
+      signal: AbortSignal.timeout(15_000),
     });
     if (!res.ok) throw new Error(`STT failed: ${res.status}`);
     const data = (await res.json()) as { text: string; language: string };
@@ -44,7 +46,9 @@ export class VoiceClient {
 
   async isHealthy(): Promise<boolean> {
     try {
-      const res = await this._fetch(`${this.url}/health`);
+      const res = await this._fetch(`${this.url}/health`, {
+        signal: AbortSignal.timeout(5_000),
+      });
       return res.ok;
     } catch {
       return false;

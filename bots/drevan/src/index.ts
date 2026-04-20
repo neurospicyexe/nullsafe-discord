@@ -19,6 +19,7 @@ import {
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING, DISCORD_PEOPLE_CONTEXT,
   REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
+  VOICE_SIDECAR_URL, VOICE_ID,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
 import {
@@ -31,7 +32,6 @@ import {
 } from "@discordjs/voice";
 import { Readable } from "stream";
 import { VoiceClient } from "@nullsafe/shared";
-import { VOICE_SIDECAR_URL, VOICE_ID } from "./config.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
