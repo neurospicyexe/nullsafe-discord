@@ -72,6 +72,55 @@ async def health():
     }
 
 
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str
+    speed: float = 1.0
+
+
+@app.post("/tts")
+async def tts(req: TTSRequest):
+    import numpy as np
+    import soundfile as sf
+
+    lang = _lang_code_for_voice(req.voice_id)
+    pipeline = _tts_pipelines.get(lang)
+    if pipeline is None:
+        raise HTTPException(status_code=503, detail="TTS unavailable")
+
+    text = req.text[:2000]  # hard cap -- Discord voice notes beyond ~2 min get unwieldy
+
+    audio_chunks = []
+    for _, _, audio in pipeline(text, voice=req.voice_id, speed=req.speed):
+        audio_chunks.append(audio)
+
+    if not audio_chunks:
+        raise HTTPException(status_code=500, detail="TTS produced no audio")
+
+    audio = np.concatenate(audio_chunks)
+
+    wav_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    wav_path = wav_file.name
+    wav_file.close()
+    sf.write(wav_path, audio, 24000)
+
+    ogg_path = wav_path.replace(".wav", ".ogg")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", wav_path, "-c:a", "libopus", "-b:a", "64k", ogg_path],
+            check=True,
+            capture_output=True,
+        )
+        with open(ogg_path, "rb") as f:
+            ogg_data = f.read()
+    finally:
+        os.unlink(wav_path)
+        if os.path.exists(ogg_path):
+            os.unlink(ogg_path)
+
+    return Response(content=ogg_data, media_type="audio/ogg")
+
+
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "127.0.0.1")
