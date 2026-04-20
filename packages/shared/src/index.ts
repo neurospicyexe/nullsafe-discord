@@ -12,3 +12,4 @@ export * from "./stm.js";
 export * from "./heartbeat.js";
 export * from "./write-queue.js";
 export * from "./cycleGuard.js";
+export { VoiceClient, type VoiceClientConfig } from "./voice.js";
