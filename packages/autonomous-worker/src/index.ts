@@ -22,14 +22,32 @@
 
 import { startScheduler } from "./scheduler.js";
 import { runPipeline } from "./pipeline.js";
+import { runSignalAudit } from "./phases/signal-audit.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
 const onceIdx = args.indexOf("--once");
+const signalAuditIdx = args.indexOf("--signal-audit");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (onceIdx !== -1) {
-  // One-shot mode: run immediately for specified companion (or all)
+if (signalAuditIdx !== -1) {
+  // One-shot signal audit mode
+  const companions: CompanionId[] = companionArg ? [companionArg] : ["cypher", "drevan", "gaia"];
+  console.log(`[autonomous-worker] signal-audit mode: ${companions.join(", ")}`);
+
+  (async () => {
+    for (const companionId of companions) {
+      console.log(`\n── signal-audit: ${companionId} ──`);
+      await runSignalAudit(companionId);
+    }
+    console.log("\n[autonomous-worker] signal-audit complete");
+    process.exit(0);
+  })().catch(e => {
+    console.error("[autonomous-worker] signal-audit failed:", e);
+    process.exit(1);
+  });
+} else if (onceIdx !== -1) {
+  // One-shot exploration mode: run immediately for specified companion (or all)
   const companions: CompanionId[] = companionArg ? [companionArg] : ["cypher", "drevan", "gaia"];
   console.log(`[autonomous-worker] one-shot mode: ${companions.join(", ")}`);
 

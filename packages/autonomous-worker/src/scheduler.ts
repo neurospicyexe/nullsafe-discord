@@ -6,6 +6,7 @@ import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
 import { runCompress } from "./phases/compress.js";
 import { runSeedGeneration } from "./phases/seed-gen.js";
+import { runSignalAudit } from "./phases/signal-audit.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -106,6 +107,19 @@ export function startScheduler(): void {
       for (const companionId of COMPANIONS) {
         await runSeedGeneration(companionId).catch(e =>
           console.error(`[scheduler/${companionId}] seed-gen failed:`, e)
+        );
+      }
+    })();
+  });
+
+  // Weekly signal audit -- Wednesday 2AM, sequential, staggered from seed-gen
+  // Reads own journal/patterns, surfaces themes/tensions/growth edges,
+  // writes signal_audit journal entry + replenishes 1-2 seeds per companion.
+  cron.schedule("0 2 * * 3", () => {
+    (async () => {
+      for (const companionId of COMPANIONS) {
+        await runSignalAudit(companionId).catch(e =>
+          console.error(`[scheduler/${companionId}] signal-audit failed:`, e)
         );
       }
     })();
