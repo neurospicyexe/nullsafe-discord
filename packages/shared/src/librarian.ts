@@ -149,6 +149,26 @@ export class LibrarianClient {
   }
 
   /**
+   * Write a structured session handoff to wm_session_handoffs.
+   * Gives Claude.ai orient a machine-readable "what happened + what's open" record,
+   * vs writeWmNote which gives a prose string. Both fire at channel close.
+   * Non-throwing; failures are logged but never bubble up.
+   */
+  async writeHandoff(params: {
+    title: string;
+    summary: string;
+    open_loops?: string[];
+    state_hint?: string;
+    next_steps?: string[];
+  }): Promise<void> {
+    try {
+      await this.ask("session handoff", JSON.stringify(params));
+    } catch (e) {
+      console.warn("[librarian] writeHandoff failed:", String(e));
+    }
+  }
+
+  /**
    * Thalamus pattern: semantic search against Second Brain before inference.
    * Fires through Halseth so the Worker handles MCP session management.
    * Returns the raw sb_search result string, or null on miss/error.
@@ -225,6 +245,7 @@ export class LibrarianClient {
     incoming_notes?: { from: string; content: string }[];
     recent_growth?: { type: string; content: string }[];
     active_patterns?: string[];
+    pending_seeds?: string[];
     active_conclusions?: Array<{
       // Renamed from conclusion_text (Halseth wire format) -- text is Discord-layer only
       text: string;
@@ -253,6 +274,7 @@ export class LibrarianClient {
         incoming_notes?: { from: string; content: string }[];
         recent_growth?: { type: string; content: string }[];
         active_patterns?: string[];
+        pending_seeds?: string[];
         active_conclusions?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
         flagged_beliefs?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
       } | undefined;
@@ -268,6 +290,7 @@ export class LibrarianClient {
         incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
         recent_growth: Array.isArray(data.recent_growth) ? data.recent_growth : [],
         active_patterns: Array.isArray(data.active_patterns) ? data.active_patterns : [],
+        pending_seeds: Array.isArray(data.pending_seeds) ? data.pending_seeds : [],
         active_conclusions: (data.active_conclusions ?? []).map(c => ({
           text: c.conclusion_text,
           belief_type: c.belief_type,
@@ -432,6 +455,7 @@ export function formatRecentContext(orient: {
   incoming_notes?: { from: string; content: string }[];
   recent_growth?: { type: string; content: string }[];
   active_patterns?: string[];
+  pending_seeds?: string[];
   active_conclusions?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
   flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
 } | null): string {
@@ -469,6 +493,9 @@ export function formatRecentContext(orient: {
   }
   if (orient.active_patterns?.length) {
     parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
+  }
+  if (orient.pending_seeds?.length) {
+    parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
   }
   // Worldview block (~200 token cap)
   if (orient.active_conclusions && orient.active_conclusions.length > 0) {
