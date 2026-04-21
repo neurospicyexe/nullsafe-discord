@@ -117,6 +117,30 @@ export async function updateThreadStatus(
 }
 
 // ---------------------------------------------------------------------------
+// Growth reads (signal audit)
+// ---------------------------------------------------------------------------
+
+export async function getRecentJournal(
+  companionId: string,
+  limit = 30,
+): Promise<Array<{ id: string; entry_type: string; content: string; tags_json: string; created_at: string }>> {
+  const r = await hFetch(`/mind/growth/journal/${encodeURIComponent(companionId)}?limit=${limit}`) as {
+    journal: Array<{ id: string; entry_type: string; content: string; tags_json: string; created_at: string }>;
+  };
+  return r.journal ?? [];
+}
+
+export async function getRecentPatterns(
+  companionId: string,
+  limit = 10,
+): Promise<Array<{ id: string; pattern_text: string; strength: number; updated_at: string }>> {
+  const r = await hFetch(`/mind/growth/patterns/${encodeURIComponent(companionId)}?limit=${limit}`) as {
+    patterns: Array<{ id: string; pattern_text: string; strength: number; updated_at: string }>;
+  };
+  return r.patterns ?? [];
+}
+
+// ---------------------------------------------------------------------------
 // Reflections
 // ---------------------------------------------------------------------------
 

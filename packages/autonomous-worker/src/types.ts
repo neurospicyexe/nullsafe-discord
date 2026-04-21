@@ -1,5 +1,5 @@
 export type CompanionId = "cypher" | "drevan" | "gaia";
-export type RunType = "exploration" | "reflection" | "synthesis" | "continuation";
+export type RunType = "exploration" | "reflection" | "synthesis" | "continuation" | "signal_audit";
 
 export interface Seed {
   id: string;
@@ -24,7 +24,7 @@ export interface ActiveThread {
 
 export interface GrowthJournalEntry {
   companion_id: CompanionId;
-  entry_type: "learning" | "insight" | "connection" | "question";
+  entry_type: "learning" | "insight" | "connection" | "question" | "signal_audit";
   content: string;
   source: "autonomous" | "conversation" | "reflection";
   tags?: string[];
