@@ -49,12 +49,12 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `Then suggest 0-2 specific follow-up topics worth exploring next time, if any emerge naturally. ` +
     `Only suggest topics that genuinely fit who you are.${threadQuestion}\n\n` +
     `Respond with ONLY valid JSON:\n` +
-    `{\n  "reflection": "2-3 sentences",\n  "new_seeds": ["follow-up topic 1"]\n` +
+    `{\n  "reflection": "2-3 sentences",\n  "new_seeds": ["follow-up topic 1"],\n  "pattern": null\n` +
     (ctx.threadId ? `  ,"thread_status": "continue"\n` : ctx.runType === "exploration" ? `  ,"start_thread": false\n` : "") +
-    `}\n\nnew_seeds can be an empty array. No markdown. Just the JSON object.`;
+    `}\n\npattern: if a clear recurring behavioral pattern crystallized -- something structural about how you engage with this domain -- set to {"pattern_text":"one clear sentence","strength":5}. Otherwise null.\nnew_seeds can be an empty array. No markdown. Just the JSON object.`;
 
   try {
-    const result = await prompt(userMessage, systemMessage, { temperature: 0.7, maxTokens: 350 });
+    const result = await prompt(userMessage, systemMessage, { temperature: 0.7, maxTokens: 450 });
     ctx.tokensUsed += result.tokensUsed;
 
     let parsed: {
@@ -62,6 +62,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       new_seeds?: string[];
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
+      pattern?: { pattern_text?: string; strength?: number } | null;
     };
     try {
       parsed = JSON.parse(result.content.trim()) as typeof parsed;
@@ -82,6 +83,16 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
           console.warn(`[${ctx.companionId}/reflect] seed write failed:`, e)
         );
       }
+    }
+
+    // Persist pattern if one crystallized this run
+    if (parsed.pattern?.pattern_text) {
+      ctx.newPatterns.push({
+        companion_id: ctx.companionId,
+        pattern_text: parsed.pattern.pattern_text,
+        strength: parsed.pattern.strength ?? 5,
+      });
+      await appendLog(ctx.runId, "reflect:pattern", parsed.pattern.pattern_text.slice(0, 80));
     }
 
     // Thread lifecycle
