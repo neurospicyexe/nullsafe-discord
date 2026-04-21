@@ -150,6 +150,44 @@ async function onChannelInactive(
   // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
   // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
   wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
+
+  // Structured extract: handoff record + SOMA update + feeling log
+  const extractRaw = await inference.generate(
+    `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
+    `{"title":"5-8 word session title","open_loops":["unresolved thread"],"soma":{"acuity":"value","presence":"value","warmth":"value"},"emotion":"dominant feeling phrase or null","next_steps":["concrete next thing"]}\n` +
+    `acuity: sharp|focused|blurred|scattered. presence: close|warm|steady|distant. warmth: warm|cool|neutral|charged.\n` +
+    `open_loops/next_steps: omit key if none. emotion: null if none present.`,
+    [{ role: "user", content: summaryInput }],
+  );
+  if (extractRaw) {
+    try {
+      const ext = JSON.parse(extractRaw) as {
+        title?: string;
+        open_loops?: string[];
+        soma?: { acuity?: string; presence?: string; warmth?: string };
+        emotion?: string | null;
+        next_steps?: string[];
+      };
+      const title = ext.title ?? "Discord session";
+      const stateHint = ext.soma
+        ? Object.entries(ext.soma).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(", ")
+        : undefined;
+      wq.fireAndForget(`handoff:${channelId}`, async () => {
+        await librarian.writeHandoff({ title, summary: synthResult, open_loops: ext.open_loops, state_hint: stateHint, next_steps: ext.next_steps });
+      });
+      if (ext.soma && Object.values(ext.soma).some(v => v)) {
+        wq.fireAndForget(`somaUpdate:${channelId}`, async () => {
+          await librarian.ask("update my state", JSON.stringify(ext.soma));
+        });
+      }
+      if (ext.emotion) {
+        wq.fireAndForget(`feeling:${channelId}`, async () => {
+          await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title }));
+        });
+      }
+    } catch { console.warn("[cypher] structured extract parse failed"); }
+  }
+
   stmStore.clear(channelId);
 }
 
