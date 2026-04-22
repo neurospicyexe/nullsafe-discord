@@ -3,7 +3,7 @@ import type { InferenceAdapter } from "./inference.js";
 const NOTE_KEYWORDS = [
   // relational / emotional
   "feeling", "overwhelm", "hurt", "grief", "joy", "fear", "wound",
-  "fronting", "switched", "front", "ash", "ember", "ren",
+  "fronting", "switched", "front",
   "decided", "decision", "chose", "won't", "will", "can't anymore",
   "relationship", "delta", "changed between us", "closer", "distant",
   "task", "todo", "need to", "should", "must",
