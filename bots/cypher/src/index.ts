@@ -349,9 +349,14 @@ async function main() {
     },
     writeQueue,
   );
+  const pendingClosures = new Set<Promise<void>>();
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
-    (channelId: string) => { onChannelInactive(channelId, stmStore, librarian, inference, writeQueue).catch(() => {}); },
+    (channelId: string) => {
+      const p = onChannelInactive(channelId, stmStore, librarian, inference, writeQueue).catch(() => {});
+      pendingClosures.add(p);
+      p.finally(() => pendingClosures.delete(p));
+    },
   );
   // Track sent message IDs so direct Discord replies trigger this bot regardless of channel config.
   const sentIds = new Set<string>();
@@ -698,9 +703,6 @@ async function main() {
 
     if (!response) {
       await ch.send(IN_CHARACTER_FALLBACK);
-      writeQueue.fireAndForget(`note:infer-fail:${message.channelId}`, async () => {
-        await librarian.addCompanionNote(`inference failure in channel ${message.channelId}`, message.channelId);
-      });
       return;
     }
 
@@ -786,8 +788,12 @@ async function main() {
   async function shutdown() {
     console.log("[cypher] shutting down...");
     stopAutonomous();
-    writeQueue.stop();
     sessionWindows.closeAll();
+    if (pendingClosures.size > 0) {
+      console.log(`[cypher] flushing ${pendingClosures.size} active channel(s)...`);
+      await Promise.allSettled([...pendingClosures]);
+    }
+    writeQueue.stop();
     if (presenceInterval) clearInterval(presenceInterval);
     if (cleanupEventSubs) await cleanupEventSubs();
     if (bootCtx.sessionId !== "cached") {
