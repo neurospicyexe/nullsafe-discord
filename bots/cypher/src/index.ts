@@ -8,17 +8,18 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext, computeChainDepth, interCompanionStaggerMs,
-  createRedisClient, claimFloor, releaseFloor, getLastSpeaker, setLastSpeaker, setLastActivity,
+  formatRecentContext, computeChainDepth,
+  createRedisClient, setLastActivity,
   wireEventSubscriptions, setPresence,
-  BrainClient, buildThoughtPacket,
+  BrainClient, buildThoughtPacket, isSwarmReply,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
+import { detectPluralKit } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
-  REDIS_URL, FLOOR_LOCK_DURATION_MS, FLOOR_JITTER_MS,
+  REDIS_URL,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
 import {
@@ -437,6 +438,12 @@ async function main() {
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.id === client.user?.id) return;
 
+    const BOT_IDS = new Set([
+      process.env["CYPHER_BOT_ID"],
+      process.env["DREVAN_BOT_ID"],
+      process.env["GAIA_BOT_ID"],
+    ].filter(Boolean) as string[]);
+    const isCompanionPost = BOT_IDS.has(message.author.id);
     const dedupKey = `${message.channelId}:${message.content}`;
     if (message.webhookId && pkPending.has(dedupKey)) {
       const entry = pkPending.get(dedupKey)!;
@@ -494,9 +501,13 @@ async function main() {
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
+    const pkCtx = detectPluralKit(message);
+    const author = pkCtx.isPluralKit
+      ? (pkCtx.memberName ?? "Raziel")
+      : (attribution.isOwner ? "Raziel" : message.author.username);
 
-    // Hard muzzle: bot messages only allowed in inter_companion channels.
-    if (message.author.bot && !channelEntry?.modes?.includes("inter_companion")) return;
+    // Hard muzzle: only companion bots pass through; all other bots are dropped.
+    if (message.author.bot && !isCompanionPost) return;
 
     // STT: if the message has an audio attachment, transcribe it and use as effectiveContent.
     let voiceInput = false;
@@ -625,48 +636,6 @@ async function main() {
 
     await ch.sendTyping();
 
-    // Random jitter + Redis floor lock for inter_companion channels.
-    // Jitter is sampled fresh each message so no companion holds a static speaking priority.
-    // "Last speaker" adds a flat penalty to encourage rotation without enforcing rank.
-    const isInterCompanion = channelEntry?.modes?.includes("inter_companion") === true;
-    let floorClaimed = false;
-    if (isInterCompanion) {
-      let useFloor = !!redis;
-      if (redis) {
-        try {
-          const lastSpeaker = await getLastSpeaker(redis).catch(() => null);
-          const jitter = Math.floor(Math.random() * FLOOR_JITTER_MS) + 100
-            + (lastSpeaker === COMPANION_ID ? 500 : 0);
-          await new Promise<void>(resolve => setTimeout(resolve, jitter));
-          floorClaimed = await claimFloor(redis, COMPANION_ID, FLOOR_LOCK_DURATION_MS);
-          if (!floorClaimed) {
-            console.debug(`[${COMPANION_ID}] floor denied (held by another), skipping ${message.channelId}`);
-            return;
-          }
-          console.debug(`[${COMPANION_ID}] floor claimed for ${message.channelId}`);
-        } catch {
-          useFloor = false; // Redis error: fall through to legacy stagger
-          console.warn(`[${COMPANION_ID}] floor Redis error, falling back to legacy stagger`);
-        }
-      }
-      if (!useFloor) {
-        // No Redis or Redis errored: legacy stagger + collision check.
-        const staggerDelay = interCompanionStaggerMs("inter_companion");
-        await new Promise<void>(resolve => setTimeout(resolve, staggerDelay));
-        const lastMsg = ch.lastMessage;
-        if (
-          lastMsg &&
-          lastMsg.id !== message.id &&
-          lastMsg.author.bot &&
-          lastMsg.author.id !== client.user?.id &&
-          Date.now() - lastMsg.createdTimestamp < staggerDelay + 1000
-        ) {
-          return;
-        }
-      }
-    }
-
-    try {
     const history = stmStore.get(message.channelId);
     const rawTemp = inferTemperature(effectiveContent, currentMood);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
@@ -681,21 +650,53 @@ async function main() {
     const sbHit = await sbSearchPromise;
     if (sbHit) contextPrompt += `\n\n[Memory -- Second Brain retrieved for this message:\n${sbHit.slice(0, 800)}]`;
 
+    const recentMessages = await message.channel.messages
+      .fetch({ limit: 20, before: message.id })
+      .catch(() => null);
+    const channelHistory = recentMessages
+      ? [...recentMessages.values()]
+          .reverse()
+          .map(m => ({ author: m.author.username, content: m.content.slice(0, 500) }))
+      : [];
+
     let response: string | null;
     if (brainClient) {
       // Relay mode: send assembled context to Phoenix Brain for inference.
       // Brain returns reply_text; falls back to direct inference on failure.
       const packet = buildThoughtPacket(
-        COMPANION_ID, message.author.id, message.channelId, effectiveContent,
-        contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature,
-        { isOwner: attribution.isOwner, frontMember: attribution.frontMember, guildId: message.guildId ?? undefined },
+        COMPANION_ID,
+        message.author.id,
+        message.channelId,
+        message.id,
+        effectiveContent,
+        contextPrompt,
+        history.slice(-CONTEXT_WINDOW_SIZE),
+        channelHistory,
+        temperature,
+        {
+          isOwner: attribution.isOwner,
+          frontMember: attribution.frontMember,
+          guildId: message.guildId ?? undefined,
+          author,
+          authorIsCompanion: isCompanionPost,
+          depth: isCompanionPost ? 1 : 0,
+        },
       );
-      const brainReply = await brainClient.chat(packet);
-      if (brainReply?.status === "ok" && brainReply.reply_text) {
-        response = brainReply.reply_text;
-      } else {
-        console.warn(`[cypher] brain relay failed (status=${brainReply?.status ?? "null"}), falling back to direct`);
+      const brainResult = await brainClient.chat(packet);
+      if (brainResult === null) {
+        console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
         response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+      } else if (isSwarmReply(brainResult)) {
+        const slotReply = brainResult.responses[COMPANION_ID];
+        if (slotReply === null || slotReply === undefined) return;
+        response = slotReply;
+      } else {
+        if (brainResult.status === "ok" && brainResult.reply_text) {
+          response = brainResult.reply_text;
+        } else {
+          console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
+          response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+        }
       }
     } else {
       response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
@@ -775,13 +776,6 @@ async function main() {
       writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
         await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
       });
-    }
-    } finally {
-      if (floorClaimed && redis) {
-        await releaseFloor(redis, COMPANION_ID).catch((e: unknown) => console.warn(`[${COMPANION_ID}] floor release failed:`, e));
-        await setLastSpeaker(redis, COMPANION_ID).catch(() => {});
-        console.debug(`[${COMPANION_ID}] floor released`);
-      }
     }
   });
 
