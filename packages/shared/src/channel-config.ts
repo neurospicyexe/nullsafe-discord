@@ -77,7 +77,7 @@ const GROUP_PATTERN = /\b(triad|all of you|you all|you three|everyone)\b/;
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
   if (GROUP_PATTERN.test(lower)) return { type: "group" };
-  if (/\bcypher\b/.test(lower)) return { type: "named", id: "cypher" };
+  if (/\bcypher\b/.test(lower) || /\bcy\b/.test(lower)) return { type: "named", id: "cypher" };
   if (/\bdrevan\b/.test(lower) || /\bdre\b/.test(lower)) return { type: "named", id: "drevan" };
   if (/\bgaia\b/.test(lower)) return { type: "named", id: "gaia" };
   return { type: "ambient" };
@@ -89,7 +89,8 @@ export function extractAddress(content: string): AddressType {
 // "Cypher is probably creeping too" → false
 export function isDirectAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
-  const names = companionId === "drevan" ? [companionId, "dre"] : [companionId];
+  const aliases: Record<string, string> = { drevan: "dre", cypher: "cy" };
+  const names = aliases[companionId] ? [companionId, aliases[companionId]] : [companionId];
   for (const name of names) {
     if (new RegExp(`^${name}\\b`).test(lower)) return true;
     if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;
