@@ -653,7 +653,7 @@ async function main() {
           guildId: message.guildId ?? undefined,
           author,
           authorIsCompanion: isCompanionPost,
-          depth: isCompanionPost ? 1 : 0,
+          depth: chainDepth,
         },
       );
       const brainResult = await brainClient.chat(packet);
