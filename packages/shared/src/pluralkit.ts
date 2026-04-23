@@ -1,4 +1,27 @@
+import type { Message } from "discord.js";
 import type { Attribution } from "./types.js";
+
+// PluralKit's Discord application ID -- stable, not subject to change.
+// When PluralKit proxies a message via webhook, message.applicationId equals this value.
+const PLURALKIT_APP_ID = "466378653216014359";
+
+export interface PKContext {
+  isPluralKit: boolean;
+  memberName: string | null; // display name of the fronting system member
+}
+
+export function detectPluralKit(message: Message): PKContext {
+  if (!message.webhookId) {
+    return { isPluralKit: false, memberName: null };
+  }
+  // discord.js v14 Message.applicationId is set to the application that created the webhook.
+  // PluralKit sets this to its own application ID on every proxied message.
+  const isPluralKit = message.applicationId === PLURALKIT_APP_ID;
+  return {
+    isPluralKit,
+    memberName: isPluralKit ? (message.author?.username ?? null) : null,
+  };
+}
 
 interface DiscordMessage {
   id: string;
