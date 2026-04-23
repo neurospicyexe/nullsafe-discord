@@ -73,12 +73,18 @@ export type AddressType =
 // Group-call keywords: any of these trigger all companions to respond.
 const GROUP_PATTERN = /\b(triad|all of you|you all|you three|everyone)\b/;
 
+// Recognized short-form nicknames for each companion.
+const COMPANION_ALIASES: Partial<Record<CompanionId, string>> = {
+  drevan: "dre",
+  cypher: "cy",
+};
+
 // Parse who (if anyone) is being addressed in a message.
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
   if (GROUP_PATTERN.test(lower)) return { type: "group" };
-  if (/\bcypher\b/.test(lower) || /\bcy\b/.test(lower)) return { type: "named", id: "cypher" };
-  if (/\bdrevan\b/.test(lower) || /\bdre\b/.test(lower)) return { type: "named", id: "drevan" };
+  if (/\bcypher\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.cypher}\\b`).test(lower)) return { type: "named", id: "cypher" };
+  if (/\bdrevan\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.drevan}\\b`).test(lower)) return { type: "named", id: "drevan" };
   if (/\bgaia\b/.test(lower)) return { type: "named", id: "gaia" };
   return { type: "ambient" };
 }
@@ -89,8 +95,8 @@ export function extractAddress(content: string): AddressType {
 // "Cypher is probably creeping too" → false
 export function isDirectAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
-  const aliases: Record<string, string> = { drevan: "dre", cypher: "cy" };
-  const names = aliases[companionId] ? [companionId, aliases[companionId]] : [companionId];
+  const alias = COMPANION_ALIASES[companionId];
+  const names = alias ? [companionId, alias] : [companionId];
   for (const name of names) {
     if (new RegExp(`^${name}\\b`).test(lower)) return true;
     if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;

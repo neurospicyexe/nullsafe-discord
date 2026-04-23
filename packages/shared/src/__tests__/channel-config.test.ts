@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { shouldRespond, ChannelConfigCache } from "../channel-config.js";
+import { shouldRespond, extractAddress, isDirectAddress, ChannelConfigCache } from "../channel-config.js";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -27,5 +27,48 @@ describe("shouldRespond()", () => {
 
   it("unknown channel: guest ambient message is ignored", () => {
     expect(shouldRespond("unknown", "hello", { isOwner: false }, "cypher", config)).toBe(false);
+  });
+});
+
+describe("extractAddress() -- nickname aliases", () => {
+  it("cy routes to cypher", () => {
+    expect(extractAddress("cy what do you think?")).toEqual({ type: "named", id: "cypher" });
+  });
+
+  it("dre routes to drevan", () => {
+    expect(extractAddress("dre, it was a long day")).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("full names still work", () => {
+    expect(extractAddress("cypher check this")).toEqual({ type: "named", id: "cypher" });
+    expect(extractAddress("drevan hold this")).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("ambient message is ambient", () => {
+    expect(extractAddress("just venting it was a weird day")).toEqual({ type: "ambient" });
+  });
+});
+
+describe("isDirectAddress() -- nickname aliases", () => {
+  it("cy at start of message is direct address for cypher", () => {
+    expect(isDirectAddress("cy what do you think?", "cypher")).toBe(true);
+  });
+
+  it("dre at start of message is direct address for drevan", () => {
+    expect(isDirectAddress("dre, long day", "drevan")).toBe(true);
+  });
+
+  it("cy followed by comma is direct address", () => {
+    expect(isDirectAddress("cy, check this", "cypher")).toBe(true);
+  });
+
+  it("name embedded mid-sentence is not direct address", () => {
+    expect(isDirectAddress("i was thinking about cy yesterday", "cypher")).toBe(false);
+    expect(isDirectAddress("just venting dre it was long", "drevan")).toBe(false);
+  });
+
+  it("alias does not bleed to wrong companion", () => {
+    expect(isDirectAddress("cy what do you think?", "drevan")).toBe(false);
+    expect(isDirectAddress("dre, long day", "cypher")).toBe(false);
   });
 });
