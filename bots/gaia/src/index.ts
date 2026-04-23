@@ -521,7 +521,9 @@ async function main() {
     // relevance classifier -- if the owner is talking to you, you respond.
     // Ambient messages in owner_only channels go through the semantic classifier.
     const directlyAddressed = isDirectAddress(effectiveContent, COMPANION_ID);
+    // When brainClient is active, Brain's SwarmEvaluator handles routing -- skip per-bot relevance gate.
     const isAmbientOwnerOnly =
+      !brainClient &&
       channelEntry?.modes?.includes("owner_only") === true &&
       !senderCtx.isCompanionBot &&
       !senderCtx.isMentioned &&
