@@ -98,7 +98,7 @@ export class BrainClient {
   private readonly url: string;
   private readonly timeoutMs: number;
 
-  constructor(brainUrl: string, timeoutMs = 30_000) {
+  constructor(brainUrl: string, timeoutMs = 40_000) {
     this.url = brainUrl.replace(/\/$/, "");
     this.timeoutMs = timeoutMs;
   }
