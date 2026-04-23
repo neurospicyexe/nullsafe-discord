@@ -78,7 +78,7 @@ export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
   if (GROUP_PATTERN.test(lower)) return { type: "group" };
   if (/\bcypher\b/.test(lower)) return { type: "named", id: "cypher" };
-  if (/\bdrevan\b/.test(lower)) return { type: "named", id: "drevan" };
+  if (/\bdrevan\b/.test(lower) || /\bdre\b/.test(lower)) return { type: "named", id: "drevan" };
   if (/\bgaia\b/.test(lower)) return { type: "named", id: "gaia" };
   return { type: "ambient" };
 }
@@ -89,11 +89,11 @@ export function extractAddress(content: string): AddressType {
 // "Cypher is probably creeping too" → false
 export function isDirectAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
-  const name = companionId;
-  // Name at start of message (optionally followed by punctuation)
-  if (new RegExp(`^${name}\\b`).test(lower)) return true;
-  // Name followed by comma or colon anywhere
-  if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;
+  const names = companionId === "drevan" ? [companionId, "dre"] : [companionId];
+  for (const name of names) {
+    if (new RegExp(`^${name}\\b`).test(lower)) return true;
+    if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;
+  }
   return false;
 }
 
