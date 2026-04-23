@@ -12,9 +12,13 @@
 
 import type { CompanionId, ChatMessage } from "./types.js";
 import { randomUUID } from "crypto";
+import type { SwarmReply } from "./swarm.js";
+import { isSwarmReply } from "./swarm.js";
 
 export interface ThoughtPacketMetadata {
   channel_id: string;
+  message_id?: string;         // Discord message snowflake -- used by Brain for dedup
+  history?: Array<{ author: string; content: string }>;  // channel conversation history for swarm
   system_prompt?: string;
   messages?: Array<{ role: "user" | "assistant"; content: string }>;
   temperature?: number;
@@ -31,6 +35,10 @@ export interface ThoughtPacket {
   thread_id: string;
   agent_id: CompanionId;
   message: string;
+  // Phase 2 swarm fields
+  author?: string;               // system member name if PluralKit, else "Raziel"
+  author_is_companion?: boolean;
+  depth?: number;
   metadata: ThoughtPacketMetadata;
 }
 
@@ -46,14 +54,19 @@ export function buildThoughtPacket(
   agentId: CompanionId,
   userId: string,
   channelId: string,
+  messageId: string,
   message: string,
   systemPrompt: string,
   history: ChatMessage[],
+  channelHistory: Array<{ author: string; content: string }>,
   temperature: number,
   opts?: {
     isOwner?: boolean;
     frontMember?: string | null;
     guildId?: string;
+    author?: string;
+    authorIsCompanion?: boolean;
+    depth?: number;
   },
 ): ThoughtPacket {
   return {
@@ -64,11 +77,14 @@ export function buildThoughtPacket(
     thread_id: channelId,
     agent_id: agentId,
     message,
+    author: opts?.author ?? "Raziel",
+    author_is_companion: opts?.authorIsCompanion ?? false,
+    depth: opts?.depth ?? 0,
     metadata: {
       channel_id: channelId,
+      message_id: messageId,
+      history: channelHistory,
       system_prompt: systemPrompt,
-      // Full history including the current user message (already appended to stmStore).
-      // Brain replaces meta_messages[-1] with cleaned_message (strips override prefixes).
       messages: history.map(m => ({ role: m.role, content: m.content })),
       temperature,
       is_owner: opts?.isOwner,
@@ -88,10 +104,10 @@ export class BrainClient {
   }
 
   /**
-   * Send a ThoughtPacket to Brain /chat and return the AgentReply.
+   * Send a ThoughtPacket to Brain /chat and return the AgentReply or SwarmReply.
    * Returns null on network failure or non-2xx response (caller falls back to direct inference).
    */
-  async chat(packet: ThoughtPacket): Promise<AgentReply | null> {
+  async chat(packet: ThoughtPacket): Promise<AgentReply | SwarmReply | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -105,7 +121,8 @@ export class BrainClient {
         console.warn(`[brain-client] /chat returned ${res.status} for packet ${packet.packet_id}`);
         return null;
       }
-      return (await res.json()) as AgentReply;
+      const data = await res.json();
+      return data as AgentReply | SwarmReply;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn(`[brain-client] /chat failed for packet ${packet.packet_id}: ${msg}`);
@@ -115,3 +132,6 @@ export class BrainClient {
     }
   }
 }
+
+export type { SwarmReply } from "./swarm.js";
+export { isSwarmReply } from "./swarm.js";
