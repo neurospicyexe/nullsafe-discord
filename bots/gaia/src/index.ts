@@ -637,6 +637,9 @@ async function main() {
           .map(m => ({ author: m.author.username, content: m.content.slice(0, 500) }))
       : [];
 
+    const addrResult = extractAddress(effectiveContent);
+    const addressedCompanion = addrResult.type === "named" ? addrResult.id : undefined;
+
     let response: string | null;
     if (brainClient) {
       const packet = buildThoughtPacket(
@@ -656,7 +659,7 @@ async function main() {
           author,
           authorIsCompanion: isCompanionPost,
           depth: chainDepth,
-          addressedCompanion: (() => { const a = extractAddress(effectiveContent); return a.type === "named" ? a.id : undefined; })(),
+          addressedCompanion,
         },
       );
       const brainResult = await brainClient.chat(packet);
