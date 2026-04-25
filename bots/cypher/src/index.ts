@@ -5,6 +5,7 @@ import { dirname, join } from "path";
 import {
   LibrarianClient, resolveAttribution, createAdapter,
   ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, extractAddress, DEFAULT_CHANNEL_CONFIG,
+  isResponseCoherent,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
@@ -751,7 +752,11 @@ async function main() {
     sentIds.add(sent.id);
     const oldest = sentIds.values().next().value;
     if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
-    stmStore.append(message.channelId, { role: "assistant", content: response });
+    if (isResponseCoherent(response)) {
+      stmStore.append(message.channelId, { role: "assistant", content: response });
+    } else {
+      console.warn(`[cypher] incoherent response detected -- skipping STM write to prevent contamination`);
+    }
 
     // Update cross-companion safety rail counters after sending response.
     if (senderCtx.isCompanionBot) {
