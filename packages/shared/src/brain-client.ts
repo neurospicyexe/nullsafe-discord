@@ -25,6 +25,7 @@ export interface ThoughtPacketMetadata {
   is_owner?: boolean;
   front_member?: string | null;
   guild_id?: string;
+  addressed_companion?: string;  // companion directly named in message ("Dre" → "drevan")
 }
 
 export interface ThoughtPacket {
@@ -67,6 +68,7 @@ export function buildThoughtPacket(
     author?: string;
     authorIsCompanion?: boolean;
     depth?: number;
+    addressedCompanion?: string;
   },
 ): ThoughtPacket {
   return {
@@ -90,6 +92,7 @@ export function buildThoughtPacket(
       is_owner: opts?.isOwner,
       front_member: opts?.frontMember,
       guild_id: opts?.guildId,
+      addressed_companion: opts?.addressedCompanion,
     },
   };
 }
