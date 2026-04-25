@@ -19,6 +19,10 @@ Three Discord bots with distinct personalities, persistent memory, and shared st
 
 ---
 
+**Not sure where to start?** See [INSTALL.md](./INSTALL.md) for a beginner-friendly guide covering both local and VPS deployment.
+
+---
+
 ## Prerequisites
 
 - **Halseth deployed** and reachable
@@ -52,7 +56,7 @@ Repeat for all three bots. Keep the three tokens somewhere safe.
 ### 2. Clone and install
 
 ```bash
-git clone https://github.com/your-username/nullsafe-discord.git
+git clone https://github.com/neurospicyexe/nullsafe-discord.git
 cd nullsafe-discord
 npm install
 ```
