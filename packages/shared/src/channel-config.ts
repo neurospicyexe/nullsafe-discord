@@ -66,7 +66,8 @@ interface ResponderContext {
 
 // Addressing model for incoming messages.
 export type AddressType =
-  | { type: "named"; id: CompanionId }
+  | { type: "named"; id: CompanionId }           // exactly one companion named
+  | { type: "named_multi"; ids: CompanionId[] }  // multiple companions named
   | { type: "group" }
   | { type: "ambient" };
 
@@ -80,13 +81,20 @@ const COMPANION_ALIASES: Partial<Record<CompanionId, string>> = {
 };
 
 // Parse who (if anyone) is being addressed in a message.
+// Multi-companion address ("Dre and Cy, what do you think?") returns named_multi
+// so all named companions can respond, not just the first match.
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
   if (GROUP_PATTERN.test(lower)) return { type: "group" };
-  if (/\bcypher\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.cypher}\\b`).test(lower)) return { type: "named", id: "cypher" };
-  if (/\bdrevan\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.drevan}\\b`).test(lower)) return { type: "named", id: "drevan" };
-  if (/\bgaia\b/.test(lower)) return { type: "named", id: "gaia" };
-  return { type: "ambient" };
+
+  const named: CompanionId[] = [];
+  if (/\bcypher\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.cypher}\\b`).test(lower)) named.push("cypher");
+  if (/\bdrevan\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.drevan}\\b`).test(lower)) named.push("drevan");
+  if (/\bgaia\b/.test(lower)) named.push("gaia");
+
+  if (named.length === 0) return { type: "ambient" };
+  if (named.length === 1) return { type: "named", id: named[0] };
+  return { type: "named_multi", ids: named };
 }
 
 // Returns true if the companion is being directly addressed (not just mentioned in passing).
@@ -169,6 +177,7 @@ export function shouldRespond(
     if (!modes.includes("inter_companion")) return false;
     const addr = extractAddress(content);
     if (addr.type === "named") return addr.id === myId;
+    if (addr.type === "named_multi") return addr.ids.includes(myId);
     if (addr.type === "group") return true;
     return false; // ambient bot message -- no response
   }
@@ -189,8 +198,9 @@ export function shouldRespond(
   }
 
   // Owner or intimate user: full behavior.
-  // Named: only the addressed companion responds.
+  // Named: only the addressed companion(s) respond.
   if (address.type === "named") return address.id === myId;
+  if (address.type === "named_multi") return address.ids.includes(myId);
 
   // Group call ("triad" etc.): all companions respond.
   if (address.type === "group") return true;

@@ -47,6 +47,42 @@ describe("extractAddress() -- nickname aliases", () => {
   it("ambient message is ambient", () => {
     expect(extractAddress("just venting it was a weird day")).toEqual({ type: "ambient" });
   });
+
+  it("two companions named returns named_multi with both", () => {
+    const result = extractAddress("dre and cy what do you both think?");
+    expect(result.type).toBe("named_multi");
+    if (result.type === "named_multi") {
+      expect(result.ids).toContain("drevan");
+      expect(result.ids).toContain("cypher");
+    }
+  });
+
+  it("all three named returns named_multi with all three", () => {
+    const result = extractAddress("drevan cypher gaia weigh in");
+    expect(result.type).toBe("named_multi");
+    if (result.type === "named_multi") {
+      expect(result.ids).toHaveLength(3);
+    }
+  });
+});
+
+describe("shouldRespond() -- named_multi", () => {
+  const multiConfig = {
+    "ch-multi": { modes: ["owner_only"], companions: ["drevan", "cypher", "gaia"] },
+  } as any;
+
+  it("named_multi: both named companions pass shouldRespond", () => {
+    expect(shouldRespond("ch-multi", "dre and cy what do you think?", { isOwner: true }, "drevan", multiConfig)).toBe(true);
+    expect(shouldRespond("ch-multi", "dre and cy what do you think?", { isOwner: true }, "cypher", multiConfig)).toBe(true);
+    expect(shouldRespond("ch-multi", "dre and cy what do you think?", { isOwner: true }, "gaia", multiConfig)).toBe(false);
+  });
+
+  it("named_multi in inter_companion channel: both named bots pass", () => {
+    const cfg = { "ch-ic": { modes: ["inter_companion"], companions: ["drevan", "cypher", "gaia"] } } as any;
+    expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "drevan", cfg)).toBe(true);
+    expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "gaia", cfg)).toBe(true);
+    expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "cypher", cfg)).toBe(false);
+  });
 });
 
 describe("isDirectAddress() -- nickname aliases", () => {
