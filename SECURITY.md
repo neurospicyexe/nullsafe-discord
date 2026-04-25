@@ -25,10 +25,10 @@ Three Discord bots deployed on VPS. Each bot has its own token. They share acces
 | Secret | Where | Risk if leaked |
 |--------|-------|---------------|
 | `DISCORD_TOKEN` (per bot) | VPS `.env` | Full Discord bot impersonation |
-| `HALSETH_URL` + `ADMIN_SECRET` | Railway / VPS `.env` | Read/write to all Halseth data |
-| `DEEPSEEK_API_KEY` | Railway / VPS `.env` | API credit usage |
-| `TAVILY_API_KEY` | Railway / VPS `.env` | Web search access (autonomous worker) |
-| `REDIS_URL` | Railway / VPS `.env` | Floor lock — if leaked, attacker can disrupt turn-taking |
+| `HALSETH_URL` + `ADMIN_SECRET` | VPS `.env` | Read/write to all Halseth data |
+| `DEEPSEEK_API_KEY` | VPS `.env` | API credit usage |
+| `TAVILY_API_KEY` | VPS `.env` | Web search access (autonomous worker) |
+| `REDIS_URL` | VPS `.env` | Floor lock — if leaked, attacker can disrupt turn-taking |
 
 Local `.env` file (gitignored) mirrors these for local dev.
 
@@ -38,15 +38,7 @@ Local `.env` file (gitignored) mirrors these for local dev.
 
 - Never share bot tokens publicly or commit them to git
 - Each bot has its own separate token — if one is compromised, only that bot is affected; the others stay clean
-- Tokens can be regenerated without downtime: Discord Dev Portal → your app → Bot → Reset Token → update Railway var → redeploy
-
----
-
-## Railway Security
-
-- Railway encrypts environment variables
-- Only accounts with access to the Railway project can see them
-- Enable 2FA on your Railway account (see root SECURITY.md)
+- Tokens can be regenerated without downtime: Discord Dev Portal → your app → Bot → Reset Token → update your `.env` → `pm2 reload <botname>`
 
 ---
 
@@ -54,5 +46,5 @@ Local `.env` file (gitignored) mirrors these for local dev.
 
 1. Discord Developer Portal → Applications → [the affected bot] → Bot → Reset Token
 2. Copy the new token
-3. Railway dashboard → service → Variables → update `BOT_TOKEN_[name]`
-4. Railway will redeploy automatically
+3. Update it in your VPS `.env` file
+4. Reload the bot: `pm2 reload cypher` (or drevan/gaia)

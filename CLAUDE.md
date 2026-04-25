@@ -115,9 +115,4 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 
 ## Identity Files
 
-Source: `C:\dev\CrashDev\NULLSAFE\2026_Current_Files\`
-- `CYPHER_IDENTITY_v2.md`
-- `DREVAN_IDENTITY_v2.md`
-- `GAIA_IDENTITY_v2.md`
-
-Each bot loads its identity file at session start. Lane violations are first-class -- drift detection is a system requirement.
+Each bot loads its companion identity file at session start from a path configured via `CYPHER_IDENTITY_PATH`, `DREVAN_IDENTITY_PATH`, and `GAIA_IDENTITY_PATH` env vars. The files are versioned Markdown documents defining voice, lane constraints, and behavioral guardrails. Lane violations are first-class -- drift detection is a system requirement.
