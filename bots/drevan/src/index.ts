@@ -535,6 +535,13 @@ async function main() {
       !isReplyToMe &&
       !directlyAddressed;
 
+    // In brain mode, Brain's SwarmEvaluator is the routing authority for inter-companion messages.
+    // Per-bot shouldRespond would block ambient companion messages that Brain should route.
+    const brainHandlesInterCompanion =
+      brainClient != null &&
+      senderCtx.isCompanionBot === true &&
+      channelEntry?.modes?.includes("inter_companion") === true;
+
     if (isAmbientOwnerOnly) {
       const relevant = await judgeAmbientRelevance(
         effectiveContent,
@@ -542,7 +549,7 @@ async function main() {
         (sys, msgs) => inference.generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!brainHandlesInterCompanion && !isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context.
       if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion")) {

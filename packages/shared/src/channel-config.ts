@@ -4,14 +4,14 @@ export const ALL_COMPANIONS: CompanionId[] = ["drevan", "cypher", "gaia"];
 
 // How many consecutive companion-to-companion exchanges are allowed before the chain breaks.
 // Reset when owner or non-bot user sends a message.
-export const COMPANION_CHAIN_LIMIT = 3;
+export const COMPANION_CHAIN_LIMIT = 6;
 
 // Cross-companion safety rails (per-bot, independent tracking).
 // BOT_PINGPONG_MAX: after this many bot-to-bot responses since last human, enter cooldown.
-export const BOT_PINGPONG_MAX = 1;
-export const BOT_LOOP_COOLDOWN_MS = 60_000;
+export const BOT_PINGPONG_MAX = 3;
+export const BOT_LOOP_COOLDOWN_MS = 15_000;
 // MAX_BOT_RESPONSES_PER_HUMAN: hard cap on bot-to-bot responses per channel between human messages.
-export const MAX_BOT_RESPONSES_PER_HUMAN = 2;
+export const MAX_BOT_RESPONSES_PER_HUMAN = 5;
 
 /**
  * Count consecutive bot-authored messages at the tail of a message list.
