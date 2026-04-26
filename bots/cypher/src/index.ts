@@ -566,17 +566,10 @@ async function main() {
     const fetched = await ch.messages.fetch({ limit: 30 });
     const fetchedMessages = [...fetched.values()].reverse();
 
-    // Loop guard: derive chain depth from fetched history so the check works across processes.
-    const chainDepth = computeChainDepth(
-      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
-      new Set(),
-    );
-    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
-
     // Lazy load STM from DB on first message to this channel (fail-silent), using already-fetched Discord history as fallback.
     await stmStore.ensureLoaded(message.channelId, async () => {
       return fetchedMessages.map(m => ({
-        role: (m.author.id === client.user?.id ? "assistant" : "user") as "user" | "assistant",
+        role: (!m.author.bot ? "user" : "assistant") as "user" | "assistant",
         content: m.content,
         authorName: m.author.username,
       }));
@@ -586,6 +579,13 @@ async function main() {
       ? `${attribution.frontMember} (via PK)`
       : message.author.username;
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
+
+    // Loop guard: derive chain depth from fetched history so the check works across processes.
+    const chainDepth = computeChainDepth(
+      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+      new Set(),
+    );
+    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
 
     if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 

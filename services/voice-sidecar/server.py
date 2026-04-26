@@ -79,7 +79,7 @@ class TTSRequest(BaseModel):
 
 
 @app.post("/tts")
-async def tts(req: TTSRequest):
+def tts(req: TTSRequest):
     import numpy as np
     import soundfile as sf
 
@@ -126,7 +126,7 @@ async def tts(req: TTSRequest):
 
 
 @app.post("/stt")
-async def stt(audio: UploadFile = File(...)):
+def stt(audio: UploadFile = File(...)):
     if _stt_model is None:
         raise HTTPException(status_code=503, detail="STT unavailable")
 
