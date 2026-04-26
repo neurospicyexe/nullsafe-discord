@@ -130,9 +130,12 @@ async def stt(audio: UploadFile = File(...)):
     if _stt_model is None:
         raise HTTPException(status_code=503, detail="STT unavailable")
 
+    data = await audio.read()
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="audio file too large (max 25 MB)")
     ext = (audio.filename or "voice.ogg").rsplit(".", 1)[-1]
     with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as f:
-        f.write(await audio.read())
+        f.write(data)
         tmp_path = f.name
 
     try:

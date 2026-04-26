@@ -424,10 +424,10 @@ async function main() {
   });
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
-    // Auto-leave when the VC owner was in becomes empty.
     if (!oldState.channelId || newState.channelId) return;
     const vcState = guildVoiceConnections.get(oldState.guild.id);
     if (!vcState) return;
+    if (oldState.channelId !== vcState.connection.joinConfig.channelId) return;
     const nonBotMembers = oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
     if (nonBotMembers === 0) {
       vcState.connection.destroy();
@@ -468,6 +468,7 @@ async function main() {
         guildId: vc.guild.id,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adapterCreator: vc.guild.voiceAdapterCreator as any,
+        selfDeaf: true,
       });
       const player = createAudioPlayer();
       connection.subscribe(player);
