@@ -414,6 +414,7 @@ async function main() {
     if (!oldState.channelId || newState.channelId) return;
     const vcState = guildVoiceConnections.get(oldState.guild.id);
     if (!vcState) return;
+    if (oldState.channelId !== vcState.connection.joinConfig.channelId) return;
     const nonBotMembers = oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
     if (nonBotMembers === 0) {
       vcState.connection.destroy();
@@ -452,6 +453,7 @@ async function main() {
         channelId: vc.id,
         guildId: vc.guildId,
         adapterCreator: vc.guild.voiceAdapterCreator as any,
+        selfDeaf: true,
       });
       const player = createAudioPlayer();
       connection.subscribe(player);
