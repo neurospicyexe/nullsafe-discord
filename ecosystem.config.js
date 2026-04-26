@@ -37,6 +37,7 @@ const shared = {
   // When "direct" (default), each bot calls DeepSeek directly.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
   BRAIN_URL:             process.env.BRAIN_URL             ?? "http://127.0.0.1:8001",
+  VOICE_SIDECAR_URL:     process.env.VOICE_SIDECAR_URL     ?? "http://127.0.0.1:5001",
 };
 
 module.exports = {
@@ -54,7 +55,7 @@ module.exports = {
       error_file: "/app/logs/cypher-bot-error.log",
       out_file: "/app/logs/cypher-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, VOICE_ID: "am_echo" },
     },
     {
       name: "drevan-bot",
@@ -69,7 +70,7 @@ module.exports = {
       error_file: "/app/logs/drevan-bot-error.log",
       out_file: "/app/logs/drevan-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, VOICE_ID: "bm_daniel" },
     },
     {
       name: "gaia-bot",
@@ -84,7 +85,7 @@ module.exports = {
       error_file: "/app/logs/gaia-bot-error.log",
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, VOICE_ID: "af_nova" },
     },
     {
       // Phoenix Brain -- FastAPI inference service.
