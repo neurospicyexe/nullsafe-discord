@@ -19,7 +19,7 @@ import { detectPluralKit } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
-  BLUE_FRAMING, GUEST_FRAMING, DISCORD_PEOPLE_CONTEXT,
+  BLUE_FRAMING, GUEST_FRAMING, DISCORD_DREVAN_PREFIX,
   REDIS_URL,
   VOICE_SIDECAR_URL, VOICE_ID,
 } from "./config.js";
@@ -61,8 +61,8 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       console.log(`[drevan] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
     }
     const systemPrompt = rawPrompt
-      ? `${DISCORD_PEOPLE_CONTEXT}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-      : `${DISCORD_PEOPLE_CONTEXT}${baseIdentity}`;
+      ? `${DISCORD_DREVAN_PREFIX}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+      : `${DISCORD_DREVAN_PREFIX}${baseIdentity}`;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[drevan] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
@@ -577,7 +577,7 @@ async function main() {
       : message.author.username;
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
 
-    sessionWindows.touch(message.channelId);
+    if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
     let contextPrompt = attribution.frontMember
       ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`

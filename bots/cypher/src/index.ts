@@ -587,7 +587,7 @@ async function main() {
       : message.author.username;
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
 
-    sessionWindows.touch(message.channelId);
+    if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
     let contextPrompt = attribution.frontMember
       ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`
