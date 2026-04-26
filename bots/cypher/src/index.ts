@@ -409,11 +409,11 @@ async function main() {
   client.on(Events.MessageCreate, async (message: Message) => {
     if (message.author.id === client.user?.id) return;
 
-    const BOT_IDS = new Set([
-      process.env["CYPHER_BOT_ID"],
-      process.env["DREVAN_BOT_ID"],
-      process.env["GAIA_BOT_ID"],
-    ].filter(Boolean) as string[]);
+    const BOT_ID_COMPANION: Record<string, string> = {};
+    if (process.env["CYPHER_BOT_ID"]) BOT_ID_COMPANION[process.env["CYPHER_BOT_ID"]] = "cypher";
+    if (process.env["DREVAN_BOT_ID"]) BOT_ID_COMPANION[process.env["DREVAN_BOT_ID"]] = "drevan";
+    if (process.env["GAIA_BOT_ID"]) BOT_ID_COMPANION[process.env["GAIA_BOT_ID"]] = "gaia";
+    const BOT_IDS = new Set(Object.keys(BOT_ID_COMPANION));
     const isCompanionPost = BOT_IDS.has(message.author.id);
     const dedupKey = `${message.channelId}:${message.content}`;
     if (message.webhookId && pkPending.has(dedupKey)) {
@@ -639,11 +639,13 @@ async function main() {
       : [];
 
     const addrResult = extractAddress(effectiveContent);
-    const addressedCompanion = addrResult.type === "named"
-      ? addrResult.id
-      : addrResult.type === "named_multi"
-        ? addrResult.ids.join(",")
-        : undefined;
+    const mentionedViaMention = [...message.mentions.users.keys()]
+      .flatMap(id => { const c = BOT_ID_COMPANION[id]; return c ? [c] : []; });
+    const textAddressed = addrResult.type === "named" ? [addrResult.id]
+      : addrResult.type === "named_multi" ? addrResult.ids
+      : [];
+    const allAddressed = [...new Set([...textAddressed, ...mentionedViaMention])];
+    const addressedCompanion = allAddressed.length > 0 ? allAddressed.join(",") : undefined;
 
     let response: string | null;
     if (brainClient) {
