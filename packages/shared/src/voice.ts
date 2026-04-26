@@ -37,7 +37,7 @@ export class VoiceClient {
     const res = await this._fetch(`${this.url}/stt`, {
       method: "POST",
       body: form,
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`STT failed: ${res.status}`);
     const data = (await res.json()) as { text: string; language: string };
