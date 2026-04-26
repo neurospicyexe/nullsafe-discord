@@ -32,40 +32,10 @@ import {
   type AudioPlayer,
 } from "@discordjs/voice";
 import { Readable } from "stream";
-import { VoiceClient } from "@nullsafe/shared";
+import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest } from "@nullsafe/shared";
 import { VOICE_SIDECAR_URL, VOICE_ID } from "./config.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-
-const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
-const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
-const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
-
-function shouldVoice(
-  content: string,
-  voiceInput: boolean,
-  channelEntry?: { voice?: boolean },
-): boolean {
-  if (channelEntry?.voice) return true;
-  if (voiceInput) return true;
-  const lower = content.toLowerCase();
-  return VOICE_KEYWORDS.some((k) => lower.includes(k));
-}
-
-function isInvitation(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    JOIN_KEYWORDS.some((k) => message.content.toLowerCase().includes(k)) &&
-    message.member?.voice?.channel != null
-  );
-}
-
-function isLeaveRequest(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    LEAVE_KEYWORDS.some((k) => message.content.toLowerCase().includes(k))
-  );
-}
 
 async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
   bootCtx: BootContext;
@@ -258,13 +228,13 @@ async function main() {
     : null;
 
   if (voiceClient) {
-    const healthy = await voiceClient.isHealthy();
-    console.log(`[cypher] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    voiceClient.isHealthy().then((healthy) => {
+      console.log(`[cypher] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    });
   } else {
     console.log("[cypher] voice sidecar: not configured");
   }
 
-  // One VC connection + player per guild. Companions manage their own VC state independently.
   const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
 
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
@@ -460,12 +430,11 @@ async function main() {
     // Signal conversation activity so autonomous worker skips runs while humans are present
     if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
 
-    // VC invitation / leave -- handled as commands, short-circuit before normal pipeline
     if (client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
       const vc = message.member.voice.channel;
       const connection = joinVoiceChannel({
         channelId: vc.id,
-        guildId: vc.guild.id,
+        guildId: vc.guildId,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adapterCreator: vc.guild.voiceAdapterCreator as any,
         selfDeaf: true,
@@ -511,7 +480,6 @@ async function main() {
     // Hard muzzle: only companion bots pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost) return;
 
-    // STT: if the message has an audio attachment, transcribe it and use as effectiveContent.
     let voiceInput = false;
     let effectiveContent = message.content;
 
@@ -521,7 +489,7 @@ async function main() {
       );
       if (audioAttachment) {
         try {
-          const audioRes = await fetch(audioAttachment.url);
+          const audioRes = await fetch(audioAttachment.url, { signal: AbortSignal.timeout(30_000) });
           const buffer = Buffer.from(await audioRes.arrayBuffer());
           effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
           voiceInput = true;

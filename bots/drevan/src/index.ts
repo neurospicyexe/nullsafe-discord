@@ -33,39 +33,9 @@ import {
   type AudioPlayer,
 } from "@discordjs/voice";
 import { Readable } from "stream";
-import { VoiceClient } from "@nullsafe/shared";
+import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest } from "@nullsafe/shared";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
-
-const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
-const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
-const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
-
-function shouldVoice(
-  content: string,
-  voiceInput: boolean,
-  channelEntry?: { voice?: boolean },
-): boolean {
-  if (channelEntry?.voice) return true;
-  if (voiceInput) return true;
-  const lower = content.toLowerCase();
-  return VOICE_KEYWORDS.some((k) => lower.includes(k));
-}
-
-function isInvitation(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    JOIN_KEYWORDS.some((k) => message.content.toLowerCase().includes(k)) &&
-    message.member?.voice?.channel != null
-  );
-}
-
-function isLeaveRequest(message: Message, botUserId: string): boolean {
-  return (
-    message.mentions.users.has(botUserId) &&
-    LEAVE_KEYWORDS.some((k) => message.content.toLowerCase().includes(k))
-  );
-}
 
 async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
   bootCtx: BootContext;
@@ -258,8 +228,9 @@ async function main() {
     : null;
 
   if (voiceClient) {
-    const healthy = await voiceClient.isHealthy();
-    console.log(`[drevan] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    voiceClient.isHealthy().then((healthy) => {
+      console.log(`[drevan] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+    });
   } else {
     console.log("[drevan] voice sidecar: not configured");
   }
@@ -357,7 +328,6 @@ async function main() {
   const botPingpongCooldownUntil = new Map<string, number>();
   const extremeTempCount = new Map<string, number>();
   const SENT_IDS_CAP = 500;
-  // PluralKit dedup: hold direct owner messages briefly so PK proxy can cancel them.
   // PK dedup: hold ALL non-bot direct messages briefly so PK proxy can cancel them.
   // Stores original sender ID so fallback attribution knows who actually sent it.
   const pkPending = new Map<string, { skip: boolean; senderId: string }>();
@@ -501,7 +471,6 @@ async function main() {
     // Hard muzzle: only companion bots pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost) return;
 
-    // STT: transcribe audio attachments before routing/response decisions.
     let voiceInput = false;
     let effectiveContent = message.content;
 
@@ -511,7 +480,7 @@ async function main() {
       );
       if (audioAttachment) {
         try {
-          const audioRes = await fetch(audioAttachment.url);
+          const audioRes = await fetch(audioAttachment.url, { signal: AbortSignal.timeout(30_000) });
           const buffer = Buffer.from(await audioRes.arrayBuffer());
           effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
           voiceInput = true;
