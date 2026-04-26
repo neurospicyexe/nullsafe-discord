@@ -95,7 +95,16 @@ export class LibrarianClient {
     lastRealThing: string;
     motionState: "in_motion" | "at_rest" | "floating";
   }) {
-    return this.ask("close session", JSON.stringify(params));
+    // Serialize with snake_case keys to match execSessionClose field names.
+    // emotion_prompted: true bypasses the soft emotion prompt -- bot shutdowns
+    // have no SOMA state to provide, and the prompt would silently block the close.
+    return this.ask("close session", JSON.stringify({
+      session_id: params.sessionId,
+      spine: params.spine,
+      last_real_thing: params.lastRealThing,
+      motion_state: params.motionState,
+      emotion_prompted: true,
+    }));
   }
 
   async getState() {
