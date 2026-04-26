@@ -55,3 +55,35 @@ export class VoiceClient {
     }
   }
 }
+
+import { type Message } from "discord.js";
+
+export const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
+export const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
+export const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
+
+export function shouldVoice(
+  content: string,
+  voiceInput: boolean,
+  channelEntry?: { voice?: boolean },
+): boolean {
+  if (channelEntry?.voice) return true;
+  if (voiceInput) return true;
+  const lower = content.toLowerCase();
+  return VOICE_KEYWORDS.some((k) => lower.includes(k));
+}
+
+export function isInvitation(message: Message, botUserId: string): boolean {
+  return (
+    message.mentions.users.has(botUserId) &&
+    JOIN_KEYWORDS.some((k) => message.content.toLowerCase().includes(k)) &&
+    message.member?.voice?.channel != null
+  );
+}
+
+export function isLeaveRequest(message: Message, botUserId: string): boolean {
+  return (
+    message.mentions.users.has(botUserId) &&
+    LEAVE_KEYWORDS.some((k) => message.content.toLowerCase().includes(k))
+  );
+}
