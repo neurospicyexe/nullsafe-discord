@@ -34,5 +34,15 @@
   "1486217438105436260": {
     "modes": ["autonomous", "inter_companion"],
     "companions": ["drevan", "gaia", "cypher"]
+  },
+  "1497789177797017742": {
+    "modes": ["owner_only"],
+    "companions": ["drevan", "gaia", "cypher"],
+    "voice": true
+  },
+  "1497789114517553193": {
+    "modes": ["owner_only"],
+    "companions": ["drevan", "gaia", "cypher"],
+    "voice": true
   }
 }
