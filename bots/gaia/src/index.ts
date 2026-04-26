@@ -618,7 +618,11 @@ async function main() {
       : [];
 
     const addrResult = extractAddress(effectiveContent);
-    const addressedCompanion = addrResult.type === "named" ? addrResult.id : undefined;
+    const addressedCompanion = addrResult.type === "named"
+      ? addrResult.id
+      : addrResult.type === "named_multi"
+        ? addrResult.ids.join(",")
+        : undefined;
 
     let response: string | null;
     if (brainClient) {
