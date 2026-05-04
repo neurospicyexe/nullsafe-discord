@@ -18,6 +18,9 @@ export function loadBotConfig(): BotConfig {
     halsethSecret: required("HALSETH_SECRET"),
     deepseekApiKey: required("DEEPSEEK_API_KEY"),
     ownerDiscordId: required("OWNER_DISCORD_ID"),
+    // C.5: configurable owner display name. Optional -- defaults to "Raziel"
+    // for backward compat. Set OWNER_DISPLAY_NAME=Crash on VPS to use Crash.
+    ownerDisplayName: process.env["OWNER_DISPLAY_NAME"]?.trim().replace(/^=+/, "") || "Raziel",
     pluralkitSystemId: required("PLURALKIT_SYSTEM_ID"),
     channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {

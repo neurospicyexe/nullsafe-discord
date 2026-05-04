@@ -474,8 +474,8 @@ async function main() {
     const channelEntry = channelConfig[message.channelId];
     const pkCtx = detectPluralKit(message);
     const author = pkCtx.isPluralKit
-      ? (pkCtx.memberName ?? "Raziel")
-      : (attribution.isOwner ? "Raziel" : message.author.username);
+      ? (pkCtx.memberName ?? cfg.ownerDisplayName)
+      : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
     // Hard muzzle: only companion bots pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost) return;
@@ -577,7 +577,7 @@ async function main() {
 
     const memberLabel = attribution.frontMember
       ? `${attribution.frontMember} (via PK)`
-      : message.author.username;
+      : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
 
     // Loop guard: derive chain depth from fetched history so the check works across processes.

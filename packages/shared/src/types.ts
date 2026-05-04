@@ -37,6 +37,10 @@ export interface BotConfig {
   halsethSecret: string;
   deepseekApiKey: string;
   ownerDiscordId: string;
+  /** Display name for the owner in author labels and PluralKit fallbacks.
+   * Defaults to "Raziel" when OWNER_DISPLAY_NAME env var is unset (preserves
+   * pre-C.5 behavior). Set OWNER_DISPLAY_NAME=Crash on the VPS to use Crash. */
+  ownerDisplayName: string;
   pluralkitSystemId: string;
   channelConfigUrl?: string;
   inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
