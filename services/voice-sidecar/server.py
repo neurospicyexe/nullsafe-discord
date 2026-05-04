@@ -126,7 +126,7 @@ def tts(req: TTSRequest):
 
 
 @app.post("/stt")
-def stt(audio: UploadFile = File(...)):
+async def stt(audio: UploadFile = File(...)):
     if _stt_model is None:
         raise HTTPException(status_code=503, detail="STT unavailable")
 
