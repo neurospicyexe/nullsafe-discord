@@ -1,5 +1,5 @@
 import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
-import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker, ActiveThread } from "./types.js";
+import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker, ActiveThread, PeerActivity } from "./types.js";
 
 async function hFetch(path: string, method = "GET", body?: unknown): Promise<unknown> {
   const res = await fetch(`${HALSETH_URL}${path}`, {
@@ -171,19 +171,29 @@ export async function writeJournalEntry(entry: GrowthJournalEntry): Promise<stri
     tags: entry.tags ?? [],
     ...(entry.run_id ? { run_id: entry.run_id } : {}),
     ...(entry.thread_id ? { thread_id: entry.thread_id } : {}),
+    ...(entry.prehended_ids?.length ? { prehended_ids: entry.prehended_ids } : {}),
+    ...(entry.evidence?.length      ? { evidence: entry.evidence }           : {}),
+    ...(entry.novelty               ? { novelty: entry.novelty }             : {}),
   }) as { id: string };
   return r.id;
 }
 
-export async function writePattern(pattern: GrowthPattern): Promise<string> {
+/**
+ * Returns { id, action } where action is 'insert' (new row) or 'upsert'
+ * (merged into existing similar pattern -- strength incremented, evidence
+ * accumulated). The returned id always points at the canonical row to
+ * reference downstream.
+ */
+export async function writePattern(pattern: GrowthPattern): Promise<{ id: string; action: "insert" | "upsert" }> {
   const r = await hFetch("/mind/growth/patterns", "POST", {
     companion_id: pattern.companion_id,
     pattern_text: pattern.pattern_text,
     evidence: pattern.evidence ?? [],
     strength: pattern.strength ?? 1,
     ...(pattern.run_id ? { run_id: pattern.run_id } : {}),
-  }) as { id: string };
-  return r.id;
+    ...(pattern.prehended_ids?.length ? { prehended_ids: pattern.prehended_ids } : {}),
+  }) as { id: string; action?: "insert" | "upsert" };
+  return { id: r.id, action: r.action ?? "insert" };
 }
 
 export async function writeMarker(marker: GrowthMarker): Promise<string> {
@@ -194,8 +204,40 @@ export async function writeMarker(marker: GrowthMarker): Promise<string> {
     related_pattern_id: marker.related_pattern_id,
     ...(marker.run_id ? { run_id: marker.run_id } : {}),
     ...(marker.thread_id ? { thread_id: marker.thread_id } : {}),
+    ...(marker.prehended_ids?.length ? { prehended_ids: marker.prehended_ids } : {}),
   }) as { id: string };
   return r.id;
+}
+
+// ---------------------------------------------------------------------------
+// Triad / peer activity (Migration 0062)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pulls the OTHER two companions' recent autonomous activity from Halseth.
+ * Synthesize injects peer_summary into the prompt so the model can prehend
+ * the triad's collective movement, not just its own.
+ *
+ * Non-fatal: a null return means orient continues with no peer context.
+ */
+export async function getPeerActivity(
+  companionId: string,
+  opts?: { journal?: number; patterns?: number; markers?: number },
+): Promise<PeerActivity | null> {
+  const params = new URLSearchParams();
+  if (opts?.journal)  params.set("journal",  String(opts.journal));
+  if (opts?.patterns) params.set("patterns", String(opts.patterns));
+  if (opts?.markers)  params.set("markers",  String(opts.markers));
+  const qs = params.toString();
+  try {
+    const r = await hFetch(
+      `/mind/triad/recent/${encodeURIComponent(companionId)}${qs ? `?${qs}` : ""}`,
+    ) as PeerActivity;
+    return r;
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getPeerActivity failed (non-fatal):`, e);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

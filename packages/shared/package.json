@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --passWithNoTests"
+    "test": "node --experimental-vm-modules ../../node_modules/jest/bin/jest.js --passWithNoTests",
+    "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "discord.js": "^14.0.0",

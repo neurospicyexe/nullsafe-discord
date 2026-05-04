@@ -55,8 +55,13 @@ export async function runExplore(ctx: PipelineContext): Promise<void> {
   }
 
   ctx.searchResults = allResults;
+  // Snapshot evidence for synthesize: short quote + url per top result.
+  ctx.explorationEvidence = allResults.slice(0, 12).map(r => ({
+    quote: r.content.slice(0, 280).trim(),
+    source_url: r.url,
+  }));
   await appendLog(ctx.runId, "explore:search-complete",
-    `queries=${successCount}/${allQueries.length} unique_results=${allResults.length}`);
+    `queries=${successCount}/${allQueries.length} unique_results=${allResults.length} evidence=${ctx.explorationEvidence.length}`);
 
   if (allResults.length === 0 && successCount === 0) {
     ctx.explorationSummary = null;

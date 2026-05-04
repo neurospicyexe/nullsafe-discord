@@ -1,6 +1,6 @@
 import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
 import { loadIdentity } from "../identity-loader.js";
-import { appendLog, getActiveThreads } from "../halseth-client.js";
+import { appendLog, getActiveThreads, getPeerActivity } from "../halseth-client.js";
 import { HALSETH_URL, HALSETH_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
 
@@ -22,13 +22,19 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     companionId: ctx.companionId,
   });
 
-  // Fetch botOrient and active threads in parallel
-  const [orient, activeThreads] = await Promise.all([
+  // Fetch botOrient + active threads + peer activity in parallel.
+  // peerActivity is the triad layer: the OTHER two companions' last 5
+  // journal entries, 3 patterns, 3 markers. Synthesize/reflect prompts
+  // inject peer_summary so each companion is prehending the others'
+  // becomings -- not exploring in isolation.
+  const [orient, activeThreads, peerActivity] = await Promise.all([
     librarian.botOrient().catch(() => null),
     getActiveThreads(ctx.companionId),
+    getPeerActivity(ctx.companionId, { journal: 5, patterns: 3, markers: 3 }),
   ]);
 
   ctx.activeThreads = activeThreads;
+  ctx.peerActivity = peerActivity;
 
   if (orient) {
     ctx.orientSummary = formatRecentContext(orient);
@@ -70,11 +76,13 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     ctx.pressureFlags = [];
   }
 
+  const peerSummaryLen = ctx.peerActivity?.peer_summary?.length ?? 0;
   await appendLog(
     ctx.runId,
     "orient:complete",
     `identity=${ctx.identityText.length}chars orient=${ctx.orientSummary.length}chars ` +
     `growth=${ctx.recentGrowth.length} dreams=${ctx.unexaminedDreamIds.length} ` +
-    `loops=${ctx.openLoops.length} pressure=${ctx.pressureFlags.length} threads=${ctx.activeThreads.length}`,
+    `loops=${ctx.openLoops.length} pressure=${ctx.pressureFlags.length} threads=${ctx.activeThreads.length} ` +
+    `peer_summary=${peerSummaryLen}chars`,
   );
 }

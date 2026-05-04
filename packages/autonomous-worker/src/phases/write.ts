@@ -74,14 +74,17 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   // Makes this exploration retrievable in future Librarian semantic searches.
   await ingestToSecondBrain(ctx.companionId, seedTopic, ctx.journalEntry.content);
 
-  // Write any patterns identified during synthesis
+  // Write any patterns identified during synthesis/reflect.
+  // writePattern returns { id, action } where action is 'insert' (new row) or
+  // 'upsert' (merged into similar existing pattern -- strength incremented).
+  // We don't increment artifactsCreated for upserts since no new row was created,
+  // but we DO log the action so the run log shows pattern accumulation distinctly.
   for (const pattern of ctx.newPatterns) {
     try {
-      await writePattern(pattern);
-      ctx.artifactsCreated += 1;
-      await appendLog(ctx.runId, "write:pattern-ok", pattern.pattern_text.slice(0, 60));
+      const result = await writePattern(pattern);
+      if (result.action === "insert") ctx.artifactsCreated += 1;
+      await appendLog(ctx.runId, `write:pattern-${result.action}`, pattern.pattern_text.slice(0, 60));
     } catch (e) {
-      // Patterns are secondary -- log and continue
       console.warn(`[${ctx.companionId}/write] Pattern write failed:`, e);
       await appendLog(ctx.runId, "write:pattern-error", String(e));
     }
