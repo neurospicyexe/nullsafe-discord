@@ -6,6 +6,18 @@ dist/
 !.env.schema
 *.local
 
+# Python virtualenvs (voice-sidecar etc.)
+venv/
+.venv/
+**/venv/
+**/.venv/
+
+# Editor crash backups (nano *.save, vim *.swp etc.)
+*.save
+*.save.*
+*.swp
+*.swo
+
 # Claude Code project settings and memory (local only)
 .claude/
 
