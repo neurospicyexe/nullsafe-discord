@@ -20,6 +20,11 @@ venv/
 
 # Claude Code project settings and memory (local only)
 .claude/
+.serena/
+
+# Stale TS build artifacts in source dirs (compiled output belongs in dist/)
+bots/*/src/**/*.js
+packages/*/src/**/*.js
 
 # Identity caches (contain companion system prompts -- never commit)
 **/identity-cache*.json
