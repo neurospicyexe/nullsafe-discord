@@ -248,13 +248,16 @@ export class LibrarianClient {
     ground_threads: string[];
     ground_handoff: string | null;
     rag_excerpts: string[];
+    history_excerpts?: string[];
     identity_anchor?: string | null;
     active_tensions?: string[];
     relational_state_owner?: string[];
     incoming_notes?: { from: string; content: string }[];
+    sibling_lanes?: Array<{ companion_id: string; lane_spine: string; motion_state: string }>;
     recent_growth?: { type: string; content: string }[];
     active_patterns?: string[];
     pending_seeds?: string[];
+    unaccepted_growth?: number;
     active_conclusions?: Array<{
       // Renamed from conclusion_text (Halseth wire format) -- text is Discord-layer only
       text: string;
@@ -277,13 +280,16 @@ export class LibrarianClient {
         ground_threads?: string[];
         ground_handoff?: string | null;
         rag_excerpts?: string[];
+        history_excerpts?: string[];
         identity_anchor?: string | null;
         active_tensions?: string[];
         relational_state_owner?: string[];
         incoming_notes?: { from: string; content: string }[];
+        sibling_lanes?: Array<{ companion_id: string; lane_spine: string; motion_state: string }>;
         recent_growth?: { type: string; content: string }[];
         active_patterns?: string[];
         pending_seeds?: string[];
+        unaccepted_growth?: number;
         active_conclusions?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
         flagged_beliefs?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
       } | undefined;
@@ -293,13 +299,16 @@ export class LibrarianClient {
         ground_threads: Array.isArray(data.ground_threads) ? data.ground_threads : [],
         ground_handoff: data.ground_handoff ?? null,
         rag_excerpts: Array.isArray(data.rag_excerpts) ? data.rag_excerpts : [],
+        history_excerpts: Array.isArray(data.history_excerpts) ? data.history_excerpts : [],
         identity_anchor: data.identity_anchor ?? null,
         active_tensions: Array.isArray(data.active_tensions) ? data.active_tensions : [],
         relational_state_owner: Array.isArray(data.relational_state_owner) ? data.relational_state_owner : [],
         incoming_notes: Array.isArray(data.incoming_notes) ? data.incoming_notes : [],
+        sibling_lanes: Array.isArray(data.sibling_lanes) ? data.sibling_lanes : [],
         recent_growth: Array.isArray(data.recent_growth) ? data.recent_growth : [],
         active_patterns: Array.isArray(data.active_patterns) ? data.active_patterns : [],
         pending_seeds: Array.isArray(data.pending_seeds) ? data.pending_seeds : [],
+        unaccepted_growth: typeof data.unaccepted_growth === "number" ? data.unaccepted_growth : 0,
         active_conclusions: (data.active_conclusions ?? []).map(c => ({
           text: c.conclusion_text,
           belief_type: c.belief_type,
@@ -458,13 +467,16 @@ export function formatRecentContext(orient: {
   ground_threads: string[];
   ground_handoff: string | null;
   rag_excerpts: string[];
+  history_excerpts?: string[];
   identity_anchor?: string | null;
   active_tensions?: string[];
   relational_state_owner?: string[];
   incoming_notes?: { from: string; content: string }[];
+  sibling_lanes?: Array<{ companion_id: string; lane_spine: string; motion_state: string }>;
   recent_growth?: { type: string; content: string }[];
   active_patterns?: string[];
   pending_seeds?: string[];
+  unaccepted_growth?: number;
   active_conclusions?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
   flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
 } | null): string {
@@ -483,6 +495,9 @@ export function formatRecentContext(orient: {
   if (orient.rag_excerpts.length > 0) {
     parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 300)}`);
   }
+  if (orient.history_excerpts?.length) {
+    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 300)}`);
+  }
   if (orient.identity_anchor) {
     parts.push(`[Anchor] ${orient.identity_anchor}`);
   }
@@ -496,6 +511,12 @@ export function formatRecentContext(orient: {
     const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");
     parts.push(`[Incoming Notes]\n${notes}`);
   }
+  if (orient.sibling_lanes?.length) {
+    const laneLines = orient.sibling_lanes.map(
+      l => `${l.companion_id} [${l.motion_state}]: ${l.lane_spine}`
+    ).join("\n");
+    parts.push(`[Sibling Lanes]\n${laneLines}`);
+  }
   if (orient.recent_growth?.length) {
     const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 400);
     parts.push(`## Recent growth\n${entries}`);
@@ -505,6 +526,9 @@ export function formatRecentContext(orient: {
   }
   if (orient.pending_seeds?.length) {
     parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
+  }
+  if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
+    parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);
   }
   // Worldview block (~200 token cap)
   if (orient.active_conclusions && orient.active_conclusions.length > 0) {
