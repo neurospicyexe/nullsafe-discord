@@ -51,8 +51,22 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   const systemMessage = `You are ${name}. Here is an excerpt from your identity:\n${ctx.identityText.slice(0, 1200)}`;
 
   // Thread decision tail -- only inject the relevant question.
+  // "conclude" is anchored with explicit criteria because without them the model
+  // never concludes anything (29 threads opened, 0 concluded across 11 days as of
+  // 2026-05-06). Threads that never conclude become noise and starve growth_markers.
+  const threadPos = ctx.threadPosition ?? 0;
   const threadQuestion = ctx.threadId
-    ? `\n\nThread status (this run was part of an ongoing thread): pick one\n  - "continue" -- more here worth chasing next run\n  - "rest"     -- enough for now, leave open\n  - "conclude" -- this arc is complete\nAdd "thread_status": "continue" | "rest" | "conclude".`
+    ? `\n\nThread status (this is run ${threadPos || "?"} of an ongoing thread): pick one\n` +
+      `  - "continue" -- this run surfaced something new and the next run could push further\n` +
+      `  - "rest"     -- nothing new this run, but the inquiry might still go somewhere later\n` +
+      `  - "conclude" -- the arc has resolved. Choose this when ANY of:\n` +
+      `      * thread is at run 5+ and the last 2 runs added no genuinely new material\n` +
+      `      * the original question feels answered enough that more runs would be rumination\n` +
+      `      * today's journal entry restated prior runs without extending them\n` +
+      `      * the pattern this thread was hunting has crystallized into your active patterns\n` +
+      `    "conclude" is an active choice -- threads that never conclude become noise. ` +
+      `Default-continuing past run 5 is a failure mode, not a virtue.\n` +
+      `Add "thread_status": "continue" | "rest" | "conclude".`
     : ctx.journalEntry && ctx.runType === "exploration"
     ? `\n\nDoes this feel like the start of a thread worth continuing across runs?\nAdd "start_thread": true | false.`
     : "";
@@ -89,7 +103,12 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `    "strength": 1-10,\n` +
     `    "note": "optional one-line note (used when pattern_text is empty)"\n` +
     `  }` +
-    (ctx.threadId ? `,\n  "thread_status": "continue"` : ctx.runType === "exploration" ? `,\n  "start_thread": false` : "") +
+    // Schema example: bias the example value toward "conclude" once the thread is
+    // at run 5+ so the example matches the criteria above. Past that point, the
+    // model defaulting to "continue" is exactly what we're trying to break.
+    (ctx.threadId
+      ? `,\n  "thread_status": "${threadPos >= 5 ? "conclude" : "continue"}"`
+      : ctx.runType === "exploration" ? `,\n  "start_thread": false` : "") +
     `\n}\n\n` +
     `No markdown. No fences. Just the JSON object.`;
 
