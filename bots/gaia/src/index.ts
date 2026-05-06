@@ -25,7 +25,7 @@ import {
   type AudioPlayer,
 } from "@discordjs/voice";
 import { Readable } from "stream";
-import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest } from "@nullsafe/shared";
+import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
@@ -470,6 +470,7 @@ async function main() {
           const buffer = Buffer.from(await audioRes.arrayBuffer());
           effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
           voiceInput = true;
+          markVoiceUsed(message.channelId);
           console.log(`[gaia] STT: "${effectiveContent.slice(0, 80)}"`);
         } catch (err) {
           console.error("[gaia] STT failed:", err);
@@ -676,10 +677,11 @@ async function main() {
     const MAX_TTS = 2000;
     let sent: Message;
 
-    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry)) {
+    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
         const audioBuffer = await voiceClient.synthesize(ttsText);
+        markVoiceUsed(message.channelId);
         const vcState = guildVoiceConnections.get(message.guildId ?? "");
 
         if (vcState && vcState.connection.state.status !== VoiceConnectionStatus.Destroyed) {
