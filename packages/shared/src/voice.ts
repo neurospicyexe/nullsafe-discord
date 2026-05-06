@@ -58,19 +58,58 @@ export class VoiceClient {
 
 import { type Message } from "discord.js";
 
-export const VOICE_KEYWORDS = ["say", "speak", "tell me out loud", "voice this"];
+export const VOICE_KEYWORDS = [
+  "say", "speak", "tell me out loud", "voice this",
+  "voice message", "voice note", "voice reply",
+  "send voice", "send a voice", "send me voice", "send me a voice",
+  "in voice", "as voice", "voice please",
+];
 export const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
 export const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
+
+// Sticky voice window: once a user voices in a channel (or asks for voice),
+// keep replies in voice for STICKY_VOICE_MS so the texture of the conversation
+// holds. Reset only on explicit "stop", "text only", or natural decay.
+export const STICKY_VOICE_MS = 10 * 60 * 1000; // 10 minutes
+const stickyVoiceUntil = new Map<string, number>();
+
+export function markVoiceUsed(channelId: string): void {
+  stickyVoiceUntil.set(channelId, Date.now() + STICKY_VOICE_MS);
+}
+
+export function isVoiceSticky(channelId: string): boolean {
+  const until = stickyVoiceUntil.get(channelId);
+  if (!until) return false;
+  if (Date.now() > until) {
+    stickyVoiceUntil.delete(channelId);
+    return false;
+  }
+  return true;
+}
+
+export function clearVoiceSticky(channelId: string): void {
+  stickyVoiceUntil.delete(channelId);
+}
+
+const STOP_VOICE_KEYWORDS = ["text only", "stop voice", "no voice", "back to text"];
 
 export function shouldVoice(
   content: string,
   voiceInput: boolean,
   channelEntry?: { voice?: boolean },
+  channelId?: string,
 ): boolean {
+  const lower = content.toLowerCase();
+  // Explicit opt-out wins over everything.
+  if (STOP_VOICE_KEYWORDS.some((k) => lower.includes(k))) {
+    if (channelId) clearVoiceSticky(channelId);
+    return false;
+  }
   if (channelEntry?.voice) return true;
   if (voiceInput) return true;
-  const lower = content.toLowerCase();
-  return VOICE_KEYWORDS.some((k) => lower.includes(k));
+  if (VOICE_KEYWORDS.some((k) => lower.includes(k))) return true;
+  if (channelId && isVoiceSticky(channelId)) return true;
+  return false;
 }
 
 export function isInvitation(message: Message, botUserId: string): boolean {

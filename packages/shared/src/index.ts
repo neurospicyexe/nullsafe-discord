@@ -16,5 +16,6 @@ export {
   VoiceClient, type VoiceClientConfig,
   VOICE_KEYWORDS, JOIN_KEYWORDS, LEAVE_KEYWORDS,
   shouldVoice, isInvitation, isLeaveRequest,
+  markVoiceUsed, isVoiceSticky, clearVoiceSticky, STICKY_VOICE_MS,
 } from "./voice.js";
 export * from "./response-quality.js";
