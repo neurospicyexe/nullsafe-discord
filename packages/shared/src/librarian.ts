@@ -186,7 +186,7 @@ export class LibrarianClient {
   async searchForMessage(query: string): Promise<string | null> {
     try {
       const url = new URL(`${this.url}/mind/search`);
-      url.searchParams.set("query", query.slice(0, 500));
+      url.searchParams.set("query", query.slice(0, 800));
       url.searchParams.set("agent_id", this.companionId);
       const res = await this._fetch(url.toString(), {
         headers: { "Authorization": `Bearer ${this.secret}` },
@@ -459,7 +459,8 @@ export async function isMyAutonomousTurn(
 
 /**
  * Format a botOrient result into a compact recentContext block for system prompts.
- * Hard cap: ~500 tokens (~2000 chars). Synthesis summary truncated first if over budget.
+ * Hard cap: ~1000 tokens (~4000 chars). Per-field caps prevent any single field from
+ * consuming the budget and squeezing out synthesis, handoff, or worldview.
  * Returns empty string if orient is null or all fields are empty.
  */
 export function formatRecentContext(orient: {
@@ -484,19 +485,19 @@ export function formatRecentContext(orient: {
   const parts: string[] = [];
 
   if (orient.synthesis_summary) {
-    parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 600)}`);
+    parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 1200)}`);
   }
   if (orient.ground_handoff) {
-    parts.push(`## Last handoff\n${orient.ground_handoff.slice(0, 200)}`);
+    parts.push(`## Last handoff\n${orient.ground_handoff.slice(0, 400)}`);
   }
   if (orient.ground_threads.length > 0) {
-    parts.push(`## Open threads\n${orient.ground_threads.join(" / ")}`);
+    parts.push(`## Open threads\n${orient.ground_threads.join(" / ").slice(0, 400)}`);
   }
   if (orient.rag_excerpts.length > 0) {
-    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 300)}`);
+    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
   }
   if (orient.history_excerpts?.length) {
-    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 300)}`);
+    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 600)}`);
   }
   if (orient.identity_anchor) {
     parts.push(`[Anchor] ${orient.identity_anchor}`);
@@ -518,7 +519,7 @@ export function formatRecentContext(orient: {
     parts.push(`[Sibling Lanes]\n${laneLines}`);
   }
   if (orient.recent_growth?.length) {
-    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 400);
+    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 800);
     parts.push(`## Recent growth\n${entries}`);
   }
   if (orient.active_patterns?.length) {
@@ -547,7 +548,7 @@ export function formatRecentContext(orient: {
   }
 
   const block = parts.join("\n\n");
-  return block.slice(0, 2000);
+  return block.slice(0, 4000);
 }
 
 function sleep(ms: number) {

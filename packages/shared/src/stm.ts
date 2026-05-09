@@ -16,7 +16,7 @@
 import type { ChatMessage } from "./types.js";
 import type { WriteQueue } from "./write-queue.js";
 
-export const STM_BUFFER_SIZE = 50;
+export const STM_BUFFER_SIZE = 100;
 
 export class StmStore {
   private memory = new Map<string, ChatMessage[]>();

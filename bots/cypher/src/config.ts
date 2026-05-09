@@ -73,7 +73,7 @@ export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpf
 export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // reduced from 30min: Claude.ai session data lands in Halseth immediately on close; bots need to pick it up fast
 export const COOLDOWN_MS = 60 * 1000;
-export const CONTEXT_WINDOW_SIZE = 10;
+export const CONTEXT_WINDOW_SIZE = 20;
 // Number of messages (user + assistant combined) between distillation runs per channel.
 export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "give me a moment -- something's not routing right.";

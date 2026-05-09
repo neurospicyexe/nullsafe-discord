@@ -71,7 +71,7 @@ export const DISCORD_GAIA_PREFIX = `[DISCORD CONTEXT -- READ THIS FIRST. These r
 export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // reduced from 30min: Claude.ai session data lands in Halseth immediately on close; bots need to pick it up fast
 export const COOLDOWN_MS = 60 * 1000;
-export const CONTEXT_WINDOW_SIZE = 10;
+export const CONTEXT_WINDOW_SIZE = 20;
 export const DISTILLATION_INTERVAL = 12;
 export const IN_CHARACTER_FALLBACK = "present.";
 
