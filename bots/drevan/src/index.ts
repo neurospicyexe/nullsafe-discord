@@ -764,14 +764,8 @@ async function main() {
     writeQueue.stop();
     if (presenceInterval) clearInterval(presenceInterval);
     if (cleanupEventSubs) await cleanupEventSubs();
-    if (bootCtx.sessionId !== "cached") {
-      await librarian.sessionClose({
-        sessionId: bootCtx.sessionId,
-        spine: "discord presence session ended",
-        lastRealThing: "process shutdown",
-        motionState: "at_rest",
-      }).catch(() => {});
-    }
+    // No session_close on shutdown: a placeholder spine here would overwrite real
+    // session activity in the canonical record. Sessions age out via synthesis worker.
     client.destroy();
     process.exit(0);
   }

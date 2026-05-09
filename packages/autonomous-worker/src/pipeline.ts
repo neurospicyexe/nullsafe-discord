@@ -79,11 +79,13 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     // Phase 4: Synthesize growth journal entry in companion voice
     await runSynthesize(ctx);
 
-    // Phase 5: Write artifacts to Halseth
-    await runWrite(ctx);
-
-    // Phase 6: Reflection + new seed generation (non-fatal)
+    // Phase 5: Reflection + new seed generation -- pushes patterns/markers into ctx
+    // before write iterates them. Reflect doesn't need journalEntryId; write stamps
+    // run_id on patterns/markers after the fact.
     await runReflect(ctx);
+
+    // Phase 6: Write artifacts to Halseth (journal + patterns + markers)
+    await runWrite(ctx);
 
     // Phase 7: SOMA state update (non-fatal) -- close the read/write gap
     await runSomaUpdate(ctx);
