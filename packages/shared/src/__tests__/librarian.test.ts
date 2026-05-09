@@ -143,4 +143,43 @@ describe("formatRecentContext()", () => {
   it("returns empty string for null input", () => {
     expect(formatRecentContext(null)).toBe("");
   });
+
+  // D1: NaN-safe confidence rendering in worldview block.
+  // Same regression class as April 26 orient NaN. If upstream emits a non-finite
+  // confidence (null, undefined, NaN, string), render '?' instead of crashing or
+  // emitting literal 'NaN' into the prompt the companion consumes.
+  describe("formatRecentContext worldview confidence (NaN-safe)", () => {
+    const baseOrient = {
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+    };
+
+    it("renders finite confidence to 2 decimals", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        active_conclusions: [{ text: "x", belief_type: "fact", confidence: 0.7321 }],
+      });
+      expect(block).toContain("(0.73)");
+    });
+
+    it("does not emit NaN when confidence is non-finite", () => {
+      for (const bad of [null, undefined, "high", NaN]) {
+        const block = formatRecentContext({
+          ...baseOrient,
+          active_conclusions: [{ text: "x", belief_type: "fact", confidence: bad as unknown as number }],
+        });
+        expect(block).not.toMatch(/NaN/);
+        expect(block).toContain("(?)");
+      }
+    });
+
+    it("does not throw when confidence is undefined", () => {
+      expect(() => formatRecentContext({
+        ...baseOrient,
+        active_conclusions: [{ text: "x", belief_type: "fact", confidence: undefined as unknown as number }],
+      })).not.toThrow();
+    });
+  });
 });

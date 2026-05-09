@@ -535,7 +535,13 @@ export function formatRecentContext(orient: {
     const conclusionLines = orient.active_conclusions.map(c => {
       const subjectTag = c.subject ? ` (${c.subject})` : '';
       const flagged = orient.flagged_beliefs?.some(f => f.text === c.text) ? '[?] ' : '';
-      return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${c.confidence.toFixed(2)})`;
+      // NaN-safe: only render when confidence is an actual finite number.
+      // Null / undefined / strings / NaN all collapse to '?' rather than '0.00'
+      // or 'NaN' literals leaking into the prompt the companion consumes.
+      const confStr = (typeof c.confidence === 'number' && Number.isFinite(c.confidence))
+        ? c.confidence.toFixed(2)
+        : '?';
+      return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${confStr})`;
     });
     parts.push(`[Worldview]\n${conclusionLines.join('\n')}`);
   }
