@@ -76,6 +76,8 @@ export const COOLDOWN_MS = 60 * 1000;
 export const CONTEXT_WINDOW_SIZE = 20;
 // Number of messages (user + assistant combined) between distillation runs per channel.
 export const DISTILLATION_INTERVAL = 12;
+// Pulse: write raw recent turns to wm_note every 4 conversation turns (2 messages each).
+export const PULSE_INTERVAL = 8;
 export const IN_CHARACTER_FALLBACK = "give me a moment -- something's not routing right.";
 
 // Injected into contextPrompt only when audit mode is explicitly invoked.

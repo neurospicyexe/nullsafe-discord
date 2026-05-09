@@ -75,6 +75,8 @@ export const SOMA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // reduced from 30min: Cl
 export const COOLDOWN_MS = 60 * 1000;
 export const CONTEXT_WINDOW_SIZE = 20;
 export const DISTILLATION_INTERVAL = 12;
+// Pulse: write raw recent turns to wm_note every 4 conversation turns (2 messages each).
+export const PULSE_INTERVAL = 8;
 export const IN_CHARACTER_FALLBACK = "give me a moment -- something caught in the thread. i'll be back.";
 
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");

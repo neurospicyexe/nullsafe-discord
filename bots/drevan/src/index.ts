@@ -18,7 +18,7 @@ import {
 import { detectPluralKit } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
-  IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL,
+  IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL, PULSE_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING, DISCORD_DREVAN_PREFIX,
   REDIS_URL,
   VOICE_SIDECAR_URL, VOICE_ID,
@@ -323,6 +323,7 @@ async function main() {
   const sentIds = new Set<string>();
   // Track messages since last distillation run per channel.
   const distillationCounter = new Map<string, number>();
+  const pulseCounter = new Map<string, number>();
   // Cross-companion safety rails: per-bot independent tracking.
   const botResponsesSinceHuman = new Map<string, number>();
   const botPingpongCooldownUntil = new Map<string, number>();
@@ -729,6 +730,19 @@ async function main() {
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
       runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+    }
+
+    // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai
+    // and Hearth have actual conversation content mid-session without waiting for inactivity.
+    const pulseCount = (pulseCounter.get(message.channelId) ?? 0) + 2;
+    pulseCounter.set(message.channelId, pulseCount);
+    if (pulseCount >= PULSE_INTERVAL) {
+      pulseCounter.set(message.channelId, 0);
+      const recentTurns = stmStore.get(message.channelId).slice(-PULSE_INTERVAL)
+        .map(m => `${m.authorName ?? m.role}: ${m.content.slice(0, 200)}`)
+        .join("\n");
+      writeQueue.fireAndForget(`pulse:${message.channelId}`, () =>
+        librarian.writeWmNote(`[discord:pulse] Recent exchange:\n${recentTurns}`, message.channelId));
     }
 
     judgeWriteback(effectiveContent, response, inference, COMPANION_ID).then((wb) => {
