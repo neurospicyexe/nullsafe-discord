@@ -667,6 +667,7 @@ async function main() {
     let contextPrompt = attribution.frontMember
       ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`
       : systemPrompt;
+    if (activeModelRef.key) contextPrompt += `\n\n[Active model] ${activeModelRef.label}`;
 
     const somaAgeMin = Math.round((Date.now() - lastSomaRefresh) / 60_000);
     if (somaAgeMin > 45) {
