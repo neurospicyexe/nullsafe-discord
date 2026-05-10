@@ -288,11 +288,15 @@ async function main() {
 
   const inference = createAdapter(
     cfg.inferenceProvider,
-    cfg.deepseekApiKey,
-    cfg.groqApiKey,
-    cfg.ollamaUrl,
-    undefined,
-    cfg.lmstudioUrl,
+    cfg.inferenceModel ?? "deepseek-chat",
+    {
+      deepseek: cfg.deepseekApiKey,
+      groq: cfg.groqApiKey,
+      kimi: cfg.kimiApiKey,
+      openai: cfg.openaiApiKey,
+      anthropic: cfg.anthropicApiKey,
+    },
+    { ollama: cfg.ollamaUrl, lmstudio: cfg.lmstudioUrl },
   );
   let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;
   try {

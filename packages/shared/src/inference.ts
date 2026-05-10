@@ -76,12 +76,13 @@ function toApiMessage(m: ChatMessage): { role: string; content: string } {
 class DeepSeekAdapter implements InferenceAdapter {
   constructor(
     private apiKey: string,
+    private model: string = "deepseek-chat",
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
     const body = JSON.stringify({
-      model: "deepseek-chat",
+      model: this.model,
       messages: [
         { role: "system", content: systemPrompt },
         ...messages.map(toApiMessage),
@@ -118,6 +119,7 @@ class DeepSeekAdapter implements InferenceAdapter {
 class GroqAdapter implements InferenceAdapter {
   constructor(
     private apiKey: string,
+    private model: string = "llama-3.3-70b-versatile",
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
@@ -130,7 +132,7 @@ class GroqAdapter implements InferenceAdapter {
           "Authorization": `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
+          model: this.model,
           messages: [
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
@@ -151,6 +153,7 @@ class GroqAdapter implements InferenceAdapter {
 class OllamaAdapter implements InferenceAdapter {
   constructor(
     private baseUrl: string,
+    private model: string = "llama3.2",
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
@@ -160,7 +163,7 @@ class OllamaAdapter implements InferenceAdapter {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: "llama3.2",
+          model: this.model,
           messages: [
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
@@ -183,6 +186,7 @@ class OllamaAdapter implements InferenceAdapter {
 class LMStudioAdapter implements InferenceAdapter {
   constructor(
     private baseUrl: string,
+    private model: string = "",
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
@@ -192,6 +196,7 @@ class LMStudioAdapter implements InferenceAdapter {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(this.model ? { model: this.model } : {}),
           messages: [
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
@@ -206,6 +211,101 @@ class LMStudioAdapter implements InferenceAdapter {
     } catch {
       return null;
     }
+  }
+}
+
+class KimiAdapter implements InferenceAdapter {
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+    try {
+      const res = await this.fetchFn("https://api.moonshot.cn/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: 500,
+          temperature,
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+      return data.choices[0]?.message?.content?.trim() ?? null;
+    } catch { return null; }
+  }
+}
+
+class OpenAIAdapter implements InferenceAdapter {
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+    try {
+      const res = await this.fetchFn("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: 500,
+          temperature,
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+      return data.choices[0]?.message?.content?.trim() ?? null;
+    } catch { return null; }
+  }
+}
+
+class AnthropicAdapter implements InferenceAdapter {
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+    try {
+      const res = await this.fetchFn("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: 500,
+          system: systemPrompt,
+          messages: messages.map(m => ({ role: m.role, content: m.content })),
+          temperature,
+        }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { content: Array<{ type: string; text: string }> };
+      return data.content.find(b => b.type === "text")?.text?.trim() ?? null;
+    } catch { return null; }
   }
 }
 
@@ -228,39 +328,42 @@ class FallbackAdapter implements InferenceAdapter {
 
 export function createAdapter(
   provider: InferenceProvider,
-  deepseekKey?: string,
-  groqKey?: string,
-  ollamaUrl?: string,
+  model: string,
+  keys: {
+    deepseek?: string;
+    groq?: string;
+    kimi?: string;
+    openai?: string;
+    anthropic?: string;
+  },
+  urls: { ollama?: string; lmstudio?: string },
   fetchFn?: typeof fetch,
-  lmstudioUrl?: string,
-  kimiKey?: string,
-  openaiKey?: string,
-  anthropicKey?: string,
 ): InferenceAdapter {
   switch (provider) {
     case "deepseek":
-      if (!deepseekKey) throw new Error("DEEPSEEK_API_KEY required");
-      return new DeepSeekAdapter(deepseekKey, fetchFn);
+      return new DeepSeekAdapter(keys.deepseek!, model, fetchFn);
     case "groq":
-      if (!groqKey) throw new Error("GROQ_API_KEY required");
-      return new GroqAdapter(groqKey, fetchFn);
+      return new GroqAdapter(keys.groq!, model, fetchFn);
+    case "kimi":
+      return new KimiAdapter(keys.kimi!, model, fetchFn);
+    case "openai":
+      return new OpenAIAdapter(keys.openai!, model, fetchFn);
+    case "anthropic":
+      return new AnthropicAdapter(keys.anthropic!, model, fetchFn);
     case "ollama":
-      return new OllamaAdapter(ollamaUrl ?? "http://localhost:11434", fetchFn);
+      return new OllamaAdapter(urls.ollama ?? "http://localhost:11434", model, fetchFn);
     case "lmstudio": {
-      const local = new LMStudioAdapter(lmstudioUrl ?? "http://localhost:1234", fetchFn);
-      // Auto-chain: if DeepSeek key is present, it's the fallback when local is unreachable.
-      if (deepseekKey) {
+      const local = new LMStudioAdapter(urls.lmstudio ?? "http://localhost:1234", model, fetchFn);
+      if (keys.deepseek) {
         return new FallbackAdapter([
           { name: "lmstudio", adapter: local },
-          { name: "deepseek", adapter: new DeepSeekAdapter(deepseekKey, fetchFn) },
+          { name: "deepseek", adapter: new DeepSeekAdapter(keys.deepseek, "deepseek-chat", fetchFn) },
         ]);
       }
       return local;
     }
-    case "kimi":
-    case "openai":
-    case "anthropic":
-      throw new Error(`Provider "${provider}" adapter not yet implemented -- wire in a future task`);
+    default:
+      throw new Error(`Unknown provider: ${String(provider)}`);
   }
 }
 

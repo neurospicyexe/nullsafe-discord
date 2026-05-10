@@ -10,7 +10,7 @@ describe("DeepSeekAdapter", () => {
         choices: [{ message: { content: "hello from deepseek" } }],
       }),
     } as any);
-    const adapter = createAdapter("deepseek", "key-xxx", undefined, undefined, mockFetch as any);
+    const adapter = createAdapter("deepseek", "deepseek-chat", { deepseek: "key-xxx" }, {}, mockFetch as any);
     const msgs: ChatMessage[] = [{ role: "user", content: "hi" }];
     const result = await adapter.generate("system", msgs);
     expect(result).toBe("hello from deepseek");
@@ -18,7 +18,7 @@ describe("DeepSeekAdapter", () => {
 
   it("retries on 5xx, returns null after second failure", async () => {
     const mockFetch = jest.fn().mockResolvedValue({ ok: false, status: 503 } as any);
-    const adapter = createAdapter("deepseek", "key-xxx", undefined, undefined, mockFetch as any);
+    const adapter = createAdapter("deepseek", "deepseek-chat", { deepseek: "key-xxx" }, {}, mockFetch as any);
     const result = await adapter.generate("system", [{ role: "user", content: "hi" }]);
     expect(result).toBeNull();
     expect(mockFetch).toHaveBeenCalledTimes(2);
