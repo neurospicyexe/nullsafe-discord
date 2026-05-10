@@ -771,6 +771,34 @@ async function main() {
       return;
     }
 
+    // Self-switch: companion can emit [model:<key>] to request a model change.
+    if (response) {
+      const MODEL_TOKEN_RE = /\[model:([^\]]+)\]/i;
+      const tokenMatch = response.match(MODEL_TOKEN_RE);
+      if (tokenMatch) {
+        response = response.replace(MODEL_TOKEN_RE, "").trim();
+        const switchKey = tokenMatch[1].trim().toLowerCase();
+        const available = getAvailableModels(availableModelsOpts);
+        if (available[switchKey]) {
+          const entry = available[switchKey];
+          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+          activeModelRef.key = switchKey;
+          activeModelRef.label = entry.label;
+          writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
+            librarian.setSetting("active_model", switchKey));
+          writeQueue.fireAndForget(`journal:model-switch:${message.channelId}`, async () => {
+            await librarian.addCompanionNote(`self-switched to ${entry.label}`, message.channelId);
+          });
+          // Post follow-up after main response
+          setImmediate(() => {
+            (message.channel as TextChannel).send(`[switching to ${entry.label} for this]`).catch(() => {});
+          });
+        } else {
+          console.warn(`[${COMPANION_ID}] self-switch to unknown model "${switchKey}" -- skipped`);
+        }
+      }
+    }
+
     const MAX_TTS = 2000;
     let sent: Message;
 
