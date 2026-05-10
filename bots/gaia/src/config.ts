@@ -25,13 +25,18 @@ export function loadBotConfig(): BotConfig {
     channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {
       const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
-      const valid = ["deepseek", "groq", "ollama", "lmstudio"] as const;
-      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio)`);
+      const valid = ["deepseek", "groq", "ollama", "lmstudio", "kimi", "openai", "anthropic"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio | kimi | openai | anthropic)`);
       return val as BotConfig["inferenceProvider"];
     })(),
     groqApiKey: process.env["GROQ_API_KEY"],
     ollamaUrl: process.env["OLLAMA_URL"],
     lmstudioUrl: process.env["LMSTUDIO_URL"],
+    kimiApiKey:      process.env["KIMI_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
+    openaiApiKey:    process.env["OPENAI_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
+    anthropicApiKey: process.env["ANTHROPIC_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
+    inferenceModel:  process.env["INFERENCE_MODEL"]?.trim().replace(/^=+/, "") || undefined,
+    disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["BLUE_DISCORD_ID"] ?? "000000000000000000",
     brainUrl: process.env["BRAIN_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceMode: (() => {

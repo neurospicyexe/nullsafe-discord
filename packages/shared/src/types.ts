@@ -1,3 +1,6 @@
+import type { InferenceProvider } from "./models.js";
+export type { InferenceProvider };
+
 export type CompanionId = "drevan" | "cypher" | "gaia";
 
 export type UserTier = "owner" | "intimate" | "guest";
@@ -43,10 +46,15 @@ export interface BotConfig {
   ownerDisplayName: string;
   pluralkitSystemId: string;
   channelConfigUrl?: string;
-  inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
+  inferenceProvider: InferenceProvider;
   groqApiKey?: string;
   ollamaUrl?: string;
   lmstudioUrl?: string;
+  kimiApiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
+  inferenceModel?: string;   // default model key on cold boot (e.g. "deepseek-chat")
+  disabledModels?: string;   // comma-separated model keys to disable
   blueDiscordId?: string;
   /** When set, bot relays inference to Phoenix Brain instead of calling DeepSeek directly. */
   brainUrl?: string;

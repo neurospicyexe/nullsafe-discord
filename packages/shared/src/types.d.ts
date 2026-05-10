@@ -17,6 +17,7 @@ export interface ChatMessage {
     content: string;
     authorName?: string;
 }
+export type InferenceProvider = "deepseek" | "groq" | "lmstudio" | "kimi" | "openai" | "anthropic" | "ollama";
 export interface BotConfig {
     companionId: CompanionId;
     discordBotToken: string;
@@ -24,12 +25,18 @@ export interface BotConfig {
     halsethSecret: string;
     deepseekApiKey: string;
     ownerDiscordId: string;
+    ownerDisplayName: string;
     pluralkitSystemId: string;
     channelConfigUrl?: string;
-    inferenceProvider: "deepseek" | "groq" | "ollama" | "lmstudio";
+    inferenceProvider: InferenceProvider;
     groqApiKey?: string;
     ollamaUrl?: string;
     lmstudioUrl?: string;
+    kimiApiKey?: string;
+    openaiApiKey?: string;
+    anthropicApiKey?: string;
+    inferenceModel?: string;
+    disabledModels?: string;
     blueDiscordId?: string;
     brainUrl?: string;
     inferenceMode?: "direct" | "brain";
