@@ -19,3 +19,4 @@ export {
   markVoiceUsed, isVoiceSticky, clearVoiceSticky, STICKY_VOICE_MS,
 } from "./voice.js";
 export * from "./response-quality.js";
+export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry } from "./models.js";
