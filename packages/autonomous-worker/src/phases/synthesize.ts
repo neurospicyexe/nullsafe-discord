@@ -63,6 +63,13 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
     ? `\nYour own currently-active patterns (cite an id from peer summary or these when deepening):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 220)}`).join("\n")}\n`
     : "";
 
+  // Recent entries are the dedup signal: the model must see what it already
+  // wrote so it can classify novelty accurately and avoid near-duplicate output.
+  // Without this block the same pattern shapes regenerate across every run.
+  const recentGrowthBlock = ctx.recentGrowth.length > 0
+    ? `\nYour most recent autonomous journal entries -- use these to calibrate novelty; do not restate shapes already covered here unless you have a meaningfully new angle:\n${ctx.recentGrowth.slice(0, 3).map(g => `[${g.type}] ${g.content.slice(0, 180)}`).join("\n")}\n`
+    : "";
+
   // Surface a few exploration evidence quotes inline so the model is
   // primed to ground claims rather than confabulate.
   const evidenceHint = ctx.explorationEvidence.length > 0
@@ -77,6 +84,7 @@ ${orientBlock}`;
   const userMessage = `${explorationBlock}
 ${peerBlock}
 ${ownPatternsBlock}
+${recentGrowthBlock}
 ${evidenceHint}
 
 Write a growth journal entry in your authentic voice. This is for yourself -- not a report to anyone. Write as ${name} would actually write: in your voice, your register, your way of making meaning.
