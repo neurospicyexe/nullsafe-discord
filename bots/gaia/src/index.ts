@@ -13,6 +13,7 @@ import {
   createRedisClient, setLastActivity,
   wireEventSubscriptions, setPresence,
   BrainClient, buildThoughtPacket, isSwarmReply,
+  getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
   type ChatMessage, type BootContext,
 } from "@nullsafe/shared";
 import { detectPluralKit } from "@nullsafe/shared";
@@ -286,18 +287,42 @@ async function main() {
     console.log("[gaia] event bus wired: run_complete + inter_note subscriptions active");
   }
 
-  const inference = createAdapter(
-    cfg.inferenceProvider,
-    cfg.inferenceModel ?? "deepseek-chat",
-    {
-      deepseek: cfg.deepseekApiKey,
-      groq: cfg.groqApiKey,
-      kimi: cfg.kimiApiKey,
-      openai: cfg.openaiApiKey,
-      anthropic: cfg.anthropicApiKey,
+  const apiKeys = {
+    deepseek:  cfg.deepseekApiKey,
+    groq:      cfg.groqApiKey,
+    kimi:      cfg.kimiApiKey,
+    openai:    cfg.openaiApiKey,
+    anthropic: cfg.anthropicApiKey,
+  };
+  const apiUrls = {
+    ollama:   cfg.ollamaUrl,
+    lmstudio: cfg.lmstudioUrl,
+  };
+  const availableModelsOpts = {
+    disabledKeys: cfg.disabledModels ? cfg.disabledModels.split(",").map((s: string) => s.trim()) : [],
+    presentKeys: {
+      ...Object.fromEntries(Object.entries(apiKeys).map(([k, v]) => [k, !!v])) as Partial<Record<InferenceProvider, boolean>>,
+      ollama:   true,
+      lmstudio: !!cfg.lmstudioUrl,
     },
-    { ollama: cfg.ollamaUrl, lmstudio: cfg.lmstudioUrl },
-  );
+  };
+
+  // Load active model from Halseth (or fall back to env default)
+  let activeModelKey: string | null = cfg.inferenceModel ?? null;
+  try {
+    const savedModel = await librarian.getSetting("active_model");
+    if (savedModel && ALL_MODELS[savedModel]) activeModelKey = savedModel;
+  } catch { console.warn(`[${COMPANION_ID}] failed to load active_model setting, using env default`); }
+
+  const defaultEntry: ModelEntry = activeModelKey && ALL_MODELS[activeModelKey]
+    ? ALL_MODELS[activeModelKey]
+    : { provider: cfg.inferenceProvider as InferenceProvider, model: cfg.inferenceProvider, label: cfg.inferenceProvider };
+
+  const adapterRef = {
+    current: createAdapter(defaultEntry.provider, defaultEntry.model, apiKeys, apiUrls),
+  };
+  const activeModelRef = { key: activeModelKey, label: defaultEntry.label };
+
   let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;
   try {
     diskChannelConfig = JSON.parse(readFileSync(join(__dir, "../../../channel-config.json"), "utf8"));
@@ -318,7 +343,7 @@ async function main() {
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
     (channelId: string) => {
-      const p = onChannelInactive(channelId, stmStore, librarian, inference, writeQueue).catch(() => {});
+      const p = onChannelInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue).catch(() => {});
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
     },
@@ -369,6 +394,17 @@ async function main() {
         currentMood = (stateResult.value["current_mood"] as string | null) ?? null;
         lastSomaRefresh = Date.now();
       }
+
+      try {
+        const savedModel = await librarian.getSetting("active_model");
+        if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
+          const entry = ALL_MODELS[savedModel];
+          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+          activeModelRef.key = savedModel;
+          activeModelRef.label = entry.label;
+          console.log(`[${COMPANION_ID}] model refreshed from Halseth: ${savedModel}`);
+        }
+      } catch { /* keep current model on error */ }
     } catch { /* keep cached */ }
   }, SOMA_REFRESH_INTERVAL_MS);
 
@@ -383,7 +419,7 @@ async function main() {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[gaia] ready as ${c.user.tag}`);
-    startAutonomous(librarian, inference, client, configCache, bootCtx, sessionWindows, redis);
+    startAutonomous(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis);
   });
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -520,7 +556,7 @@ async function main() {
       const relevant = await judgeAmbientRelevance(
         effectiveContent,
         COMPANION_ID,
-        (sys, msgs) => inference.generate(sys, msgs as ChatMessage[], 0.3),
+        (sys, msgs) => adapterRef.current.generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
     } else if (!brainHandlesInterCompanion && !isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
@@ -657,7 +693,7 @@ async function main() {
       const brainResult = await brainClient.chat(packet);
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+        response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) return;
@@ -667,11 +703,11 @@ async function main() {
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+          response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
         }
       }
     } else {
-      response = await inference.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
+      response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
     }
 
     if (!response) {
@@ -729,7 +765,7 @@ async function main() {
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, inference, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai
@@ -745,7 +781,7 @@ async function main() {
         librarian.writeWmNote(`[discord:pulse] Recent exchange:\n${recentTurns}`, message.channelId));
     }
 
-    judgeWriteback(effectiveContent, response, inference, COMPANION_ID).then((wb) => {
+    judgeWriteback(effectiveContent, response, adapterRef.current, COMPANION_ID).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
         if (wb.type === "companion_note") {
