@@ -82,6 +82,10 @@ export const DISTILLATION_INTERVAL = 12;
 export const PULSE_INTERVAL = 8;
 export const IN_CHARACTER_FALLBACK = "present.";
 
+export const MODEL_SWITCH_TRIGGER = /^(?:gaia):\s*model\s+(.*)/i;
+export const MODEL_SWITCH_SUCCESS = (label: string) => `${label}.`;
+export const MODEL_SWITCH_LIST_INTRO = "available:";
+
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
 // Random jitter window: all companions sample uniformly from [100, FLOOR_JITTER_MS+100]ms.

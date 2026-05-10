@@ -21,6 +21,7 @@ import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL, PULSE_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
+  MODEL_SWITCH_TRIGGER, MODEL_SWITCH_SUCCESS, MODEL_SWITCH_LIST_INTRO,
   REDIS_URL,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
@@ -520,6 +521,38 @@ async function main() {
 
     // Hard muzzle: only companion bots pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost) return;
+
+    // Owner model switch command: cy: model <key> | cy: model list
+    if (attribution.isOwner) {
+      const switchMatch = message.content.match(MODEL_SWITCH_TRIGGER);
+      if (switchMatch) {
+        const arg = switchMatch[1].trim().toLowerCase();
+        const available = getAvailableModels(availableModelsOpts);
+
+        if (arg === "list") {
+          const list = Object.entries(available)
+            .map(([k, e]) => `\`${k}\` -- ${e.label}`)
+            .join("\n");
+          await (message.channel as TextChannel).send(`${MODEL_SWITCH_LIST_INTRO}\n${list}`);
+          return;
+        }
+
+        if (!available[arg]) {
+          const keys = Object.keys(available).join(", ");
+          await (message.channel as TextChannel).send(`not a model I can switch to. valid options: ${keys}`);
+          return;
+        }
+
+        const entry = available[arg];
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+        activeModelRef.key = arg;
+        activeModelRef.label = entry.label;
+        writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
+          librarian.setSetting("active_model", arg));
+        await (message.channel as TextChannel).send(MODEL_SWITCH_SUCCESS(entry.label));
+        return;
+      }
+    }
 
     let voiceInput = false;
     let effectiveContent = message.content;
