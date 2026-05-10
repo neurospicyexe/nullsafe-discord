@@ -1,4 +1,3 @@
-import { describe, it, expect } from "vitest";
 import { ALL_MODELS, getAvailableModels, type InferenceProvider } from "../models.js";
 
 describe("ALL_MODELS", () => {
