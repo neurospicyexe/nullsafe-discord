@@ -431,6 +431,47 @@ export class LibrarianClient {
     return json.entries ?? [];
   }
 
+  /**
+   * Fetch a single companion setting by key from Halseth.
+   * Returns null on miss, non-ok response, or any error.
+   */
+  async getSetting(key: string): Promise<string | null> {
+    try {
+      const res = await this._fetch(
+        `${this.url}/companion/settings/${encodeURIComponent(this.companionId)}`,
+        {
+          headers: { "Authorization": `Bearer ${this.secret}` },
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      if (!res.ok) return null;
+      const data = await res.json() as Record<string, string>;
+      return data[key] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Upsert a companion setting key/value pair in Halseth.
+   * Throws on non-2xx (caller should .catch(() => {})).
+   */
+  async setSetting(key: string, value: string): Promise<void> {
+    const res = await this._fetch(
+      `${this.url}/companion/settings/${encodeURIComponent(this.companionId)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ key, value }),
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!res.ok) throw new Error(`setSetting ${res.status}`);
+  }
+
   async getHouseState(): Promise<{ autonomous_turn: string | null }> {
     const res = await this._fetch(`${this.url}/house`, {
       headers: { "Authorization": `Bearer ${this.secret}` },

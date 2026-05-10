@@ -105,6 +105,51 @@ describe("LibrarianClient.botOrient()", () => {
   });
 });
 
+describe("getSetting / setSetting", () => {
+  function makeClient(mockResponse: { status: number; ok?: boolean; body: Record<string, unknown> }) {
+    const ok = mockResponse.ok ?? (mockResponse.status >= 200 && mockResponse.status < 300);
+    const mockFetch = jest.fn().mockResolvedValue({
+      ok,
+      status: mockResponse.status,
+      json: async () => mockResponse.body,
+    } as any);
+    return new LibrarianClient({
+      url: "https://example.com",
+      secret: "test-secret",
+      companionId: "cypher",
+      fetch: mockFetch as unknown as typeof fetch,
+    });
+  }
+
+  it("getSetting returns null on non-ok response", async () => {
+    const client = makeClient({ status: 404, body: {} });
+    const result = await client.getSetting("active_model");
+    expect(result).toBeNull();
+  });
+
+  it("getSetting returns value from response", async () => {
+    const client = makeClient({ status: 200, body: { active_model: "kimi-k2" } });
+    const result = await client.getSetting("active_model");
+    expect(result).toBe("kimi-k2");
+  });
+
+  it("getSetting returns null when key is absent from response", async () => {
+    const client = makeClient({ status: 200, body: { other_key: "val" } });
+    const result = await client.getSetting("active_model");
+    expect(result).toBeNull();
+  });
+
+  it("setSetting throws on non-ok response", async () => {
+    const client = makeClient({ status: 500, body: {} });
+    await expect(client.setSetting("active_model", "kimi-k2")).rejects.toThrow("setSetting 500");
+  });
+
+  it("setSetting resolves on ok response", async () => {
+    const client = makeClient({ status: 200, body: {} });
+    await expect(client.setSetting("active_model", "kimi-k2")).resolves.toBeUndefined();
+  });
+});
+
 describe("formatRecentContext()", () => {
   it("renders all canonical fields including the 3 new ones", () => {
     const orient = canonicalOrientPayload().data;
