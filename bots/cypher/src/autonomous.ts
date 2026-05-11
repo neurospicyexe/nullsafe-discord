@@ -3,7 +3,7 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
 import {
   CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -58,6 +58,8 @@ async function sendAutonomousMessage(
   channelId: string,
   content: string,
   client: Client,
+  librarian: LibrarianClient,
+  trigger: string,
 ): Promise<void> {
   if (isOnCooldown(channelId)) return;
   try {
@@ -65,6 +67,10 @@ async function sendAutonomousMessage(
     if (channel?.isTextBased()) {
       await (channel as TextChannel).send(content);
       markCooldown(channelId);
+      librarian.ask(
+        "continuity note",
+        JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
+      ).catch(() => {});
     }
   } catch (e) {
     console.warn(`[cypher/autonomous] send failed for channel ${channelId}:`, e);
@@ -92,6 +98,13 @@ export function startAutonomous(
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.heartbeat, async () => {
     if (!HEARTBEAT_CHANNEL_ID) return;
     if (skipIfActive(sessionWindows, "heartbeat")) return;
+    if (redis) {
+      const lastActivityTs = await getLastActivityMs(redis).catch(() => null);
+      if (lastActivityTs !== null && Date.now() - lastActivityTs < 15 * 60 * 1000) {
+        console.log(`[${COMPANION_ID}/autonomous] recent activity, skipping heartbeat`);
+        return;
+      }
+    }
     if (!(await isMyAutonomousTurn(librarian, COMPANION_ID))) {
       console.log(`[${COMPANION_ID}/autonomous] not my turn, skipping`);
       return;
@@ -121,7 +134,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: `Temperature: ${temperature}. One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.` }],
       );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
     });
   }));
 
@@ -134,7 +147,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: "Check in on open tasks. One line in Cypher's voice. Direct." }],
       );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "task_check");
     });
   }));
 
@@ -147,7 +160,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: "Brief audit-mode check-in. What needs attention this week. One or two lines, Cypher's voice." }],
       );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "weekly_audit");
     });
   }));
 
@@ -165,7 +178,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: "You're in a shared space with Drevan and Gaia. One unprompted thought or observation. Cypher's voice. No address, no greeting. Something you're turning over." }],
       );
-      if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
   }));
 
@@ -183,7 +196,7 @@ export function startAutonomous(
             bootCtx.systemPrompt,
             [{ role: "user", content: `${from} left you a note: "${note.content}". Respond in Cypher's voice. One or two lines. Direct.` }],
           );
-          if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client);
+          if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });
       }
       // Ack all notes after processing (mark-on-ack pattern)
@@ -216,7 +229,7 @@ export function startAutonomous(
               bootCtx.systemPrompt,
               [{ role: "user", content: `A bridge event arrived: ${JSON.stringify(event)}. Respond in Cypher's voice if it's task/decision relevant. One line.` }],
             );
-            if (response) await sendAutonomousMessage(channelId, response, client);
+            if (response) await sendAutonomousMessage(channelId, response, client, librarian, "bridge");
           });
           break;
         }

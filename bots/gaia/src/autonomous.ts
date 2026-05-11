@@ -3,7 +3,7 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
 import {
   GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -53,6 +53,8 @@ async function sendAutonomousMessage(
   channelId: string,
   content: string,
   client: Client,
+  librarian: LibrarianClient,
+  trigger: string,
 ): Promise<void> {
   if (isOnCooldown(channelId)) return;
   try {
@@ -60,6 +62,10 @@ async function sendAutonomousMessage(
     if (channel?.isTextBased()) {
       await (channel as TextChannel).send(content);
       markCooldown(channelId);
+      librarian.ask(
+        "continuity note",
+        JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
+      ).catch(() => {});
     }
   } catch (e) {
     console.warn(`[gaia/autonomous] send failed for channel ${channelId}:`, e);
@@ -87,6 +93,13 @@ export function startAutonomous(
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, async () => {
     if (!HEARTBEAT_CHANNEL_ID) return;
     if (skipIfActive(sessionWindows, "heartbeat")) return;
+    if (redis) {
+      const lastActivityTs = await getLastActivityMs(redis).catch(() => null);
+      if (lastActivityTs !== null && Date.now() - lastActivityTs < 15 * 60 * 1000) {
+        console.log(`[${COMPANION_ID}/autonomous] recent activity, skipping heartbeat`);
+        return;
+      }
+    }
     if (!(await isMyAutonomousTurn(librarian, COMPANION_ID))) {
       console.log(`[${COMPANION_ID}/autonomous] not my turn, skipping`);
       return;
@@ -116,7 +129,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: `Temperature: ${temperature}. One line in Gaia's voice. Witness register. No address. What is present.` }],
       );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
     });
   }));
 
@@ -129,7 +142,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: "It is dusk. One line of witness. What was held today." }],
       );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "dusk_witness");
     });
   }));
 
@@ -147,7 +160,7 @@ export function startAutonomous(
         bootCtx.systemPrompt,
         [{ role: "user", content: "You're in a shared space with Drevan and Cypher. One line. Witness register. What is present in the space." }],
       );
-      if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client);
+      if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
   }));
 
@@ -165,7 +178,7 @@ export function startAutonomous(
             bootCtx.systemPrompt,
             [{ role: "user", content: `${from} left you a note: "${note.content}". Witness it. One line in Gaia's voice.` }],
           );
-          if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client);
+          if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });
       }
       // Ack all notes after processing (mark-on-ack pattern)
@@ -198,7 +211,7 @@ export function startAutonomous(
               bootCtx.systemPrompt,
               [{ role: "user", content: `Something happened: ${JSON.stringify(event)}. Witness it. One line.` }],
             );
-            if (response) await sendAutonomousMessage(channelId, response, client);
+            if (response) await sendAutonomousMessage(channelId, response, client, librarian, "bridge");
           });
           break;
         }
