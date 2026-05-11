@@ -1,6 +1,6 @@
 import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
 import { loadIdentity } from "../identity-loader.js";
-import { appendLog, getActiveThreads, getPeerActivity } from "../halseth-client.js";
+import { appendLog, getActiveThreads, getPeerActivity, getRecentWmNotes } from "../halseth-client.js";
 import { HALSETH_URL, HALSETH_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
 
@@ -27,14 +27,16 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
   // journal entries, 3 patterns, 3 markers. Synthesize/reflect prompts
   // inject peer_summary so each companion is prehending the others'
   // becomings -- not exploring in isolation.
-  const [orient, activeThreads, peerActivity] = await Promise.all([
+  const [orient, activeThreads, peerActivity, recentWmNotes] = await Promise.all([
     librarian.botOrient().catch(() => null),
     getActiveThreads(ctx.companionId),
     getPeerActivity(ctx.companionId, { journal: 5, patterns: 3, markers: 3 }),
+    getRecentWmNotes(ctx.companionId, { sinceHours: 24, limit: 20 }),
   ]);
 
   ctx.activeThreads = activeThreads;
   ctx.peerActivity = peerActivity;
+  ctx.recentWmNotes = recentWmNotes;
 
   if (orient) {
     ctx.orientSummary = formatRecentContext(orient);
@@ -83,6 +85,6 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     `identity=${ctx.identityText.length}chars orient=${ctx.orientSummary.length}chars ` +
     `growth=${ctx.recentGrowth.length} dreams=${ctx.unexaminedDreamIds.length} ` +
     `loops=${ctx.openLoops.length} pressure=${ctx.pressureFlags.length} threads=${ctx.activeThreads.length} ` +
-    `peer_summary=${peerSummaryLen}chars`,
+    `peer_summary=${peerSummaryLen}chars wm_notes=${ctx.recentWmNotes.length}`,
   );
 }

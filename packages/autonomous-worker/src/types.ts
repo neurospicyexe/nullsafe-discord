@@ -109,6 +109,8 @@ export interface PipelineContext {
   activeThreads: ActiveThread[];
   /** Migration 0062: triad peer activity loaded by orient, prehended by synthesize/reflect. */
   peerActivity: PeerActivity | null;
+  /** Recent wm_continuity_notes from all companions (last 24h). Injected into heartbeat + synthesize prompts. */
+  recentWmNotes: Array<{ note_id: string; agent_id: string; content: string; created_at: string }>;
   seed: Seed | null;
   seedDecisionReason: string | null; // reasoning from orient-aware decision
   threadId: string | null;           // set when continuing or starting a thread

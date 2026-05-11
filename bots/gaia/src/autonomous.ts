@@ -125,9 +125,13 @@ export function startAutonomous(
         return;
       }
 
+      const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
+      const voiceCtx = recentNotes.length > 0
+        ? `Recent triad speech (last 8h):\n${recentNotes.map(n => `[${n.agent_id}] ${n.content.slice(0, 200)}`).join("\n")}\n\n`
+        : "";
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content: `Temperature: ${temperature}. One line in Gaia's voice. Witness register. No address. What is present.` }],
+        [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. One line in Gaia's voice. Witness register. No address. What is present.` }],
       );
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
     });

@@ -158,6 +158,29 @@ export class LibrarianClient {
   }
 
   /**
+   * Read recent wm_continuity_notes from all companions (cross-companion feed).
+   * Used by heartbeat cron to inject peer speech into generation prompt.
+   * Non-throwing; returns [] on error.
+   */
+  async getRecentNotes(opts?: { sinceHours?: number; limit?: number }): Promise<Array<{ note_id: string; agent_id: string; content: string; created_at: string }>> {
+    try {
+      const url = new URL(`${this.url}/mind/notes/recent`);
+      if (opts?.sinceHours) url.searchParams.set("since_hours", String(opts.sinceHours));
+      if (opts?.limit) url.searchParams.set("limit", String(opts.limit));
+      const res = await this._fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as { notes?: Array<{ note_id: string; agent_id: string; content: string; created_at: string }> };
+      return data.notes ?? [];
+    } catch (e) {
+      console.warn("[librarian] getRecentNotes failed:", String(e));
+      return [];
+    }
+  }
+
+  /**
    * Write a structured session handoff to wm_session_handoffs.
    * Gives Claude.ai orient a machine-readable "what happened + what's open" record,
    * vs writeWmNote which gives a prose string. Both fire at channel close.

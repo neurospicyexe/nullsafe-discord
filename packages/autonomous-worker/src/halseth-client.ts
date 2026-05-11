@@ -309,6 +309,40 @@ export async function writeWmNote(companionId: string, content: string, threadKe
 }
 
 // ---------------------------------------------------------------------------
+// Recent continuity notes (cross-companion feed)
+// ---------------------------------------------------------------------------
+
+export interface RecentWmNote {
+  note_id: string;
+  agent_id: string;
+  content: string;
+  salience: string;
+  source: string | null;
+  created_at: string;
+}
+
+/**
+ * Read recent wm_continuity_notes from all companions.
+ * Non-fatal: returns [] on failure.
+ */
+export async function getRecentWmNotes(
+  companionId: string,
+  opts?: { sinceHours?: number; limit?: number },
+): Promise<RecentWmNote[]> {
+  const params = new URLSearchParams();
+  if (opts?.sinceHours) params.set("since_hours", String(opts.sinceHours));
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  try {
+    const r = await hFetch(`/mind/notes/recent${qs ? `?${qs}` : ""}`) as { notes: RecentWmNote[] };
+    return r.notes ?? [];
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getRecentWmNotes failed (non-fatal):`, e);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Memory compression
 // ---------------------------------------------------------------------------
 

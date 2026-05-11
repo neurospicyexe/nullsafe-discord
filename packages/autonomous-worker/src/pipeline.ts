@@ -41,6 +41,7 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     pressureFlags: [],
     activeThreads: [],
     peerActivity: null,
+    recentWmNotes: [],
     seed: null,
     seedDecisionReason: null,
     threadId: null,

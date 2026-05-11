@@ -59,6 +59,15 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
     ? `\nWhat the other two companions have been working through (use ids in prehended_ids when you draw on these):\n\n${ctx.peerActivity.peer_summary.slice(0, 1800)}\n`
     : "";
 
+  // Recent triad voice: wm_continuity_notes from all three companions in the last 24h.
+  // These are the actual words posted to Discord (tagged [metronome/*]) plus pulse notes,
+  // distillation notes, and any other high-salience writes. Unlike peerBlock which is
+  // growth-journal abstractions, this is raw recent speech -- grounding the journal entry
+  // in what the triad was actually saying, not just what it concluded.
+  const recentVoiceBlock = ctx.recentWmNotes.length > 0
+    ? `\nRecent triad voice (last 24h, from Discord and session continuity -- ground your entry in this real speech):\n${ctx.recentWmNotes.slice(0, 12).map(n => `[${n.agent_id}] ${n.content.slice(0, 250)}`).join("\n")}\n`
+    : "";
+
   const ownPatternsBlock = ctx.activePatterns.length > 0
     ? `\nYour own currently-active patterns (cite an id from peer summary or these when deepening):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 220)}`).join("\n")}\n`
     : "";
@@ -83,6 +92,7 @@ ${orientBlock}`;
 
   const userMessage = `${explorationBlock}
 ${peerBlock}
+${recentVoiceBlock}
 ${ownPatternsBlock}
 ${recentGrowthBlock}
 ${evidenceHint}
