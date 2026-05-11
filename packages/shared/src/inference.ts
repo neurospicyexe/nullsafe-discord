@@ -103,12 +103,15 @@ class DeepSeekAdapter implements InferenceAdapter {
         });
         if (!res.ok) {
           if (attempt === 0) { await sleep(3000); continue; }
+          console.warn(`[inference:deepseek] non-2xx on final attempt: ${res.status}`);
           return null;
         }
         const data = await res.json() as { choices: Array<{ message: { content: string } }> };
         return data.choices[0]?.message?.content ?? null;
-      } catch {
+      } catch (e: unknown) {
         if (attempt === 0) { await sleep(3000); continue; }
+        const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+        console.warn(`[inference:deepseek] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
         return null;
       }
     }
@@ -141,10 +144,15 @@ class GroqAdapter implements InferenceAdapter {
           temperature,
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:groq] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { choices: Array<{ message: { content: string } }> };
       return data.choices[0]?.message?.content ?? null;
-    } catch {
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:groq] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
       return null;
     }
   }
@@ -172,10 +180,15 @@ class OllamaAdapter implements InferenceAdapter {
           options: { temperature },
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:ollama] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { message: { content: string } };
       return data.message?.content ?? null;
-    } catch {
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:ollama] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
       return null;
     }
   }
@@ -205,10 +218,15 @@ class LMStudioAdapter implements InferenceAdapter {
           temperature,
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:lmstudio] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
       return data.choices?.[0]?.message?.content ?? null;
-    } catch {
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:lmstudio] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
       return null;
     }
   }
@@ -239,10 +257,17 @@ class KimiAdapter implements InferenceAdapter {
           temperature,
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:kimi] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { choices: Array<{ message: { content: string } }> };
       return data.choices[0]?.message?.content?.trim() ?? null;
-    } catch { return null; }
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:kimi] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
   }
 }
 
@@ -271,10 +296,17 @@ class OpenAIAdapter implements InferenceAdapter {
           temperature,
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:openai] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { choices: Array<{ message: { content: string } }> };
       return data.choices[0]?.message?.content?.trim() ?? null;
-    } catch { return null; }
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:openai] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
   }
 }
 
@@ -302,10 +334,17 @@ class AnthropicAdapter implements InferenceAdapter {
           temperature,
         }),
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        console.warn(`[inference:anthropic] non-2xx response: ${res.status}`);
+        return null;
+      }
       const data = await res.json() as { content: Array<{ type: string; text: string }> };
       return data.content.find(b => b.type === "text")?.text?.trim() ?? null;
-    } catch { return null; }
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:anthropic] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
   }
 }
 

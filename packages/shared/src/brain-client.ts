@@ -128,7 +128,8 @@ export class BrainClient {
       return data as AgentReply | SwarmReply;
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[brain-client] /chat failed for packet ${packet.packet_id}: ${msg}`);
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[brain-client] /chat failed for packet ${packet.packet_id}: ${msg}${cause}`);
       return null;
     } finally {
       clearTimeout(timer);

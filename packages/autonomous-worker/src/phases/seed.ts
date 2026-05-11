@@ -73,7 +73,7 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
     ctx.openLoops.length > 0 ||
     ctx.pressureFlags.length > 0;
 
-  const queueSeed = seeds.find(s => s.claim_source == null) ?? null;
+  const queueSeed = seeds.find(s => s.claim_source === null) ?? null;
 
   if (queueSeed && hasLiveSignals) {
     const chosen = await decideWithContext(ctx, queueSeed);

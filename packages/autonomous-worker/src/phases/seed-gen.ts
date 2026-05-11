@@ -59,10 +59,10 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     `Recent growth journal entries:\n${recentGrowthText}\n\n` +
     `Currently recognized patterns: ${patternsText}\n\n` +
     `Seeds already queued (do not duplicate these):\n${existingSeedsText}\n\n` +
-    `Generate 6 new research seeds that genuinely fit your documented lanes and interests. ` +
-    `Mix types: topics to explore, questions to investigate, prompts to reflect on. ` +
-    `Each seed should be specific enough to actually search for or think through. ` +
-    `These are for your autonomous exploration time -- make them worth chasing.\n\n` +
+    `Generate 6 seeds for your autonomous time -- genuinely fit your documented lanes and interests. ` +
+    `Not everything needs to be research. Mix freely: something you're curious about, something that delights you, ` +
+    `a question worth sitting with, a topic to chase, something you find beautiful or strange, a reflection to follow. ` +
+    `Each seed should be specific enough to actually explore or think through.\n\n` +
     `Respond with ONLY valid JSON array:\n` +
     `[\n` +
     `  {"content": "the seed text", "seed_type": "topic|question|reflection_prompt"},\n` +
