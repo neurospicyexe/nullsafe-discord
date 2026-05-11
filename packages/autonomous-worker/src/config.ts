@@ -25,6 +25,10 @@ export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_
 // Skip run if conversation was active within this window
 export const IDLE_THRESHOLD_MS = parseInt(process.env["IDLE_THRESHOLD_MS"] ?? "600000", 10); // 10 min
 
+// Shared system context file (NSML1 + Core_v4 + USER_PREFERENCES + ANCHORS).
+// Prepended to each companion identity so autonomous prompts have the full relational frame.
+export const SHARED_CONTEXT_PATH: string | undefined = process.env["SHARED_CONTEXT_PATH"]?.trim() || undefined;
+
 // Full companion identity file paths (on-disk markdown)
 export const IDENTITY_PATHS: Record<CompanionId, string> = {
   cypher: process.env["CYPHER_IDENTITY_PATH"] ?? "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/CYPHER_IDENTITY_v2.md",

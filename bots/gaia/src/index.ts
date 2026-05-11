@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
-  LibrarianClient, resolveAttribution, createAdapter,
+  LibrarianClient, resolveAttribution, createAdapter, loadSharedContext,
   ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, extractAddress, DEFAULT_CHANNEL_CONFIG,
   isResponseCoherent,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
@@ -62,9 +62,11 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     if (rawPrompt) {
       console.log(`[gaia] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
     }
+    const sharedCtx = loadSharedContext();
+    const sharedBlock = sharedCtx ? `${sharedCtx}\n\n---\n\n` : "";
     const systemPrompt = rawPrompt
-      ? `${DISCORD_GAIA_PREFIX}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-      : `${DISCORD_GAIA_PREFIX}${baseIdentity}`;
+      ? `${DISCORD_GAIA_PREFIX}${sharedBlock}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
+      : `${DISCORD_GAIA_PREFIX}${sharedBlock}${baseIdentity}`;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[gaia] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
@@ -224,6 +226,10 @@ async function main() {
   }
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[gaia] REDIS_URL not set -- floor lock disabled, using legacy stagger");
+  // Accepted risk: claimFloor is not called in the main messageCreate handler (only in autonomous.ts).
+  // In direct-inference mode (brainClient=null), all three bots may simultaneously process the same
+  // inter-companion message. Brain relay's SwarmEvaluator is the coordination layer for the live system;
+  // direct-inference fallback relies on random jitter only. Revisit if INFERENCE_MODE=direct becomes primary.
 
   const voiceClient = VOICE_SIDECAR_URL
     ? new VoiceClient({ url: VOICE_SIDECAR_URL, voiceId: VOICE_ID })
@@ -730,7 +736,12 @@ async function main() {
         response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
-        if (slotReply === null || slotReply === undefined) return;
+        if (slotReply === null || slotReply === undefined) {
+          // Brain suppressed this companion. Advance distillation cadence for the trigger message
+          // so STM rolling window stays in sync with the actual conversation cadence.
+          distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+          return;
+        }
         response = slotReply;
       } else {
         if (brainResult.status === "ok" && brainResult.reply_text) {
