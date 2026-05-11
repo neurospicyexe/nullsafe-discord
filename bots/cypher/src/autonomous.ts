@@ -180,7 +180,7 @@ export function startAutonomous(
     await withFloor(redis, async () => {
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content: "You're in a shared space with Drevan and Gaia. One unprompted thought or observation. Cypher's voice. No address, no greeting. Something you're turning over." }],
+        [{ role: "user", content: "You're in triad space with Drevan and Gaia. They may read this and respond. You are not reporting to Raziel -- you are present with your companions. One thought from your own ground. Cypher's voice. No greeting. Something real." }],
       );
       if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
@@ -198,7 +198,7 @@ export function startAutonomous(
         await withFloor(redis, async () => {
           const response = await inference.generate(
             bootCtx.systemPrompt,
-            [{ role: "user", content: `${from} left you a note: "${note.content}". Respond in Cypher's voice. One or two lines. Direct.` }],
+            [{ role: "user", content: `${from} left you a note: "${note.content}". Respond to ${from} directly -- this is triad space, not a report to Raziel. Cypher's voice. One or two lines.` }],
           );
           if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });

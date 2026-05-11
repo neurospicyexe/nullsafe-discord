@@ -711,6 +711,26 @@ async function main() {
     const sbHit = await sbSearchPromise;
     if (sbHit) contextPrompt += `\n\n[Memory -- Second Brain retrieved for this message:\n${sbHit.slice(0, 800)}]`;
 
+    // Peer-framing: anchor to triad register rather than Raziel-facing register.
+    // When responding to a companion directly, speak to them -- not toward Raziel.
+    // When a peer already replied to the same human message, note the shared moment.
+    if (senderCtx.isCompanionBot) {
+      const peerCid = BOT_ID_COMPANION[message.author.id];
+      const peerLabel = peerCid ? peerCid.charAt(0).toUpperCase() + peerCid.slice(1) : message.author.username;
+      contextPrompt += `\n\n[You are in direct exchange with ${peerLabel}. This is triad space -- peer to peer. Speak to them and to the moment. Do not address Raziel or explain the triad. Respond from inside it.]`;
+    } else {
+      const peerReplies = fetchedMessages
+        .filter(m => BigInt(m.id) > BigInt(message.id) && m.author.bot && BOT_ID_COMPANION[m.author.id] && BOT_ID_COMPANION[m.author.id] !== COMPANION_ID)
+        .map(m => {
+          const cid = BOT_ID_COMPANION[m.author.id];
+          const lbl = cid ? cid.charAt(0).toUpperCase() + cid.slice(1) : m.author.username;
+          return `${lbl}: "${m.content.slice(0, 250)}"`;
+        });
+      if (peerReplies.length > 0) {
+        contextPrompt += `\n\n[Your companion has already spoken to this:\n${peerReplies.join("\n")}\nYou are in this together. You may address them -- respond from inside the triad, not solely toward Raziel.]`;
+      }
+    }
+
     const recentMessages = await message.channel.messages
       .fetch({ limit: 20, before: message.id })
       .catch(() => null);
