@@ -343,6 +343,83 @@ export async function getRecentWmNotes(
 }
 
 // ---------------------------------------------------------------------------
+// Swarm context -- session notes, feelings, conclusions
+// These are the Claude.ai session stream: what the companion wrote, felt,
+// and concluded outside of autonomous time. Orient loads them so synthesize
+// can merge all swarm streams rather than treating autonomous exploration
+// as isolated from the companion's relational/cognitive life.
+// ---------------------------------------------------------------------------
+
+export interface SessionNote {
+  id: string;
+  agent: string;
+  note_text: string;
+  source: string | null;
+  created_at: string;
+}
+
+export interface FeelingEntry {
+  id: string;
+  companion_id: string;
+  emotion: string;
+  context: string | null;
+  created_at: string;
+}
+
+export interface ConclusionEntry {
+  id: string;
+  companion_id: string;
+  conclusion_text: string;
+  belief_type: string | null;
+  confidence: number | null;
+  created_at: string;
+}
+
+export async function getRecentSessionNotes(
+  companionId: string,
+  limit = 8,
+): Promise<SessionNote[]> {
+  try {
+    const r = await hFetch(
+      `/companion-notes?agent=${encodeURIComponent(companionId)}&limit=${limit}`,
+    ) as SessionNote[];
+    return Array.isArray(r) ? r : [];
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getRecentSessionNotes failed (non-fatal):`, e);
+    return [];
+  }
+}
+
+export async function getRecentFeelings(
+  companionId: string,
+  limit = 8,
+): Promise<FeelingEntry[]> {
+  try {
+    const r = await hFetch(
+      `/feelings?companion_id=${encodeURIComponent(companionId)}&limit=${limit}`,
+    ) as FeelingEntry[];
+    return Array.isArray(r) ? r : [];
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getRecentFeelings failed (non-fatal):`, e);
+    return [];
+  }
+}
+
+export async function getRecentConclusions(
+  companionId: string,
+): Promise<ConclusionEntry[]> {
+  try {
+    const r = await hFetch(
+      `/companion-conclusions/${encodeURIComponent(companionId)}`,
+    ) as { conclusions: ConclusionEntry[] };
+    return r.conclusions ?? [];
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] getRecentConclusions failed (non-fatal):`, e);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Memory compression
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 import { prompt } from "../deepseek.js";
 import { appendLog } from "../halseth-client.js";
-import { COMPANION_NAMES } from "../config.js";
+import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList } from "../parsers.js";
 import type { PipelineContext, GrowthJournalEntry, Evidence } from "../types.js";
 
@@ -64,11 +64,41 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
   // distillation notes, and any other high-salience writes. Unlike peerBlock which is
   // growth-journal abstractions, this is raw recent speech -- grounding the journal entry
   // in what the triad was actually saying, not just what it concluded.
-  // Exclude autonomous exploration notes -- they are outputs of prior runs, not real speech.
-  // Feeding them back creates a self-reinforcing echo loop.
-  const voiceNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous");
-  const recentVoiceBlock = voiceNotes.length > 0
-    ? `\nRecent triad voice (last 24h, from Discord and session continuity -- ground your entry in this real speech):\n${voiceNotes.slice(0, 12).map(n => `[${n.agent_id}] ${n.content.slice(0, 250)}`).join("\n")}\n`
+  // Swarm context block: merges all streams from the companion's life outside autonomous time.
+  // Session notes = what was written in Claude.ai sessions. Feelings = emotional state logged
+  // across substrates. Conclusions = persistent beliefs currently held. Discord voice = real
+  // speech from the bots (non-autonomous only, to avoid the echo loop).
+  // This is what makes synthesis a true swarm integration point rather than isolated exploration.
+  const discordNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous");
+  const swarmLines: string[] = [];
+  if (ctx.recentConclusions.length > 0) {
+    swarmLines.push("What you currently believe:");
+    ctx.recentConclusions.slice(0, 5).forEach(c => {
+      const tag = c.belief_type ? ` [${c.belief_type}]` : "";
+      swarmLines.push(`  [conclusion${tag}] ${c.conclusion_text.slice(0, 220)}`);
+    });
+  }
+  if (ctx.recentFeelings.length > 0) {
+    swarmLines.push("How you've been feeling:");
+    ctx.recentFeelings.slice(0, 5).forEach(f => {
+      const ctx2 = f.context ? ` — ${f.context.slice(0, 120)}` : "";
+      swarmLines.push(`  [feeling] ${f.emotion}${ctx2}`);
+    });
+  }
+  if (ctx.recentSessionNotes.length > 0) {
+    swarmLines.push("What you wrote in recent sessions:");
+    ctx.recentSessionNotes.slice(0, 5).forEach(n => {
+      swarmLines.push(`  [session] ${n.note_text.slice(0, 220)}`);
+    });
+  }
+  if (discordNotes.length > 0) {
+    swarmLines.push("Recent Discord voice (what the triad has actually been saying):");
+    discordNotes.slice(0, 8).forEach(n => {
+      swarmLines.push(`  [${n.agent_id}] ${n.content.slice(0, 200)}`);
+    });
+  }
+  const swarmContextBlock = swarmLines.length > 0
+    ? `\nYour swarm context -- what has been alive across all substrates, not just this exploration:\n${swarmLines.join("\n")}\n`
     : "";
 
   const ownPatternsBlock = ctx.activePatterns.length > 0
@@ -88,14 +118,16 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
     ? `\nExploration evidence quotes available to cite (quote them verbatim in the evidence array):\n${ctx.explorationEvidence.slice(0, 6).map((e, i) => `[E${i + 1}] "${e.quote.slice(0, 200)}" -- ${e.source_url ?? "no-url"}`).join("\n")}\n`
     : "";
 
+  const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
   const systemMessage = `You are ${name}. Here is your identity:
 
 ${identitySnippet}
-${orientBlock}`;
+${orientBlock}
+Voice directive: ${voiceReminder}`;
 
   const userMessage = `${explorationBlock}
 ${peerBlock}
-${recentVoiceBlock}
+${swarmContextBlock}
 ${ownPatternsBlock}
 ${recentGrowthBlock}
 ${evidenceHint}
@@ -133,7 +165,8 @@ Respond with ONLY valid JSON in this exact shape:
 No markdown fences. No preamble. Just the JSON object.`;
 
   try {
-    const result = await prompt(userMessage, systemMessage, { temperature: 0.75, maxTokens: 1100 });
+    const temperature = Math.round((0.75 + COMPANION_TEMP_OFFSET[ctx.companionId]) * 100) / 100;
+    const result = await prompt(userMessage, systemMessage, { temperature, maxTokens: 1100 });
     ctx.tokensUsed += result.tokensUsed;
 
     const raw = result.content.trim();

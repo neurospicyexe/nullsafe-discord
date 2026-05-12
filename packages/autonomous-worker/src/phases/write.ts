@@ -66,7 +66,7 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   // companion_journal (witnessLog path) is NOT read by orient; wm_continuity_notes IS.
   const seedTopic = ctx.seed?.content ?? "unknown";
   const threadTag = ctx.threadId ? ` [thread:pos${ctx.threadPosition ?? 1}]` : "";
-  const noteContent = `[autonomous:${ctx.runType}${threadTag}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
+  const noteContent = `[${ctx.companionId}:autonomous:${ctx.runType}${threadTag}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
   await writeWmNote(ctx.companionId, noteContent, ctx.threadId ?? undefined);
   await appendLog(ctx.runId, "write:wm-note-attempted");
 

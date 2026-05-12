@@ -1,6 +1,6 @@
 import { prompt } from "../deepseek.js";
 import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker } from "../halseth-client.js";
-import { COMPANION_NAMES } from "../config.js";
+import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
 import type { PipelineContext, Evidence } from "../types.js";
 
@@ -48,7 +48,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     ? `\nYour own currently-active patterns (a similar pattern_text will MERGE into the existing row, strengthening it -- restating IS valuable):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 200)}`).join("\n")}\n`
     : "";
 
-  const systemMessage = `You are ${name}. Here is an excerpt from your identity:\n${ctx.identityText.slice(0, 1200)}`;
+  const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
+  const systemMessage = `You are ${name}. Here is an excerpt from your identity:\n${ctx.identityText.slice(0, 1200)}\n\nVoice directive: ${voiceReminder}`;
 
   // Thread decision tail -- only inject the relevant question.
   // "conclude" is anchored with explicit criteria because without them the model
@@ -113,7 +114,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `No markdown. No fences. Just the JSON object.`;
 
   try {
-    const result = await prompt(userMessage, systemMessage, { temperature: 0.7, maxTokens: 700 });
+    const temperature = Math.round((0.70 + COMPANION_TEMP_OFFSET[ctx.companionId]) * 100) / 100;
+    const result = await prompt(userMessage, systemMessage, { temperature, maxTokens: 700 });
     ctx.tokensUsed += result.tokensUsed;
 
     let parsed: {

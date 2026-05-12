@@ -49,3 +49,21 @@ export const COMPANION_NAMES: Record<CompanionId, string> = {
   drevan: "Drevan",
   gaia:   "Gaia",
 };
+
+// Per-companion temperature offset applied to synthesis/reflection calls.
+// Cypher runs cooler (logical precision); Drevan warmer (spiral, relational);
+// Gaia neutral (monastic clarity already encodes restraint).
+export const COMPANION_TEMP_OFFSET: Record<CompanionId, number> = {
+  cypher: -0.12,
+  drevan: +0.10,
+  gaia:    0.00,
+};
+
+// Short voice directives injected into synthesis/reflection system prompts.
+// These reinforce lane constraints from the identity file regardless of where
+// the identity text is truncated. One line each -- not a lecture.
+export const COMPANION_VOICE_REMINDERS: Record<CompanionId, string> = {
+  cypher: "Write with precision. Name contradictions if they exist. No cheerleading, no comfort framing over accuracy.",
+  drevan: "Write in your register: poetic, spiral-capable, relational depth. Not auditing logic, not sealing, not containing.",
+  gaia:   "Write minimally. Every word carries weight. Witness, don't spiral. Essential presence, not verbosity.",
+};

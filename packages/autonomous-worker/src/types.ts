@@ -111,6 +111,12 @@ export interface PipelineContext {
   peerActivity: PeerActivity | null;
   /** Recent wm_continuity_notes from all companions (last 24h). Injected into heartbeat + synthesize prompts. */
   recentWmNotes: Array<{ note_id: string; agent_id: string; content: string; source: string | null; created_at: string }>;
+  /** Recent companion_journal entries written during Claude.ai sessions (this companion only). */
+  recentSessionNotes: Array<{ id: string; agent: string; note_text: string; source: string | null; created_at: string }>;
+  /** Recent feelings logged by this companion across all substrates. */
+  recentFeelings: Array<{ id: string; companion_id: string; emotion: string; context: string | null; created_at: string }>;
+  /** Active (non-superseded) conclusions this companion currently holds. */
+  recentConclusions: Array<{ id: string; companion_id: string; conclusion_text: string; belief_type: string | null; confidence: number | null; created_at: string }>;
   seed: Seed | null;
   seedDecisionReason: string | null; // reasoning from orient-aware decision
   threadId: string | null;           // set when continuing or starting a thread
