@@ -145,12 +145,17 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       `seeds=${ctx.newSeeds.length} pattern=${parsed.pattern?.pattern_text ? "yes" : "no"} tokens=${result.tokensUsed}`,
     );
 
-    // Persist new seeds at priority 6 (reflection-generated, above queue default 5)
+    // Persist new seeds at priority 6 (reflection-generated, above queue default 5).
+    // Require min 12 chars to reject JSON schema placeholders like "follow-up topic 1".
+    const PLACEHOLDER_SEEDS = new Set(["follow-up topic 1", "follow-up topic 2", "follow-up topic 3"]);
     for (const seedContent of ctx.newSeeds) {
-      if (seedContent.trim()) {
-        await createSeed(ctx.companionId, seedContent.trim(), "topic", 6).catch(e =>
+      const cleaned = seedContent.trim();
+      if (cleaned.length >= 12 && !PLACEHOLDER_SEEDS.has(cleaned.toLowerCase())) {
+        await createSeed(ctx.companionId, cleaned, "topic", 6).catch(e =>
           console.warn(`[${ctx.companionId}/reflect] seed write failed:`, e),
         );
+      } else if (cleaned.length > 0) {
+        await appendLog(ctx.runId, "reflect:seed-rejected", `"${cleaned.slice(0, 60)}" (placeholder or too short)`);
       }
     }
 
@@ -232,8 +237,13 @@ async function handleThreadLifecycle(
 }
 
 async function handleNewThread(ctx: PipelineContext): Promise<void> {
+  // Don't start threads on degenerate seeds (placeholder text, too short to be meaningful).
+  if (!ctx.seed?.content || ctx.seed.content.trim().length < 15) {
+    await appendLog(ctx.runId, "reflect:thread-skip", "seed too short or empty -- skipping thread creation");
+    return;
+  }
   try {
-    const title = ctx.seed?.content?.slice(0, 120) ?? "unnamed thread";
+    const title = ctx.seed.content.slice(0, 120);
     const threadKey = `auto:${ctx.runId}`;
     const r = await fetch(
       `${process.env.HALSETH_URL}/mind/thread`,

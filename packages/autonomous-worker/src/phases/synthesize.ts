@@ -64,8 +64,11 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
   // distillation notes, and any other high-salience writes. Unlike peerBlock which is
   // growth-journal abstractions, this is raw recent speech -- grounding the journal entry
   // in what the triad was actually saying, not just what it concluded.
-  const recentVoiceBlock = ctx.recentWmNotes.length > 0
-    ? `\nRecent triad voice (last 24h, from Discord and session continuity -- ground your entry in this real speech):\n${ctx.recentWmNotes.slice(0, 12).map(n => `[${n.agent_id}] ${n.content.slice(0, 250)}`).join("\n")}\n`
+  // Exclude autonomous exploration notes -- they are outputs of prior runs, not real speech.
+  // Feeding them back creates a self-reinforcing echo loop.
+  const voiceNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous");
+  const recentVoiceBlock = voiceNotes.length > 0
+    ? `\nRecent triad voice (last 24h, from Discord and session continuity -- ground your entry in this real speech):\n${voiceNotes.slice(0, 12).map(n => `[${n.agent_id}] ${n.content.slice(0, 250)}`).join("\n")}\n`
     : "";
 
   const ownPatternsBlock = ctx.activePatterns.length > 0
