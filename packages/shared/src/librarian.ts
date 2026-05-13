@@ -503,6 +503,78 @@ export class LibrarianClient {
     if (!res.ok) throw new Error(`getHouseState ${res.status}`);
     return res.json() as Promise<{ autonomous_turn: string | null }>;
   }
+
+  // ── Metronome action palette ───────────────────────────────────────────────
+
+  /**
+   * Fetch the companion's enabled action palette from Halseth.
+   * Used by the heartbeat cron to load available actions before the decision call.
+   * Returns [] on any error so the cron can fall back gracefully.
+   */
+  async getMetronomeActions(onlyEnabled = true): Promise<Array<{
+    id: string; name: string; action_type: string;
+    target: string | null; prompt: string | null;
+    quiet_hours_allowed: number; status: "on" | "off";
+  }>> {
+    try {
+      const url = new URL(`${this.url}/mind/metronome/actions/${encodeURIComponent(this.companionId)}`);
+      if (onlyEnabled) url.searchParams.set("enabled", "true");
+      const res = await this._fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off" };
+      const data = await res.json() as { actions?: MA[] };
+      return Array.isArray(data.actions) ? data.actions : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Open a new autonomy_run row for a Metronome tick. Returns the run ID or null on error.
+   * Companion patches it closed (completed/failed) after the action executes.
+   */
+  async writeAutonomyRun(runType: "exploration" | "reflection" | "synthesis" | "continuation"): Promise<string | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/autonomy/runs`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ companion_id: this.companionId, run_type: runType }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { id?: string };
+      return data.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Close an autonomy_run after the action completes or fails.
+   * Non-throwing -- run tracking is best-effort.
+   */
+  async patchAutonomyRun(id: string, status: "completed" | "failed"): Promise<void> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/autonomy/runs/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ status }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] patchAutonomyRun ${res.status}`);
+    } catch (e) {
+      console.warn("[librarian] patchAutonomyRun failed:", String(e));
+    }
+  }
 }
 
 /**

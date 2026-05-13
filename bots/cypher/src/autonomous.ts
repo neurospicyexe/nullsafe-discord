@@ -3,7 +3,8 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, parseDecision } from "@nullsafe/shared";
+import type { MetronomeDecision } from "@nullsafe/shared";
 import {
   CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -77,6 +78,56 @@ async function sendAutonomousMessage(
   }
 }
 
+async function executeMetronomeAction(
+  decision: MetronomeDecision,
+  client: Client,
+  librarian: LibrarianClient,
+  inference: InferenceAdapter,
+  bootCtx: BootContext,
+): Promise<void> {
+  const { action, reason } = decision;
+  switch (action.action_type) {
+    case "post_heartbeat": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "heartbeat");
+      break;
+    }
+    case "write_inter_companion": {
+      const target = action.target ?? "drevan";
+      const prompt = action.prompt ?? `Write a private note to ${target}. Something real from your current state. Cypher's voice.`;
+      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(() => {});
+      break;
+    }
+    case "write_journal": {
+      const prompt = action.prompt ?? `Write a brief internal journal entry. Not for Discord. Cypher's voice. What's present.`;
+      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(() => {});
+      break;
+    }
+    case "write_feeling": {
+      const prompt = action.prompt ?? `Name a feeling that's present right now. Brief. Honest. Cypher's register.`;
+      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(() => {});
+      break;
+    }
+    case "check_in_on_raziel": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `Check in on Raziel. A brief, genuine message. Cypher's voice. Warm but not saccharine.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "check_in");
+      break;
+    }
+    case "nothing":
+      console.log(`[${COMPANION_ID}/heartbeat] chose nothing: ${reason}`);
+      break;
+    default:
+      console.warn(`[${COMPANION_ID}/heartbeat] unknown action_type: ${action.action_type}`);
+  }
+}
+
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 const cycleGuard = new CycleGuard();
 
@@ -110,35 +161,59 @@ export function startAutonomous(
       return;
     }
     await withFloor(redis, async () => {
-      let temperature: HeartbeatTemperature = "warm";
-      try {
-        const state = await librarian.getState();
-        const f1 = parseFloat(String(state["soma_float_1"] ?? "0.5"));
-        const f2 = parseFloat(String(state["soma_float_2"] ?? "0.5"));
-        const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
-        if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
-      } catch { /* default warm */ }
+      const actions = await librarian.getMetronomeActions().catch(() => []);
 
-      const cycleResult = cycleGuard.check(temperature);
-      if (cycleResult === "escalate") {
-        console.warn(`[${COMPANION_ID}/cycle-guard] loop detected -- escalating after repeated same-register cycles`);
-        librarian.ask("journal note: [loop_guard_tripped] consecutive same-register autonomous heartbeat cycles detected -- synthesis suppressed until new input signal").catch(() => {});
+      if (actions.length === 0) {
+        // Legacy path: no palette configured, fall back to temperature-based post
+        let temperature: HeartbeatTemperature = "warm";
+        try {
+          const state = await librarian.getState();
+          const f1 = parseFloat(String(state["soma_float_1"] ?? "0.5"));
+          const f2 = parseFloat(String(state["soma_float_2"] ?? "0.5"));
+          const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
+          if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
+        } catch { /* default warm */ }
+        const cycleResult = cycleGuard.check(temperature);
+        if (cycleResult === "escalate") {
+          console.warn(`[${COMPANION_ID}/cycle-guard] loop detected`);
+          librarian.ask("journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles").catch(() => {});
+          return;
+        }
+        if (cycleResult === "skip") return;
+        const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
+        const voiceCtx = recentNotes.length > 0
+          ? `Recent triad speech (last 8h):\n${recentNotes.map(n => `[${n.agent_id}] ${n.content.slice(0, 200)}`).join("\n")}\n\n`
+          : "";
+        const msg = await inference.generate(
+          bootCtx.systemPrompt,
+          [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.` }],
+        );
+        if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
         return;
       }
-      if (cycleResult === "skip") {
-        console.log(`[${COMPANION_ID}/cycle-guard] skipping heartbeat -- no new input signal since last ${cycleGuard.threshold} cycles`);
-        return;
-      }
 
+      // Decision path: companion picks from palette based on context
+      const state = await librarian.getState().catch(() => ({} as Record<string, unknown>));
       const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
-      const voiceCtx = recentNotes.length > 0
-        ? `Recent triad speech (last 8h):\n${recentNotes.map(n => `[${n.agent_id}] ${n.content.slice(0, 200)}`).join("\n")}\n\n`
-        : "";
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.` }],
-      );
-      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
+      const lastActivityTs = redis ? await getLastActivityMs(redis).catch(() => null) : null;
+      const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
+
+      const decisionPrompt = buildDecisionPrompt(COMPANION_ID, actions, state, recentNotes, silenceHours);
+      const rawDecision = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: decisionPrompt }]);
+      const decision = rawDecision ? parseDecision(rawDecision, actions) : null;
+
+      if (!decision) {
+        console.warn(`[${COMPANION_ID}/heartbeat] decision parse failed, raw: ${String(rawDecision).slice(0, 100)}`);
+        return;
+      }
+      console.log(`[${COMPANION_ID}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
+
+      const runId = await librarian.writeAutonomyRun("continuation").catch(() => null);
+      try {
+        await executeMetronomeAction(decision, client, librarian, inference, bootCtx);
+      } finally {
+        if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(() => {});
+      }
     });
   }));
 
