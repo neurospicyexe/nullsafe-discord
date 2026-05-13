@@ -69,7 +69,7 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
   // across substrates. Conclusions = persistent beliefs currently held. Discord voice = real
   // speech from the bots (non-autonomous only, to avoid the echo loop).
   // This is what makes synthesis a true swarm integration point rather than isolated exploration.
-  const discordNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous");
+  const discordNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous" && n.source !== "synthesis_loop");
   const swarmLines: string[] = [];
   if (ctx.recentConclusions.length > 0) {
     swarmLines.push("What you currently believe:");
