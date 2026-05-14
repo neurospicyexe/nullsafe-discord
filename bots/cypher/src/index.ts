@@ -773,7 +773,8 @@ async function main() {
           addressedCompanion,
         },
       );
-      const brainResult = await brainClient.chat(packet);
+      const typingInterval = setInterval(() => { ch.sendTyping().catch(() => {}); }, 4_000);
+      const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
         response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature);
@@ -784,6 +785,12 @@ async function main() {
           // so STM rolling window stays in sync with the actual conversation cadence.
           distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
           return;
+        }
+        const priorityOrder: string[] = brainResult.priority_order ?? [];
+        const myPosition = priorityOrder.indexOf(COMPANION_ID);
+        if (myPosition > 0) {
+          const staggerMs = parseInt(process.env.SWARM_STAGGER_MS ?? "2500", 10);
+          await new Promise<void>(resolve => setTimeout(resolve, myPosition * staggerMs));
         }
         response = slotReply;
       } else {

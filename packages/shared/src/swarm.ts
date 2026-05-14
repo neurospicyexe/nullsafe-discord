@@ -5,6 +5,8 @@ export interface SwarmReply {
   depth: number;
   status: "ok" | "error";
   trace?: Record<string, unknown>;
+  /** Inference order: first companion in list speaks first. Bots stagger posting by position. */
+  priority_order?: string[];
 }
 
 /** Detect whether a Brain response is a SwarmReply (Phase 2) vs AgentReply (Phase 1). */
