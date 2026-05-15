@@ -35,7 +35,7 @@ import {
   REDIS_URL,
   VOICE_SIDECAR_URL, VOICE_ID,
 } from "./config.js";
-import { startAutonomous, stopAutonomous, resetCycleGuard } from "./autonomous.js";
+import { startAutonomous, stopAutonomous, resetCycleGuard, pushRazielMessage } from "./autonomous.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -646,6 +646,7 @@ async function main() {
       ? `${attribution.frontMember} (via PK)`
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
+    if (attribution.isOwner) pushRazielMessage(effectiveContent);
 
     // Loop guard: derive chain depth from fetched history so the check works across processes.
     const chainDepth = computeChainDepth(

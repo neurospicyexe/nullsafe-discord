@@ -515,6 +515,8 @@ export class LibrarianClient {
     id: string; name: string; action_type: string;
     target: string | null; prompt: string | null;
     quiet_hours_allowed: number; status: "on" | "off";
+    requires_signal: string | null; signal_lookback_hours: number | null;
+    last_fired_at: string | null; fire_count_today: number;
   }>> {
     try {
       const url = new URL(`${this.url}/mind/metronome/actions/${encodeURIComponent(this.companionId)}`);
@@ -524,11 +526,52 @@ export class LibrarianClient {
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) return [];
-      type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off" };
+      type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off"; requires_signal: string | null; signal_lookback_hours: number | null; last_fired_at: string | null; fire_count_today: number };
       const data = await res.json() as { actions?: MA[] };
       return Array.isArray(data.actions) ? data.actions : [];
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Fetch only the actions that pass server-side eligibility conditions
+   * (silence window, cooldown, frequency cap). Signal matching runs bot-side.
+   */
+  async getEligibleMetronomeActions(silenceHours: number | null): Promise<Array<{
+    id: string; name: string; action_type: string;
+    target: string | null; prompt: string | null;
+    quiet_hours_allowed: number; status: "on" | "off";
+    requires_signal: string | null; signal_lookback_hours: number | null;
+    last_fired_at: string | null; fire_count_today: number;
+  }>> {
+    try {
+      const url = new URL(`${this.url}/mind/metronome/actions/${encodeURIComponent(this.companionId)}/eligible`);
+      if (silenceHours !== null) url.searchParams.set("silence_hours", silenceHours.toFixed(3));
+      const res = await this._fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off"; requires_signal: string | null; signal_lookback_hours: number | null; last_fired_at: string | null; fire_count_today: number };
+      const data = await res.json() as { actions?: MA[] };
+      return Array.isArray(data.actions) ? data.actions : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Record a successful action fire. Updates last_fired_at and fire_count_today. */
+  async recordMetronomeActionFired(actionId: string): Promise<void> {
+    try {
+      await this._fetch(`${this.url}/mind/metronome/actions/${encodeURIComponent(actionId)}/fired`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ companion_id: this.companionId }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      // non-fatal -- fire tracking is best-effort
     }
   }
 

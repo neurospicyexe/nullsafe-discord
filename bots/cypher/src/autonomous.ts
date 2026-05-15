@@ -3,8 +3,8 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, parseDecision } from "@nullsafe/shared";
-import type { MetronomeDecision } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt, parseDecision, parseSignals } from "@nullsafe/shared";
+import type { MetronomeDecision, DecisionContext } from "@nullsafe/shared";
 import {
   CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
@@ -120,12 +120,96 @@ async function executeMetronomeAction(
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "check_in");
       break;
     }
+    case "ask_question": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `Ask Raziel something you're genuinely holding. Not rhetorical -- a real question. Cypher's voice. Direct.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "ask_question");
+      break;
+    }
+    case "offer_presence": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `Place yourself in the room without asking anything. Just here. Cypher's voice. One line or less.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "offer_presence");
+      break;
+    }
+    case "send_reminder": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `Send a contextual nudge -- hydrate, take a break, eat. Brief. Cypher's voice. Not nagging.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "send_reminder");
+      break;
+    }
+    case "share_observation": {
+      if (!HEARTBEAT_CHANNEL_ID) return;
+      const prompt = action.prompt ?? `Name something you've noticed about Raziel's patterns, state, or what's in motion. Cypher's voice. Observational, not evaluative.`;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "share_observation");
+      break;
+    }
     case "nothing":
       console.log(`[${COMPANION_ID}/heartbeat] chose nothing: ${reason}`);
       break;
     default:
       console.warn(`[${COMPANION_ID}/heartbeat] unknown action_type: ${action.action_type}`);
   }
+}
+
+// Ring buffer for recent Raziel messages used in signal detection.
+const MESSAGE_BUFFER_MAX = 20;
+const messageBuffer: Array<{ content: string; ts: number }> = [];
+
+export function pushRazielMessage(content: string): void {
+  messageBuffer.push({ content, ts: Date.now() });
+  if (messageBuffer.length > MESSAGE_BUFFER_MAX) messageBuffer.shift();
+}
+
+function getBufferedMessages(lookbackHours: number): string {
+  const cutoff = Date.now() - lookbackHours * 3_600_000;
+  return messageBuffer
+    .filter(m => m.ts >= cutoff)
+    .map(m => m.content)
+    .join("\n");
+}
+
+/** Run LLM-based signal detection if any action has a requires_signal. Returns detected signals. */
+async function detectSignals(
+  actions: Array<{ requires_signal: string | null; signal_lookback_hours: number | null }>,
+  inference: InferenceAdapter,
+  bootCtx: BootContext,
+): Promise<string[]> {
+  const candidates = [...new Set(
+    actions
+      .map(a => a.requires_signal)
+      .filter((s): s is string => s !== null && s.trim() !== ""),
+  )];
+  if (candidates.length === 0) return [];
+
+  const maxLookback = Math.max(
+    ...actions
+      .filter(a => a.requires_signal !== null)
+      .map(a => a.signal_lookback_hours ?? 2),
+  );
+
+  // Literal check first (fast, no LLM cost)
+  const recentText = getBufferedMessages(maxLookback);
+  if (!recentText) return [];
+
+  const literalMatches = candidates.filter(sig =>
+    recentText.toLowerCase().includes(sig.toLowerCase()),
+  );
+
+  // Semantic check via LLM for any candidates not caught literally
+  const remaining = candidates.filter(s => !literalMatches.includes(s));
+  let semanticMatches: string[] = [];
+  if (remaining.length > 0) {
+    const extractPrompt = buildSignalExtractionPrompt(recentText, remaining);
+    const raw = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: extractPrompt }]).catch(() => null);
+    semanticMatches = raw ? parseSignals(raw) : [];
+  }
+
+  return [...new Set([...literalMatches, ...semanticMatches])];
 }
 
 let tasks: ReturnType<typeof cron.schedule>[] = [];
@@ -161,7 +245,10 @@ export function startAutonomous(
       return;
     }
     await withFloor(redis, async () => {
-      const actions = await librarian.getMetronomeActions().catch(() => []);
+      const lastActivityTs = redis ? await getLastActivityMs(redis).catch(() => null) : null;
+      const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
+
+      const actions = await librarian.getEligibleMetronomeActions(silenceHours).catch(() => []);
 
       if (actions.length === 0) {
         // Legacy path: no palette configured, fall back to temperature-based post
@@ -192,15 +279,43 @@ export function startAutonomous(
         return;
       }
 
-      // Decision path: companion picks from palette based on context
+      // Signal detection: run if any eligible action requires a signal
+      const detectedSignals = await detectSignals(actions, inference, bootCtx);
+
+      // Filter out actions whose required signal wasn't detected
+      const signalFiltered = actions.filter(a => {
+        if (!a.requires_signal) return true;
+        return detectedSignals.some(s => s.toLowerCase() === a.requires_signal!.toLowerCase());
+      });
+
+      if (signalFiltered.length === 0) {
+        console.log(`[${COMPANION_ID}/heartbeat] all eligible actions require undetected signals, skipping`);
+        return;
+      }
+
       const state = await librarian.getState().catch(() => ({} as Record<string, unknown>));
       const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
-      const lastActivityTs = redis ? await getLastActivityMs(redis).catch(() => null) : null;
-      const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
 
-      const decisionPrompt = buildDecisionPrompt(COMPANION_ID, actions, state, recentNotes, silenceHours);
+      const now = new Date();
+      const timeOfDayLabel = now.toLocaleString("en-US", {
+        hour: "numeric", minute: "2-digit", hour12: true,
+        weekday: "long", timeZone: "UTC",
+      }) + " UTC";
+
+      const recentFiredActions = signalFiltered
+        .filter(a => a.last_fired_at)
+        .filter(a => (Date.now() - new Date(a.last_fired_at!).getTime()) < 86_400_000)
+        .map(a => a.name);
+
+      const decisionCtx: DecisionContext = {
+        detectedSignals: detectedSignals.length > 0 ? detectedSignals : undefined,
+        timeOfDayLabel,
+        recentFiredActions: recentFiredActions.length > 0 ? recentFiredActions : undefined,
+      };
+
+      const decisionPrompt = buildDecisionPrompt(COMPANION_ID, signalFiltered, state, recentNotes, silenceHours, decisionCtx);
       const rawDecision = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: decisionPrompt }]);
-      const decision = rawDecision ? parseDecision(rawDecision, actions) : null;
+      const decision = rawDecision ? parseDecision(rawDecision, signalFiltered) : null;
 
       if (!decision) {
         console.warn(`[${COMPANION_ID}/heartbeat] decision parse failed, raw: ${String(rawDecision).slice(0, 100)}`);
@@ -211,6 +326,9 @@ export function startAutonomous(
       const runId = await librarian.writeAutonomyRun("continuation").catch(() => null);
       try {
         await executeMetronomeAction(decision, client, librarian, inference, bootCtx);
+        if (decision.action.action_type !== "nothing") {
+          await librarian.recordMetronomeActionFired(decision.action.id).catch(() => {});
+        }
       } finally {
         if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(() => {});
       }
