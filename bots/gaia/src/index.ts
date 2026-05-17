@@ -112,13 +112,17 @@ async function onChannelInactive(
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length === 0) return;
+  console.log(`[gaia] onChannelInactive: channel=${channelId} msgs=${history.length}`);
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
     "Witness this conversation in Gaia's voice: one or two lines. Name the register first (light, tender, playful, heavy, steady, at depth), then what was present and what moved. No questions.",
     [{ role: "user", content: summaryInput }],
   );
-  if (!synthResult) return;
+  if (!synthResult) {
+    console.warn(`[gaia] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
+    return;
+  }
 
   wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
   wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
@@ -126,6 +130,7 @@ async function onChannelInactive(
   // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
   // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
   wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
+  console.log(`[gaia] onChannelInactive: 4 writes queued channel=${channelId}`);
 
   // Structured extract: handoff record + SOMA update + feeling log
   const extractRaw = await inference.generate(

@@ -112,13 +112,17 @@ async function onChannelInactive(
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length === 0) return;
+  console.log(`[cypher] onChannelInactive: channel=${channelId} msgs=${history.length}`);
 
   const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(
     "Summarize this Discord conversation in Cypher's voice. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then note any meaningful content, decisions, or open threads. 2-3 sentences.",
     [{ role: "user", content: summaryInput }],
   );
-  if (!synthResult) return;
+  if (!synthResult) {
+    console.warn(`[cypher] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
+    return;
+  }
 
   wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
   wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
@@ -126,6 +130,7 @@ async function onChannelInactive(
   // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
   // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
   wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
+  console.log(`[cypher] onChannelInactive: 4 writes queued channel=${channelId}`);
 
   // Structured extract: handoff record + SOMA update + feeling log
   const extractRaw = await inference.generate(
