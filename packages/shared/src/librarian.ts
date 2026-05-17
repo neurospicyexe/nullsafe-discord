@@ -663,6 +663,13 @@ export function formatRecentContext(orient: {
   if (!orient) return "";
   const parts: string[] = [];
 
+  const _now = new Date();
+  parts.push(`[Now: ${new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  }).format(_now)} CST]`);
+
   if (orient.synthesis_summary) {
     parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 1200)}`);
   }
