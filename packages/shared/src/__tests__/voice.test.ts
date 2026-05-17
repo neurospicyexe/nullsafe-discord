@@ -1,5 +1,5 @@
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
-import { VoiceClient } from "../voice.js";
+import { VoiceClient, VoiceRealtimeSession } from "../voice.js";
 
 const mockFetch = jest.fn();
 
@@ -81,5 +81,39 @@ describe("VoiceClient.createRealtimeSession", () => {
     expect(session).toBeTruthy();
     expect(typeof session.run).toBe("function");
     expect(typeof session.onTranscript).toBe("function");
+  });
+});
+
+describe("VoiceRealtimeSession", () => {
+  it("accumulates transcript deltas and returns final string", async () => {
+    const session = new VoiceRealtimeSession("test-key", {
+      _mockTranscriptEvents: [
+        { type: "transcript.text.delta", text: "hello " },
+        { type: "transcript.text.delta", text: "world" },
+        { type: "transcript.done" },
+      ],
+    });
+
+    const deltas: string[] = [];
+    session.onTranscript((t) => deltas.push(t));
+
+    async function* emptyPCM(): AsyncIterable<Uint8Array> {
+      yield new Uint8Array(0);
+    }
+
+    const result = await session.run(emptyPCM());
+    expect(result).toBe("hello world");
+    expect(deltas).toEqual(["hello ", "world"]);
+  });
+
+  it("returns empty string if no speech", async () => {
+    const session = new VoiceRealtimeSession("test-key", {
+      _mockTranscriptEvents: [{ type: "transcript.done" }],
+    });
+
+    async function* emptyPCM(): AsyncIterable<Uint8Array> {}
+
+    const result = await session.run(emptyPCM());
+    expect(result).toBe("");
   });
 });

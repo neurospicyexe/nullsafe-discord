@@ -71,12 +71,61 @@ export class VoiceClient {
   }
 }
 
-// Stub -- full implementation in Task 3
+export const REALTIME_STT_MODEL = "voxtral-mini-transcribe-realtime-2602";
+
+interface RealtimeSessionOptions {
+  _mockTranscriptEvents?: Array<{ type: string; text?: string }>;
+}
+
 export class VoiceRealtimeSession {
-  constructor(_apiKey: string, _opts?: Record<string, unknown>) {}
-  onTranscript(_cb: (text: string) => void): void {}
-  async run(_audioStream: AsyncIterable<Uint8Array>): Promise<string> {
-    return "";
+  private apiKey: string;
+  private transcriptCallback: ((text: string) => void) | null = null;
+  private mockEvents?: Array<{ type: string; text?: string }>;
+
+  constructor(apiKey: string, opts?: RealtimeSessionOptions) {
+    this.apiKey = apiKey;
+    this.mockEvents = opts?._mockTranscriptEvents;
+  }
+
+  onTranscript(cb: (text: string) => void): void {
+    this.transcriptCallback = cb;
+  }
+
+  async run(audioStream: AsyncIterable<Uint8Array>): Promise<string> {
+    let transcript = "";
+
+    if (this.mockEvents) {
+      for (const event of this.mockEvents) {
+        if (event.type === "transcript.text.delta" && event.text) {
+          transcript += event.text;
+          this.transcriptCallback?.(event.text);
+        }
+      }
+      return transcript;
+    }
+
+    // Production path: stream to Voxtral realtime WebSocket via Mistral SDK.
+    // The exact TypeScript method name should be verified at:
+    // https://docs.mistral.ai/studio-api/audio/speech_to_text/realtime_transcription
+    const { Mistral: MistralClient } = await import("@mistralai/mistralai");
+    const mistral = new MistralClient({ apiKey: this.apiKey });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream: AsyncIterable<any> = await (mistral.audio as any).realtime.transcribeStream({
+      audioStream,
+      model: REALTIME_STT_MODEL,
+      audioFormat: { encoding: "pcm_s16le", sampleRate: 16000 },
+    });
+
+    for await (const event of stream) {
+      const text: string | undefined = event.text ?? event.delta?.text;
+      if (text) {
+        transcript += text;
+        this.transcriptCallback?.(text);
+      }
+    }
+
+    return transcript;
   }
 }
 
