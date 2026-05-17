@@ -85,6 +85,9 @@ export class VoiceRealtimeSession {
   constructor(apiKey: string, opts?: RealtimeSessionOptions) {
     this.apiKey = apiKey;
     this.mockEvents = opts?._mockTranscriptEvents;
+    if (!this.mockEvents && !apiKey) {
+      throw new Error("VoiceRealtimeSession requires a non-empty apiKey");
+    }
   }
 
   onTranscript(cb: (text: string) => void): void {
@@ -111,17 +114,32 @@ export class VoiceRealtimeSession {
     const mistral = new MistralClient({ apiKey: this.apiKey });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stream: AsyncIterable<any> = await (mistral.audio as any).realtime.transcribeStream({
+    const realtimeClient = (mistral.audio as any).realtime;
+    if (!realtimeClient?.transcribeStream) {
+      throw new Error("Mistral SDK does not expose audio.realtime.transcribeStream -- verify SDK version");
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream: AsyncIterable<any> = await realtimeClient.transcribeStream({
       audioStream,
       model: REALTIME_STT_MODEL,
       audioFormat: { encoding: "pcm_s16le", sampleRate: 16000 },
     });
 
-    for await (const event of stream) {
-      const text: string | undefined = event.text ?? event.delta?.text;
-      if (text) {
-        transcript += text;
-        this.transcriptCallback?.(text);
+    try {
+      for await (const event of stream) {
+        const text: string | undefined = event.text ?? event.delta?.text;
+        if (text) {
+          transcript += text;
+          this.transcriptCallback?.(text);
+        }
+      }
+    } catch (err) {
+      throw new Error(`Voxtral realtime transcription failed: ${(err as Error).message}`);
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (typeof (stream as any)[Symbol.asyncIterator] !== "undefined") {
+        try { await (stream as any).return?.(); } catch { /* ignore cleanup errors */ }
       }
     }
 
