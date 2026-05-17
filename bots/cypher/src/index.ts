@@ -23,6 +23,7 @@ import {
   BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
   MODEL_SWITCH_TRIGGER, MODEL_SWITCH_SUCCESS, MODEL_SWITCH_LIST_INTRO,
   REDIS_URL,
+  MISTRAL_API_KEY, VOICE_ID,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard, pushRazielMessage } from "./autonomous.js";
 import {
@@ -35,7 +36,6 @@ import {
 } from "@discordjs/voice";
 import { Readable } from "stream";
 import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
-import { MISTRAL_API_KEY, VOICE_ID } from "./config.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
