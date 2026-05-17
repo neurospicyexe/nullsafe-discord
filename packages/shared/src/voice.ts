@@ -1,29 +1,37 @@
+const MISTRAL_BASE = "https://api.mistral.ai";
+
 export interface VoiceClientConfig {
-  url: string;
+  mistralApiKey: string;
   voiceId: string;
-  speed?: number;
+  ttsModel?: string;
+  sttModel?: string;
   /** Injectable fetch for testing; defaults to globalThis.fetch. */
   fetch?: typeof globalThis.fetch;
 }
 
 export class VoiceClient {
-  private url: string;
+  private apiKey: string;
   private voiceId: string;
-  private speed: number;
+  private ttsModel: string;
+  private sttModel: string;
   private _fetch: typeof globalThis.fetch;
 
   constructor(config: VoiceClientConfig) {
-    this.url = config.url;
+    this.apiKey = config.mistralApiKey;
     this.voiceId = config.voiceId;
-    this.speed = config.speed ?? 1.0;
+    this.ttsModel = config.ttsModel ?? "voxtral-v1";
+    this.sttModel = config.sttModel ?? "voxtral-mini-transcribe-2507";
     this._fetch = config.fetch ?? globalThis.fetch;
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    const res = await this._fetch(`${this.url}/tts`, {
+    const res = await this._fetch(`${MISTRAL_BASE}/v1/audio/speech`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: this.voiceId, speed: this.speed }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({ model: this.ttsModel, input: text, voice: this.voiceId }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
@@ -33,26 +41,42 @@ export class VoiceClient {
 
   async transcribe(audio: Buffer, filename: string): Promise<string> {
     const form = new FormData();
-    form.append("audio", new Blob([new Uint8Array(audio)]), filename);
-    const res = await this._fetch(`${this.url}/stt`, {
+    form.append("file", new Blob([new Uint8Array(audio)]), filename);
+    form.append("model", this.sttModel);
+    const res = await this._fetch(`${MISTRAL_BASE}/v1/audio/transcriptions`, {
       method: "POST",
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body: form,
       signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`STT failed: ${res.status}`);
-    const data = (await res.json()) as { text: string; language: string };
+    const data = (await res.json()) as { text: string };
     return data.text;
   }
 
   async isHealthy(): Promise<boolean> {
     try {
-      const res = await this._fetch(`${this.url}/health`, {
+      const res = await this._fetch(`${MISTRAL_BASE}/v1/models`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(5_000),
       });
       return res.ok;
     } catch {
       return false;
     }
+  }
+
+  createRealtimeSession(): VoiceRealtimeSession {
+    return new VoiceRealtimeSession(this.apiKey);
+  }
+}
+
+// Stub -- full implementation in Task 3
+export class VoiceRealtimeSession {
+  constructor(_apiKey: string, _opts?: Record<string, unknown>) {}
+  onTranscript(_cb: (text: string) => void): void {}
+  async run(_audioStream: AsyncIterable<Uint8Array>): Promise<string> {
+    return "";
   }
 }
 

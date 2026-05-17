@@ -23,7 +23,7 @@ import {
   BLUE_FRAMING, GUEST_FRAMING, DISCORD_DREVAN_PREFIX,
   MODEL_SWITCH_TRIGGER, MODEL_SWITCH_SUCCESS, MODEL_SWITCH_LIST_INTRO,
   REDIS_URL,
-  VOICE_SIDECAR_URL, VOICE_ID,
+  MISTRAL_API_KEY, VOICE_ID,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard, pushRazielMessage } from "./autonomous.js";
 import {
@@ -236,16 +236,16 @@ async function main() {
   // inter-companion message. Brain relay's SwarmEvaluator is the coordination layer for the live system;
   // direct-inference fallback relies on random jitter only. Revisit if INFERENCE_MODE=direct becomes primary.
 
-  const voiceClient = VOICE_SIDECAR_URL
-    ? new VoiceClient({ url: VOICE_SIDECAR_URL, voiceId: VOICE_ID })
+  const voiceClient = MISTRAL_API_KEY
+    ? new VoiceClient({ mistralApiKey: MISTRAL_API_KEY, voiceId: VOICE_ID })
     : null;
 
   if (voiceClient) {
     voiceClient.isHealthy().then((healthy) => {
-      console.log(`[drevan] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+      console.log(`[drevan] voice (Mistral): ${healthy ? "ok" : "unavailable"}`);
     });
   } else {
-    console.log("[drevan] voice sidecar: not configured");
+    console.log("[drevan] voice (Mistral): not configured");
   }
 
   const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();

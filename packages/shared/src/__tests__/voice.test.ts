@@ -4,66 +4,82 @@ import { VoiceClient } from "../voice.js";
 const mockFetch = jest.fn();
 
 const client = new VoiceClient({
-  url: "http://localhost:5001",
-  voiceId: "am_echo",
-  speed: 1.0,
+  mistralApiKey: "test-key",
+  voiceId: "voice-cypher-001",
+  ttsModel: "voxtral-v1",
+  sttModel: "voxtral-mini-transcribe-2507",
   fetch: mockFetch as unknown as typeof globalThis.fetch,
 });
 
 beforeEach(() => mockFetch.mockReset());
 
 describe("VoiceClient.synthesize", () => {
-  it("returns a Buffer on success", async () => {
-    const fakeOgg = Buffer.from("OggS\x00fake");
+  it("calls Mistral TTS endpoint with correct body and returns Buffer", async () => {
+    const fakeAudio = Buffer.from("fake-audio-data");
     mockFetch.mockResolvedValueOnce({
       ok: true,
       arrayBuffer: async () =>
-        fakeOgg.buffer.slice(fakeOgg.byteOffset, fakeOgg.byteOffset + fakeOgg.byteLength),
+        fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
     } as any);
 
-    const result = await client.synthesize("hello");
+    const result = await client.synthesize("hello Raziel");
 
     expect(mockFetch).toHaveBeenCalledWith(
-      "http://localhost:5001/tts",
+      "https://api.mistral.ai/v1/audio/speech",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ text: "hello", voice_id: "am_echo", speed: 1.0 }),
+        body: JSON.stringify({ model: "voxtral-v1", input: "hello Raziel", voice: "voice-cypher-001" }),
       }),
     );
     expect(Buffer.isBuffer(result)).toBe(true);
   });
 
-  it("throws on non-ok response", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 503 } as any);
-    await expect(client.synthesize("hello")).rejects.toThrow("TTS failed: 503");
+  it("throws on non-ok TTS response", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 429 } as any);
+    await expect(client.synthesize("hello")).rejects.toThrow("TTS failed: 429");
   });
 });
 
 describe("VoiceClient.transcribe", () => {
-  it("returns transcript text on success", async () => {
+  it("calls Mistral offline STT with multipart form and returns text", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ text: "hello world", language: "en" }),
+      json: async () => ({ text: "what is the plan" }),
     } as any);
 
-    const result = await client.transcribe(Buffer.from("fake-audio"), "voice.ogg");
-    expect(result).toBe("hello world");
+    const result = await client.transcribe(Buffer.from("fake-ogg"), "voice.ogg");
+    expect(result).toBe("what is the plan");
+
+    const call = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(call[0]).toBe("https://api.mistral.ai/v1/audio/transcriptions");
+    expect(call[1].method).toBe("POST");
+    const body = call[1].body as FormData;
+    expect(body.get("model")).toBe("voxtral-mini-transcribe-2507");
   });
 
-  it("throws on non-ok response", async () => {
+  it("throws on non-ok STT response", async () => {
     mockFetch.mockResolvedValueOnce({ ok: false, status: 503 } as any);
     await expect(client.transcribe(Buffer.from("x"), "voice.ogg")).rejects.toThrow("STT failed: 503");
   });
 });
 
 describe("VoiceClient.isHealthy", () => {
-  it("returns true when sidecar responds ok", async () => {
+  it("returns true when Mistral API responds ok", async () => {
     mockFetch.mockResolvedValueOnce({ ok: true } as any);
     expect(await client.isHealthy()).toBe(true);
   });
 
-  it("returns false when sidecar is down", async () => {
+  it("returns false when Mistral API is unreachable", async () => {
     mockFetch.mockRejectedValueOnce(new Error("ECONNREFUSED"));
     expect(await client.isHealthy()).toBe(false);
+  });
+});
+
+describe("VoiceClient.createRealtimeSession", () => {
+  it("returns a session object with a run method", () => {
+    const session = client.createRealtimeSession();
+    expect(session).toBeTruthy();
+    expect(typeof session.run).toBe("function");
+    expect(typeof session.onTranscript).toBe("function");
   });
 });

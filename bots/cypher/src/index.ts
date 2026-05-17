@@ -35,7 +35,7 @@ import {
 } from "@discordjs/voice";
 import { Readable } from "stream";
 import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
-import { VOICE_SIDECAR_URL, VOICE_ID } from "./config.js";
+import { MISTRAL_API_KEY, VOICE_ID } from "./config.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
@@ -236,16 +236,16 @@ async function main() {
   // inter-companion message. Brain relay's SwarmEvaluator is the coordination layer for the live system;
   // direct-inference fallback relies on random jitter only. Revisit if INFERENCE_MODE=direct becomes primary.
 
-  const voiceClient = VOICE_SIDECAR_URL
-    ? new VoiceClient({ url: VOICE_SIDECAR_URL, voiceId: VOICE_ID })
+  const voiceClient = MISTRAL_API_KEY
+    ? new VoiceClient({ mistralApiKey: MISTRAL_API_KEY, voiceId: VOICE_ID })
     : null;
 
   if (voiceClient) {
     voiceClient.isHealthy().then((healthy) => {
-      console.log(`[cypher] voice sidecar: ${healthy ? "ok" : "unavailable"}`);
+      console.log(`[cypher] voice (Mistral): ${healthy ? "ok" : "unavailable"}`);
     });
   } else {
-    console.log("[cypher] voice sidecar: not configured");
+    console.log("[cypher] voice (Mistral): not configured");
   }
 
   const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
