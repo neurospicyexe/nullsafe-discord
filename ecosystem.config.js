@@ -37,7 +37,6 @@ const shared = {
   // When "direct" (default), each bot calls DeepSeek directly.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
   BRAIN_URL:             process.env.BRAIN_URL             ?? "http://127.0.0.1:8001",
-  VOICE_SIDECAR_URL:     process.env.VOICE_SIDECAR_URL     ?? "http://127.0.0.1:5001",
 };
 
 module.exports = {
@@ -140,25 +139,6 @@ module.exports = {
         CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
         DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,
         GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
-      },
-    },
-    {
-      name: "voice-sidecar",
-      script: "services/voice-sidecar/server.py",
-      interpreter: "/app/nullsafe-discord/services/voice-sidecar/venv/bin/python3",
-      cwd: "/app/nullsafe-discord",
-      autorestart: true,
-      restart_delay: 3000,
-      max_restarts: 10,
-      min_uptime: "10s",
-      kill_timeout: 5000,
-      error_file: "/app/logs/voice-sidecar-error.log",
-      out_file: "/app/logs/voice-sidecar-out.log",
-      log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: {
-        HOST: "127.0.0.1",
-        PORT: "5001",
-        WHISPER_MODEL: "base",
       },
     },
   ],
