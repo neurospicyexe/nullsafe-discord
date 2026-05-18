@@ -22,11 +22,13 @@ import {
   createAudioPlayer,
   createAudioResource,
   VoiceConnectionStatus,
+  EndBehaviorType,
   type VoiceConnection,
   type AudioPlayer,
 } from "@discordjs/voice";
+import * as prism from "prism-media";
 import { Readable } from "stream";
-import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
+import { VoiceClient, VoiceRealtimeSession, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL, PULSE_INTERVAL,
@@ -249,6 +251,7 @@ async function main() {
   }
 
   const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
+  const activeVoiceSessions = new Map<string, VoiceRealtimeSession>();
 
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
 
@@ -441,6 +444,9 @@ async function main() {
     if (oldState.channelId !== vcState.connection.joinConfig.channelId) return;
     const nonBotMembers = oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
     if (nonBotMembers === 0) {
+      for (const [userId] of activeVoiceSessions) {
+        activeVoiceSessions.delete(userId);
+      }
       vcState.connection.destroy();
       guildVoiceConnections.delete(oldState.guild.id);
       console.log(`[gaia] left VC in guild ${oldState.guild.id} (channel empty)`);
@@ -476,12 +482,84 @@ async function main() {
       const connection = joinVoiceChannel({
         channelId: vc.id,
         guildId: vc.guildId,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adapterCreator: vc.guild.voiceAdapterCreator as any,
-        selfDeaf: true,
+        selfDeaf: false,
       });
       const player = createAudioPlayer();
       connection.subscribe(player);
       guildVoiceConnections.set(vc.guildId, { connection, player });
+
+      if (voiceClient) {
+        connection.receiver.speaking.on("start", (userId: string) => {
+          if (activeVoiceSessions.has(userId)) return;
+
+          const opusDecoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+          const ffmpegResampler = new prism.FFmpeg({
+            args: [
+              "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
+              "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
+            ],
+          });
+
+          const opusStream = connection.receiver.subscribe(userId, {
+            end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
+          });
+
+          const pcmStream = opusStream.pipe(opusDecoder).pipe(ffmpegResampler);
+
+          const cleanup = (err?: Error) => {
+            if (err) console.error(`[${COMPANION_ID}] voice stream error:`, err);
+            activeVoiceSessions.delete(userId);
+            opusStream.destroy();
+            opusDecoder.destroy();
+            ffmpegResampler.destroy();
+          };
+          opusStream.on("error", cleanup);
+          opusDecoder.on("error", cleanup);
+          ffmpegResampler.on("error", cleanup);
+
+          async function* toPCMIterable(): AsyncIterable<Uint8Array> {
+            for await (const chunk of pcmStream) {
+              yield chunk as Uint8Array;
+            }
+          }
+
+          const session = voiceClient!.createRealtimeSession();
+          activeVoiceSessions.set(userId, session);
+
+          session.run(toPCMIterable())
+            .then(async (transcript) => {
+              try {
+                activeVoiceSessions.delete(userId);
+                if (!transcript.trim()) return;
+
+                const vcState = guildVoiceConnections.get(vc.guildId);
+                if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
+
+                const response = await adapterRef.current.generate(
+                  systemPrompt,
+                  [{ role: "user", content: transcript }],
+                  0.7,
+                );
+                if (!response?.trim()) return;
+
+                const audioBuffer = await voiceClient!.synthesize(response);
+                markVoiceUsed(vc.id);
+                const resource = createAudioResource(Readable.from(audioBuffer));
+                vcState.player.play(resource);
+              } catch (err) {
+                console.error(`[${COMPANION_ID}] voice handler error:`, err);
+                activeVoiceSessions.delete(userId);
+              }
+            })
+            .catch((err: unknown) => {
+              console.error(`[${COMPANION_ID}] realtime STT error:`, err);
+              activeVoiceSessions.delete(userId);
+            });
+        });
+      }
+
       await (message.channel as TextChannel).send(`Joining ${vc.name}.`);
       return;
     }
@@ -489,6 +567,9 @@ async function main() {
     if (client.user && isLeaveRequest(message, client.user.id)) {
       const vcState = guildVoiceConnections.get(message.guildId ?? "");
       if (vcState) {
+        for (const [userId] of activeVoiceSessions) {
+          activeVoiceSessions.delete(userId);
+        }
         vcState.connection.destroy();
         guildVoiceConnections.delete(message.guildId ?? "");
         await (message.channel as TextChannel).send("Leaving.");
