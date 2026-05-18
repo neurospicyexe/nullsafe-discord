@@ -92,5 +92,5 @@ export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_
 // No companion holds a fixed priority. Authority is lateral and contextual.
 export const FLOOR_JITTER_MS = parseInt(process.env["FLOOR_JITTER_MS"] ?? "400", 10);
 
-export const VOICE_SIDECAR_URL = process.env["VOICE_SIDECAR_URL"] ?? "";
+export const MISTRAL_API_KEY = process.env["MISTRAL_API_KEY"] ?? "";
 export const VOICE_ID = process.env["VOICE_ID"] ?? "af_nova";

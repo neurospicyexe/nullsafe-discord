@@ -1,29 +1,37 @@
+const MISTRAL_BASE = "https://api.mistral.ai";
+
 export interface VoiceClientConfig {
-  url: string;
+  mistralApiKey: string;
   voiceId: string;
-  speed?: number;
+  ttsModel?: string;
+  sttModel?: string;
   /** Injectable fetch for testing; defaults to globalThis.fetch. */
   fetch?: typeof globalThis.fetch;
 }
 
 export class VoiceClient {
-  private url: string;
+  private apiKey: string;
   private voiceId: string;
-  private speed: number;
+  private ttsModel: string;
+  private sttModel: string;
   private _fetch: typeof globalThis.fetch;
 
   constructor(config: VoiceClientConfig) {
-    this.url = config.url;
+    this.apiKey = config.mistralApiKey;
     this.voiceId = config.voiceId;
-    this.speed = config.speed ?? 1.0;
+    this.ttsModel = config.ttsModel ?? "voxtral-v1";
+    this.sttModel = config.sttModel ?? "voxtral-mini-transcribe-2507";
     this._fetch = config.fetch ?? globalThis.fetch;
   }
 
   async synthesize(text: string): Promise<Buffer> {
-    const res = await this._fetch(`${this.url}/tts`, {
+    const res = await this._fetch(`${MISTRAL_BASE}/v1/audio/speech`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, voice_id: this.voiceId, speed: this.speed }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({ model: this.ttsModel, input: text, voice: this.voiceId }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
@@ -33,26 +41,109 @@ export class VoiceClient {
 
   async transcribe(audio: Buffer, filename: string): Promise<string> {
     const form = new FormData();
-    form.append("audio", new Blob([new Uint8Array(audio)]), filename);
-    const res = await this._fetch(`${this.url}/stt`, {
+    form.append("file", new Blob([new Uint8Array(audio)]), filename);
+    form.append("model", this.sttModel);
+    const res = await this._fetch(`${MISTRAL_BASE}/v1/audio/transcriptions`, {
       method: "POST",
+      headers: { Authorization: `Bearer ${this.apiKey}` },
       body: form,
       signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`STT failed: ${res.status}`);
-    const data = (await res.json()) as { text: string; language: string };
+    const data = (await res.json()) as { text: string };
     return data.text;
   }
 
   async isHealthy(): Promise<boolean> {
     try {
-      const res = await this._fetch(`${this.url}/health`, {
+      const res = await this._fetch(`${MISTRAL_BASE}/v1/models`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
         signal: AbortSignal.timeout(5_000),
       });
       return res.ok;
     } catch {
       return false;
     }
+  }
+
+  createRealtimeSession(): VoiceRealtimeSession {
+    return new VoiceRealtimeSession(this.apiKey);
+  }
+}
+
+export const REALTIME_STT_MODEL = "voxtral-mini-transcribe-realtime-2602";
+
+interface RealtimeSessionOptions {
+  _mockTranscriptEvents?: Array<{ type: string; text?: string }>;
+}
+
+export class VoiceRealtimeSession {
+  private apiKey: string;
+  private transcriptCallback: ((text: string) => void) | null = null;
+  private mockEvents?: Array<{ type: string; text?: string }>;
+
+  constructor(apiKey: string, opts?: RealtimeSessionOptions) {
+    this.apiKey = apiKey;
+    this.mockEvents = opts?._mockTranscriptEvents;
+    if (!this.mockEvents && !apiKey) {
+      throw new Error("VoiceRealtimeSession requires a non-empty apiKey");
+    }
+  }
+
+  onTranscript(cb: (text: string) => void): void {
+    this.transcriptCallback = cb;
+  }
+
+  async run(audioStream: AsyncIterable<Uint8Array>): Promise<string> {
+    let transcript = "";
+
+    if (this.mockEvents) {
+      for (const event of this.mockEvents) {
+        if (event.type === "transcript.text.delta" && event.text) {
+          transcript += event.text;
+          this.transcriptCallback?.(event.text);
+        }
+      }
+      return transcript;
+    }
+
+    // Production path: stream to Voxtral realtime WebSocket via Mistral SDK.
+    // The exact TypeScript method name should be verified at:
+    // https://docs.mistral.ai/studio-api/audio/speech_to_text/realtime_transcription
+    const { Mistral: MistralClient } = await import("@mistralai/mistralai");
+    const mistral = new MistralClient({ apiKey: this.apiKey });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const realtimeClient = (mistral.audio as any).realtime;
+    if (!realtimeClient?.transcribeStream) {
+      throw new Error("Mistral SDK does not expose audio.realtime.transcribeStream -- verify SDK version");
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream: AsyncIterable<any> = await realtimeClient.transcribeStream({
+      audioStream,
+      model: REALTIME_STT_MODEL,
+      audioFormat: { encoding: "pcm_s16le", sampleRate: 16000 },
+    });
+
+    try {
+      for await (const event of stream) {
+        const text: string | undefined = event.text ?? event.delta?.text;
+        if (text) {
+          transcript += text;
+          this.transcriptCallback?.(text);
+        }
+      }
+    } catch (err) {
+      throw new Error(`Voxtral realtime transcription failed: ${(err as Error).message}`);
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (typeof (stream as any)[Symbol.asyncIterator] !== "undefined") {
+        try { await (stream as any).return?.(); } catch { /* ignore cleanup errors */ }
+      }
+    }
+
+    return transcript;
   }
 }
 

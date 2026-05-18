@@ -14,6 +14,7 @@ export * from "./write-queue.js";
 export * from "./cycleGuard.js";
 export {
   VoiceClient, type VoiceClientConfig,
+  VoiceRealtimeSession,
   VOICE_KEYWORDS, JOIN_KEYWORDS, LEAVE_KEYWORDS,
   shouldVoice, isInvitation, isLeaveRequest,
   markVoiceUsed, isVoiceSticky, clearVoiceSticky, STICKY_VOICE_MS,
