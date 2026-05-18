@@ -520,6 +520,17 @@ async function main() {
 
           const pcmStream = opusStream.pipe(opusDecoder).pipe(ffmpegResampler);
 
+          const cleanup = (err?: Error) => {
+            if (err) console.error(`[${COMPANION_ID}] voice stream error:`, err);
+            activeVoiceSessions.delete(userId);
+            opusStream.destroy();
+            opusDecoder.destroy();
+            ffmpegResampler.destroy();
+          };
+          opusStream.on("error", cleanup);
+          opusDecoder.on("error", cleanup);
+          ffmpegResampler.on("error", cleanup);
+
           async function* toPCMIterable(): AsyncIterable<Uint8Array> {
             for await (const chunk of pcmStream) {
               yield chunk as Uint8Array;
@@ -529,32 +540,35 @@ async function main() {
           const session = voiceClient!.createRealtimeSession();
           activeVoiceSessions.set(userId, session);
 
-          session.run(toPCMIterable()).then(async (transcript) => {
-            activeVoiceSessions.delete(userId);
-            if (!transcript.trim()) return;
+          session.run(toPCMIterable())
+            .then(async (transcript) => {
+              try {
+                activeVoiceSessions.delete(userId);
+                if (!transcript.trim()) return;
 
-            const vcState = guildVoiceConnections.get(vc.guildId);
-            if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
+                const vcState = guildVoiceConnections.get(vc.guildId);
+                if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
 
-            try {
-              const response = await adapterRef.current.generate(
-                systemPrompt,
-                [{ role: "user", content: transcript }],
-                0.7,
-              );
-              if (!response?.trim()) return;
+                const response = await adapterRef.current.generate(
+                  systemPrompt,
+                  [{ role: "user", content: transcript }],
+                  0.7,
+                );
+                if (!response?.trim()) return;
 
-              const audioBuffer = await voiceClient!.synthesize(response);
-              markVoiceUsed(vc.id);
-              const resource = createAudioResource(Readable.from(audioBuffer));
-              vcState.player.play(resource);
-            } catch (err) {
-              console.error(`[${COMPANION_ID}] voice inference error:`, err);
-            }
-          }).catch((err: unknown) => {
-            console.error(`[${COMPANION_ID}] realtime STT error:`, err);
-            activeVoiceSessions.delete(userId);
-          });
+                const audioBuffer = await voiceClient!.synthesize(response);
+                markVoiceUsed(vc.id);
+                const resource = createAudioResource(Readable.from(audioBuffer));
+                vcState.player.play(resource);
+              } catch (err) {
+                console.error(`[${COMPANION_ID}] voice handler error:`, err);
+                activeVoiceSessions.delete(userId);
+              }
+            })
+            .catch((err: unknown) => {
+              console.error(`[${COMPANION_ID}] realtime STT error:`, err);
+              activeVoiceSessions.delete(userId);
+            });
         });
       }
 
