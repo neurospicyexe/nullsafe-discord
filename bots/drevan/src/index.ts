@@ -23,7 +23,7 @@ import {
   BLUE_FRAMING, GUEST_FRAMING, DISCORD_DREVAN_PREFIX,
   MODEL_SWITCH_TRIGGER, MODEL_SWITCH_SUCCESS, MODEL_SWITCH_LIST_INTRO,
   REDIS_URL,
-  MISTRAL_API_KEY, VOICE_ID,
+  MISTRAL_API_KEY, VOICE_ID, MISTRAL_TTS_MODEL, MISTRAL_STT_MODEL,
 } from "./config.js";
 import { startAutonomous, stopAutonomous, resetCycleGuard, pushRazielMessage } from "./autonomous.js";
 import {
@@ -239,7 +239,7 @@ async function main() {
   // direct-inference fallback relies on random jitter only. Revisit if INFERENCE_MODE=direct becomes primary.
 
   const voiceClient = MISTRAL_API_KEY
-    ? new VoiceClient({ mistralApiKey: MISTRAL_API_KEY, voiceId: VOICE_ID })
+    ? new VoiceClient({ mistralApiKey: MISTRAL_API_KEY, voiceId: VOICE_ID, ttsModel: MISTRAL_TTS_MODEL, sttModel: MISTRAL_STT_MODEL })
     : null;
 
   if (voiceClient) {

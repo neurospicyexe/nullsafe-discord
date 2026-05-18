@@ -95,4 +95,6 @@ export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_
 export const FLOOR_JITTER_MS = parseInt(process.env["FLOOR_JITTER_MS"] ?? "400", 10);
 
 export const MISTRAL_API_KEY = process.env["MISTRAL_API_KEY"] ?? "";
-export const VOICE_ID = process.env["VOICE_ID"] ?? "bm_fable";
+export const VOICE_ID = process.env["DREVAN_VOICE_ID"] ?? "";
+export const MISTRAL_TTS_MODEL = process.env["MISTRAL_TTS_MODEL"];
+export const MISTRAL_STT_MODEL = process.env["MISTRAL_STT_MODEL"];

@@ -34,7 +34,10 @@ export class VoiceClient {
       body: JSON.stringify({ model: this.ttsModel, input: text, voice: this.voiceId }),
       signal: AbortSignal.timeout(30_000),
     });
-    if (!res.ok) throw new Error(`TTS failed: ${res.status}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`TTS failed: ${res.status} ${body}`);
+    }
     const ab = await res.arrayBuffer();
     return Buffer.from(ab);
   }
