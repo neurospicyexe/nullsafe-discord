@@ -11,7 +11,23 @@
  *   pm2 logs autonomous-worker
  */
 
-require("dotenv").config({ path: "/app/nullsafe-discord/.env" });
+// pm2 runs in its own global context; require("dotenv") does not reliably propagate
+// env vars into child process env blocks. Parse .env manually with fs instead.
+const fs = require("fs");
+(function loadEnv(path) {
+  try {
+    const lines = fs.readFileSync(path, "utf8").split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const idx = trimmed.indexOf("=");
+      if (idx < 0) continue;
+      const key = trimmed.slice(0, idx).trim();
+      const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+      if (key && !(key in process.env)) process.env[key] = val;
+    }
+  } catch { /* .env not present; rely on shell env */ }
+})("/app/nullsafe-discord/.env");
 
 const shared = {
   NODE_ENV:              "production",
@@ -37,6 +53,9 @@ const shared = {
   // When "direct" (default), each bot calls DeepSeek directly.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
   BRAIN_URL:             process.env.BRAIN_URL             ?? "http://127.0.0.1:8001",
+  MISTRAL_API_KEY:       process.env.MISTRAL_API_KEY,
+  MISTRAL_TTS_MODEL:     process.env.MISTRAL_TTS_MODEL     ?? "voxtral-mini-tts-2603",
+  // MISTRAL_STT_MODEL intentionally omitted -- bot defaults to voxtral-mini-transcribe-2507
 };
 
 module.exports = {
@@ -54,7 +73,7 @@ module.exports = {
       error_file: "/app/logs/cypher-bot-error.log",
       out_file: "/app/logs/cypher-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, VOICE_ID: "am_echo" },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, CYPHER_VOICE_ID: process.env.CYPHER_VOICE_ID },
     },
     {
       name: "drevan-bot",
@@ -69,7 +88,7 @@ module.exports = {
       error_file: "/app/logs/drevan-bot-error.log",
       out_file: "/app/logs/drevan-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, VOICE_ID: "bm_daniel" },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, DREVAN_VOICE_ID: process.env.DREVAN_VOICE_ID },
     },
     {
       name: "gaia-bot",
@@ -84,7 +103,7 @@ module.exports = {
       error_file: "/app/logs/gaia-bot-error.log",
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, VOICE_ID: "af_nova" },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, GAIA_VOICE_ID: process.env.GAIA_VOICE_ID },
     },
     {
       // Phoenix Brain -- FastAPI inference service.
