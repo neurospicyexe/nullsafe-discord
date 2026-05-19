@@ -28,7 +28,27 @@ import {
 } from "@discordjs/voice";
 import * as prism from "prism-media";
 import { Readable } from "stream";
-import { VoiceClient, VoiceRealtimeSession, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
+import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
+
+function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16): Buffer {
+  const byteRate = sampleRate * channels * (bitDepth / 8);
+  const blockAlign = channels * (bitDepth / 8);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitDepth, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL, PULSE_INTERVAL,
@@ -251,7 +271,7 @@ async function main() {
   }
 
   const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
-  const activeVoiceSessions = new Map<string, VoiceRealtimeSession>();
+  const activeVoiceSessions = new Set<string>();
 
   const { bootCtx, librarian, recentContextRef } = await boot(cfg);
 
@@ -525,38 +545,40 @@ async function main() {
             }
           }
 
-          const session = voiceClient!.createRealtimeSession();
-          activeVoiceSessions.set(userId, session);
+          activeVoiceSessions.add(userId);
 
-          session.run(toPCMIterable())
-            .then(async (transcript) => {
-              try {
-                activeVoiceSessions.delete(userId);
-                if (!transcript.trim()) return;
-
-                const vcState = guildVoiceConnections.get(vc.guildId);
-                if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
-
-                const response = await adapterRef.current.generate(
-                  systemPrompt,
-                  [{ role: "user", content: transcript }],
-                  0.7,
-                );
-                if (!response?.trim()) return;
-
-                const audioBuffer = await voiceClient!.synthesize(response);
-                markVoiceUsed(vc.id);
-                const resource = createAudioResource(Readable.from(audioBuffer));
-                vcState.player.play(resource);
-              } catch (err) {
-                console.error(`[${COMPANION_ID}] voice handler error:`, err);
-                activeVoiceSessions.delete(userId);
+          (async () => {
+            try {
+              const chunks: Buffer[] = [];
+              for await (const chunk of toPCMIterable()) {
+                chunks.push(Buffer.from(chunk));
               }
-            })
-            .catch((err: unknown) => {
-              console.error(`[${COMPANION_ID}] realtime STT error:`, err);
               activeVoiceSessions.delete(userId);
-            });
+              const pcm = Buffer.concat(chunks);
+              if (!pcm.length) return;
+
+              const transcript = await voiceClient!.transcribe(pcmToWav(pcm), "voice.wav");
+              if (!transcript.trim()) return;
+
+              const vcState = guildVoiceConnections.get(vc.guildId);
+              if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
+
+              const response = await adapterRef.current.generate(
+                systemPrompt,
+                [{ role: "user", content: transcript }],
+                0.7,
+              );
+              if (!response?.trim()) return;
+
+              const audioBuffer = await voiceClient!.synthesize(response);
+              markVoiceUsed(vc.id);
+              const resource = createAudioResource(Readable.from(audioBuffer));
+              vcState.player.play(resource);
+            } catch (err) {
+              console.error(`[${COMPANION_ID}] voice handler error:`, err);
+              activeVoiceSessions.delete(userId);
+            }
+          })();
         });
       }
 
@@ -567,9 +589,7 @@ async function main() {
     if (client.user && isLeaveRequest(message, client.user.id)) {
       const vcState = guildVoiceConnections.get(message.guildId ?? "");
       if (vcState) {
-        for (const [userId] of activeVoiceSessions) {
-          activeVoiceSessions.delete(userId);
-        }
+        activeVoiceSessions.clear();
         vcState.connection.destroy();
         guildVoiceConnections.delete(message.guildId ?? "");
         await (message.channel as TextChannel).send("Leaving.");
