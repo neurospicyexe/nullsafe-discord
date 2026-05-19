@@ -19,7 +19,7 @@ export class VoiceClient {
   constructor(config: VoiceClientConfig) {
     this.apiKey = config.mistralApiKey;
     this.voiceId = config.voiceId;
-    this.ttsModel = config.ttsModel ?? "voxtral-v1";
+    this.ttsModel = config.ttsModel ?? "voxtral-mini-tts-2603";
     this.sttModel = config.sttModel ?? "voxtral-mini-transcribe-2507";
     this._fetch = config.fetch ?? globalThis.fetch;
   }
@@ -31,15 +31,15 @@ export class VoiceClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ model: this.ttsModel, input: text, voice: this.voiceId }),
+      body: JSON.stringify({ model: this.ttsModel, text, voice_id: this.voiceId, response_format: "mp3" }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`TTS failed: ${res.status} ${body}`);
     }
-    const ab = await res.arrayBuffer();
-    return Buffer.from(ab);
+    const json = await res.json() as { audio_data: string };
+    return Buffer.from(json.audio_data, "base64");
   }
 
   async transcribe(audio: Buffer, filename: string): Promise<string> {

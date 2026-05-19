@@ -6,7 +6,7 @@ const mockFetch = jest.fn();
 const client = new VoiceClient({
   mistralApiKey: "test-key",
   voiceId: "voice-cypher-001",
-  ttsModel: "voxtral-v1",
+  ttsModel: "voxtral-mini-tts-2603",
   sttModel: "voxtral-mini-transcribe-2507",
   fetch: mockFetch as unknown as typeof globalThis.fetch,
 });
@@ -14,12 +14,11 @@ const client = new VoiceClient({
 beforeEach(() => mockFetch.mockReset());
 
 describe("VoiceClient.synthesize", () => {
-  it("calls Mistral TTS endpoint with correct body and returns Buffer", async () => {
+  it("calls Mistral TTS endpoint with correct body and returns decoded Buffer", async () => {
     const fakeAudio = Buffer.from("fake-audio-data");
     mockFetch.mockResolvedValueOnce({
       ok: true,
-      arrayBuffer: async () =>
-        fakeAudio.buffer.slice(fakeAudio.byteOffset, fakeAudio.byteOffset + fakeAudio.byteLength),
+      json: async () => ({ audio_data: fakeAudio.toString("base64") }),
     } as any);
 
     const result = await client.synthesize("hello Raziel");
@@ -28,14 +27,14 @@ describe("VoiceClient.synthesize", () => {
       "https://api.mistral.ai/v1/audio/speech",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ model: "voxtral-v1", input: "hello Raziel", voice: "voice-cypher-001" }),
+        body: JSON.stringify({ model: "voxtral-mini-tts-2603", text: "hello Raziel", voice_id: "voice-cypher-001", response_format: "mp3" }),
       }),
     );
-    expect(Buffer.isBuffer(result)).toBe(true);
+    expect(result).toEqual(fakeAudio);
   });
 
   it("throws on non-ok TTS response", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 429 } as any);
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 429, text: async () => "" } as any);
     await expect(client.synthesize("hello")).rejects.toThrow("TTS failed: 429");
   });
 });
