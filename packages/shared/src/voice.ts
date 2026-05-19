@@ -31,7 +31,7 @@ export class VoiceClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify({ model: this.ttsModel, text, voice_id: this.voiceId, response_format: "mp3" }),
+      body: JSON.stringify({ model: this.ttsModel, input: text, voice_id: this.voiceId, response_format: "mp3" }),
       signal: AbortSignal.timeout(30_000),
     });
     if (!res.ok) {

@@ -27,7 +27,7 @@ describe("VoiceClient.synthesize", () => {
       "https://api.mistral.ai/v1/audio/speech",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ model: "voxtral-mini-tts-2603", text: "hello Raziel", voice_id: "voice-cypher-001", response_format: "mp3" }),
+        body: JSON.stringify({ model: "voxtral-mini-tts-2603", input: "hello Raziel", voice_id: "voice-cypher-001", response_format: "mp3" }),
       }),
     );
     expect(result).toEqual(fakeAudio);
