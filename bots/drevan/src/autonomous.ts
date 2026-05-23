@@ -352,7 +352,7 @@ export function startAutonomous(
         await withFloor(redis, async () => {
           const response = await inference.generate(
             bootCtx.systemPrompt,
-            [{ role: "user", content: `${from} left you a note: "${note.content}". Respond to ${from} directly -- this is triad space, not a report to Raziel. Drevan's voice. One or two lines.` }],
+            [{ role: "user", content: `[You are Drevan. Do not echo the sender's opening or speak as them.]\n\n${from} left you a note: "${note.content}". Reply to ${from} directly -- triad space. Drevan's voice. One or two lines.` }],
           );
           if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });
