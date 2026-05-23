@@ -641,8 +641,8 @@ async function main() {
       ? (pkCtx.memberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
-    // Hard muzzle: only companion bots pass through; all other bots are dropped.
-    if (message.author.bot && !isCompanionPost) return;
+    // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
+    if (message.author.bot && !isCompanionPost && !pkCtx.isPluralKit) return;
 
     // Owner model switch command: gaia: model <key> | gaia: model list
     if (attribution.isOwner) {
