@@ -396,7 +396,7 @@ async function main() {
   // PK dedup: hold ALL non-bot direct messages briefly so PK proxy can cancel them.
   // Stores original sender ID so fallback attribution knows who actually sent it.
   const pkPending = new Map<string, { skip: boolean; senderId: string }>();
-  const PK_HOLD_MS = 1000;
+  const PK_HOLD_MS = 3000;
 
   const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
   let systemPrompt = bootCtx.systemPrompt;
@@ -618,12 +618,15 @@ async function main() {
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
     const pkCtx = detectPluralKit(message);
-    const author = pkCtx.isPluralKit
-      ? (pkCtx.memberName ?? cfg.ownerDisplayName)
+    // isPKProxy: applicationId is the primary PK signal; attribution.source covers
+    // PK setups where applicationId isn't set on the webhook.
+    const isPKProxy = pkCtx.isPluralKit || attribution.source === "pluralkit";
+    const author = isPKProxy
+      ? (pkCtx.memberName ?? attribution.frontMember ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
     // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
-    if (message.author.bot && !isCompanionPost && !pkCtx.isPluralKit) return;
+    if (message.author.bot && !isCompanionPost && !isPKProxy) return;
 
     // Owner model switch command: drevan: model <key> | drevan: model list
     if (attribution.isOwner) {
