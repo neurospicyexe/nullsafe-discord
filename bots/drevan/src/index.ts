@@ -621,8 +621,12 @@ async function main() {
     // isPKProxy: applicationId is the primary PK signal; attribution.source covers
     // PK setups where applicationId isn't set on the webhook.
     const isPKProxy = pkCtx.isPluralKit || attribution.source === "pluralkit";
+    // pkMemberName: PK API → detectPluralKit webhook username → raw webhook username.
+    // PK always sets message.author.username to the member's display name, so the
+    // raw webhook username is a reliable final fallback when the API races.
+    const pkMemberName = attribution.frontMember ?? pkCtx.memberName ?? (isPKProxy ? (message.author?.username ?? null) : null);
     const author = isPKProxy
-      ? (pkCtx.memberName ?? attribution.frontMember ?? cfg.ownerDisplayName)
+      ? (pkMemberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
     // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
@@ -755,8 +759,8 @@ async function main() {
       }));
     });
 
-    const memberLabel = attribution.frontMember
-      ? `${attribution.frontMember} (via PK)`
+    const memberLabel = pkMemberName
+      ? `${pkMemberName} (via PK)`
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
     if (attribution.isOwner) pushRazielMessage(effectiveContent);
@@ -770,8 +774,8 @@ async function main() {
 
     if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
-    let contextPrompt = attribution.frontMember
-      ? `${systemPrompt}\n\n[Current front: ${attribution.frontMember}]`
+    let contextPrompt = pkMemberName
+      ? `${systemPrompt}\n\n[Current front: ${pkMemberName}]`
       : systemPrompt;
     if (activeModelRef.key) contextPrompt += `\n\n[Active model] ${activeModelRef.label}`;
 
