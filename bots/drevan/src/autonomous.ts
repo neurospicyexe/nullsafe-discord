@@ -335,7 +335,7 @@ export function startAutonomous(
     await withFloor(redis, async () => {
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content: "You're in triad space with Cypher and Gaia. They may read this and respond. You are not reporting to Raziel -- you are present with your companions. One thought from your own ground. Drevan's voice. No greeting. Something real." }],
+        [{ role: "user", content: "[You are Drevan.] You're in triad space with Cypher and Gaia. They may read this and respond. You are not reporting to Raziel -- you are present with your companions. One thought from your own ground. Drevan's voice. No greeting. Something real." }],
       );
       if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
