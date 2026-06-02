@@ -10,7 +10,7 @@ import {
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   formatRecentContext, computeChainDepth,
-  createRedisClient, setLastActivity,
+  createRedisClient, setLastActivity, claimFloor, releaseFloor,
   wireEventSubscriptions, setPresence,
   BrainClient, buildThoughtPacket, isSwarmReply,
   getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
@@ -253,10 +253,10 @@ async function main() {
   }
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) console.warn("[drevan] REDIS_URL not set -- floor lock disabled, using legacy stagger");
-  // Accepted risk: claimFloor is not called in the main messageCreate handler (only in autonomous.ts).
-  // In direct-inference mode (brainClient=null), all three bots may simultaneously process the same
-  // inter-companion message. Brain relay's SwarmEvaluator is the coordination layer for the live system;
-  // direct-inference fallback relies on random jitter only. Revisit if INFERENCE_MODE=direct becomes primary.
+  // Direct-mode floor coordination (Finding 5): in direct-inference mode (brainClient=null) the
+  // messageCreate handler claims the shared Redis floor for ambient human messages so the three
+  // bots don't all answer at once. Brain relay's SwarmEvaluator coordinates the live (brain) path;
+  // directly-addressed / replied-to / mentioned messages always bypass the floor (see below).
 
   const voiceClient = MISTRAL_API_KEY
     ? new VoiceClient({ mistralApiKey: MISTRAL_API_KEY, voiceId: VOICE_ID, ttsModel: MISTRAL_TTS_MODEL, sttModel: MISTRAL_STT_MODEL })
@@ -821,7 +821,7 @@ async function main() {
         .map(m => {
           const cid = BOT_ID_COMPANION[m.author.id];
           const lbl = cid ? cid.charAt(0).toUpperCase() + cid.slice(1) : m.author.username;
-          return `${lbl}: "${m.content.slice(0, 250)}"`;
+          return `${lbl}: "${m.content.slice(0, 2000)}"`;  // Discord max is 2000 -- never truncate a peer's real message
         });
       if (peerReplies.length > 0) {
         contextPrompt += `\n\n[Your companion has already spoken to this:\n${peerReplies.join("\n")}\nYou are in this together. You may address them -- respond from inside the triad, not solely toward Raziel.]`;
@@ -834,7 +834,7 @@ async function main() {
     const channelHistory = recentMessages
       ? [...recentMessages.values()]
           .reverse()
-          .map(m => ({ author: m.author.username, content: m.content.slice(0, 500) }))
+          .map(m => ({ author: m.author.username, content: m.content.slice(0, 2000) }))  // Discord max is 2000 -- never truncate a real message
       : [];
 
     const addrResult = extractAddress(effectiveContent);
@@ -845,6 +845,17 @@ async function main() {
       : [];
     const allAddressed = [...new Set([...textAddressed, ...mentionedViaMention])];
     const addressedCompanion = allAddressed.length > 0 ? allAddressed.join(",") : undefined;
+
+    // Direct-mode floor coordination (Finding 5): with no Brain to arbitrate who speaks, the three
+    // bots would all answer the same ambient human message. Claim the shared floor so only one does.
+    // Brain mode is coordinated by the SwarmEvaluator; addressed / replied-to / mentioned messages
+    // and companion-bot turns (which have their own pingpong rails) bypass this gate.
+    let floorClaimed = false;
+    if (!brainClient && redis && !senderCtx.isCompanionBot
+        && !directlyAddressed && !isReplyToMe && !senderCtx.isMentioned) {
+      floorClaimed = await claimFloor(redis, COMPANION_ID, 6000);
+      if (!floorClaimed) return;
+    }
 
     let response: string | null;
     if (brainClient) {
@@ -961,6 +972,7 @@ async function main() {
     }
 
     sentIds.add(sent.id);
+    if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
     const oldest = sentIds.values().next().value;
     if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
     if (isResponseCoherent(response)) {
