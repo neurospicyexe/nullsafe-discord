@@ -30,7 +30,7 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
   // Fetch existing unused seeds so we don't duplicate them
   let existingSeeds: string[] = [];
   try {
-    const r = await fetch(`${HALSETH_URL}/mind/autonomy/seeds/${companionId}?limit=20`, {
+    const r = await fetch(`${HALSETH_URL}/mind/autonomy/seeds/${companionId}?limit=200`, {
       headers: { "Authorization": `Bearer ${HALSETH_SECRET}` },
       signal: AbortSignal.timeout(10_000),
     });
@@ -101,9 +101,24 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     return;
   }
 
+  // Write-time dedup guard: never insert a seed whose content already exists for
+  // this companion. The "do not duplicate" prompt instruction is not reliable, and
+  // duplicates were accumulating (222 cleaned 2026-06-02). Also dedups within this
+  // batch. Normalized (trim + lowercase) for comparison.
+  const existingSet = new Set(existingSeeds.map(s => s.trim().toLowerCase()));
+  const seenThisBatch = new Set<string>();
+  const toWrite = generated.filter(g => {
+    const key = g.content.trim().toLowerCase();
+    if (existingSet.has(key) || seenThisBatch.has(key)) return false;
+    seenThisBatch.add(key);
+    return true;
+  });
+  const skipped = generated.length - toWrite.length;
+  if (skipped > 0) console.log(`[${companionId}/seed-gen] skipped ${skipped} duplicate seed(s)`);
+
   // Write seeds at priority 8 (hand-seeded tier, above queue default 5)
   let written = 0;
-  for (const seed of generated) {
+  for (const seed of toWrite) {
     try {
       await createSeed(
         companionId,
@@ -117,5 +132,5 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     }
   }
 
-  console.log(`[${companionId}/seed-gen] complete: wrote ${written}/${generated.length} seeds`);
+  console.log(`[${companionId}/seed-gen] complete: wrote ${written}/${toWrite.length} new seeds (${skipped} dupes skipped)`);
 }
