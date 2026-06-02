@@ -365,45 +365,67 @@ class FallbackAdapter implements InferenceAdapter {
   }
 }
 
+export interface AdapterKeys {
+  deepseek?: string;
+  groq?: string;
+  kimi?: string;
+  openai?: string;
+  anthropic?: string;
+}
+export interface AdapterUrls { ollama?: string; lmstudio?: string }
+
+// Build a single-provider adapter, or null when its credential / URL is absent.
+function buildAdapter(
+  provider: InferenceProvider,
+  model: string,
+  keys: AdapterKeys,
+  urls: AdapterUrls,
+  fetchFn?: typeof fetch,
+): InferenceAdapter | null {
+  switch (provider) {
+    case "deepseek":  return keys.deepseek  ? new DeepSeekAdapter(keys.deepseek, model, fetchFn)   : null;
+    case "groq":      return keys.groq      ? new GroqAdapter(keys.groq, model, fetchFn)           : null;
+    case "kimi":      return keys.kimi      ? new KimiAdapter(keys.kimi, model, fetchFn)           : null;
+    case "openai":    return keys.openai    ? new OpenAIAdapter(keys.openai, model, fetchFn)       : null;
+    case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn) : null;
+    case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)       : null;
+    case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)   : null;
+    default:          return null;
+  }
+}
+
+// Resilience tail (Finding 4b): when the chosen provider returns null (5xx, network,
+// rate limit), fall through to the next configured provider instead of dropping to a
+// static in-character string. Order favors cheap, reliable cloud providers; local last.
+const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
+  { provider: "deepseek", model: "deepseek-chat" },
+  { provider: "kimi",     model: "kimi-k2" },
+  { provider: "groq",     model: "llama-3.3-70b-versatile" },
+  { provider: "lmstudio", model: "" },
+  { provider: "ollama",   model: "llama3.2" },
+];
+
 export function createAdapter(
   provider: InferenceProvider,
   model: string,
-  keys: {
-    deepseek?: string;
-    groq?: string;
-    kimi?: string;
-    openai?: string;
-    anthropic?: string;
-  },
-  urls: { ollama?: string; lmstudio?: string },
+  keys: AdapterKeys,
+  urls: AdapterUrls,
   fetchFn?: typeof fetch,
 ): InferenceAdapter {
-  switch (provider) {
-    case "deepseek":
-      return new DeepSeekAdapter(keys.deepseek!, model, fetchFn);
-    case "groq":
-      return new GroqAdapter(keys.groq!, model, fetchFn);
-    case "kimi":
-      return new KimiAdapter(keys.kimi!, model, fetchFn);
-    case "openai":
-      return new OpenAIAdapter(keys.openai!, model, fetchFn);
-    case "anthropic":
-      return new AnthropicAdapter(keys.anthropic!, model, fetchFn);
-    case "ollama":
-      return new OllamaAdapter(urls.ollama ?? "http://localhost:11434", model, fetchFn);
-    case "lmstudio": {
-      const local = new LMStudioAdapter(urls.lmstudio ?? "http://localhost:1234", model, fetchFn);
-      if (keys.deepseek) {
-        return new FallbackAdapter([
-          { name: "lmstudio", adapter: local },
-          { name: "deepseek", adapter: new DeepSeekAdapter(keys.deepseek, "deepseek-chat", fetchFn) },
-        ]);
-      }
-      return local;
-    }
-    default:
-      throw new Error(`Unknown provider: ${String(provider)}`);
+  const primary = buildAdapter(provider, model, keys, urls, fetchFn);
+  if (!primary) {
+    throw new Error(`Provider ${String(provider)} selected but no credential/URL was provided`);
   }
+
+  const chain: Array<{ name: string; adapter: InferenceAdapter }> = [{ name: provider, adapter: primary }];
+  for (const fb of FALLBACK_ORDER) {
+    if (fb.provider === provider) continue;          // primary already first
+    const adapter = buildAdapter(fb.provider, fb.model, keys, urls, fetchFn);
+    if (adapter) chain.push({ name: fb.provider, adapter });
+  }
+
+  // Single configured provider -> return it bare (no wrapper, unchanged behavior).
+  return chain.length === 1 ? primary : new FallbackAdapter(chain);
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
