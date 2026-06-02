@@ -412,20 +412,26 @@ export function createAdapter(
   urls: AdapterUrls,
   fetchFn?: typeof fetch,
 ): InferenceAdapter {
+  // Build the requested provider first when this host holds its credential. When it
+  // doesn't (e.g. a companion was switched to Kimi from Discord but only Brain's
+  // .env.brain holds KIMI_API_KEY), DON'T throw -- fall through to whatever provider IS
+  // configured locally. Brain runs the real swarm voice; this adapter is only the
+  // direct-mode fallback, so any working local provider suffices.
+  const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
   const primary = buildAdapter(provider, model, keys, urls, fetchFn);
-  if (!primary) {
-    throw new Error(`Provider ${String(provider)} selected but no credential/URL was provided`);
-  }
+  if (primary) chain.push({ name: provider, adapter: primary });
 
-  const chain: Array<{ name: string; adapter: InferenceAdapter }> = [{ name: provider, adapter: primary }];
   for (const fb of FALLBACK_ORDER) {
-    if (fb.provider === provider) continue;          // primary already first
+    if (fb.provider === provider) continue;          // requested provider already handled
     const adapter = buildAdapter(fb.provider, fb.model, keys, urls, fetchFn);
     if (adapter) chain.push({ name: fb.provider, adapter });
   }
 
+  if (chain.length === 0) {
+    throw new Error(`No usable inference provider configured (requested ${String(provider)})`);
+  }
   // Single configured provider -> return it bare (no wrapper, unchanged behavior).
-  return chain.length === 1 ? primary : new FallbackAdapter(chain);
+  return chain.length === 1 ? chain[0].adapter : new FallbackAdapter(chain);
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }

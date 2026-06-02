@@ -656,23 +656,27 @@ async function main() {
       const switchMatch = effectiveContent.match(MODEL_SWITCH_TRIGGER);
       if (switchMatch) {
         const arg = switchMatch[1].trim().toLowerCase();
-        const available = getAvailableModels(availableModelsOpts);
 
+        // Validate against the FULL registry, not this bot's local keys. Brain is the
+        // live arbiter (reads active_model from Halseth), so any registry model is
+        // selectable; provider keys only need to live in Brain's .env.brain.
         if (arg === "list") {
-          const list = Object.entries(available)
+          const list = Object.entries(ALL_MODELS)
             .map(([k, e]) => `\`${k}\` -- ${e.label}`)
             .join("\n");
           await (message.channel as TextChannel).send(`${MODEL_SWITCH_LIST_INTRO}\n${list}`);
           return;
         }
 
-        if (!available[arg]) {
-          const keys = Object.keys(available).join(", ");
+        if (!ALL_MODELS[arg]) {
+          const keys = Object.keys(ALL_MODELS).join(", ");
           await (message.channel as TextChannel).send(`not a model I can switch to. valid options: ${keys}`);
           return;
         }
 
-        const entry = available[arg];
+        const entry = ALL_MODELS[arg];
+        // createAdapter is resilient: if this bot lacks the provider key it returns a
+        // working local fallback (deepseek) for direct mode; Brain runs the real voice.
         adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
         activeModelRef.key = arg;
         activeModelRef.label = entry.label;
@@ -919,9 +923,8 @@ async function main() {
       if (tokenMatch) {
         response = response.replace(MODEL_TOKEN_RE, "").trim();
         const switchKey = tokenMatch[1].trim().toLowerCase();
-        const available = getAvailableModels(availableModelsOpts);
-        if (available[switchKey]) {
-          const entry = available[switchKey];
+        if (ALL_MODELS[switchKey]) {
+          const entry = ALL_MODELS[switchKey];
           adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
           activeModelRef.key = switchKey;
           activeModelRef.label = entry.label;

@@ -55,4 +55,26 @@ describe("createAdapter fallback chain (Finding 4b)", () => {
     expect(result).toBeNull();
     expect(mockFetch).toHaveBeenCalledTimes(2); // only deepseek's two attempts, no fallthrough
   });
+
+  it("does not throw when the requested provider has no local key; uses what is configured", async () => {
+    // Companion switched to Kimi from Discord, but this host only has the DeepSeek key.
+    // createAdapter must NOT throw (that would crash-loop the bot at boot) -- it falls
+    // through to DeepSeek for the direct-mode fallback. Brain runs the real Kimi voice.
+    const mockFetch = jest.fn(async (url: string) => {
+      if (url.includes("deepseek.com")) {
+        return { ok: true, json: async () => ({ choices: [{ message: { content: "deepseek fallback" } }] }) } as any;
+      }
+      return { ok: false, status: 401 } as any; // moonshot would 401 with no key
+    });
+    expect(() =>
+      createAdapter("kimi", "kimi-k2", { deepseek: "dk" }, {}, mockFetch as any),
+    ).not.toThrow();
+    const adapter = createAdapter("kimi", "kimi-k2", { deepseek: "dk" }, {}, mockFetch as any);
+    const result = await adapter.generate("system", [{ role: "user", content: "hi" }]);
+    expect(result).toBe("deepseek fallback");
+  });
+
+  it("throws only when no provider is configured at all", () => {
+    expect(() => createAdapter("kimi", "kimi-k2", {}, {}, (async () => {}) as any)).toThrow();
+  });
 });
