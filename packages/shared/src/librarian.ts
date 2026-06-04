@@ -206,11 +206,15 @@ export class LibrarianClient {
    * Returns the raw sb_search result string, or null on miss/error.
    * Callers should fire this before sendTyping so the await cost overlaps with floor jitter.
    */
-  async searchForMessage(query: string): Promise<string | null> {
+  async searchForMessage(query: string, recentContext?: string | null): Promise<string | null> {
     try {
       const url = new URL(`${this.url}/mind/search`);
       url.searchParams.set("query", query.slice(0, 800));
       url.searchParams.set("agent_id", this.companionId);
+      // Opt-in continuity: recent prior turns widen recall via dual-vector retrieval.
+      if (recentContext && recentContext.trim()) {
+        url.searchParams.set("recent_context", recentContext.trim().slice(0, 600));
+      }
       const res = await this._fetch(url.toString(), {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(6_000),

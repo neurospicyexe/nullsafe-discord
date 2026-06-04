@@ -808,8 +808,16 @@ async function main() {
 
     // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
     // Skip for short messages (< 20 chars) -- searches on "ok" or "lol" produce noise.
+    // Continuity: recent prior user turns (current msg already appended, so excluded)
+    // widen recall via dual-vector retrieval on the Halseth side.
+    const recentContext = stmStore.get(message.channelId)
+      .filter(m => m.role === "user")
+      .slice(0, -1)
+      .map(m => m.content)
+      .slice(-3)
+      .join("\n");
     const sbSearchPromise = effectiveContent.length >= 20
-      ? librarian.searchForMessage(effectiveContent).catch(() => null)
+      ? librarian.searchForMessage(effectiveContent, recentContext).catch(() => null)
       : Promise.resolve(null);
 
     await ch.sendTyping();
