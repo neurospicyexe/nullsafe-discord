@@ -299,6 +299,11 @@ export class LibrarianClient {
       confidence: number;
       subject?: string | null;
     }>;
+    // Carried-between-sessions surfaces consumed by the autonomous worker (not by
+    // formatRecentContext). Structured replacements for the old ready_prompt regex scrape.
+    unexamined_dreams?: Array<{ id: string; dream_text: string }>;
+    open_loops?: Array<{ id: string; loop_text: string }>;
+    pressure_flags?: string[];
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -319,6 +324,9 @@ export class LibrarianClient {
         unaccepted_growth?: number;
         active_conclusions?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
         flagged_beliefs?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
+        unexamined_dreams?: Array<{ id: string; dream_text: string }>;
+        open_loops?: Array<{ id: string; loop_text: string }>;
+        pressure_flags?: string[];
       } | undefined;
       if (!data) return null;
       return {
@@ -348,6 +356,9 @@ export class LibrarianClient {
           confidence: c.confidence,
           subject: c.subject ?? null,
         })),
+        unexamined_dreams: Array.isArray(data.unexamined_dreams) ? data.unexamined_dreams : [],
+        open_loops: Array.isArray(data.open_loops) ? data.open_loops : [],
+        pressure_flags: Array.isArray(data.pressure_flags) ? data.pressure_flags : [],
       };
     } catch {
       return null;

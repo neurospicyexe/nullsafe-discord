@@ -52,31 +52,16 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     ctx.recentGrowth = orient.recent_growth ?? [];
     ctx.activePatterns = orient.active_patterns ?? [];
 
-    const readyPrompt = (orient as { ready_prompt?: string }).ready_prompt ?? "";
-
-    // Unexamined dream IDs -- write phase clears these after successful run
-    // Format: [Unexamined dream [autonomous] id:UUID] «text»
-    const dreamIdRe = /\[Unexamined dream[^\]]*\bid:([0-9a-f-]{36})\]/gi;
-    const dreamIds: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = dreamIdRe.exec(readyPrompt)) !== null) dreamIds.push(m[1]);
-    ctx.unexaminedDreamIds = dreamIds;
-
-    // Open loops -- text content extracted for seed decision context
-    // Format: [Open loop id:UUID] text  OR  [Open loop: text]
-    const loopRe = /\[Open loop[^\]]*\]\s*([^\n\[]{5,120})/gi;
-    const openLoops: Array<{ id: string; text: string }> = [];
-    while ((m = loopRe.exec(readyPrompt)) !== null) {
-      const idMatch = m[0].match(/\bid:([0-9a-f-]{36})/i);
-      openLoops.push({ id: idMatch?.[1] ?? "unknown", text: m[1].trim() });
-    }
-    ctx.openLoops = openLoops;
-
-    // Pressure flags -- short text snippets flagged as active pressure
-    // Format: [Pressure: text]  OR  [pressure_flag: text]
-    const pressureRe = /\[[Pp]ressure[_\s:][^\]]{3,100}\]/g;
-    ctx.pressureFlags = (readyPrompt.match(pressureRe) ?? [])
-      .map(s => s.replace(/^\[|\]$/g, "").trim());
+    // Structured carried-between-sessions surfaces from bot_orient.
+    // Previously this phase regex-scraped a `ready_prompt` field that bot_orient never
+    // returns (it returns structured `data`), so dreams/loops/pressure were ALWAYS empty
+    // and unexamined dreams never got cleared -- they accumulated and flooded every orient.
+    // bot_orient now provides these as structured arrays; read them directly.
+    ctx.unexaminedDreamIds = (orient.unexamined_dreams ?? []).map(d => d.id).filter(Boolean);
+    ctx.openLoops = (orient.open_loops ?? [])
+      .map(l => ({ id: l.id ?? "unknown", text: (l.loop_text ?? "").trim() }))
+      .filter(l => l.text.length > 0);
+    ctx.pressureFlags = (orient.pressure_flags ?? []).map(s => s.trim()).filter(Boolean);
   } else {
     console.warn(`[${ctx.companionId}/orient] botOrient returned null -- proceeding with empty context`);
     ctx.orientSummary = "";

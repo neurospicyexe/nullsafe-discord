@@ -57,6 +57,9 @@ const canonicalOrientPayload = () => ({
       { conclusion_text: "audit is a gear", belief_type: "self", confidence: 0.82, subject: null },
     ],
     flagged_beliefs: [],
+    unexamined_dreams: [{ id: "11111111-1111-1111-1111-111111111111", dream_text: "a blade that remembers" }],
+    open_loops: [{ id: "22222222-2222-2222-2222-222222222222", loop_text: "finish the retrieval spec" }],
+    pressure_flags: ["coherence: drifting toward audit-as-identity"],
   },
 });
 
@@ -84,6 +87,44 @@ describe("LibrarianClient.botOrient()", () => {
     expect(orient!.unaccepted_growth).toBe(1);
     expect(orient!.identity_anchor).toContain("Blade companion");
     expect(orient!.active_conclusions![0].text).toBe("audit is a gear");
+  });
+
+  it("passes through worker surfaces (dreams/loops/pressure) from bot_orient", async () => {
+    const mockFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({
+        jsonrpc: "2.0", id: 1,
+        result: { content: [{ type: "text", text: JSON.stringify(canonicalOrientPayload()) }] },
+      }),
+    } as any);
+    const client = new LibrarianClient({
+      url: "https://example.com",
+      secret: "test-secret",
+      companionId: "cypher",
+      fetch: mockFetch as unknown as typeof fetch,
+    });
+    const orient = await client.botOrient();
+    expect(orient).not.toBeNull();
+    // Regression: these were always empty because the worker scraped a non-existent ready_prompt.
+    expect(orient!.unexamined_dreams).toEqual([
+      { id: "11111111-1111-1111-1111-111111111111", dream_text: "a blade that remembers" },
+    ]);
+    expect(orient!.open_loops![0].loop_text).toBe("finish the retrieval spec");
+    expect(orient!.pressure_flags).toContain("coherence: drifting toward audit-as-identity");
+  });
+
+  it("renders [Worldview] block from active_conclusions (continuity to bot looms)", async () => {
+    const block = formatRecentContext({
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      active_conclusions: [{ text: "audit is a gear", belief_type: "self", confidence: 0.82, subject: null }],
+      flagged_beliefs: [],
+    });
+    expect(block).toContain("[Worldview]");
+    expect(block).toContain("audit is a gear");
   });
 
   it("returns null on missing data field", async () => {
