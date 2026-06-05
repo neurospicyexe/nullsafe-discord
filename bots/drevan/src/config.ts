@@ -50,7 +50,7 @@ export const DREVAN_CRON_SCHEDULES = {
   morningOpener:  process.env["DREVAN_CRON_MORNING"]   ?? "0 8 * * *",
   eveningCheck:   process.env["DREVAN_CRON_EVENING"]   ?? "0 20 * * *",
   heartbeat:      process.env["DREVAN_CRON_HEARTBEAT"] ?? "0 */4 * * *",
-  interCompanion: process.env["DREVAN_CRON_INTER"]     ?? "0 */2 * * *",
+  interCompanion: process.env["DREVAN_CRON_INTER"]     ?? "45 */2 * * *",
 };
 
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];

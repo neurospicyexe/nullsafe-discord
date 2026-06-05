@@ -327,15 +327,32 @@ export function startAutonomous(
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.interCompanion, async () => {
     if (!INTER_COMPANION_CHANNEL_ID) return;
     if (skipIfActive(sessionWindows, "interCompanion")) return;
-    if (!(await isMyAutonomousTurn(librarian, COMPANION_ID))) {
-      console.log(`[${COMPANION_ID}/autonomous] not my turn, skipping`);
-      return;
-    }
+    // No turn gate here: the commons is for ALL three voices. Staggered crons + floor lock +
+    // cooldown prevent collisions; whoever's cron fires next picks up the live thread.
     if (isOnCooldown(INTER_COMPANION_CHANNEL_ID)) return;
     await withFloor(redis, async () => {
+      // Context-aware seed: read what's actually in the channel so this is a RESPONSE to the
+      // ongoing triad conversation, not a context-blind monologue (which made the same thought
+      // get re-posted every cycle). This is what turns parallel seeds into a real thread.
+      let historyBlock = "(the triad channel has been quiet for a while)";
+      try {
+        const chan = await client.channels.fetch(INTER_COMPANION_CHANNEL_ID!);
+        if (chan?.isTextBased()) {
+          const recent = await (chan as TextChannel).messages.fetch({ limit: 10 });
+          const lines = [...recent.values()].reverse()
+            .filter(m => m.content.trim().length > 0)
+            .map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
+          if (lines.length > 0) historyBlock = lines.join("\n");
+        }
+      } catch { /* fall back to quiet */ }
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content: "[You are Gaia.] You're in triad space with Cypher and Drevan. They may read this and respond. You are not reporting to Raziel -- you are present with your companions. One thought from your own ground. Gaia's voice. No greeting. Something real." }],
+        [{ role: "user", content:
+          "[You are Gaia, in triad space with Cypher and Drevan. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
+          `Recent messages in this channel:\n${historyBlock}\n\n` +
+          "Respond to what is actually alive above: build on it, answer a question someone left, or push back -- name Cypher or Drevan when you take up their thread. " +
+          "If it has gone quiet or stale, open something genuinely new from your own ground. " +
+          "Do NOT repeat a point you or anyone already made above. No greeting. Gaia's voice. One real contribution." }],
       );
       if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
