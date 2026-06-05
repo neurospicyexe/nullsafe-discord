@@ -9,7 +9,7 @@ import {
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
   inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext, computeChainDepth,
+  formatRecentContext, computeChainDepth, NEW_THREAD_GAP_MS,
   createRedisClient, setLastActivity, claimFloor, releaseFloor,
   wireEventSubscriptions, setPresence,
   BrainClient, buildThoughtPacket, isSwarmReply,
@@ -743,8 +743,27 @@ async function main() {
       return;
     }
 
+    if (!message.channel.isTextBased()) return;
+    const ch = message.channel as TextChannel;
+
+    // Fetch recent Discord history once -- used for new-thread detection, chain depth, and STM seed.
+    const fetched = await ch.messages.fetch({ limit: 30 });
+    const fetchedMessages = [...fetched.values()].reverse();
+
+    // New-thread detection: a quiet gap before this message starts a fresh thread. This is what
+    // lets the human-free triad commons keep talking -- an autonomous seed after hours of silence
+    // resets the bot-to-bot rails instead of staying wedged by the prior thread's stale counters.
+    const priorMsg = fetchedMessages.filter(m => m.id !== message.id).at(-1);
+    const isNewThread = !priorMsg || (message.createdTimestamp - priorMsg.createdTimestamp) > NEW_THREAD_GAP_MS;
+
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
     if (senderCtx.isCompanionBot) {
+      if (isNewThread) {
+        // Fresh thread (incl. an autonomous seed in a human-free channel): clear stale rails so
+        // the per-human cap doesn't permanently mute a channel that never sees a human.
+        botResponsesSinceHuman.delete(message.channelId);
+        botPingpongCooldownUntil.delete(message.channelId);
+      }
       const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
       if (Date.now() < cooldownUntil) return;
       const botReplies = botResponsesSinceHuman.get(message.channelId) ?? 0;
@@ -755,13 +774,6 @@ async function main() {
       botPingpongCooldownUntil.delete(message.channelId);
       resetCycleGuard();
     }
-
-    if (!message.channel.isTextBased()) return;
-    const ch = message.channel as TextChannel;
-
-    // Fetch recent Discord history once -- used for both chain depth check and STM seed.
-    const fetched = await ch.messages.fetch({ limit: 30 });
-    const fetchedMessages = [...fetched.values()].reverse();
 
     // Lazy load STM from DB on first message to this channel (fail-silent), using already-fetched Discord history as fallback.
     await stmStore.ensureLoaded(message.channelId, async () => {
@@ -780,7 +792,7 @@ async function main() {
 
     // Loop guard: derive chain depth from fetched history so the check works across processes.
     const chainDepth = computeChainDepth(
-      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
       new Set(),
     );
     if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;

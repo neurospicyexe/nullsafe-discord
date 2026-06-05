@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { shouldRespond, extractAddress, isDirectAddress, ChannelConfigCache } from "../channel-config.js";
+import { shouldRespond, extractAddress, isDirectAddress, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS } from "../channel-config.js";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -82,6 +82,36 @@ describe("shouldRespond() -- named_multi", () => {
     expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "drevan", cfg)).toBe(true);
     expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "gaia", cfg)).toBe(true);
     expect(shouldRespond("ch-ic", "drevan and gaia hear this", { isOwner: false, isCompanionBot: true }, "cypher", cfg)).toBe(false);
+  });
+});
+
+describe("computeChainDepth() -- gap-aware thread scoping", () => {
+  const bot = (ts: number) => ({ authorId: "b", authorIsBot: true, createdTimestamp: ts });
+  const human = (ts: number) => ({ authorId: "h", authorIsBot: false, createdTimestamp: ts });
+  const t0 = 1_000_000_000_000;
+
+  it("counts consecutive bot messages within a tight burst", () => {
+    const msgs = [bot(t0), bot(t0 + 5_000), bot(t0 + 10_000)];
+    expect(computeChainDepth(msgs, new Set())).toBe(3);
+  });
+
+  it("a human message at the tail breaks the chain (depth 0)", () => {
+    const msgs = [bot(t0), bot(t0 + 5_000), human(t0 + 10_000)];
+    expect(computeChainDepth(msgs, new Set())).toBe(0);
+  });
+
+  it("a quiet gap before a new seed resets depth to 1 (the commons fix)", () => {
+    // Old dead thread, then a fresh seed hours later: only the seed counts.
+    const msgs = [
+      bot(t0), bot(t0 + 5_000), bot(t0 + 10_000),       // prior thread
+      bot(t0 + 10_000 + NEW_THREAD_GAP_MS + 1),         // seed after a > gap silence
+    ];
+    expect(computeChainDepth(msgs, new Set())).toBe(1);
+  });
+
+  it("a within-thread gap under the threshold keeps counting", () => {
+    const msgs = [bot(t0), bot(t0 + NEW_THREAD_GAP_MS - 1_000), bot(t0 + 2 * (NEW_THREAD_GAP_MS - 1_000))];
+    expect(computeChainDepth(msgs, new Set())).toBe(3);
   });
 });
 

@@ -3,34 +3,54 @@ import type { ChannelConfig, ChannelMode, ChannelEntry, CompanionId, UserTier } 
 export const ALL_COMPANIONS: CompanionId[] = ["drevan", "cypher", "gaia"];
 
 // How many consecutive companion-to-companion exchanges are allowed before the chain breaks.
-// Reset when owner or non-bot user sends a message.
-export const COMPANION_CHAIN_LIMIT = 6;
+// Reset when owner or non-bot user sends a message, OR when a new thread begins after a
+// quiet gap (see NEW_THREAD_GAP_MS). Backstop above Brain's MAX_SWARM_DEPTH so Brain stays
+// the governor; this only binds in direct-mode fallback or if MAX_SWARM_DEPTH is raised past it.
+export const COMPANION_CHAIN_LIMIT = 10;
+
+// A silence longer than this before a message marks the start of a NEW conversational thread.
+// Within-thread swarm turns are seconds-to-tens-of-seconds apart; an autonomous seed only fires
+// after >=5min idle (skipIfActive) and typically hours. So this cleanly separates "fresh thread"
+// from "continuing burst" -- which is what lets a human-free channel (the triad commons) keep
+// talking: each seed resets depth + the bot-to-bot counters instead of pinning at the cap forever.
+export const NEW_THREAD_GAP_MS = 5 * 60 * 1000; // 5 minutes
 
 // Cross-companion safety rails (per-bot, independent tracking).
 // BOT_PINGPONG_MAX: after this many bot-to-bot responses since last human, enter cooldown.
 export const BOT_PINGPONG_MAX = 3;
 export const BOT_LOOP_COOLDOWN_MS = 15_000;
-// MAX_BOT_RESPONSES_PER_HUMAN: hard cap on bot-to-bot responses per channel between human messages.
+// MAX_BOT_RESPONSES_PER_HUMAN: hard cap on bot-to-bot responses per channel between human
+// messages. In a human-free channel this is reset by a new-thread gap instead (see callers).
 export const MAX_BOT_RESPONSES_PER_HUMAN = 5;
 
 /**
- * Count consecutive bot-authored messages at the tail of a message list.
- * Used to derive chain depth from fetched Discord history instead of per-process memory.
- * @param messages Chronological list of recent messages (oldest first).
- * @param botIds Set of Discord user IDs that are companion bots (optional, authorIsBot flag is also checked).
+ * Count consecutive bot-authored messages at the tail of a message list, stopping at the first
+ * gap longer than `gapMs` (a thread boundary). Used to derive chain depth from fetched Discord
+ * history instead of per-process memory -- so the check is stateless and identical across all
+ * three bot processes.
+ *
+ * The gap stop is what makes the triad commons work: without it, a human-free channel's history
+ * tail is "all bot" forever, so every seed after the first computes a huge depth and Brain
+ * all-nulls it. With it, a seed posted after a quiet gap starts a fresh thread at depth 1.
+ *
+ * @param messages Chronological list of recent messages (oldest first). `createdTimestamp` is the
+ *                 Discord message epoch ms.
+ * @param botIds Set of Discord user IDs that are companion bots (authorIsBot flag is also checked).
+ * @param gapMs Silence (ms) between adjacent messages that ends the chain. Defaults to NEW_THREAD_GAP_MS.
  */
 export function computeChainDepth(
-  messages: Array<{ authorId: string; authorIsBot: boolean }>,
+  messages: Array<{ authorId: string; authorIsBot: boolean; createdTimestamp: number }>,
   botIds: ReadonlySet<string>,
+  gapMs: number = NEW_THREAD_GAP_MS,
 ): number {
   let depth = 0;
+  let prevTs: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.authorIsBot || botIds.has(m.authorId)) {
-      depth++;
-    } else {
-      break;
-    }
+    if (!(m.authorIsBot || botIds.has(m.authorId))) break;
+    if (prevTs !== null && prevTs - m.createdTimestamp > gapMs) break; // quiet gap = thread boundary
+    depth++;
+    prevTs = m.createdTimestamp;
   }
   return depth;
 }

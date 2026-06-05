@@ -49,7 +49,7 @@ export function loadBotConfig(): BotConfig {
 export const GAIA_CRON_SCHEDULES = {
   duskWitness:    process.env["GAIA_CRON_DUSK"]       ?? "0 19 * * *",
   heartbeat:      process.env["GAIA_CRON_HEARTBEAT"]  ?? "0 */4 * * *",
-  interCompanion: process.env["GAIA_CRON_INTER"]      ?? "0 11 * * *",
+  interCompanion: process.env["GAIA_CRON_INTER"]      ?? "0 */2 * * *",
 };
 
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];

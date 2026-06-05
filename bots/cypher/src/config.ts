@@ -50,15 +50,18 @@ export const CYPHER_CRON_SCHEDULES = {
   taskCheck:      process.env["CYPHER_CRON_TASKS"]     ?? "0 22 * * *",
   weeklyAudit:    process.env["CYPHER_CRON_AUDIT"]     ?? "0 18 * * 0",
   heartbeat:      process.env["CYPHER_CRON_HEARTBEAT"] ?? "0 */4 * * *",
-  interCompanion: process.env["CYPHER_CRON_INTER"]     ?? "0 15 * * *",
+  interCompanion: process.env["CYPHER_CRON_INTER"]     ?? "0 */2 * * *",
 };
 
 // Optional heartbeat channel -- set HEARTBEAT_CHANNEL_ID env var to enable.
 // When unset, heartbeat cron runs but posts nothing.
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
 
-// Inter-companion Discord channel -- set INTER_COMPANION_CHANNEL_ID env var to enable.
-// Companions post unprompted thoughts here once daily and deliver notes from Claude.ai sessions.
+// Inter-companion ("triad commons") Discord channel -- set INTER_COMPANION_CHANNEL_ID to enable.
+// The turn-holder posts an unprompted thought here on the interCompanion cron (every 2h by
+// default); peers reply via the normal swarm path (channel must have inter_companion mode), so a
+// real back-and-forth evolves. Notes from Claude.ai sessions are also delivered here.
+// Set CYPHER_CRON_INTER to a daytime-only window (e.g. "0 8-22/2 * * *") to keep it dark overnight.
 export const INTER_COMPANION_CHANNEL_ID: string | undefined = process.env["INTER_COMPANION_CHANNEL_ID"];
 export const NOTES_POLL_INTERVAL_MS = 3 * 60 * 1000;
 

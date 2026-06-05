@@ -49,6 +49,12 @@ const shared = {
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
+  // Each bot needs the OTHER bots' Discord user IDs to recognize their messages as companion
+  // posts (isCompanionPost / BOT_ID_COMPANION). Without these forwarded here, every bot-to-bot
+  // message is dropped at the "hard muzzle" gate and inter-companion conversation never fires.
+  CYPHER_BOT_ID:         process.env.CYPHER_BOT_ID,
+  DREVAN_BOT_ID:         process.env.DREVAN_BOT_ID,
+  GAIA_BOT_ID:           process.env.GAIA_BOT_ID,
   // Brain relay: set INFERENCE_MODE=brain to route inference through Phoenix Brain.
   // When "direct" (default), each bot calls DeepSeek directly.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
