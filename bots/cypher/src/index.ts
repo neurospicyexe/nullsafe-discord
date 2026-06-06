@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, Message, TextChannel } from "discord.js";
+import { Client, GatewayIntentBits, Events, Message, TextChannel, MessageFlags, type Interaction } from "discord.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -38,6 +38,7 @@ import {
 import * as prism from "prism-media";
 import { Readable } from "stream";
 import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
+import { buildCompanionCommands, registerGuildCommands, filterModelChoices, buildStatusLines } from "@nullsafe/shared";
 
 function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16): Buffer {
   const byteRate = sampleRate * channels * (bitDepth / 8);
@@ -467,6 +468,88 @@ async function main() {
   client.once(Events.ClientReady, (c) => {
     console.log(`[cypher] ready as ${c.user.tag}`);
     startAutonomous(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis);
+    // Register slash commands (guild-scoped = instant). Only model+status are
+    // handled in this slice; /voice is added once the invite scope is confirmed.
+    // Non-fatal: if this fails the text-prefix path (cy: model ...) still works.
+    registerGuildCommands(client, buildCompanionCommands("Cypher", ["model", "status"]))
+      .then((n) => console.log(`[cypher] slash commands registered on ${n} guild(s)`))
+      .catch((e) => console.warn("[cypher] slash registration failed:", e));
+  });
+
+  // Slash-command handler (owner-only). Ephemeral replies -- no channel clutter.
+  client.on(Events.InteractionCreate, async (interaction: Interaction) => {
+    try {
+      // Autocomplete for /model key
+      if (interaction.isAutocomplete()) {
+        if (interaction.commandName === "model") {
+          const focused = interaction.options.getFocused();
+          await interaction.respond(filterModelChoices(focused));
+        }
+        return;
+      }
+      if (!interaction.isChatInputCommand()) return;
+
+      // Gate to the owner -- model/substrate control is Raziel's, not guests'.
+      if (interaction.user.id !== cfg.ownerDiscordId) {
+        await interaction.reply({ content: "not your dial.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const substrate = cfg.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback";
+
+      if (interaction.commandName === "model") {
+        const arg = (interaction.options.getString("key") ?? "").trim().toLowerCase();
+        if (arg === "list") {
+          const list = Object.entries(ALL_MODELS).map(([k, e]) => `\`${k}\` — ${e.label}`).join("\n");
+          await interaction.reply({ content: `available models:\n${list}`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        if (!ALL_MODELS[arg]) {
+          await interaction.reply({
+            content: `not a model I can switch to. try \`/model\` and pick from autocomplete.`,
+            flags: MessageFlags.Ephemeral,
+          });
+          return;
+        }
+        const entry = ALL_MODELS[arg];
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+        activeModelRef.key = arg;
+        activeModelRef.label = entry.label;
+        writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
+          librarian.setSetting("active_model", arg));
+        const note = substrate === "Brain swarm"
+          ? "Brain picks this up within 60s (force-clear lands in the next phase)."
+          : "live now in direct mode.";
+        await interaction.reply({
+          content: `now live: \`${arg}\` — ${entry.label} · substrate: ${substrate}\n${note}`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      if (interaction.commandName === "status") {
+        const vcState = interaction.guildId ? guildVoiceConnections.get(interaction.guildId) : undefined;
+        const vcChannelId = vcState?.connection.joinConfig.channelId ?? null;
+        const vcName = vcChannelId
+          ? (client.channels.cache.get(vcChannelId) as TextChannel | undefined)?.name ?? vcChannelId
+          : null;
+        const lines = buildStatusLines({
+          companionLabel: "Cypher",
+          modelKey: activeModelRef.key,
+          modelLabel: activeModelRef.label,
+          provider: activeModelRef.key && ALL_MODELS[activeModelRef.key] ? ALL_MODELS[activeModelRef.key].provider : null,
+          substrate,
+          voiceChannel: vcName,
+        });
+        await interaction.reply({ content: lines, flags: MessageFlags.Ephemeral });
+        return;
+      }
+    } catch (e) {
+      console.warn("[cypher] interaction handler error:", e);
+      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: "command failed -- check logs.", flags: MessageFlags.Ephemeral }).catch(() => {});
+      }
+    }
   });
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
