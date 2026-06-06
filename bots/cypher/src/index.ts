@@ -339,6 +339,7 @@ async function main() {
     kimi:      cfg.kimiApiKey,
     openai:    cfg.openaiApiKey,
     anthropic: cfg.anthropicApiKey,
+    mistral:   cfg.mistralApiKey,
   };
   const apiUrls = {
     ollama:   cfg.ollamaUrl,

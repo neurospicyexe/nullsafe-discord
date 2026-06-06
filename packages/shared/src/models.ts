@@ -7,6 +7,7 @@ export type InferenceProvider =
   | "kimi"
   | "openai"
   | "anthropic"
+  | "mistral"
   | "ollama";
 
 export interface ModelEntry {
@@ -24,6 +25,9 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // LM Studio (local via Cloudflare tunnel -- set LMSTUDIO_URL on VPS)
   "gemma-4":           { provider: "lmstudio",  model: "gemma-4",                   label: "Gemma 4 (local)" },
   "mistral-large-3":   { provider: "lmstudio",  model: "mistral-large-3",           label: "Mistral Large 3 (local)" },
+  // Mistral (La Plateforme API -- set MISTRAL_API_KEY)
+  "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
+  "mistral-small":     { provider: "mistral",   model: "mistral-small-latest",      label: "Mistral Small (API)" },
   // Kimi (Moonshot AI)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2",                   label: "Kimi K2" },
   "kimi-128k":         { provider: "kimi",      model: "moonshot-v1-128k",          label: "Kimi 128k" },

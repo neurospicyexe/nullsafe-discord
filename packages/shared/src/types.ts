@@ -53,6 +53,7 @@ export interface BotConfig {
   kimiApiKey?: string;
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  mistralApiKey?: string;
   inferenceModel?: string;   // default model key on cold boot (e.g. "deepseek-chat")
   disabledModels?: string;   // comma-separated model keys to disable
   blueDiscordId?: string;

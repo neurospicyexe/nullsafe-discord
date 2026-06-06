@@ -348,6 +348,46 @@ class AnthropicAdapter implements InferenceAdapter {
   }
 }
 
+class MistralAdapter implements InferenceAdapter {
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+    try {
+      // Mistral La Plateforme is OpenAI-compatible.
+      const res = await this.fetchFn("https://api.mistral.ai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: 500,
+          temperature,
+        }),
+      });
+      if (!res.ok) {
+        console.warn(`[inference:mistral] non-2xx response: ${res.status}`);
+        return null;
+      }
+      const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+      return data.choices[0]?.message?.content?.trim() ?? null;
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:mistral] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
+  }
+}
+
 // Tries each adapter in order, returns first non-null result.
 class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
@@ -371,6 +411,7 @@ export interface AdapterKeys {
   kimi?: string;
   openai?: string;
   anthropic?: string;
+  mistral?: string;
 }
 export interface AdapterUrls { ollama?: string; lmstudio?: string }
 
@@ -388,6 +429,7 @@ function buildAdapter(
     case "kimi":      return keys.kimi      ? new KimiAdapter(keys.kimi, model, fetchFn)           : null;
     case "openai":    return keys.openai    ? new OpenAIAdapter(keys.openai, model, fetchFn)       : null;
     case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn) : null;
+    case "mistral":   return keys.mistral   ? new MistralAdapter(keys.mistral, model, fetchFn)     : null;
     case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)       : null;
     case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)   : null;
     default:          return null;
