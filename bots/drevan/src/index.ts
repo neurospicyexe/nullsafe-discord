@@ -248,7 +248,7 @@ async function main() {
     diskChannelConfig = JSON.parse(readFileSync(join(__dir, "../../../channel-config.json"), "utf8"));
   } catch { console.warn("[drevan] channel-config.json not found on disk, using hardcoded default"); }
   const configCache = new ChannelConfigCache(cfg.channelConfigUrl, diskChannelConfig);
-  const writeQueue = new WriteQueue();
+  const writeQueue = new WriteQueue(COMPANION_ID);
   writeQueue.start();
   const stmStore = new StmStore(
     COMPANION_ID,
@@ -263,7 +263,7 @@ async function main() {
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
     (channelId: string) => {
-      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId: COMPANION_ID, synthesisPrompt: SYNTHESIS_PROMPT, sessionExtractPrompt: SESSION_EXTRACT_PROMPT }).catch(() => {});
+      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId: COMPANION_ID, synthesisPrompt: SYNTHESIS_PROMPT, sessionExtractPrompt: SESSION_EXTRACT_PROMPT }).catch((e) => console.error(`[${COMPANION_ID}] distillSessionOnInactive failed:`, e));
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
     },

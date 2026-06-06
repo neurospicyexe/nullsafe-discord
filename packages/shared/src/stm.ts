@@ -87,7 +87,9 @@ export class StmStore {
         () => this.writeFn(channelId, message),
       );
     } else {
-      this.writeFn(channelId, message).catch(() => {});
+      this.writeFn(channelId, message).catch((e) => {
+        console.warn(`[stm] direct write failed (no retry queue): ${channelId} -- ${e instanceof Error ? e.message : String(e)}`);
+      });
     }
   }
 

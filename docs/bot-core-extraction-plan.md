@@ -77,6 +77,28 @@ Implication: the shared `assembleSystemPrompt(config, identity, ...)` pure funct
 snapshot (below) is the right first artifact, but the SOMA schema and audit-capability
 divergences mean `BotConfig` needs per-bot optional fields, not a flat homogenized shape.
 
+## Silent-failure hardening (2026-06-06)
+
+Triage of all `.catch(() => {})` swallows in bots + shared. **Leave silent** (correctly
+best-effort; logging would be noise per `feedback_pm2_log_noise`): floor release, setPresence,
+setLastActivity, sendTyping, status `channel.send`, pub/sub unsubscribe/quit cleanup, slash
+interaction reply (has fallback).
+
+**Fixed (this increment):**
+- `WriteQueue` (shared) — was silent on every failure path. Now logs: write failure→buffer (warn),
+  buffer-overflow eviction (error, DATA LOSS), age-out drop (error, DATA LOSS), incomplete drain
+  (warn). Constructor takes `name` (companion id) for attributable logs. 5 tests.
+- `distillSessionOnInactive(...).catch(() => {})` in all 3 bots → logs the error (was swallowing
+  the whole continuity path silently; call site is fire-and-forget so a regression here is invisible).
+- `new WriteQueue()` → `new WriteQueue(COMPANION_ID)` in all 3 bots.
+- `stm.ts` no-queue fallback write → logs on failure.
+
+**TODO — fix during autonomous.ts dedup (continuity-critical writes still silent in triplicated code):**
+`bots/*/src/autonomous.ts` swallows these with `.catch(() => {})`: `librarian.ask` for inter-companion
+note / journal entry / log feeling / loop_guard journal note; `recordMetronomeActionFired`;
+`patchAutonomyRun(runId, "completed")`. Fix once when autonomous.ts moves to shared (≈6 sites in one
+file vs 18 inline now). Until then these autonomous-loop writes fail invisibly.
+
 ## Steps (each independently verifiable)
 
 1. **Standardize config contract.** Define a `BotConfig` type in shared. Make all three
