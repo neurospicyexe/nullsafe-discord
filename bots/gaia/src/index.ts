@@ -15,6 +15,7 @@ import {
   BrainClient, buildThoughtPacket, isSwarmReply,
   getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
   type ChatMessage, type BootContext,
+  composePrompt, deriveIdentityBase,
 } from "@nullsafe/shared";
 import { detectPluralKit } from "@nullsafe/shared";
 import {
@@ -87,9 +88,7 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
     }
     const sharedCtx = loadSharedContext();
     const sharedBlock = sharedCtx ? `${sharedCtx}\n\n---\n\n` : "";
-    const systemPrompt = rawPrompt
-      ? `${DISCORD_GAIA_PREFIX}${sharedBlock}${baseIdentity}\n\n---\n\n${rawPrompt}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-      : `${DISCORD_GAIA_PREFIX}${sharedBlock}${baseIdentity}`;
+    const identityCore = `${DISCORD_GAIA_PREFIX}${sharedBlock}${baseIdentity}`;
     const frontState = String(state["front_state"] ?? "unknown");
     console.log(`[gaia] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
 
@@ -101,9 +100,7 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       if (recentContext) console.log(`[gaia] botOrient: ${recentContext.length} chars loaded`);
     } catch { console.warn("[gaia] botOrient failed at boot, starting cold"); }
 
-    const systemPromptWithContext = recentContext
-      ? `${systemPrompt}\n\n---\n\n${recentContext}`
-      : systemPrompt;
+    const systemPromptWithContext = composePrompt({ identityCore, promptContext: rawPrompt, companionId: COMPANION_ID, recentContext });
 
     return {
       bootCtx: { companionId: COMPANION_ID, systemPrompt: systemPromptWithContext, sessionId, frontState, fromCache: !rawPrompt },
@@ -400,7 +397,7 @@ async function main() {
   const PK_HOLD_MS = 3000;
   const pkDedup = new PkDedup(PK_HOLD_MS);
 
-  const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
+  const identityBase = deriveIdentityBase(bootCtx.systemPrompt);
   let systemPrompt = bootCtx.systemPrompt;
   let currentMood: string | null = null;
   let lastSomaRefresh = Date.now();
@@ -421,10 +418,7 @@ async function main() {
 
       recentContextRef.value = freshRecentCtx;
 
-      const newBase = freshPromptCtx
-        ? `${identityBase}\n\n---\n\n${freshPromptCtx}\n\n---\n\nRespond only as ${COMPANION_ID}. Never use [Name]: prefixes.`
-        : identityBase;
-      systemPrompt = freshRecentCtx ? `${newBase}\n\n---\n\n${freshRecentCtx}` : newBase;
+      systemPrompt = composePrompt({ identityCore: identityBase, promptContext: freshPromptCtx ?? undefined, companionId: COMPANION_ID, recentContext: freshRecentCtx });
       bootCtx.systemPrompt = systemPrompt;
 
       if (stateResult.status === "fulfilled" && stateResult.value["current_mood"] !== undefined) {

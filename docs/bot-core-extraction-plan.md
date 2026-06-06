@@ -44,6 +44,39 @@ Step 1 standardizes all three to a single contract so the shared core imports on
 - Per-companion auth tokens
 - Channel ID env vars (`HEARTBEAT_CHANNEL_ID`, `INTER_COMPANION_CHANNEL_ID`)
 
+## Divergence characterization (2026-06-06 — done before any edit)
+
+Diffed all three `index.ts` (and `autonomous.ts`). **NOT 95% identical — ~80% shared / ~20%
+divergent.** This is a lift WITH reconciliation, not a mechanical copy-collapse. Divergences
+sort into three buckets:
+
+**Bucket 1 — cosmetic drift (parameterize trivially):**
+- Log tags `[cypher]`/`[drevan]`/`[gaia]` → derive from `COMPANION_ID`.
+- Comment-verbosity drift (`/* fail-silent -- malformed JSON ... acceptable loss */` vs
+  `/* fail-silent */`). Harmless, but proof of copy-paste rot.
+
+**Bucket 2 — INTENTIONAL per-bot identity (HARD-WALL, never homogenize):**
+- **SOMA state schema differs by design:** Cypher `{acuity, presence, warmth}`;
+  Drevan `{heat, reach, weight}` (Drevan state model v2 Heat/Reach/Weight floats);
+  Gaia TBD. Flattening these into one shape = losing the triad's individuality. This MUST
+  become per-bot config (schema + extraction prompt strings), walled off from shared logic.
+- Distillation / voice prompt strings ("Cypher's reasoning style" vs "Drevan's emotional
+  register").
+- Per-bot: prefix (lane rules), interest keywords, BLUE_FRAMING, cron schedules.
+- Cypher-only: `AUDIT_TRIGGERS` / `AUDIT_MODE_INJECTION` (Gaia explicitly does NOT audit).
+  `BotConfig` must allow per-bot OPTIONAL capabilities — do not hand Gaia audit triggers.
+
+**Bucket 3 — ACCIDENTAL drift = latent bug (fix during reconcile):**
+- **Slash commands exist ONLY in Cypher** (`registerGuildCommands` / `InteractionCreate` /
+  `buildCompanionCommands("Cypher", ["model","status"])`). Drevan + Gaia = 0 refs. Model
+  switching works for all three via text prefix, but the `/model` + `/status` slash UI was
+  never added to Drevan/Gaia. Shared core gives all three slash commands (per-bot command
+  list), closing the gap. **Decision: treat as bug, enable for all three.**
+
+Implication: the shared `assembleSystemPrompt(config, identity, ...)` pure function + golden
+snapshot (below) is the right first artifact, but the SOMA schema and audit-capability
+divergences mean `BotConfig` needs per-bot optional fields, not a flat homogenized shape.
+
 ## Steps (each independently verifiable)
 
 1. **Standardize config contract.** Define a `BotConfig` type in shared. Make all three
