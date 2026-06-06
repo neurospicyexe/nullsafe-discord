@@ -1,8 +1,93 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { resolveAttribution } from "../pluralkit.js";
+import { resolveAttribution, PkDedup } from "../pluralkit.js";
 import type { Attribution } from "../types.js";
 
 const OWNER_ID = "123456789";
+
+describe("PkDedup (proxy-tag-tolerant double-post suppression)", () => {
+  const CH = "chan1";
+
+  it("autoproxy: identical original+webhook content dedups and captures sender", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig1", "hello", OWNER_ID);
+    const match = d.matchWebhook(CH, "hello");
+    expect(match).toEqual({ senderId: OWNER_ID });
+    // original wakes after the hold and finds itself skipped
+    expect(d.resolveOriginal(CH, "orig1")).toEqual({ skip: true });
+  });
+
+  it("prefix proxy tag stripped: 'cy: hello' original matches 'hello' webhook", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig2", "cy: hello", OWNER_ID);
+    expect(d.matchWebhook(CH, "hello")).toEqual({ senderId: OWNER_ID });
+    expect(d.resolveOriginal(CH, "orig2")).toEqual({ skip: true });
+  });
+
+  it("suffix proxy tag stripped: 'hello -c' original matches 'hello' webhook", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig3", "hello -c", OWNER_ID);
+    expect(d.matchWebhook(CH, "hello")).toEqual({ senderId: OWNER_ID });
+    expect(d.resolveOriginal(CH, "orig3")).toEqual({ skip: true });
+  });
+
+  it("genuinely unproxied: no webhook follows, original is NOT skipped", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig4", "just me talking", OWNER_ID);
+    expect(d.resolveOriginal(CH, "orig4")).toEqual({ skip: false });
+  });
+
+  it("empty webhook content (image-only proxy) never false-matches", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig5", "anything", OWNER_ID);
+    expect(d.matchWebhook(CH, "   ")).toBeNull();
+    expect(d.resolveOriginal(CH, "orig5")).toEqual({ skip: false });
+  });
+
+  it("non-matching webhook content returns null", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig6", "hello", OWNER_ID);
+    expect(d.matchWebhook(CH, "totally different")).toBeNull();
+  });
+
+  it("different channel does not match", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "orig7", "hello", OWNER_ID);
+    expect(d.matchWebhook("otherchan", "hello")).toBeNull();
+  });
+
+  it("two pending originals: webhook matches the right one by containment", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "a", "cy: morning", "user-A");
+    d.addOriginal(CH, "b", "cy: evening", "user-B");
+    expect(d.matchWebhook(CH, "evening")).toEqual({ senderId: "user-B" });
+    expect(d.resolveOriginal(CH, "b")).toEqual({ skip: true });
+    expect(d.resolveOriginal(CH, "a")).toEqual({ skip: false });
+  });
+
+  it("short webhook does NOT match a long original that merely contains it", () => {
+    // Owner's long proxied message is pending; another user proxies a short "ok".
+    // Containment alone would wrongly drop the owner's message and steal its sender.
+    const d = new PkDedup();
+    d.addOriginal(CH, "long", "cy: ok everyone listen up for a sec", OWNER_ID);
+    expect(d.matchWebhook(CH, "ok")).toBeNull();
+    expect(d.resolveOriginal(CH, "long")).toEqual({ skip: false });
+  });
+
+  it("circumfix tag within budget still matches: '{hello}' original vs 'hello' webhook", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "circ", "{hello}", OWNER_ID);
+    expect(d.matchWebhook(CH, "hello")).toEqual({ senderId: OWNER_ID });
+  });
+
+  it("a webhook only consumes one matching original (no double-skip)", () => {
+    const d = new PkDedup();
+    d.addOriginal(CH, "x", "hello", "user-A");
+    d.addOriginal(CH, "y", "hello", "user-B");
+    d.matchWebhook(CH, "hello"); // should mark only the newest (y)
+    expect(d.resolveOriginal(CH, "y")).toEqual({ skip: true });
+    expect(d.resolveOriginal(CH, "x")).toEqual({ skip: false });
+  });
+});
 
 describe("resolveAttribution()", () => {
   it("non-webhook owner message → direct attribution", async () => {

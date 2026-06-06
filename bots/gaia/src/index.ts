@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
-  LibrarianClient, resolveAttribution, createAdapter, loadSharedContext,
+  LibrarianClient, resolveAttribution, PkDedup, createAdapter, loadSharedContext,
   ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, extractAddress, DEFAULT_CHANNEL_CONFIG,
   isResponseCoherent,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
@@ -395,8 +395,8 @@ async function main() {
   const SENT_IDS_CAP = 500;
   // PK dedup: hold ALL non-bot direct messages briefly so PK proxy can cancel them.
   // Stores original sender ID so fallback attribution knows who actually sent it.
-  const pkPending = new Map<string, { skip: boolean; senderId: string }>();
   const PK_HOLD_MS = 3000;
+  const pkDedup = new PkDedup(PK_HOLD_MS);
 
   const identityBase = bootCtx.systemPrompt.split("\n\n---\n\n")[0];
   let systemPrompt = bootCtx.systemPrompt;
@@ -482,17 +482,16 @@ async function main() {
     if (process.env["GAIA_BOT_ID"]) BOT_ID_COMPANION[process.env["GAIA_BOT_ID"]] = "gaia";
     const BOT_IDS = new Set(Object.keys(BOT_ID_COMPANION));
     const isCompanionPost = BOT_IDS.has(message.author.id);
-    const dedupKey = `${message.channelId}:${message.content}`;
-    if (message.webhookId && pkPending.has(dedupKey)) {
-      const entry = pkPending.get(dedupKey)!;
-      pkPending.set(dedupKey, { ...entry, skip: true });
-    }
+    // PluralKit reposts proxied messages via webhook with the proxy tag stripped,
+    // so dedup must match by content containment, not exact equality. matchWebhook
+    // also recovers the sender id captured from the direct original (used below for
+    // attribution when the PK API races).
+    const pkMatch = message.webhookId ? pkDedup.matchWebhook(message.channelId, message.content) : null;
+    const pkKnownSenderId = pkMatch?.senderId;
     if (!message.webhookId && !message.author.bot) {
-      pkPending.set(dedupKey, { skip: false, senderId: message.author.id });
+      pkDedup.addOriginal(message.channelId, message.id, message.content, message.author.id);
       await new Promise<void>(resolve => setTimeout(resolve, PK_HOLD_MS));
-      const entry = pkPending.get(dedupKey);
-      pkPending.delete(dedupKey);
-      if (entry?.skip) return;
+      if (pkDedup.resolveOriginal(message.channelId, message.id).skip) return;
     }
     // Signal conversation activity so autonomous worker skips runs while humans are present
     if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
@@ -597,7 +596,7 @@ async function main() {
       return;
     }
 
-    const knownSenderId = message.webhookId ? pkPending.get(dedupKey)?.senderId : undefined;
+    const knownSenderId = pkKnownSenderId;
     const channelConfig = await configCache.get();
     const attribution = await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"]);
 
