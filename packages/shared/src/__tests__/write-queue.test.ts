@@ -1,5 +1,15 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { WriteQueue } from "../write-queue.js";
+import { WriteQueue, onWriteError } from "../write-queue.js";
+
+describe("onWriteError — fire-and-forget writes outside the queue must not be silent", () => {
+  it("returns a handler that logs the failure with both the companion tag and the label", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    onWriteError("cypher", "inter-companion note")(new Error("halseth down"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("inter-companion note"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("cypher"));
+    warnSpy.mockRestore();
+  });
+});
 
 // Continuity writes (handoff, SOMA, wm_note) go through WriteQueue.fireAndForget. Before this,
 // a failed write was buffered silently and a buffer-overflow/age-out dropped it with NO signal —

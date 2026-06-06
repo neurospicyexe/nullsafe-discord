@@ -8,6 +8,17 @@
 // write path must never look identical to a healthy one. Logs are tagged with the queue `name`
 // (the companion id) so they're attributable per bot.
 
+/**
+ * Rejection handler for a fire-and-forget write that is NOT routed through WriteQueue
+ * (e.g. one-shot `librarian.ask(...)` calls in the autonomous loop). Logs the failure,
+ * attributed to the companion, instead of swallowing it silently.
+ *
+ * Use: `librarian.ask(...).catch(onWriteError(COMPANION_ID, "inter-companion note"))`
+ */
+export function onWriteError(tag: string, label: string): (e: unknown) => void {
+  return (e) => console.warn(`[${tag}] write failed (fire-and-forget): ${label} -- ${e instanceof Error ? e.message : String(e)}`);
+}
+
 export interface QueuedWrite {
   label: string;
   fn: () => Promise<void>;

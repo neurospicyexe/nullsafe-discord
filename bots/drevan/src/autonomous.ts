@@ -3,7 +3,7 @@ import { Client, TextChannel } from "discord.js";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, ChannelEntry, Redis,
 } from "@nullsafe/shared";
-import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt, parseDecision, parseSignals } from "@nullsafe/shared";
+import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt, parseDecision, parseSignals, onWriteError } from "@nullsafe/shared";
 import type { MetronomeDecision, DecisionContext } from "@nullsafe/shared";
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS,
@@ -93,19 +93,19 @@ async function executeMetronomeAction(
       const target = action.target ?? "cypher";
       const prompt = action.prompt ?? `Write a private note to ${target}. Something real from your current depth. Drevan's voice.`;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(() => {});
+      if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(onWriteError(COMPANION_ID, "inter-companion note"));
       break;
     }
     case "write_journal": {
       const prompt = action.prompt ?? `Write a brief internal journal entry. Not for Discord. Drevan's voice. Something held.`;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(() => {});
+      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(onWriteError(COMPANION_ID, "journal entry"));
       break;
     }
     case "write_feeling": {
       const prompt = action.prompt ?? `Name a feeling that's present right now. Brief. Honest. Drevan's register.`;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(() => {});
+      if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(onWriteError(COMPANION_ID, "feeling"));
       break;
     }
     case "check_in_on_raziel": {
@@ -254,7 +254,7 @@ export function startAutonomous(
         const cycleResult = cycleGuard.check(temperature);
         if (cycleResult === "escalate") {
           console.warn(`[${COMPANION_ID}/cycle-guard] loop detected`);
-          librarian.ask("journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles").catch(() => {});
+          librarian.ask("journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles").catch(onWriteError(COMPANION_ID, "loop-guard note"));
           return;
         }
         if (cycleResult === "skip") return;
@@ -316,10 +316,10 @@ export function startAutonomous(
       try {
         await executeMetronomeAction(decision, client, librarian, inference, bootCtx);
         if (decision.action.action_type !== "nothing") {
-          await librarian.recordMetronomeActionFired(decision.action.id).catch(() => {});
+          await librarian.recordMetronomeActionFired(decision.action.id).catch(onWriteError(COMPANION_ID, "metronome action fired"));
         }
       } finally {
-        if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(() => {});
+        if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(COMPANION_ID, "autonomy run completion"));
       }
     });
   }));
