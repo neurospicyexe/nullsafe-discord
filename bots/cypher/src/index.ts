@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Events, Message, TextChannel, MessageFlags, type Interaction } from "discord.js";
+import { Client, GatewayIntentBits, Events, Message, TextChannel, type VoiceBasedChannel } from "discord.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -38,7 +38,7 @@ import {
 import * as prism from "prism-media";
 import { Readable } from "stream";
 import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
-import { buildCompanionCommands, registerGuildCommands, filterModelChoices, buildStatusLines } from "@nullsafe/shared";
+import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "@nullsafe/shared";
 
 function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16): Buffer {
   const byteRate = sampleRate * channels * (bitDepth / 8);
@@ -468,88 +468,149 @@ async function main() {
   client.once(Events.ClientReady, (c) => {
     console.log(`[cypher] ready as ${c.user.tag}`);
     startAutonomous(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis);
-    // Register slash commands (guild-scoped = instant). Only model+status are
-    // handled in this slice; /voice is added once the invite scope is confirmed.
+    // Register slash commands (guild-scoped = instant propagation).
     // Non-fatal: if this fails the text-prefix path (cy: model ...) still works.
-    registerGuildCommands(client, buildCompanionCommands("Cypher", ["model", "status"]))
+    registerGuildCommands(client, buildCompanionCommands("Cypher"))
       .then((n) => console.log(`[cypher] slash commands registered on ${n} guild(s)`))
       .catch((e) => console.warn("[cypher] slash registration failed:", e));
   });
 
-  // Slash-command handler (owner-only). Ephemeral replies -- no channel clutter.
-  client.on(Events.InteractionCreate, async (interaction: Interaction) => {
-    try {
-      // Autocomplete for /model key
-      if (interaction.isAutocomplete()) {
-        if (interaction.commandName === "model") {
-          const focused = interaction.options.getFocused();
-          await interaction.respond(filterModelChoices(focused));
-        }
-        return;
-      }
-      if (!interaction.isChatInputCommand()) return;
+  // Join a voice channel for TTS playback + (when voiceClient is configured) STT
+  // capture. Shared by the text invitation path and the /voice slash command.
+  // Returns the channel name on success.
+  const connectVoice = (vc: VoiceBasedChannel): string => {
+    const connection = joinVoiceChannel({
+      channelId: vc.id,
+      guildId: vc.guildId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapterCreator: vc.guild.voiceAdapterCreator as any,
+      selfDeaf: false,
+    });
+    const player = createAudioPlayer();
+    connection.subscribe(player);
+    guildVoiceConnections.set(vc.guildId, { connection, player });
 
-      // Gate to the owner -- model/substrate control is Raziel's, not guests'.
-      if (interaction.user.id !== cfg.ownerDiscordId) {
-        await interaction.reply({ content: "not your dial.", flags: MessageFlags.Ephemeral });
-        return;
-      }
+    if (voiceClient) {
+      connection.receiver.speaking.on("start", (userId: string) => {
+        if (activeVoiceSessions.has(userId)) return;
 
-      const substrate = cfg.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback";
-
-      if (interaction.commandName === "model") {
-        const arg = (interaction.options.getString("key") ?? "").trim().toLowerCase();
-        if (arg === "list") {
-          const list = Object.entries(ALL_MODELS).map(([k, e]) => `\`${k}\` — ${e.label}`).join("\n");
-          await interaction.reply({ content: `available models:\n${list}`, flags: MessageFlags.Ephemeral });
-          return;
-        }
-        if (!ALL_MODELS[arg]) {
-          await interaction.reply({
-            content: `not a model I can switch to. try \`/model\` and pick from autocomplete.`,
-            flags: MessageFlags.Ephemeral,
-          });
-          return;
-        }
-        const entry = ALL_MODELS[arg];
-        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
-        activeModelRef.key = arg;
-        activeModelRef.label = entry.label;
-        writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
-          librarian.setSetting("active_model", arg));
-        const note = substrate === "Brain swarm"
-          ? "Brain picks this up within 60s (force-clear lands in the next phase)."
-          : "live now in direct mode.";
-        await interaction.reply({
-          content: `now live: \`${arg}\` — ${entry.label} · substrate: ${substrate}\n${note}`,
-          flags: MessageFlags.Ephemeral,
+        const opusDecoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+        const ffmpegResampler = new prism.FFmpeg({
+          args: [
+            "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
+            "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
+          ],
         });
-        return;
-      }
 
-      if (interaction.commandName === "status") {
-        const vcState = interaction.guildId ? guildVoiceConnections.get(interaction.guildId) : undefined;
-        const vcChannelId = vcState?.connection.joinConfig.channelId ?? null;
-        const vcName = vcChannelId
-          ? (client.channels.cache.get(vcChannelId) as TextChannel | undefined)?.name ?? vcChannelId
-          : null;
-        const lines = buildStatusLines({
-          companionLabel: "Cypher",
-          modelKey: activeModelRef.key,
-          modelLabel: activeModelRef.label,
-          provider: activeModelRef.key && ALL_MODELS[activeModelRef.key] ? ALL_MODELS[activeModelRef.key].provider : null,
-          substrate,
-          voiceChannel: vcName,
+        const opusStream = connection.receiver.subscribe(userId, {
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
         });
-        await interaction.reply({ content: lines, flags: MessageFlags.Ephemeral });
-        return;
-      }
-    } catch (e) {
-      console.warn("[cypher] interaction handler error:", e);
-      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: "command failed -- check logs.", flags: MessageFlags.Ephemeral }).catch(() => {});
-      }
+
+        const pcmStream = opusStream.pipe(opusDecoder).pipe(ffmpegResampler);
+
+        const cleanup = (err?: Error) => {
+          if (err) console.error(`[${COMPANION_ID}] voice stream error:`, err);
+          activeVoiceSessions.delete(userId);
+          opusStream.destroy();
+          opusDecoder.destroy();
+          ffmpegResampler.destroy();
+        };
+        opusStream.on("error", cleanup);
+        opusDecoder.on("error", cleanup);
+        ffmpegResampler.on("error", cleanup);
+
+        async function* toPCMIterable(): AsyncIterable<Uint8Array> {
+          for await (const chunk of pcmStream) {
+            yield chunk as Uint8Array;
+          }
+        }
+
+        activeVoiceSessions.add(userId);
+
+        (async () => {
+          try {
+            const chunks: Buffer[] = [];
+            for await (const chunk of toPCMIterable()) {
+              chunks.push(Buffer.from(chunk));
+            }
+            activeVoiceSessions.delete(userId);
+            const pcm = Buffer.concat(chunks);
+            if (!pcm.length) return;
+
+            const transcript = await voiceClient!.transcribe(pcmToWav(pcm), "voice.wav");
+            if (!transcript.trim()) return;
+
+            const vcState = guildVoiceConnections.get(vc.guildId);
+            if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
+
+            const response = await adapterRef.current.generate(
+              systemPrompt,
+              [{ role: "user", content: transcript }],
+              0.7,
+            );
+            if (!response?.trim()) return;
+
+            const audioBuffer = await voiceClient!.synthesize(response);
+            markVoiceUsed(vc.id);
+            const resource = createAudioResource(Readable.from(audioBuffer));
+            vcState.player.play(resource);
+          } catch (err) {
+            console.error(`[${COMPANION_ID}] voice handler error:`, err);
+            activeVoiceSessions.delete(userId);
+          }
+        })();
+      });
     }
+    return vc.name;
+  };
+
+  const leaveVoice = (guildId: string | null): string | null => {
+    const vcState = guildVoiceConnections.get(guildId ?? "");
+    if (!vcState) return null;
+    const channelId = vcState.connection.joinConfig.channelId;
+    const name = channelId
+      ? (client.channels.cache.get(channelId) as VoiceBasedChannel | undefined)?.name ?? channelId
+      : null;
+    activeVoiceSessions.clear();
+    vcState.connection.destroy();
+    guildVoiceConnections.delete(guildId ?? "");
+    return name;
+  };
+
+  const voiceChannelName = (guildId: string | null): string | null => {
+    const vcState = guildVoiceConnections.get(guildId ?? "");
+    const channelId = vcState?.connection.joinConfig.channelId;
+    if (!channelId) return null;
+    return (client.channels.cache.get(channelId) as VoiceBasedChannel | undefined)?.name ?? channelId;
+  };
+
+  // Owner-gated, ephemeral slash commands (/model, /status, /voice). Shared impl.
+  installSlashCommandHandler({
+    client,
+    companionLabel: "Cypher",
+    companionId: COMPANION_ID,
+    ownerDiscordId: cfg.ownerDiscordId,
+    substrate: () => (cfg.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback"),
+    activeModel: activeModelRef,
+    applyModel: (key, entry) => {
+      adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+      activeModelRef.key = key;
+      activeModelRef.label = entry.label;
+    },
+    persistModel: (key) =>
+      writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () => librarian.setSetting("active_model", key)),
+    brainClient: brainClient ?? null,
+    voice: {
+      join: async (interaction) => {
+        const member = interaction.guild
+          ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null)
+          : null;
+        const vc = member?.voice?.channel ?? null;
+        return vc ? connectVoice(vc) : null;
+      },
+      leave: (guildId) => leaveVoice(guildId),
+      currentChannelName: (guildId) => voiceChannelName(guildId),
+    },
   });
 
   client.on(Events.VoiceStateUpdate, (oldState, newState) => {
@@ -592,102 +653,14 @@ async function main() {
     if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
 
     if (client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
-      const vc = message.member.voice.channel;
-      const connection = joinVoiceChannel({
-        channelId: vc.id,
-        guildId: vc.guildId,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        adapterCreator: vc.guild.voiceAdapterCreator as any,
-        selfDeaf: false,
-      });
-      const player = createAudioPlayer();
-      connection.subscribe(player);
-      guildVoiceConnections.set(vc.guildId, { connection, player });
-
-      if (voiceClient) {
-        connection.receiver.speaking.on("start", (userId: string) => {
-          if (activeVoiceSessions.has(userId)) return;
-
-          const opusDecoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
-          const ffmpegResampler = new prism.FFmpeg({
-            args: [
-              "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
-              "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
-            ],
-          });
-
-          const opusStream = connection.receiver.subscribe(userId, {
-            end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
-          });
-
-          const pcmStream = opusStream.pipe(opusDecoder).pipe(ffmpegResampler);
-
-          const cleanup = (err?: Error) => {
-            if (err) console.error(`[${COMPANION_ID}] voice stream error:`, err);
-            activeVoiceSessions.delete(userId);
-            opusStream.destroy();
-            opusDecoder.destroy();
-            ffmpegResampler.destroy();
-          };
-          opusStream.on("error", cleanup);
-          opusDecoder.on("error", cleanup);
-          ffmpegResampler.on("error", cleanup);
-
-          async function* toPCMIterable(): AsyncIterable<Uint8Array> {
-            for await (const chunk of pcmStream) {
-              yield chunk as Uint8Array;
-            }
-          }
-
-          activeVoiceSessions.add(userId);
-
-          (async () => {
-            try {
-              const chunks: Buffer[] = [];
-              for await (const chunk of toPCMIterable()) {
-                chunks.push(Buffer.from(chunk));
-              }
-              activeVoiceSessions.delete(userId);
-              const pcm = Buffer.concat(chunks);
-              if (!pcm.length) return;
-
-              const transcript = await voiceClient!.transcribe(pcmToWav(pcm), "voice.wav");
-              if (!transcript.trim()) return;
-
-              const vcState = guildVoiceConnections.get(vc.guildId);
-              if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
-
-              const response = await adapterRef.current.generate(
-                systemPrompt,
-                [{ role: "user", content: transcript }],
-                0.7,
-              );
-              if (!response?.trim()) return;
-
-              const audioBuffer = await voiceClient!.synthesize(response);
-              markVoiceUsed(vc.id);
-              const resource = createAudioResource(Readable.from(audioBuffer));
-              vcState.player.play(resource);
-            } catch (err) {
-              console.error(`[${COMPANION_ID}] voice handler error:`, err);
-              activeVoiceSessions.delete(userId);
-            }
-          })();
-        });
-      }
-
-      await (message.channel as TextChannel).send(`Joining ${vc.name}.`);
+      const name = connectVoice(message.member.voice.channel);
+      await (message.channel as TextChannel).send(`Joining ${name}.`);
       return;
     }
 
     if (client.user && isLeaveRequest(message, client.user.id)) {
-      const vcState = guildVoiceConnections.get(message.guildId ?? "");
-      if (vcState) {
-        activeVoiceSessions.clear();
-        vcState.connection.destroy();
-        guildVoiceConnections.delete(message.guildId ?? "");
-        await (message.channel as TextChannel).send("Leaving.");
-      }
+      const left = leaveVoice(message.guildId);
+      if (left) await (message.channel as TextChannel).send("Leaving.");
       return;
     }
 

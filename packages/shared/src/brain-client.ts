@@ -135,6 +135,53 @@ export class BrainClient {
       clearTimeout(timer);
     }
   }
+
+  /**
+   * Force-clear Brain's cached active_model for a companion so a Discord /model
+   * switch takes effect immediately instead of after the 60s TTL. Best-effort:
+   * returns true only if Brain confirms it cleared an entry; never throws.
+   */
+  async invalidateModelCache(companionId: string): Promise<boolean> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(`${this.url}/admin/model-cache/invalidate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ companion_id: companionId }),
+        signal: controller.signal,
+      });
+      if (!res.ok) return false;
+      const data = (await res.json()) as { cleared?: boolean };
+      return data.cleared === true;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Ask Brain which model a companion will actually use right now (the truth
+   * surface behind /status). Returns null when Brain is unreachable.
+   */
+  async getModelStatus(companionId: string): Promise<{ active_model: string | null } | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(`${this.url}/admin/model-status/${encodeURIComponent(companionId)}`, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as { active_model?: string | null };
+      return { active_model: data.active_model ?? null };
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export type { SwarmReply } from "./swarm.js";
