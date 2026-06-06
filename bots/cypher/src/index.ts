@@ -3,7 +3,7 @@ import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
-  LibrarianClient, resolveAttribution, PkDedup, createAdapter, loadSharedContext,
+  resolveAttribution, PkDedup, createAdapter,
   ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, extractAddress, DEFAULT_CHANNEL_CONFIG,
   isResponseCoherent,
   SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
@@ -14,9 +14,10 @@ import {
   wireEventSubscriptions, setPresence,
   BrainClient, buildThoughtPacket, isSwarmReply,
   getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
-  type ChatMessage, type BootContext,
+  type ChatMessage,
   composePrompt, deriveIdentityBase,
   distillSessionOnInactive, runDistillation,
+  bootSession, type BootSessionResult,
 } from "@nullsafe/shared";
 import { detectPluralKit } from "@nullsafe/shared";
 import {
@@ -65,64 +66,20 @@ function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16):
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
-async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
-  bootCtx: BootContext;
-  librarian: LibrarianClient;
-  recentContextRef: { value: string };
-}> {
-  const librarian = new LibrarianClient({
-    url: cfg.halsethUrl,
-    secret: cfg.halsethSecret,
-    companionId: COMPANION_ID,
-  });
-
+async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<BootSessionResult> {
+  // identity-cache read stays bot-side: the path resolves against this module's location.
   let cache: { system_prompt: string } | null = null;
   try { cache = JSON.parse(readFileSync(join(__dir, "../identity-cache.json"), "utf8")); }
   catch { console.warn("[cypher] identity-cache.json missing or corrupt, cache fallback unavailable"); }
 
-  try {
-    const state = await librarian.sessionOpen("work");
-    const sessionId = String(state["session_id"] ?? "unknown");
-    const rawPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "").trim();
-    const baseIdentity = cache?.system_prompt || IN_CHARACTER_FALLBACK;
-    if (rawPrompt) {
-      console.log(`[cypher] ready_prompt: ${rawPrompt.length} chars | preview: ${rawPrompt.slice(0, 200).replace(/\n/g, "\\n")}`);
-    }
-    const sharedCtx = loadSharedContext();
-    const sharedBlock = sharedCtx ? `${sharedCtx}\n\n---\n\n` : "";
-    const identityCore = `${DISCORD_COMPANION_PREFIX}${sharedBlock}${baseIdentity}`;
-    const frontState = String(state["front_state"] ?? "unknown");
-    console.log(`[cypher] session ${state["reused"] ? "reused" : "opened"}: ${sessionId}, front: ${frontState}, prompt_source: ${rawPrompt ? "combined" : "identity-cache"}`);
-
-    // Warm boot: fetch recent context (synthesis + WebMind ground + RAG)
-    let recentContext = "";
-    try {
-      const orient = await librarian.botOrient();
-      recentContext = formatRecentContext(orient);
-      if (recentContext) console.log(`[cypher] botOrient: ${recentContext.length} chars loaded`);
-    } catch { console.warn("[cypher] botOrient failed at boot, starting cold"); }
-
-    const systemPromptWithContext = composePrompt({ identityCore, promptContext: rawPrompt, companionId: COMPANION_ID, recentContext });
-
-    return {
-      bootCtx: { companionId: COMPANION_ID, systemPrompt: systemPromptWithContext, sessionId, frontState, fromCache: !rawPrompt },
-      librarian,
-      recentContextRef: { value: recentContext },
-    };
-  } catch (e) {
-    console.warn("[cypher] Halseth unreachable at boot, loading identity cache:", e);
-    return {
-      bootCtx: {
-        companionId: COMPANION_ID,
-        systemPrompt: cache?.system_prompt ?? IN_CHARACTER_FALLBACK,
-        sessionId: "cached",
-        frontState: "unknown",
-        fromCache: true,
-      },
-      librarian,
-      recentContextRef: { value: "" },
-    };
-  }
+  return bootSession({
+    companionId: COMPANION_ID,
+    halsethUrl: cfg.halsethUrl,
+    halsethSecret: cfg.halsethSecret,
+    prefix: DISCORD_COMPANION_PREFIX,
+    fallbackPrompt: IN_CHARACTER_FALLBACK,
+    identityCache: cache,
+  });
 }
 
 async function main() {

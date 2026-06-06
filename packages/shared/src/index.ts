@@ -22,6 +22,7 @@ export {
 export * from "./shared-context.js";
 export * from "./prompt-assembly.js";
 export * from "./distillation.js";
+export * from "./bot-core.js";
 export * from "./response-quality.js";
 export * from "./metronome-decide.js";
 export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry } from "./models.js";
