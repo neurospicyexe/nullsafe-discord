@@ -185,17 +185,17 @@ async function handleModel(
   interaction: ChatInputCommandInteraction,
   substrate: "Brain swarm" | "direct/fallback",
 ): Promise<void> {
+  // Caller has already deferred (ephemeral); every reply below is editReply.
   const arg = (interaction.options.getString("key") ?? "").trim().toLowerCase();
   if (arg === "list") {
     const list = Object.entries(ALL_MODELS).map(([k, e]) => `\`${k}\` — ${e.label}`).join("\n");
-    await interaction.reply({ content: `available models:\n${list}`, ...EPHEMERAL });
+    await interaction.editReply({ content: `available models:\n${list}` });
     return;
   }
   const entry = ALL_MODELS[arg];
   if (!entry) {
-    await interaction.reply({
+    await interaction.editReply({
       content: "not a model I can switch to. run `/model` and pick from autocomplete.",
-      ...EPHEMERAL,
     });
     return;
   }
@@ -209,9 +209,8 @@ async function handleModel(
   } else {
     note = "live now in direct mode.";
   }
-  await interaction.reply({
+  await interaction.editReply({
     content: `now live: \`${arg}\` — ${entry.label} · substrate: ${substrate}\n${note}`,
-    ...EPHEMERAL,
   });
 }
 
@@ -242,25 +241,20 @@ async function handleStatus(
     brainReachable,
     voiceChannel: ctx.voice.currentChannelName(interaction.guildId),
   });
-  await interaction.reply({ content: lines, ...EPHEMERAL });
+  await interaction.editReply({ content: lines });
 }
 
 async function handleVoice(ctx: SlashHandlerContext, interaction: ChatInputCommandInteraction): Promise<void> {
+  // Caller has already deferred (ephemeral); replies below are editReply.
   const action = interaction.options.getString("action");
   if (action === "join") {
     const name = await ctx.voice.join(interaction);
-    await interaction.reply({
-      content: name ? `joined ${name}.` : "you're not in a voice channel.",
-      ...EPHEMERAL,
-    });
+    await interaction.editReply({ content: name ? `joined ${name}.` : "you're not in a voice channel." });
     return;
   }
   if (action === "leave") {
     const left = ctx.voice.leave(interaction.guildId);
-    await interaction.reply({
-      content: left ? `left ${left}.` : "I'm not in a voice channel.",
-      ...EPHEMERAL,
-    });
+    await interaction.editReply({ content: left ? `left ${left}.` : "I'm not in a voice channel." });
     return;
   }
 }
@@ -283,13 +277,21 @@ export function installSlashCommandHandler(ctx: SlashHandlerContext): void {
         await interaction.reply({ content: "not your dial.", ...EPHEMERAL });
         return;
       }
+      // Defer immediately (instant ACK, ephemeral). The handlers below await Brain
+      // calls that can take up to 5s; Discord kills the interaction token after 3s
+      // if nothing has responded, so we MUST defer before any awaited work. After
+      // deferReply, all responses are editReply (ephemerality is inherited).
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       const substrate = ctx.substrate();
       if (interaction.commandName === "model") await handleModel(ctx, interaction, substrate);
       else if (interaction.commandName === "status") await handleStatus(ctx, interaction, substrate);
       else if (interaction.commandName === "voice") await handleVoice(ctx, interaction);
     } catch (e) {
       console.warn(`[${ctx.companionId}] slash handler error:`, e);
-      if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+      if (interaction.isChatInputCommand() && interaction.deferred && !interaction.replied) {
+        // Already deferred -> editReply, or the "thinking…" state hangs forever.
+        await interaction.editReply({ content: "command failed -- check logs." }).catch(() => {});
+      } else if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
         await interaction.reply({ content: "command failed -- check logs.", ...EPHEMERAL }).catch(() => {});
       }
     }
