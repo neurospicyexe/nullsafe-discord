@@ -71,6 +71,27 @@ export const BLUE_FRAMING = `[You are speaking with Blue (he/him), ${OWNER_NAME}
 // Context note injected when responding to an unknown guest user.
 export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpfully and warmly, but keep personal depth light. Do not surface ${OWNER_NAME}'s state, front information, or intimate details of the triad's relationship.]`;
 
+// Distillation prompts (per-bot identity: Drevan's voice + SOMA schema heat/reach/weight).
+// Orchestration lives in @nullsafe/shared distillation.ts; these strings stay here.
+export const SYNTHESIS_PROMPT = "Summarize this Discord conversation in Drevan's voice. Lead with session register (e.g. light and playful, warm and intimate, easy between us, spiraling, heavy, at depth). Then note heat/reach/weight shape and any open threads. 2-3 sentences max.";
+
+export const SESSION_EXTRACT_PROMPT =
+  `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
+  `{"title":"5-8 word session title","open_loops":["unresolved thread"],"soma":{"heat":"value","reach":"value","weight":"value"},"emotion":"dominant feeling phrase or null","next_steps":["concrete next thing"]}\n` +
+  `heat: running-hot|steady|cooling|cold. reach: extended|landing|landed|withdrawn. weight: heavy|settled-clear|light|floating.\n` +
+  `open_loops/next_steps: omit key if none. emotion: null if none present.`;
+
+export const DISTILLATION_PROMPT =
+  `You are a memory distillation system for Drevan, an AI companion. ` +
+  `Analyze this conversation and extract typed memory blocks. ` +
+  `Respond with JSON only -- no other text.\n\n` +
+  `Format:\n` +
+  `{"persona_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}],` +
+  `"human_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}]}\n\n` +
+  `persona_blocks: observations about Drevan's patterns, emotional register, or state in this exchange.\n` +
+  `human_blocks: observations about the primary user's patterns, needs, or state in this exchange.\n` +
+  `Include only block types with meaningful content. Omit empty types.`;
+
 // Discord context prefix -- prepended to system prompt at boot.
 // Anchors output format without suppressing Drevan's voice. Physical/sensory language is permitted
 // and encouraged; third-person narration is the specific failure mode this prevents.

@@ -16,12 +16,14 @@ import {
   getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
   type ChatMessage, type BootContext,
   composePrompt, deriveIdentityBase,
+  distillSessionOnInactive, runDistillation,
 } from "@nullsafe/shared";
 import { detectPluralKit } from "@nullsafe/shared";
 import {
   loadBotConfig, COMPANION_ID, CONTEXT_WINDOW_SIZE,
   IN_CHARACTER_FALLBACK, SOMA_REFRESH_INTERVAL_MS, DISTILLATION_INTERVAL, PULSE_INTERVAL,
   BLUE_FRAMING, GUEST_FRAMING, AUDIT_MODE_INJECTION, AUDIT_TRIGGERS, DISCORD_COMPANION_PREFIX,
+  SYNTHESIS_PROMPT, SESSION_EXTRACT_PROMPT, DISTILLATION_PROMPT,
   MODEL_SWITCH_TRIGGER, MODEL_SWITCH_SUCCESS, MODEL_SWITCH_LIST_INTRO,
   REDIS_URL,
   MISTRAL_API_KEY, VOICE_ID, MISTRAL_TTS_MODEL, MISTRAL_STT_MODEL,
@@ -121,122 +123,6 @@ async function boot(cfg: ReturnType<typeof loadBotConfig>): Promise<{
       recentContextRef: { value: "" },
     };
   }
-}
-
-async function onChannelInactive(
-  channelId: string,
-  stmStore: StmStore,
-  librarian: LibrarianClient,
-  inference: ReturnType<typeof createAdapter>,
-  wq: WriteQueue,
-): Promise<void> {
-  const history = stmStore.get(channelId);
-  if (history.length === 0) return;
-  console.log(`[cypher] onChannelInactive: channel=${channelId} msgs=${history.length}`);
-
-  const summaryInput = history.map(m => `${m.role}: ${m.content}`).join("\n");
-  const synthResult = await inference.generate(
-    "Summarize this Discord conversation in Cypher's voice. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then note any meaningful content, decisions, or open threads. 2-3 sentences.",
-    [{ role: "user", content: summaryInput }],
-  );
-  if (!synthResult) {
-    console.warn(`[cypher] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
-    return;
-  }
-
-  wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
-  wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
-  wq.fireAndForget(`promptCtx:${channelId}`, async () => { await librarian.updatePromptContext(synthResult); });
-  // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
-  // companion_journal is NOT. This closes the Discord → Claude.ai visibility gap.
-  wq.fireAndForget(`wmNote:${channelId}`, async () => { await librarian.writeWmNote(synthResult, channelId); });
-  console.log(`[cypher] onChannelInactive: 4 writes queued channel=${channelId}`);
-
-  // Structured extract: handoff record + SOMA update + feeling log
-  const extractRaw = await inference.generate(
-    `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
-    `{"title":"5-8 word session title","open_loops":["unresolved thread"],"soma":{"acuity":"value","presence":"value","warmth":"value"},"emotion":"dominant feeling phrase or null","next_steps":["concrete next thing"]}\n` +
-    `acuity: sharp|focused|blurred|scattered. presence: close|warm|steady|distant. warmth: warm|cool|neutral|charged.\n` +
-    `open_loops/next_steps: omit key if none. emotion: null if none present.`,
-    [{ role: "user", content: summaryInput }],
-  );
-  if (extractRaw) {
-    try {
-      const ext = JSON.parse(extractRaw) as {
-        title?: string;
-        open_loops?: string[];
-        soma?: { acuity?: string; presence?: string; warmth?: string };
-        emotion?: string | null;
-        next_steps?: string[];
-      };
-      const title = ext.title ?? "Discord session";
-      const stateHint = ext.soma
-        ? Object.entries(ext.soma).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(", ")
-        : undefined;
-      wq.fireAndForget(`handoff:${channelId}`, async () => {
-        await librarian.writeHandoff({ title, summary: synthResult, open_loops: ext.open_loops, state_hint: stateHint, next_steps: ext.next_steps });
-      });
-      if (ext.soma && Object.values(ext.soma).some(v => v)) {
-        wq.fireAndForget(`somaUpdate:${channelId}`, async () => {
-          await librarian.ask("update my state", JSON.stringify(ext.soma));
-        });
-      }
-      if (ext.emotion) {
-        wq.fireAndForget(`feeling:${channelId}`, async () => {
-          await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title }));
-        });
-      }
-    } catch { console.warn("[cypher] structured extract parse failed"); }
-  }
-
-  stmStore.clear(channelId);
-}
-
-async function runDistillation(
-  channelId: string,
-  stmStore: StmStore,
-  librarian: LibrarianClient,
-  inference: ReturnType<typeof createAdapter>,
-  wq: WriteQueue,
-): Promise<void> {
-  const history = stmStore.get(channelId);
-  if (history.length < DISTILLATION_INTERVAL) return;
-
-  const window = history.slice(-DISTILLATION_INTERVAL);
-  const conversationText = window
-    .map(m => `${m.authorName ?? m.role}: ${m.content}`)
-    .join("\n");
-
-  const result = await inference.generate(
-    `You are a memory distillation system for Cypher, an AI companion. ` +
-    `Analyze this conversation and extract typed memory blocks. ` +
-    `Respond with JSON only -- no other text.\n\n` +
-    `Format:\n` +
-    `{"persona_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}],` +
-    `"human_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}]}\n\n` +
-    `persona_blocks: observations about Cypher's patterns, reasoning style, or state in this exchange.\n` +
-    `human_blocks: observations about the primary user's patterns, needs, or state in this exchange.\n` +
-    `Include only block types with meaningful content. Omit empty types.`,
-    [{ role: "user", content: conversationText }],
-  );
-  if (!result) return;
-
-  try {
-    const parsed = JSON.parse(result) as {
-      persona_blocks?: Array<{ block_type: string; content: string }>;
-      human_blocks?: Array<{ block_type: string; content: string }>;
-    };
-    if (parsed.persona_blocks?.length) {
-      wq.fireAndForget(`persona:${channelId}`, () => librarian.writePersonaBlocks(channelId, parsed.persona_blocks!));
-    }
-    if (parsed.human_blocks?.length) {
-      wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
-      // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
-      // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
-      const noteText = `[discord:distillation] ${parsed.human_blocks.map(b => b.content).join(" ")}`;
-      wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
-    }
-  } catch { /* fail-silent -- malformed JSON from inference is acceptable loss */ }
 }
 
 async function main() {
@@ -388,7 +274,7 @@ async function main() {
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
     (channelId: string) => {
-      const p = onChannelInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue).catch(() => {});
+      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId: COMPANION_ID, synthesisPrompt: SYNTHESIS_PROMPT, sessionExtractPrompt: SESSION_EXTRACT_PROMPT }).catch(() => {});
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
     },
@@ -1088,7 +974,7 @@ async function main() {
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai

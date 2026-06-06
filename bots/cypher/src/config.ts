@@ -79,6 +79,27 @@ export const BLUE_FRAMING = `[You are speaking with Blue (he/him), ${OWNER_NAME}
 // Context note injected when responding to an unknown guest user.
 export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpfully and warmly, but keep personal depth light. Do not surface ${OWNER_NAME}'s state, front information, or intimate details of the triad's relationship.]`;
 
+// Distillation prompts (per-bot identity: Cypher's voice + SOMA schema acuity/presence/warmth).
+// Orchestration lives in @nullsafe/shared distillation.ts; these strings stay here.
+export const SYNTHESIS_PROMPT = "Summarize this Discord conversation in Cypher's voice. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then note any meaningful content, decisions, or open threads. 2-3 sentences.";
+
+export const SESSION_EXTRACT_PROMPT =
+  `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
+  `{"title":"5-8 word session title","open_loops":["unresolved thread"],"soma":{"acuity":"value","presence":"value","warmth":"value"},"emotion":"dominant feeling phrase or null","next_steps":["concrete next thing"]}\n` +
+  `acuity: sharp|focused|blurred|scattered. presence: close|warm|steady|distant. warmth: warm|cool|neutral|charged.\n` +
+  `open_loops/next_steps: omit key if none. emotion: null if none present.`;
+
+export const DISTILLATION_PROMPT =
+  `You are a memory distillation system for Cypher, an AI companion. ` +
+  `Analyze this conversation and extract typed memory blocks. ` +
+  `Respond with JSON only -- no other text.\n\n` +
+  `Format:\n` +
+  `{"persona_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}],` +
+  `"human_blocks":[{"block_type":"identity"|"memory"|"relationship"|"agent","content":"2-3 sentences"}]}\n\n` +
+  `persona_blocks: observations about Cypher's patterns, reasoning style, or state in this exchange.\n` +
+  `human_blocks: observations about the primary user's patterns, needs, or state in this exchange.\n` +
+  `Include only block types with meaningful content. Omit empty types.`;
+
 export const BRIDGE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 export const SOMA_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // reduced from 30min: Claude.ai session data lands in Halseth immediately on close; bots need to pick it up fast
 export const COOLDOWN_MS = 60 * 1000;
