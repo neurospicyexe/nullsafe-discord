@@ -15,9 +15,9 @@ import {
   BrainClient, buildThoughtPacket, isSwarmReply,
   getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
   type ChatMessage,
-  composePrompt, deriveIdentityBase,
+  deriveIdentityBase,
   distillSessionOnInactive, runDistillation,
-  bootSession, type BootSessionResult,
+  bootSession, refreshBotState, type BootSessionResult,
 } from "@nullsafe/shared";
 import { detectPluralKit } from "@nullsafe/shared";
 import {
@@ -253,45 +253,15 @@ async function main() {
 
   // Base identity is always the foundation; Halseth context layers on top.
   const identityBase = deriveIdentityBase(bootCtx.systemPrompt);
-  let systemPrompt = bootCtx.systemPrompt;
-  let currentMood: string | null = null;
-  let lastSomaRefresh = Date.now();
+  const currentMoodRef = { value: null as string | null };
+  const lastSomaRefreshRef = { value: Date.now() };
 
-  setInterval(async () => {
-    try {
-      const [stateResult, orientResult] = await Promise.allSettled([
-        librarian.getState(),
-        librarian.botOrient(),
-      ]);
-
-      const freshPromptCtx = stateResult.status === "fulfilled" && stateResult.value["prompt_context"]
-        ? String(stateResult.value["prompt_context"])
-        : null;
-      const freshRecentCtx = orientResult.status === "fulfilled"
-        ? formatRecentContext(orientResult.value)
-        : recentContextRef.value;
-
-      recentContextRef.value = freshRecentCtx;
-
-      systemPrompt = composePrompt({ identityCore: identityBase, promptContext: freshPromptCtx ?? undefined, companionId: COMPANION_ID, recentContext: freshRecentCtx });
-      bootCtx.systemPrompt = systemPrompt;
-
-      if (stateResult.status === "fulfilled" && stateResult.value["current_mood"] !== undefined) {
-        currentMood = (stateResult.value["current_mood"] as string | null) ?? null;
-        lastSomaRefresh = Date.now();
-      }
-
-      try {
-        const savedModel = await librarian.getSetting("active_model");
-        if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
-          const entry = ALL_MODELS[savedModel];
-          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
-          activeModelRef.key = savedModel;
-          activeModelRef.label = entry.label;
-          console.log(`[${COMPANION_ID}] model refreshed from Halseth: ${savedModel}`);
-        }
-      } catch { /* keep current model on error */ }
-    } catch { /* keep cached */ }
+  setInterval(() => {
+    void refreshBotState({
+      companionId: COMPANION_ID, librarian, identityBase, bootCtx,
+      recentContextRef, currentMoodRef, lastSomaRefreshRef,
+      adapterRef, activeModelRef, apiKeys, apiUrls,
+    });
   }, SOMA_REFRESH_INTERVAL_MS);
 
   const client = new Client({
@@ -382,7 +352,7 @@ async function main() {
             if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
 
             const response = await adapterRef.current.generate(
-              systemPrompt,
+              bootCtx.systemPrompt,
               [{ role: "user", content: transcript }],
               0.7,
             );
@@ -693,11 +663,11 @@ async function main() {
     if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
     let contextPrompt = pkMemberName
-      ? `${systemPrompt}\n\n[Current front: ${pkMemberName}]`
-      : systemPrompt;
+      ? `${bootCtx.systemPrompt}\n\n[Current front: ${pkMemberName}]`
+      : bootCtx.systemPrompt;
     if (activeModelRef.key) contextPrompt += `\n\n[Active model] ${activeModelRef.label}`;
 
-    const somaAgeMin = Math.round((Date.now() - lastSomaRefresh) / 60_000);
+    const somaAgeMin = Math.round((Date.now() - lastSomaRefreshRef.value) / 60_000);
     if (somaAgeMin > 45) {
       contextPrompt += `\n\n[Note: SOMA/mood data is ${somaAgeMin}min old; treat emotional reads as approximate]`;
     }
@@ -728,7 +698,7 @@ async function main() {
     await ch.sendTyping();
 
     const history = stmStore.get(message.channelId);
-    const rawTemp = inferTemperature(effectiveContent, currentMood);
+    const rawTemp = inferTemperature(effectiveContent, currentMoodRef.value);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
     const temperature = (rawTemp >= EXTREME_TEMP_THRESHOLD && extremeCount >= EXTREME_TEMP_CAP)
       ? COOLDOWN_TEMP : rawTemp;

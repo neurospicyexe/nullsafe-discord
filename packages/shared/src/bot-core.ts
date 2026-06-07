@@ -14,6 +14,8 @@
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt } from "./prompt-assembly.js";
+import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
+import { ALL_MODELS } from "./models.js";
 import type { BootContext, CompanionId } from "./types.js";
 
 export interface BootSessionOptions {
@@ -100,4 +102,71 @@ export async function bootSession(opts: BootSessionOptions): Promise<BootSession
       recentContextRef: { value: "" },
     };
   }
+}
+
+export interface RefreshBotStateOptions {
+  companionId: CompanionId;
+  librarian: LibrarianClient;
+  /** Boot-derived identity base — the foundation composePrompt layers fresh context onto. */
+  identityBase: string;
+  /** Live BootContext. `systemPrompt` is mutated in place; the message handler reads it. */
+  bootCtx: BootContext;
+  /** Live refs the message handler also reads. MUST be the same object instances main() holds. */
+  recentContextRef: { value: string };
+  currentMoodRef: { value: string | null };
+  lastSomaRefreshRef: { value: number };
+  adapterRef: { current: InferenceAdapter };
+  activeModelRef: { key: string | null; label: string };
+  apiKeys: AdapterKeys;
+  apiUrls: AdapterUrls;
+}
+
+/**
+ * Periodic state refresh (was an inline `setInterval` body triplicated across the three bots).
+ * Re-pulls Halseth state + orient, recomposes the system prompt, refreshes mood/age, and
+ * hot-swaps the inference adapter when the active model changed in Halseth (`cy: model ...`).
+ *
+ * Mutates the passed-in live refs in place so the message handler sees fresh values without
+ * re-wiring. Scheduling stays bot-side (`setInterval(() => refreshBotState(opts), MS)`); this
+ * owns only the body. Fully fail-soft: any error keeps the cached values.
+ */
+export async function refreshBotState(opts: RefreshBotStateOptions): Promise<void> {
+  const {
+    companionId, librarian, identityBase, bootCtx,
+    recentContextRef, currentMoodRef, lastSomaRefreshRef,
+    adapterRef, activeModelRef, apiKeys, apiUrls,
+  } = opts;
+  try {
+    const [stateResult, orientResult] = await Promise.allSettled([
+      librarian.getState(),
+      librarian.botOrient(),
+    ]);
+
+    const freshPromptCtx = stateResult.status === "fulfilled" && stateResult.value["prompt_context"]
+      ? String(stateResult.value["prompt_context"])
+      : null;
+    const freshRecentCtx = orientResult.status === "fulfilled"
+      ? formatRecentContext(orientResult.value)
+      : recentContextRef.value;
+
+    recentContextRef.value = freshRecentCtx;
+
+    bootCtx.systemPrompt = composePrompt({ identityCore: identityBase, promptContext: freshPromptCtx ?? undefined, companionId, recentContext: freshRecentCtx });
+
+    if (stateResult.status === "fulfilled" && stateResult.value["current_mood"] !== undefined) {
+      currentMoodRef.value = (stateResult.value["current_mood"] as string | null) ?? null;
+      lastSomaRefreshRef.value = Date.now();
+    }
+
+    try {
+      const savedModel = await librarian.getSetting("active_model");
+      if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
+        const entry = ALL_MODELS[savedModel];
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+        activeModelRef.key = savedModel;
+        activeModelRef.label = entry.label;
+        console.log(`[${companionId}] model refreshed from Halseth: ${savedModel}`);
+      }
+    } catch { /* keep current model on error */ }
+  } catch { /* keep cached */ }
 }
