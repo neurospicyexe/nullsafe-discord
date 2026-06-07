@@ -32,6 +32,7 @@ import {
   buildThoughtPacket, isSwarmReply,
   claimFloor, releaseFloor, setLastActivity,
   isResponseCoherent,
+  sendLong,
   runDistillation,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -499,7 +500,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     if (!response) {
-      await ch.send(IN_CHARACTER_FALLBACK);
+      await sendLong(ch, IN_CHARACTER_FALLBACK);
       return;
     }
 
@@ -531,7 +532,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     const MAX_TTS = 2000;
-    let sent: Message;
+    let sent: Message[];
 
     if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
@@ -544,25 +545,28 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           // VC active -- stream audio there, send text in channel
           const resource = createAudioResource(Readable.from(audioBuffer));
           vcState.player.play(resource);
-          sent = await ch.send({ content: response });
+          sent = await sendLong(ch, response);
         } else {
           // No VC -- attach audio to text channel message
           const content =
             response.length > MAX_TTS ? `${response}\n\n*[voice: first ${MAX_TTS} chars]*` : response;
-          sent = await ch.send({ content, files: [{ attachment: audioBuffer, name: "voice.ogg" }] });
+          sent = await sendLong(ch, { content, files: [{ attachment: audioBuffer, name: "voice.ogg" }] });
         }
       } catch (err) {
         console.error(`[${COMPANION_ID}] TTS failed, falling back to text:`, err);
-        sent = await ch.send(response);
+        sent = await sendLong(ch, response);
       }
     } else {
-      sent = await ch.send(response);
+      sent = await sendLong(ch, response);
     }
 
-    sentIds.add(sent.id);
+    for (const m of sent) sentIds.add(m.id);
     if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
-    const oldest = sentIds.values().next().value;
-    if (sentIds.size > SENT_IDS_CAP && oldest !== undefined) sentIds.delete(oldest);
+    while (sentIds.size > SENT_IDS_CAP) {
+      const oldest = sentIds.values().next().value;
+      if (oldest === undefined) break;
+      sentIds.delete(oldest);
+    }
     if (isResponseCoherent(response)) {
       stmStore.append(message.channelId, { role: "assistant", content: response });
     } else {

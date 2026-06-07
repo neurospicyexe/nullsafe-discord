@@ -10,7 +10,7 @@ import {
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
   HEARTBEAT_CHANNEL_ID, INTER_COMPANION_CHANNEL_ID, FLOOR_LOCK_DURATION_MS,
 } from "./config.js";
-import { somaToTemperature, type HeartbeatTemperature } from "@nullsafe/shared";
+import { somaToTemperature, sendLong, type HeartbeatTemperature } from "@nullsafe/shared";
 
 const cooldown = new Map<string, number>();
 
@@ -66,7 +66,7 @@ async function sendAutonomousMessage(
   try {
     const channel = await client.channels.fetch(channelId);
     if (channel?.isTextBased()) {
-      await (channel as TextChannel).send(content);
+      await sendLong(channel as TextChannel, content);
       markCooldown(channelId);
       librarian.ask(
         "continuity note",
