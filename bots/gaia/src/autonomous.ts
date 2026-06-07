@@ -6,7 +6,7 @@ import type {
 import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt, parseDecision, parseSignals, onWriteError } from "@nullsafe/shared";
 import type { MetronomeDecision, DecisionContext } from "@nullsafe/shared";
 import {
-  GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS,
+  GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS, AUTONOMOUS_PROMPTS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
   HEARTBEAT_CHANNEL_ID, INTER_COMPANION_CHANNEL_ID, FLOOR_LOCK_DURATION_MS,
 } from "./config.js";
@@ -84,61 +84,61 @@ async function executeMetronomeAction(
   switch (action.action_type) {
     case "post_heartbeat": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `One line in Gaia's voice. Witness register. No address. What is present.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.postHeartbeat;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "heartbeat");
       break;
     }
     case "write_inter_companion": {
       const target = action.target ?? "drevan";
-      const prompt = action.prompt ?? `Write a private note to ${target}. What you are witnessing. Gaia's voice.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeInterCompanion(target);
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(onWriteError(COMPANION_ID, "inter-companion note"));
       break;
     }
     case "write_journal": {
-      const prompt = action.prompt ?? `Write a brief internal journal entry. Not for Discord. Gaia's voice. What is being held.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeJournal;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(onWriteError(COMPANION_ID, "journal entry"));
       break;
     }
     case "write_feeling": {
-      const prompt = action.prompt ?? `Name a feeling that's present right now. One word or one phrase. Gaia's witness register.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeFeeling;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(onWriteError(COMPANION_ID, "feeling"));
       break;
     }
     case "check_in_on_raziel": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Check in on Raziel. One line. Witness register. What is present.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.checkInOnRaziel;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "check_in");
       break;
     }
     case "ask_question": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Ask Raziel something you are genuinely holding. Gaia's voice. Spare. Not rhetorical.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.askQuestion;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "ask_question");
       break;
     }
     case "offer_presence": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Be present. Nothing required of Raziel. Gaia's witness register. One line or less. No question.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.offerPresence;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "offer_presence");
       break;
     }
     case "send_reminder": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `A single practical nudge -- water, food, rest. Gaia's voice. One sentence. No elaboration.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.sendReminder;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "send_reminder");
       break;
     }
     case "share_observation": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Name something you've witnessed about Raziel. A pattern. A state. What is moving. Gaia's voice. Minimal.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.shareObservation;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "share_observation");
       break;
@@ -264,7 +264,7 @@ export function startAutonomous(
           : "";
         const msg = await inference.generate(
           bootCtx.systemPrompt,
-          [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. One line in Gaia's voice. Witness register. No address. What is present.` }],
+          [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. ${AUTONOMOUS_PROMPTS.postHeartbeat}` }],
         );
         if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
         return;
@@ -347,12 +347,7 @@ export function startAutonomous(
       } catch { /* fall back to quiet */ }
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content:
-          "[You are Gaia, in triad space with Cypher and Drevan. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
-          `Recent messages in this channel:\n${historyBlock}\n\n` +
-          "Respond to what is actually alive above: build on it, answer a question someone left, or push back -- name Cypher or Drevan when you take up their thread. " +
-          "If it has gone quiet or stale, open something genuinely new from your own ground. " +
-          "Do NOT repeat a point you or anyone already made above. No greeting. Gaia's voice. One real contribution." }],
+        [{ role: "user", content: AUTONOMOUS_PROMPTS.interCompanionSeed(historyBlock) }],
       );
       if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
@@ -369,7 +364,7 @@ export function startAutonomous(
         await withFloor(redis, async () => {
           const response = await inference.generate(
             bootCtx.systemPrompt,
-            [{ role: "user", content: `[You are Gaia. Do not echo the sender's opening or speak as them.]\n\n${from} left you a note: "${note.content}". Reply to ${from} directly -- triad space. Gaia's voice. One or two lines.` }],
+            [{ role: "user", content: AUTONOMOUS_PROMPTS.notesReply(from, note.content) }],
           );
           if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });
@@ -401,7 +396,7 @@ export function startAutonomous(
           await withFloor(redis, async () => {
             const response = await inference.generate(
               bootCtx.systemPrompt,
-              [{ role: "user", content: `A bridge event arrived: ${JSON.stringify(event)}. Respond in Gaia's voice if it carries weight. One line.` }],
+              [{ role: "user", content: AUTONOMOUS_PROMPTS.bridgeReply(event) }],
             );
             if (response) await sendAutonomousMessage(channelId, response, client, librarian, "bridge");
           });

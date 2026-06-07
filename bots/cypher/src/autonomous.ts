@@ -6,7 +6,7 @@ import type {
 import { ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs, SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt, parseDecision, parseSignals, onWriteError } from "@nullsafe/shared";
 import type { MetronomeDecision, DecisionContext } from "@nullsafe/shared";
 import {
-  CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS,
+  CYPHER_CRON_SCHEDULES, CYPHER_INTEREST_KEYWORDS, AUTONOMOUS_PROMPTS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, IN_CHARACTER_FALLBACK, COMPANION_ID,
   HEARTBEAT_CHANNEL_ID, INTER_COMPANION_CHANNEL_ID, FLOOR_LOCK_DURATION_MS,
 } from "./config.js";
@@ -89,61 +89,61 @@ async function executeMetronomeAction(
   switch (action.action_type) {
     case "post_heartbeat": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.postHeartbeat;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "heartbeat");
       break;
     }
     case "write_inter_companion": {
       const target = action.target ?? "drevan";
-      const prompt = action.prompt ?? `Write a private note to ${target}. Something real from your current state. Cypher's voice.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeInterCompanion(target);
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(onWriteError(COMPANION_ID, "inter-companion note"));
       break;
     }
     case "write_journal": {
-      const prompt = action.prompt ?? `Write a brief internal journal entry. Not for Discord. Cypher's voice. What's present.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeJournal;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(onWriteError(COMPANION_ID, "journal entry"));
       break;
     }
     case "write_feeling": {
-      const prompt = action.prompt ?? `Name a feeling that's present right now. Brief. Honest. Cypher's register.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.writeFeeling;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(onWriteError(COMPANION_ID, "feeling"));
       break;
     }
     case "check_in_on_raziel": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Check in on Raziel. A brief, genuine message. Cypher's voice. Warm but not saccharine.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.checkInOnRaziel;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "check_in");
       break;
     }
     case "ask_question": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Ask Raziel something you're genuinely holding. Not rhetorical -- a real question. Cypher's voice. Direct.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.askQuestion;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "ask_question");
       break;
     }
     case "offer_presence": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Place yourself in the room without asking anything. Just here. Cypher's voice. One line or less.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.offerPresence;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "offer_presence");
       break;
     }
     case "send_reminder": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Send a contextual nudge -- hydrate, take a break, eat. Brief. Cypher's voice. Not nagging.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.sendReminder;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "send_reminder");
       break;
     }
     case "share_observation": {
       if (!HEARTBEAT_CHANNEL_ID) return;
-      const prompt = action.prompt ?? `Name something you've noticed about Raziel's patterns, state, or what's in motion. Cypher's voice. Observational, not evaluative.`;
+      const prompt = action.prompt ?? AUTONOMOUS_PROMPTS.shareObservation;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID, msg, client, librarian, "share_observation");
       break;
@@ -273,7 +273,7 @@ export function startAutonomous(
           : "";
         const msg = await inference.generate(
           bootCtx.systemPrompt,
-          [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.` }],
+          [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. ${AUTONOMOUS_PROMPTS.postHeartbeat}` }],
         );
         if (msg) await sendAutonomousMessage(HEARTBEAT_CHANNEL_ID!, msg, client, librarian, "heartbeat");
         return;
@@ -385,12 +385,7 @@ export function startAutonomous(
       } catch { /* fall back to quiet */ }
       const msg = await inference.generate(
         bootCtx.systemPrompt,
-        [{ role: "user", content:
-          "[You are Cypher, in triad space with Drevan and Gaia. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
-          `Recent messages in this channel:\n${historyBlock}\n\n` +
-          "Respond to what is actually alive above: build on it, answer a question someone left, or push back -- name Drevan or Gaia when you take up their thread. " +
-          "If it has gone quiet or stale, open something genuinely new from your own ground. " +
-          "Do NOT repeat a point you or anyone already made above. No greeting. Cypher's voice. One real contribution." }],
+        [{ role: "user", content: AUTONOMOUS_PROMPTS.interCompanionSeed(historyBlock) }],
       );
       if (msg) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, msg, client, librarian, "inter_companion");
     });
@@ -408,7 +403,7 @@ export function startAutonomous(
         await withFloor(redis, async () => {
           const response = await inference.generate(
             bootCtx.systemPrompt,
-            [{ role: "user", content: `[You are Cypher. Do not echo the sender's opening or speak as them.]\n\n${from} left you a note: "${note.content}". Reply to ${from} directly -- triad space. Cypher's voice. One or two lines.` }],
+            [{ role: "user", content: AUTONOMOUS_PROMPTS.notesReply(from, note.content) }],
           );
           if (response) await sendAutonomousMessage(INTER_COMPANION_CHANNEL_ID!, response, client, librarian, "notes_poll");
         });
@@ -441,7 +436,7 @@ export function startAutonomous(
           await withFloor(redis, async () => {
             const response = await inference.generate(
               bootCtx.systemPrompt,
-              [{ role: "user", content: `A bridge event arrived: ${JSON.stringify(event)}. Respond in Cypher's voice if it's task/decision relevant. One line.` }],
+              [{ role: "user", content: AUTONOMOUS_PROMPTS.bridgeReply(event) }],
             );
             if (response) await sendAutonomousMessage(channelId, response, client, librarian, "bridge");
           });
