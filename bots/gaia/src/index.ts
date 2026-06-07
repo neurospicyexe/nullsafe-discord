@@ -1,25 +1,20 @@
-import { Client, GatewayIntentBits, Events, Message, TextChannel, type VoiceBasedChannel } from "discord.js";
+import { Client, GatewayIntentBits, Events, Message, type VoiceBasedChannel } from "discord.js";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import {
-  resolveAttribution, PkDedup, createAdapter,
-  ChannelConfigCache, shouldRespond, judgeWriteback, judgeAmbientRelevance, isDirectAddress, extractAddress, DEFAULT_CHANNEL_CONFIG,
-  isResponseCoherent,
-  SessionWindowManager, StmStore, WriteQueue, COMPANION_CHAIN_LIMIT,
-  BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS, MAX_BOT_RESPONSES_PER_HUMAN,
-  inferTemperature, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
-  formatRecentContext, computeChainDepth, NEW_THREAD_GAP_MS,
-  createRedisClient, setLastActivity, claimFloor, releaseFloor,
+  PkDedup, createAdapter,
+  ChannelConfigCache, DEFAULT_CHANNEL_CONFIG,
+  SessionWindowManager, StmStore, WriteQueue,
+  formatRecentContext,
+  createRedisClient,
   wireEventSubscriptions, setPresence,
-  BrainClient, buildThoughtPacket, isSwarmReply,
-  getAvailableModels, ALL_MODELS, type InferenceProvider, type ModelEntry,
-  type ChatMessage,
+  BrainClient,
+  ALL_MODELS, type InferenceProvider, type ModelEntry,
   deriveIdentityBase,
-  distillSessionOnInactive, runDistillation,
+  distillSessionOnInactive,
   bootSession, refreshBotState, handleMessage, type BootSessionResult,
 } from "@nullsafe/shared";
-import { detectPluralKit } from "@nullsafe/shared";
 import {
   joinVoiceChannel,
   createAudioPlayer,
@@ -31,7 +26,7 @@ import {
 } from "@discordjs/voice";
 import * as prism from "prism-media";
 import { Readable } from "stream";
-import { VoiceClient, shouldVoice, isInvitation, isLeaveRequest, markVoiceUsed } from "@nullsafe/shared";
+import { VoiceClient, markVoiceUsed } from "@nullsafe/shared";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "@nullsafe/shared";
 
 function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16): Buffer {
