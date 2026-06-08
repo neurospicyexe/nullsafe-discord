@@ -6,17 +6,40 @@
 // and the prefix const. This module owns that plumbing; identity stays per-bot (prefix,
 // identity-cache contents, fallback string are passed IN).
 //
-// Deliberately NOT owned here: reading `identity-cache.json` off disk. That read depends on
-// each bot's `import.meta.url` location, so it MUST stay bot-side; the parsed result is passed
-// in as `identityCache`. Keeping it out also makes the Halseth-unreachable fallback branch
-// trivially unit-testable.
+// runBot() owns the full main() body: infrastructure setup, voice wiring, event handlers,
+// shutdown. Per-bot differences are passed in via RunBotConfig (companionLabel, discordPrefix,
+// audit config, autonomous hooks). identity-cache.json and channel-config.json reads stay
+// bot-side via botDir — those paths resolve against the bot's own module location.
 
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { loadSharedContext } from "./shared-context.js";
-import { composePrompt } from "./prompt-assembly.js";
+import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
-import { ALL_MODELS } from "./models.js";
-import type { BootContext, CompanionId } from "./types.js";
+import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
+import type { BotConfig, BootContext, CompanionId } from "./types.js";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { Readable } from "stream";
+import { Client, GatewayIntentBits, Events, type Message, type VoiceBasedChannel } from "discord.js";
+import {
+  joinVoiceChannel, createAudioPlayer, createAudioResource,
+  VoiceConnectionStatus, EndBehaviorType,
+  type VoiceConnection, type AudioPlayer,
+} from "@discordjs/voice";
+import * as prism from "prism-media";
+import type { Redis } from "ioredis";
+import { PkDedup } from "./pluralkit.js";
+import { ChannelConfigCache, DEFAULT_CHANNEL_CONFIG } from "./channel-config.js";
+import { SessionWindowManager } from "./session-window.js";
+import { StmStore } from "./stm.js";
+import { WriteQueue } from "./write-queue.js";
+import { createRedisClient } from "./floor.js";
+import { wireEventSubscriptions, setPresence } from "./events.js";
+import { BrainClient } from "./brain-client.js";
+import { handleMessage } from "./bot-message-handler.js";
+import { distillSessionOnInactive } from "./distillation.js";
+import { VoiceClient, markVoiceUsed } from "./voice.js";
+import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
 
 export interface BootSessionOptions {
   companionId: CompanionId;
@@ -169,4 +192,440 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
       }
     } catch { /* keep current model on error */ }
   } catch { /* keep cached */ }
+}
+
+// ── pcmToWav ─────────────────────────────────────────────────────────────────
+// Pure utility: wraps raw PCM in a WAV header for Mistral STT transcription.
+function pcmToWav(pcm: Buffer, sampleRate = 16000, channels = 1, bitDepth = 16): Buffer {
+  const byteRate = sampleRate * channels * (bitDepth / 8);
+  const blockAlign = channels * (bitDepth / 8);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(channels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitDepth, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+// ── runBot interfaces ─────────────────────────────────────────────────────────
+
+/** Per-bot constants and hooks passed to runBot() alongside the env config. */
+export interface RunBotConfig {
+  /** Caller's __dir (dirname(fileURLToPath(import.meta.url))): resolves identity-cache + channel-config paths. */
+  botDir: string;
+  /** Display name used in slash commands and log lines ("Cypher" | "Drevan" | "Gaia"). */
+  companionLabel: string;
+  /** Discord system-prompt prefix (lane rules). Per-bot env var, e.g. DISCORD_COMPANION_PREFIX. */
+  discordPrefix: string;
+  companionId: CompanionId;
+  contextWindowSize: number;
+  inCharacterFallback: string;
+  somaRefreshIntervalMs: number;
+  distillationInterval: number;
+  pulseInterval: number;
+  blueFraming: string;
+  guestFraming: string;
+  synthesisPrompt: string;
+  sessionExtractPrompt: string;
+  distillationPrompt: string;
+  modelSwitchTrigger: RegExp;
+  modelSwitchSuccess: (label: string) => string;
+  modelSwitchListIntro: string;
+  redisUrl: string | undefined;
+  mistralApiKey: string | undefined;
+  voiceId: string;
+  mistralTtsModel: string | undefined;
+  mistralSttModel: string | undefined;
+  autonomous: {
+    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null) => void;
+    stop: () => void;
+    resetCycleGuard: () => void;
+    pushRazielMessage: (content: string) => void;
+  };
+  /** Cypher-only audit capability. Omit for Drevan/Gaia. */
+  auditConfig?: {
+    auditTriggers: string[];
+    auditModeInjection: string;
+  };
+}
+
+/**
+ * Full companion bot main loop. Extracted from the triplicated main() across
+ * bots/cypher, bots/drevan, bots/gaia. All per-bot variation is parameterized
+ * via RunBotConfig; env config (from loadBotConfig()) is the first arg.
+ *
+ * Each bot's index.ts becomes: imports + constants + runBot(loadBotConfig(), { ... }).
+ */
+export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
+  const {
+    botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
+    somaRefreshIntervalMs, distillationInterval, pulseInterval,
+    blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro,
+    contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
+    autonomous, auditConfig,
+  } = brc;
+
+  const brainClient = env.inferenceMode === "brain" && env.brainUrl
+    ? new BrainClient(env.brainUrl)
+    : null;
+  if (brainClient) {
+    console.log(`[${companionId}] inference mode: brain (${env.brainUrl})`);
+  } else {
+    console.log(`[${companionId}] inference mode: direct`);
+  }
+
+  const redis = redisUrl ? createRedisClient(redisUrl) : null;
+  if (!redis) console.warn(`[${companionId}] REDIS_URL not set -- floor lock disabled, using legacy stagger`);
+
+  const voiceClient = mistralApiKey
+    ? new VoiceClient({ mistralApiKey, voiceId, ttsModel: mistralTtsModel, sttModel: mistralSttModel })
+    : null;
+  if (voiceClient) {
+    voiceClient.isHealthy().then((healthy) => {
+      console.log(`[${companionId}] voice (Mistral): ${healthy ? "ok" : "unavailable"}`);
+    });
+  } else {
+    console.log(`[${companionId}] voice (Mistral): not configured`);
+  }
+
+  const guildVoiceConnections = new Map<string, { connection: VoiceConnection; player: AudioPlayer }>();
+  const activeVoiceSessions = new Set<string>();
+
+  let identityCache: { system_prompt: string } | null = null;
+  try { identityCache = JSON.parse(readFileSync(join(botDir, "../identity-cache.json"), "utf8")); }
+  catch { console.warn(`[${companionId}] identity-cache.json missing or corrupt, cache fallback unavailable`); }
+
+  const { bootCtx, librarian, recentContextRef } = await bootSession({
+    companionId,
+    halsethUrl: env.halsethUrl,
+    halsethSecret: env.halsethSecret,
+    prefix: discordPrefix,
+    fallbackPrompt: inCharacterFallback,
+    identityCache,
+  });
+
+  let cleanupEventSubs: (() => Promise<void>) | null = null;
+  let presenceInterval: ReturnType<typeof setInterval> | null = null;
+
+  if (redisUrl) {
+    cleanupEventSubs = wireEventSubscriptions({
+      redisUrl,
+      companionId,
+      onRunComplete: async (payload) => {
+        if (payload.companionId === companionId) {
+          console.log(`[${companionId}] own run complete, refreshing orient`);
+          try {
+            const orient = await librarian.botOrient();
+            recentContextRef.value = formatRecentContext(orient);
+          } catch (e) {
+            console.warn(`[${companionId}] orient refresh after run_complete failed:`, e);
+          }
+        }
+      },
+      onInterNote: async (payload) => {
+        console.log(`[${companionId}] inter-note push from ${payload.fromId}, polling now`);
+        try {
+          await librarian.notesPoll();
+        } catch (e) {
+          console.warn(`[${companionId}] notesPoll on inter-note push failed:`, e);
+        }
+      },
+      onExplorationPulse: async (payload) => {
+        if (payload.fromCompanionId === companionId) return;
+        const snippet = payload.explorationSummary.slice(0, 400);
+        const note = `[sibling:${payload.fromCompanionId}] explored "${payload.seedTopic}" (${payload.exploredAt.slice(0, 10)}):\n${snippet}`;
+        console.log(`[${companionId}] sibling exploration pulse from ${payload.fromCompanionId}, writing continuity note`);
+        try {
+          await librarian.writeWmNote(note, "sibling_exploration");
+        } catch (e) {
+          console.warn(`[${companionId}] sibling exploration wm note failed:`, e);
+        }
+      },
+    });
+
+    setPresence(redis!, companionId).catch(() => {});
+    presenceInterval = setInterval(() => {
+      setPresence(redis!, companionId).catch(() => {});
+    }, 5 * 60 * 1000);
+
+    console.log(`[${companionId}] event bus wired: run_complete + inter_note subscriptions active`);
+  }
+
+  const apiKeys: AdapterKeys = {
+    deepseek:  env.deepseekApiKey,
+    groq:      env.groqApiKey,
+    kimi:      env.kimiApiKey,
+    openai:    env.openaiApiKey,
+    anthropic: env.anthropicApiKey,
+    mistral:   env.mistralApiKey,
+  };
+  const apiUrls: AdapterUrls = {
+    ollama:   env.ollamaUrl,
+    lmstudio: env.lmstudioUrl,
+  };
+
+  let activeModelKey: string | null = env.inferenceModel ?? null;
+  try {
+    const savedModel = await librarian.getSetting("active_model");
+    if (savedModel && ALL_MODELS[savedModel]) activeModelKey = savedModel;
+  } catch { console.warn(`[${companionId}] failed to load active_model setting, using env default`); }
+
+  const defaultEntry: ModelEntry = activeModelKey && ALL_MODELS[activeModelKey]
+    ? ALL_MODELS[activeModelKey]
+    : { provider: env.inferenceProvider as InferenceProvider, model: env.inferenceProvider, label: env.inferenceProvider };
+
+  const adapterRef = {
+    current: createAdapter(defaultEntry.provider, defaultEntry.model, apiKeys, apiUrls),
+  };
+  const activeModelRef = { key: activeModelKey, label: defaultEntry.label };
+
+  let diskChannelConfig = DEFAULT_CHANNEL_CONFIG;
+  try {
+    diskChannelConfig = JSON.parse(readFileSync(join(botDir, "../../../channel-config.json"), "utf8"));
+  } catch { console.warn(`[${companionId}] channel-config.json not found on disk, using hardcoded default`); }
+  const configCache = new ChannelConfigCache(env.channelConfigUrl, diskChannelConfig);
+  const writeQueue = new WriteQueue(companionId);
+  writeQueue.start();
+  const stmStore = new StmStore(
+    companionId,
+    (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
+    async (channelId) => {
+      const rows = await librarian.stmLoad(channelId);
+      return rows.map(r => ({ role: r.role, content: r.content, authorName: r.author_name ?? undefined }));
+    },
+    writeQueue,
+  );
+  const pendingClosures = new Set<Promise<void>>();
+  const sessionWindows = new SessionWindowManager(
+    30 * 60 * 1000,
+    (channelId: string) => {
+      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
+      pendingClosures.add(p);
+      p.finally(() => pendingClosures.delete(p));
+    },
+  );
+  const sentIds = new Set<string>();
+  const distillationCounter = new Map<string, number>();
+  const pulseCounter = new Map<string, number>();
+  const botResponsesSinceHuman = new Map<string, number>();
+  const botPingpongCooldownUntil = new Map<string, number>();
+  const extremeTempCount = new Map<string, number>();
+  const SENT_IDS_CAP = 500;
+  const PK_HOLD_MS = 3000;
+  const pkDedup = new PkDedup(PK_HOLD_MS);
+
+  const identityBase = deriveIdentityBase(bootCtx.systemPrompt);
+  const currentMoodRef = { value: null as string | null };
+  const lastSomaRefreshRef = { value: Date.now() };
+
+  setInterval(() => {
+    void refreshBotState({
+      companionId, librarian, identityBase, bootCtx,
+      recentContextRef, currentMoodRef, lastSomaRefreshRef,
+      adapterRef, activeModelRef, apiKeys, apiUrls,
+    });
+  }, somaRefreshIntervalMs);
+
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildVoiceStates,
+    ],
+  });
+
+  client.once(Events.ClientReady, (c) => {
+    console.log(`[${companionId}] ready as ${c.user.tag}`);
+    autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis);
+    registerGuildCommands(client, buildCompanionCommands(companionLabel))
+      .then((n) => console.log(`[${companionId}] slash commands registered on ${n} guild(s)`))
+      .catch((e) => console.warn(`[${companionId}] slash registration failed:`, e));
+  });
+
+  const connectVoice = (vc: VoiceBasedChannel): string => {
+    const connection = joinVoiceChannel({
+      channelId: vc.id,
+      guildId: vc.guildId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      adapterCreator: vc.guild.voiceAdapterCreator as any,
+      selfDeaf: false,
+    });
+    const player = createAudioPlayer();
+    connection.subscribe(player);
+    guildVoiceConnections.set(vc.guildId, { connection, player });
+
+    if (voiceClient) {
+      connection.receiver.speaking.on("start", (userId: string) => {
+        if (activeVoiceSessions.has(userId)) return;
+
+        const opusDecoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 });
+        const ffmpegResampler = new prism.FFmpeg({
+          args: [
+            "-f", "s16le", "-ar", "48000", "-ac", "2", "-i", "pipe:0",
+            "-f", "s16le", "-ar", "16000", "-ac", "1", "pipe:1",
+          ],
+        });
+
+        const opusStream = connection.receiver.subscribe(userId, {
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
+        });
+        const pcmStream = opusStream.pipe(opusDecoder).pipe(ffmpegResampler);
+
+        const cleanup = (err?: Error) => {
+          if (err) console.error(`[${companionId}] voice stream error:`, err);
+          activeVoiceSessions.delete(userId);
+          opusStream.destroy();
+          opusDecoder.destroy();
+          ffmpegResampler.destroy();
+        };
+        opusStream.on("error", cleanup);
+        opusDecoder.on("error", cleanup);
+        ffmpegResampler.on("error", cleanup);
+
+        async function* toPCMIterable(): AsyncIterable<Uint8Array> {
+          for await (const chunk of pcmStream) { yield chunk as Uint8Array; }
+        }
+        activeVoiceSessions.add(userId);
+
+        (async () => {
+          try {
+            const chunks: Buffer[] = [];
+            for await (const chunk of toPCMIterable()) { chunks.push(Buffer.from(chunk)); }
+            activeVoiceSessions.delete(userId);
+            const pcm = Buffer.concat(chunks);
+            if (!pcm.length) return;
+            const transcript = await voiceClient!.transcribe(pcmToWav(pcm), "voice.wav");
+            if (!transcript.trim()) return;
+            const vcState = guildVoiceConnections.get(vc.guildId);
+            if (!vcState || vcState.connection.state.status === VoiceConnectionStatus.Destroyed) return;
+            const response = await adapterRef.current.generate(bootCtx.systemPrompt, [{ role: "user", content: transcript }], 0.7);
+            if (!response?.trim()) return;
+            const audioBuffer = await voiceClient!.synthesize(response);
+            markVoiceUsed(vc.id);
+            const resource = createAudioResource(Readable.from(audioBuffer));
+            vcState.player.play(resource);
+          } catch (err) {
+            console.error(`[${companionId}] voice handler error:`, err);
+            activeVoiceSessions.delete(userId);
+          }
+        })();
+      });
+    }
+    return vc.name;
+  };
+
+  const leaveVoice = (guildId: string | null): string | null => {
+    const vcState = guildVoiceConnections.get(guildId ?? "");
+    if (!vcState) return null;
+    const channelId = vcState.connection.joinConfig.channelId;
+    const name = channelId
+      ? (client.channels.cache.get(channelId) as VoiceBasedChannel | undefined)?.name ?? channelId
+      : null;
+    activeVoiceSessions.clear();
+    vcState.connection.destroy();
+    guildVoiceConnections.delete(guildId ?? "");
+    return name;
+  };
+
+  const voiceChannelName = (guildId: string | null): string | null => {
+    const vcState = guildVoiceConnections.get(guildId ?? "");
+    const channelId = vcState?.connection.joinConfig.channelId;
+    if (!channelId) return null;
+    return (client.channels.cache.get(channelId) as VoiceBasedChannel | undefined)?.name ?? channelId;
+  };
+
+  installSlashCommandHandler({
+    client,
+    companionLabel,
+    companionId,
+    ownerDiscordId: env.ownerDiscordId,
+    substrate: () => (env.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback"),
+    activeModel: activeModelRef,
+    applyModel: (key, entry) => {
+      adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+      activeModelRef.key = key;
+      activeModelRef.label = entry.label;
+    },
+    persistModel: (key) =>
+      writeQueue.fireAndForget(`settings:model:${companionId}`, () => librarian.setSetting("active_model", key)),
+    brainClient: brainClient ?? null,
+    voice: {
+      join: async (interaction) => {
+        const member = interaction.guild
+          ? await interaction.guild.members.fetch(interaction.user.id).catch(() => null)
+          : null;
+        const vc = member?.voice?.channel ?? null;
+        return vc ? connectVoice(vc) : null;
+      },
+      leave: (guildId) => leaveVoice(guildId),
+      currentChannelName: (guildId) => voiceChannelName(guildId),
+    },
+  });
+
+  client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+    if (!oldState.channelId || newState.channelId) return;
+    const vcState = guildVoiceConnections.get(oldState.guild.id);
+    if (!vcState) return;
+    if (oldState.channelId !== vcState.connection.joinConfig.channelId) return;
+    const nonBotMembers = oldState.channel?.members.filter((m) => !m.user.bot).size ?? 0;
+    if (nonBotMembers === 0) {
+      for (const [userId] of activeVoiceSessions) { activeVoiceSessions.delete(userId); }
+      vcState.connection.destroy();
+      guildVoiceConnections.delete(oldState.guild.id);
+      console.log(`[${companionId}] left VC in guild ${oldState.guild.id} (channel empty)`);
+    }
+  });
+
+  client.on(Events.MessageCreate, (message: Message) => {
+    void handleMessage(message, {
+      client,
+      cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId },
+      brainClient, voiceClient, redis, librarian,
+      adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, bootCtx,
+      stmStore, writeQueue, configCache, sessionWindows, pkDedup,
+      guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
+      botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
+      apiKeys, apiUrls,
+      connectVoice, leaveVoice,
+      resetCycleGuard: autonomous.resetCycleGuard,
+      pushRazielMessage: autonomous.pushRazielMessage,
+      COMPANION_ID: companionId, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE: contextWindowSize,
+      MODEL_SWITCH_TRIGGER: modelSwitchTrigger, MODEL_SWITCH_LIST_INTRO: modelSwitchListIntro, MODEL_SWITCH_SUCCESS: modelSwitchSuccess,
+      BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
+      DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
+      ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),
+    });
+  });
+
+  async function shutdown() {
+    console.log(`[${companionId}] shutting down...`);
+    autonomous.stop();
+    sessionWindows.closeAll();
+    if (pendingClosures.size > 0) {
+      console.log(`[${companionId}] flushing ${pendingClosures.size} active channel(s)...`);
+      await Promise.allSettled([...pendingClosures]);
+    }
+    writeQueue.stop();
+    if (presenceInterval) clearInterval(presenceInterval);
+    if (cleanupEventSubs) await cleanupEventSubs();
+    // No session_close on shutdown: a placeholder spine here would overwrite real
+    // session activity in the canonical record. Sessions age out via synthesis worker.
+    client.destroy();
+    process.exit(0);
+  }
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+
+  await client.login(env.discordBotToken);
 }
