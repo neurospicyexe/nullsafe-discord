@@ -25,6 +25,8 @@ venv/
 # Stale TS build artifacts in source dirs (compiled output belongs in dist/)
 bots/*/src/**/*.js
 packages/*/src/**/*.js
+bots/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts
 
 # Identity caches (contain companion system prompts -- never commit)
 **/identity-cache*.json
