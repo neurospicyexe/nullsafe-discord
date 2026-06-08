@@ -1,16 +1,20 @@
 import { prompt } from "../deepseek.js";
-import { createSeed, appendLog } from "../halseth-client.js";
+import { createSeed, appendLog, getRecentSessionNotes, getRecentFeelings, getRecentConclusions } from "../halseth-client.js";
 import { loadIdentity } from "../identity-loader.js";
-import { HALSETH_URL, HALSETH_SECRET } from "../config.js";
-import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
-import { COMPANION_NAMES } from "../config.js";
+import { HALSETH_URL, HALSETH_SECRET, COMPANION_NAMES, COMPANION_ANCHOR_TOPICS } from "../config.js";
+import { LibrarianClient } from "@nullsafe/shared";
+import { decideSeedSource } from "./seed.js";
 import type { CompanionId } from "../types.js";
 
 /**
  * Weekly seed generation -- runs Sunday 1AM per companion.
- * Reads full identity + recent growth + existing unused seeds,
+ * Reads full identity + session context (notes, feelings, conclusions) + existing unused seeds,
  * then asks DeepSeek to generate 6 lane-appropriate seeds at priority 8.
- * Replenishes the queue so companions always have material to draw from.
+ *
+ * Primary seed source: session notes + feelings + conclusions (what the companion actually
+ * experienced recently with Raziel). Growth patterns stay as a NEGATIVE signal -- avoid
+ * re-deriving what's already named. When session delta volume is thin, anchor topics take over
+ * as the positive source so autonomous time never orbits its own prior output.
  *
  * This is NOT part of the 6-phase pipeline. It runs as a separate cron task.
  */
@@ -21,11 +25,25 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
   const identityText = loadIdentity(companionId);
   const name = COMPANION_NAMES[companionId];
 
-  // Load recent growth context
+  // Load session context + active patterns in parallel.
+  // orient() is only needed for active_patterns (negative signal).
+  // Session notes + feelings + conclusions are the positive seed source.
   const librarian = new LibrarianClient({ url: HALSETH_URL, secret: HALSETH_SECRET, companionId });
-  const orient = await librarian.botOrient().catch(() => null);
-  const recentGrowth = orient?.recent_growth ?? [];
+  const [orient, sessionNotes, feelings, conclusions] = await Promise.all([
+    librarian.botOrient().catch(() => null),
+    getRecentSessionNotes(companionId, 8),
+    getRecentFeelings(companionId, 8),
+    getRecentConclusions(companionId),
+  ]);
+
   const activePatterns = orient?.active_patterns ?? [];
+
+  // Filter to 7-day recency before deciding source -- limit=8 rows have no date
+  // filter; stale rows (e.g. from March) would misclassify thin weeks as session-rich.
+  const since7d = Date.now() - 7 * 24 * 3600 * 1000;
+  const recentNotes    = sessionNotes.filter(n => new Date(n.created_at).getTime() >= since7d);
+  const recentFeelings = feelings.filter(f  => new Date(f.created_at).getTime()  >= since7d);
+  const recentConclusions = conclusions.filter(c => new Date(c.created_at).getTime() >= since7d);
 
   // Fetch existing unused seeds so we don't duplicate them
   let existingSeeds: string[] = [];
@@ -42,13 +60,26 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     console.warn(`[${companionId}/seed-gen] failed to fetch existing seeds:`, e);
   }
 
-  const recentGrowthText = recentGrowth.length > 0
-    ? recentGrowth.map((g: { type: string; content: string }) => `[${g.type}] ${g.content}`).join("\n").slice(0, 600)
-    : "(no recent growth journal entries yet)";
+  const sourceType = decideSeedSource(recentNotes.length, recentFeelings.length);
+  console.log(`[${companionId}/seed-gen] source=${sourceType} (notes=${recentNotes.length} feelings=${recentFeelings.length} of ${sessionNotes.length}/${feelings.length} fetched)`);
 
-  const patternsText = activePatterns.length > 0
-    ? (activePatterns as string[]).join(", ").slice(0, 300)
-    : "(no recognized patterns yet)";
+  // Active patterns as negative signal: seed AWAY from what's already named.
+  const avoidText = (activePatterns as string[]).length > 0
+    ? `Patterns already recognized (do NOT re-derive or repackage these):\n${(activePatterns as string[]).join("\n").slice(0, 300)}\n\n`
+    : "";
+
+  let contextBlock: string;
+  if (sourceType === "session") {
+    const sessionLines = [
+      ...recentNotes.map(n => `[note] ${n.note_text}`),
+      ...recentFeelings.map(f => `[feeling] ${f.emotion}${f.context ? `: ${f.context}` : ""}`),
+      ...recentConclusions.map(c => `[conclusion] ${c.conclusion_text}`),
+    ].join("\n").slice(0, 600);
+    contextBlock = `What has been present lately:\n${sessionLines}`;
+  } else {
+    const topics = COMPANION_ANCHOR_TOPICS[companionId];
+    contextBlock = `Your anchor territories (session context is thin this week -- start from here):\n${topics.map(t => `- ${t}`).join("\n")}`;
+  }
 
   const existingSeedsText = existingSeeds.length > 0
     ? existingSeeds.map(s => `- ${s.slice(0, 80)}`).join("\n")
@@ -56,8 +87,8 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
 
   const userMessage =
     `You are ${name}. Here is your full identity:\n\n${identityText.slice(0, 3000)}\n\n` +
-    `Recent growth journal entries:\n${recentGrowthText}\n\n` +
-    `Currently recognized patterns: ${patternsText}\n\n` +
+    `${contextBlock}\n\n` +
+    avoidText +
     `Seeds already queued (do not duplicate these):\n${existingSeedsText}\n\n` +
     `Generate 6 seeds for your autonomous time -- genuinely fit your documented lanes and interests. ` +
     `Not everything needs to be research. Mix freely: something you're curious about, something that delights you, ` +
@@ -132,5 +163,5 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     }
   }
 
-  console.log(`[${companionId}/seed-gen] complete: wrote ${written}/${toWrite.length} new seeds (${skipped} dupes skipped)`);
+  console.log(`[${companionId}/seed-gen] complete (${sourceType}): wrote ${written}/${toWrite.length} new seeds (${skipped} dupes skipped)`);
 }

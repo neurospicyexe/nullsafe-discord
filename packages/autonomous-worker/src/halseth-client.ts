@@ -420,6 +420,27 @@ export async function getRecentConclusions(
 }
 
 // ---------------------------------------------------------------------------
+// Home presence
+// ---------------------------------------------------------------------------
+
+/**
+ * Write the companion's current room at pipeline start so home_presence
+ * reflects autonomous session activity rather than stale seeded values.
+ * Non-fatal -- pipeline proceeds even if this write fails.
+ */
+export async function setHomePresence(
+  companionId: string,
+  roomKey: string,
+  activity: string,
+): Promise<void> {
+  try {
+    await hFetch("/home/presence", "PATCH", { companion_id: companionId, current_room: roomKey, activity });
+  } catch (e) {
+    console.warn(`[${companionId}/halseth] setHomePresence failed (non-fatal):`, e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Memory compression
 // ---------------------------------------------------------------------------
 

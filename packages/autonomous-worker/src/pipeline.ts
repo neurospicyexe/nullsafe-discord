@@ -1,4 +1,4 @@
-import { createRun, updateRun, appendLog } from "./halseth-client.js";
+import { createRun, updateRun, appendLog, setHomePresence } from "./halseth-client.js";
 import { runOrient } from "./phases/orient.js";
 import { runSeed } from "./phases/seed.js";
 import { runExplore } from "./phases/explore.js";
@@ -6,6 +6,7 @@ import { runSynthesize } from "./phases/synthesize.js";
 import { runWrite } from "./phases/write.js";
 import { runReflect } from "./phases/reflect.js";
 import { runSomaUpdate } from "./phases/soma.js";
+import { AUTONOMOUS_TIME_ROOMS } from "./config.js";
 import type { CompanionId, RunType, PipelineContext } from "./types.js";
 
 /**
@@ -65,6 +66,10 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
   try {
     // Phase 1: Load full identity + orient context
     await runOrient(ctx);
+
+    // Mark presence in home_presence so the topology reflects autonomous session activity.
+    // Non-fatal -- pipeline continues even if the write fails.
+    await setHomePresence(companionId, AUTONOMOUS_TIME_ROOMS[companionId], "in autonomous session");
 
     // Phase 2: Select or generate exploration seed
     // Seed phase may mutate ctx.runType, ctx.threadId, ctx.threadPosition

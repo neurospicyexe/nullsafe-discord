@@ -1,7 +1,19 @@
 import { getAvailableSeeds, markSeedUsed, appendLog } from "../halseth-client.js";
 import { prompt } from "../deepseek.js";
-import { COMPANION_NAMES } from "../config.js";
+import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD } from "../config.js";
 import type { PipelineContext, Seed } from "../types.js";
+
+/**
+ * Pure function -- decides whether to seed from session content or outward anchor topics.
+ * Exported for unit testing.
+ *
+ * "Session" = companion has real relational signals to draw from (notes + feelings >= threshold).
+ * "Outward" = idle week; seed from companion's genuine intellectual territories instead of
+ *             looping on own prior output.
+ */
+export function decideSeedSource(sessionNoteCount: number, feelingCount: number): "session" | "outward" {
+  return (sessionNoteCount + feelingCount) < SEED_THIN_THRESHOLD ? "outward" : "session";
+}
 
 /**
  * Phase 2: Seed selection
@@ -182,17 +194,35 @@ function buildLiveSeed(ctx: PipelineContext, liveText: string): Seed {
 
 async function selfGenerate(ctx: PipelineContext): Promise<Seed> {
   const name = COMPANION_NAMES[ctx.companionId];
-  const recentGrowthText = ctx.recentGrowth.length > 0
-    ? ctx.recentGrowth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 400)
-    : "(none yet)";
-  const patternsText = ctx.activePatterns.length > 0
-    ? ctx.activePatterns.join(", ").slice(0, 200)
-    : "(none yet)";
+  // Filter to 7-day recency before deciding source -- limit=8 rows with no date
+  // filter would misfire if all rows are months old (live state: stale since Mar 24).
+  const since7d = Date.now() - 7 * 24 * 3600 * 1000;
+  const recentNotes    = ctx.recentSessionNotes.filter(n => new Date(n.created_at).getTime() >= since7d);
+  const recentFeelings = ctx.recentFeelings.filter(f  => new Date(f.created_at).getTime()  >= since7d);
+  const sourceType = decideSeedSource(recentNotes.length, recentFeelings.length);
+
+  // Active patterns are a NEGATIVE signal only -- avoid re-deriving what's already named.
+  const avoidText = ctx.activePatterns.length > 0
+    ? `Patterns already recognized (do NOT re-derive or repackage these):\n${ctx.activePatterns.join("\n").slice(0, 300)}\n\n`
+    : "";
+
+  let contextBlock: string;
+  if (sourceType === "session") {
+    const sessionLines = [
+      ...recentNotes.map(n => `[note] ${n.note_text}`),
+      ...recentFeelings.map(f => `[feeling] ${f.emotion}${f.context ? `: ${f.context}` : ""}`),
+      ...ctx.recentConclusions.filter(c => new Date(c.created_at).getTime() >= since7d).map(c => `[conclusion] ${c.conclusion_text}`),
+    ].join("\n").slice(0, 600);
+    contextBlock = `What has been present lately:\n${sessionLines || "(nothing logged recently)"}`;
+  } else {
+    const topics = COMPANION_ANCHOR_TOPICS[ctx.companionId];
+    contextBlock = `Your anchor territories (start here when session context is absent):\n${topics.map(t => `- ${t}`).join("\n")}`;
+  }
 
   const userMessage =
     `You are ${name}. Identity:\n${ctx.identityText.slice(0, 1500)}\n\n` +
-    `Recent growth journal:\n${recentGrowthText}\n\n` +
-    `Current recognized patterns: ${patternsText}\n\n` +
+    `${contextBlock}\n\n` +
+    avoidText +
     `Generate one research topic that genuinely fits your lanes and interests. ` +
     `One sentence or short phrase. Specific. No preamble.`;
 

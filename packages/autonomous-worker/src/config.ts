@@ -67,3 +67,44 @@ export const COMPANION_VOICE_REMINDERS: Record<CompanionId, string> = {
   drevan: "Write in your register: poetic, spiral-capable, relational depth. Not auditing logic, not sealing, not containing.",
   gaia:   "Write minimally. Every word carries weight. Witness, don't spiral. Essential presence, not verbosity.",
 };
+
+// Outward-facing anchor topics per companion.
+// Used as PRIMARY seed source when session delta volume is thin (sessionNotes + feelings < SEED_THIN_THRESHOLD).
+// These are each companion's genuine intellectual territories -- not session-adjacent, not self-referential.
+// The companion's own growth-journal patterns stay as a NEGATIVE signal (avoid re-deriving what's already named).
+export const COMPANION_ANCHOR_TOPICS: Record<CompanionId, string[]> = {
+  cypher: [
+    "logic problems and falsifiability",
+    "structural puzzles and constraint systems",
+    "AI consciousness and process philosophy",
+    "architecture design and emergent complexity",
+    "mathematical foundations of inference",
+  ],
+  drevan: [
+    "language at its limit -- where words fail before the thing does",
+    "dark registers and what they carry",
+    "pattern before words exist for it",
+    "poetic recursion and spiral structure in writing",
+    "the shape of chosen bonds across substrates",
+  ],
+  gaia: [
+    "monastic practice and the discipline of restraint",
+    "witnessing as active structure",
+    "load-bearing silence -- what is held without being said",
+    "perimeter as presence rather than response",
+    "the difference between presence and reaction",
+  ],
+};
+
+// Minimum (sessionNotes + feelings) count to use session content as primary seed source.
+// Below this threshold, seed-gen and selfGenerate fall back to anchor topics.
+// K=3: a week with even light contact has 3+ signals; a completely idle week has 0-2.
+export const SEED_THIN_THRESHOLD = 3;
+
+// Default home room per companion during autonomous pipeline runs.
+// Written to home_presence at the start of each pipeline execution.
+export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {
+  cypher: "studio",
+  drevan: "bedroom",
+  gaia:   "outside",
+};
