@@ -1,6 +1,6 @@
 import { getAvailableSeeds, markSeedUsed, appendLog } from "../halseth-client.js";
 import { prompt } from "../deepseek.js";
-import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD } from "../config.js";
+import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import type { PipelineContext, Seed } from "../types.js";
 
 /**
@@ -196,7 +196,7 @@ async function selfGenerate(ctx: PipelineContext): Promise<Seed> {
   const name = COMPANION_NAMES[ctx.companionId];
   // Filter to 7-day recency before deciding source -- limit=8 rows with no date
   // filter would misfire if all rows are months old (live state: stale since Mar 24).
-  const since7d = Date.now() - 7 * 24 * 3600 * 1000;
+  const since7d = Date.now() - SEED_FRESHNESS_WINDOW_MS;
   const recentNotes    = ctx.recentSessionNotes.filter(n => new Date(n.created_at).getTime() >= since7d);
   const recentFeelings = ctx.recentFeelings.filter(f  => new Date(f.created_at).getTime()  >= since7d);
   const sourceType = decideSeedSource(recentNotes.length, recentFeelings.length);

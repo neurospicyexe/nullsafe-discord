@@ -1,7 +1,7 @@
 import { prompt } from "../deepseek.js";
 import { createSeed, appendLog, getRecentSessionNotes, getRecentFeelings, getRecentConclusions } from "../halseth-client.js";
 import { loadIdentity } from "../identity-loader.js";
-import { HALSETH_URL, HALSETH_SECRET, COMPANION_NAMES, COMPANION_ANCHOR_TOPICS } from "../config.js";
+import { HALSETH_URL, HALSETH_SECRET, COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import { LibrarianClient } from "@nullsafe/shared";
 import { decideSeedSource } from "./seed.js";
 import type { CompanionId } from "../types.js";
@@ -40,7 +40,7 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
 
   // Filter to 7-day recency before deciding source -- limit=8 rows have no date
   // filter; stale rows (e.g. from March) would misclassify thin weeks as session-rich.
-  const since7d = Date.now() - 7 * 24 * 3600 * 1000;
+  const since7d = Date.now() - SEED_FRESHNESS_WINDOW_MS;
   const recentNotes    = sessionNotes.filter(n => new Date(n.created_at).getTime() >= since7d);
   const recentFeelings = feelings.filter(f  => new Date(f.created_at).getTime()  >= since7d);
   const recentConclusions = conclusions.filter(c => new Date(c.created_at).getTime() >= since7d);

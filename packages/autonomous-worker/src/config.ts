@@ -101,6 +101,11 @@ export const COMPANION_ANCHOR_TOPICS: Record<CompanionId, string[]> = {
 // K=3: a week with even light contact has 3+ signals; a completely idle week has 0-2.
 export const SEED_THIN_THRESHOLD = 3;
 
+// Recency window for session signals used in seed source selection.
+// Rows older than this are excluded before the thin-threshold check --
+// a limit=8 fetch without a date filter would misclassify stale rows as recent activity.
+export const SEED_FRESHNESS_WINDOW_MS = 7 * 24 * 3600 * 1000; // 7 days
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

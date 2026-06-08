@@ -232,7 +232,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const entry = ALL_MODELS[arg];
         // createAdapter is resilient: if this bot lacks the provider key it returns a
         // working local fallback (deepseek) for direct mode; Brain runs the real voice.
-        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);
         activeModelRef.key = arg;
         activeModelRef.label = entry.label;
         writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
@@ -513,7 +513,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const switchKey = tokenMatch[1].trim().toLowerCase();
         if (ALL_MODELS[switchKey]) {
           const entry = ALL_MODELS[switchKey];
-          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);
           activeModelRef.key = switchKey;
           activeModelRef.label = entry.label;
           writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
