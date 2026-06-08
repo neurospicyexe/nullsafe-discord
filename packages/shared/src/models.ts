@@ -28,13 +28,17 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // Mistral (La Plateforme API -- set MISTRAL_API_KEY)
   "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
   "mistral-small":     { provider: "mistral",   model: "mistral-small-latest",      label: "Mistral Small (API)" },
-  // Kimi (Moonshot AI)
-  "kimi-k2":           { provider: "kimi",      model: "kimi-k2",                   label: "Kimi K2" },
+  // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
+  "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
   "kimi-128k":         { provider: "kimi",      model: "moonshot-v1-128k",          label: "Kimi 128k" },
   // OpenAI
+  "gpt-5.5":           { provider: "openai",    model: "gpt-5.5",                   label: "GPT-5.5" },
+  "gpt-5.4":           { provider: "openai",    model: "gpt-5.4",                   label: "GPT-5.4" },
+  "gpt-5.4-mini":      { provider: "openai",    model: "gpt-5.4-mini",              label: "GPT-5.4 Mini" },
   "gpt-4o":            { provider: "openai",    model: "gpt-4o",                    label: "GPT-4o" },
   "gpt-4o-mini":       { provider: "openai",    model: "gpt-4o-mini",               label: "GPT-4o Mini" },
-  // Anthropic (Opus excluded -- too expensive for lean phase)
+  // Anthropic
+  "claude-opus":       { provider: "anthropic", model: "claude-opus-4-8",           label: "Claude Opus 4.8" },
   "claude-sonnet":     { provider: "anthropic", model: "claude-sonnet-4-6",         label: "Claude Sonnet 4.6" },
   "claude-haiku":      { provider: "anthropic", model: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
   // Ollama

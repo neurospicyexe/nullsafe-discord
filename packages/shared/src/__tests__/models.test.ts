@@ -5,9 +5,17 @@ describe("ALL_MODELS", () => {
     expect(ALL_MODELS["deepseek-chat"]).toBeDefined();
     expect(ALL_MODELS["deepseek-chat"].provider).toBe("deepseek");
   });
-  it("contains claude-haiku but not claude-opus", () => {
+  it("contains claude-haiku and claude-opus", () => {
     expect(ALL_MODELS["claude-haiku"]).toBeDefined();
-    expect(ALL_MODELS["claude-opus"]).toBeUndefined();
+    expect(ALL_MODELS["claude-opus"]).toBeDefined();
+    expect(ALL_MODELS["claude-opus"].model).toBe("claude-opus-4-8");
+  });
+  it("kimi-k2 uses correct model ID", () => {
+    expect(ALL_MODELS["kimi-k2"].model).toBe("kimi-k2.6");
+  });
+  it("contains gpt-5.5 and gpt-5.4", () => {
+    expect(ALL_MODELS["gpt-5.5"]).toBeDefined();
+    expect(ALL_MODELS["gpt-5.4"]).toBeDefined();
   });
 });
 
