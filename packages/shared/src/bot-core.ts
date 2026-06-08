@@ -185,7 +185,7 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
       const savedModel = await librarian.getSetting("active_model");
       if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
         const entry = ALL_MODELS[savedModel];
-        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, companionId);
         activeModelRef.key = savedModel;
         activeModelRef.label = entry.label;
         console.log(`[${companionId}] model refreshed from Halseth: ${savedModel}`);
@@ -385,7 +385,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     : { provider: env.inferenceProvider as InferenceProvider, model: env.inferenceProvider, label: env.inferenceProvider };
 
   const adapterRef = {
-    current: createAdapter(defaultEntry.provider, defaultEntry.model, apiKeys, apiUrls),
+    current: createAdapter(defaultEntry.provider, defaultEntry.model, apiKeys, apiUrls, undefined, companionId),
   };
   const activeModelRef = { key: activeModelKey, label: defaultEntry.label };
 
@@ -553,7 +553,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     substrate: () => (env.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback"),
     activeModel: activeModelRef,
     applyModel: (key, entry) => {
-      adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls);
+      adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, companionId);
       activeModelRef.key = key;
       activeModelRef.label = entry.label;
     },

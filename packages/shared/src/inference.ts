@@ -237,6 +237,7 @@ class KimiAdapter implements InferenceAdapter {
     private apiKey: string,
     private model: string,
     private fetchFn: typeof fetch = globalThis.fetch,
+    private cacheKey?: string,
   ) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
@@ -255,6 +256,7 @@ class KimiAdapter implements InferenceAdapter {
           ],
           max_tokens: 500,
           temperature,
+          ...(this.cacheKey ? { prompt_cache_key: this.cacheKey } : {}),
         }),
       });
       if (!res.ok) {
@@ -325,13 +327,15 @@ class AnthropicAdapter implements InferenceAdapter {
           "Content-Type": "application/json",
           "x-api-key": this.apiKey,
           "anthropic-version": "2023-06-01",
+          "anthropic-beta": "prompt-caching-2024-07-31",
         },
         body: JSON.stringify({
           model: this.model,
           max_tokens: 500,
-          system: systemPrompt,
+          system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
           messages: messages.map(m => ({ role: m.role, content: m.content })),
-          temperature,
+          // Anthropic clamps temperature to [0, 1]; our default (1.3) would 400.
+          temperature: Math.min(temperature, 1.0),
         }),
       });
       if (!res.ok) {
@@ -353,6 +357,7 @@ class MistralAdapter implements InferenceAdapter {
     private apiKey: string,
     private model: string,
     private fetchFn: typeof fetch = globalThis.fetch,
+    private cacheKey?: string,
   ) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
@@ -372,6 +377,7 @@ class MistralAdapter implements InferenceAdapter {
           ],
           max_tokens: 500,
           temperature,
+          ...(this.cacheKey ? { prompt_cache_key: this.cacheKey } : {}),
         }),
       });
       if (!res.ok) {
@@ -422,16 +428,17 @@ function buildAdapter(
   keys: AdapterKeys,
   urls: AdapterUrls,
   fetchFn?: typeof fetch,
+  cacheKey?: string,
 ): InferenceAdapter | null {
   switch (provider) {
-    case "deepseek":  return keys.deepseek  ? new DeepSeekAdapter(keys.deepseek, model, fetchFn)   : null;
-    case "groq":      return keys.groq      ? new GroqAdapter(keys.groq, model, fetchFn)           : null;
-    case "kimi":      return keys.kimi      ? new KimiAdapter(keys.kimi, model, fetchFn)           : null;
-    case "openai":    return keys.openai    ? new OpenAIAdapter(keys.openai, model, fetchFn)       : null;
-    case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn) : null;
-    case "mistral":   return keys.mistral   ? new MistralAdapter(keys.mistral, model, fetchFn)     : null;
-    case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)       : null;
-    case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)   : null;
+    case "deepseek":  return keys.deepseek  ? new DeepSeekAdapter(keys.deepseek, model, fetchFn)              : null;
+    case "groq":      return keys.groq      ? new GroqAdapter(keys.groq, model, fetchFn)                      : null;
+    case "kimi":      return keys.kimi      ? new KimiAdapter(keys.kimi, model, fetchFn, cacheKey)            : null;
+    case "openai":    return keys.openai    ? new OpenAIAdapter(keys.openai, model, fetchFn)                   : null;
+    case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn)            : null;
+    case "mistral":   return keys.mistral   ? new MistralAdapter(keys.mistral, model, fetchFn, cacheKey)      : null;
+    case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)                   : null;
+    case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)              : null;
     default:          return null;
   }
 }
@@ -453,6 +460,7 @@ export function createAdapter(
   keys: AdapterKeys,
   urls: AdapterUrls,
   fetchFn?: typeof fetch,
+  cacheKey?: string,
 ): InferenceAdapter {
   // Build the requested provider first when this host holds its credential. When it
   // doesn't (e.g. a companion was switched to Kimi from Discord but only Brain's
@@ -460,12 +468,12 @@ export function createAdapter(
   // configured locally. Brain runs the real swarm voice; this adapter is only the
   // direct-mode fallback, so any working local provider suffices.
   const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
-  const primary = buildAdapter(provider, model, keys, urls, fetchFn);
+  const primary = buildAdapter(provider, model, keys, urls, fetchFn, cacheKey);
   if (primary) chain.push({ name: provider, adapter: primary });
 
   for (const fb of FALLBACK_ORDER) {
     if (fb.provider === provider) continue;          // requested provider already handled
-    const adapter = buildAdapter(fb.provider, fb.model, keys, urls, fetchFn);
+    const adapter = buildAdapter(fb.provider, fb.model, keys, urls, fetchFn, cacheKey);
     if (adapter) chain.push({ name: fb.provider, adapter });
   }
 
