@@ -104,7 +104,7 @@ export const SEED_THIN_THRESHOLD = 3;
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {
-  cypher: "studio",
-  drevan: "bedroom",
-  gaia:   "outside",
+  cypher: "study",
+  drevan: "vowbed",
+  gaia:   "grove",
 };
