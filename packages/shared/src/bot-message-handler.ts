@@ -459,7 +459,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         temperature,
         {
           isOwner: attribution.isOwner,
-          frontMember: attribution.frontMember,
+          frontMember: pkMemberName,
           guildId: message.guildId ?? undefined,
           author,
           authorIsCompanion: isCompanionPost,
