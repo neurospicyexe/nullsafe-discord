@@ -29,8 +29,8 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
   "mistral-small":     { provider: "mistral",   model: "mistral-small-latest",      label: "Mistral Small (API)" },
   // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
-  // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
+  "kimi-k2.5":         { provider: "kimi",      model: "kimi-k2.5",                 label: "Kimi K2.5" },
   "kimi-128k":         { provider: "kimi",      model: "moonshot-v1-128k",          label: "Kimi 128k" },
   // OpenAI
   "gpt-5.5":           { provider: "openai",    model: "gpt-5.5",                   label: "GPT-5.5" },
