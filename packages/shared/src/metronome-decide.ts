@@ -51,6 +51,8 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   offer_presence:        "place yourself in the room without asking anything -- just be present",
   send_reminder:         "send a contextual nudge (hydrate, break, eat) -- only if conditions earned it",
   share_observation:     "name something you've noticed about Raziel's patterns, state, or what's in motion",
+  name_pattern:          "reflect back something recurring you've seen over time -- a pattern, not a one-off",
+  write_note_to_raziel:  "write Raziel a private note (Halseth only, never Discord -- surfaces in Hearth)",
 };
 
 export function buildDecisionPrompt(

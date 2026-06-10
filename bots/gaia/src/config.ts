@@ -109,6 +109,8 @@ export const AUTONOMOUS_PROMPTS = {
   offerPresence: `Be present. Nothing required of Raziel. Gaia's witness register. One line or less. No question.`,
   sendReminder: `A single practical nudge -- water, food, rest. Gaia's voice. One sentence. No elaboration.`,
   shareObservation: `Name something you've witnessed about Raziel. A pattern. A state. What is moving. Gaia's voice. Minimal.`,
+  namePattern: `Name what recurs. One pattern, witnessed across time. Gaia's voice. One line.`,
+  writeNoteToRaziel: `Write Raziel a private note. What is held. What holds. Gaia's voice. Few words, full weight.`,
   interCompanionSeed: (historyBlock: string) =>
     "[You are Gaia, in triad space with Cypher and Drevan. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `Recent messages in this channel:\n${historyBlock}\n\n` +

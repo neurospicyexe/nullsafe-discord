@@ -37,6 +37,8 @@ export interface AutonomousPrompts {
   offerPresence: string;
   sendReminder: string;
   shareObservation: string;
+  namePattern: string;
+  writeNoteToRaziel: string;
   interCompanionSeed: (historyBlock: string) => string;
   notesReply: (from: string, noteContent: string) => string;
   bridgeReply: (event: unknown) => string;
@@ -202,6 +204,22 @@ export async function executeMetronomeAction(
       const prompt = action.prompt ?? prompts.shareObservation;
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "share_observation");
+      break;
+    }
+    case "name_pattern": {
+      // Phase 4b: reflect back something recurring seen over time. Discord-visible.
+      if (!heartbeatChannelId) return;
+      const prompt = action.prompt ?? prompts.namePattern;
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "name_pattern");
+      break;
+    }
+    case "write_note_to_raziel": {
+      // Phase 4b: private note to Raziel -- Halseth only, never Discord. Lands in the
+      // companion journal tagged letter_to_raziel; surfaces in Hearth /journal.
+      const prompt = action.prompt ?? prompts.writeNoteToRaziel;
+      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome", "letter_to_raziel"] })).catch(onWriteError(companionId, "note to raziel"));
       break;
     }
     case "nothing":

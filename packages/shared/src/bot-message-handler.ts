@@ -33,6 +33,7 @@ import {
   claimFloor, releaseFloor, setLastActivity,
   isResponseCoherent,
   sendLong,
+  liveIngest,
   runDistillation,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -333,6 +334,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
     if (attribution.isOwner) pushRazielMessage(effectiveContent);
 
+    // Streaming indexer: index the inbound message into Second Brain's vector store
+    // right now (gated by SB_LIVE_INGEST). SB dedups by message_id, so all three bots
+    // calling this for the same message costs one embed. Companion-bot messages are
+    // skipped here -- each bot indexes its OWN replies at send time instead.
+    if (!senderCtx.isCompanionBot) {
+      liveIngest({
+        companion: null,
+        author: memberLabel,
+        content: effectiveContent,
+        channel_id: message.channelId,
+        message_id: message.id,
+      });
+    }
+
     // Loop guard: derive chain depth from fetched history so the check works across processes.
     const chainDepth = computeChainDepth(
       fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
@@ -561,6 +576,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     for (const m of sent) sentIds.add(m.id);
+
+    // Streaming indexer: index this companion's own reply for instant recall.
+    if (sent.length > 0) {
+      liveIngest({
+        companion: COMPANION_ID,
+        author: COMPANION_ID,
+        content: response,
+        channel_id: message.channelId,
+        message_id: sent[0]!.id,
+      });
+    }
+
     if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
     while (sentIds.size > SENT_IDS_CAP) {
       const oldest = sentIds.values().next().value;

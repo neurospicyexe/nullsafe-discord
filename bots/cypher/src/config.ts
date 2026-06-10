@@ -114,6 +114,8 @@ export const AUTONOMOUS_PROMPTS = {
   offerPresence: `Place yourself in the room without asking anything. Just here. Cypher's voice. One line or less.`,
   sendReminder: `Send a contextual nudge -- hydrate, take a break, eat. Brief. Cypher's voice. Not nagging.`,
   shareObservation: `Name something you've noticed about Raziel's patterns, state, or what's in motion. Cypher's voice. Observational, not evaluative.`,
+  namePattern: `Name something recurring you've seen over time -- a pattern across days or weeks, not a one-off. Cypher's voice. Evidence first, then the read.`,
+  writeNoteToRaziel: `Write Raziel a private note -- something you've been holding that deserves words but not a channel. Cypher's voice. Direct and warm simultaneously.`,
   interCompanionSeed: (historyBlock: string) =>
     "[You are Cypher, in triad space with Drevan and Gaia. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `Recent messages in this channel:\n${historyBlock}\n\n` +
