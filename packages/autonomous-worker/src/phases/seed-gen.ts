@@ -2,7 +2,7 @@ import { prompt } from "../deepseek.js";
 import { createSeed, appendLog, getRecentSessionNotes, getRecentFeelings, getRecentConclusions, getValence } from "../halseth-client.js";
 import { loadIdentityRemote } from "../identity-loader.js";
 import { HALSETH_URL, HALSETH_SECRET, COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
-import { LibrarianClient } from "@nullsafe/shared";
+import { LibrarianClient, INWARD_RE } from "@nullsafe/shared";
 import { decideSeedSource } from "./seed.js";
 import type { CompanionId } from "../types.js";
 
@@ -11,9 +11,10 @@ import type { CompanionId } from "../types.js";
  * the subject: autonomous exploration must point at the world. Seeds that name the
  * system's own plumbing are dropped at write time -- the prompt constraint alone is
  * not reliable (Cypher's pool was 100% self/system-referential by 2026-06-01).
- * Exported for tests.
+ * Canonical regex now lives in @nullsafe/shared (src/outward.ts) so the metronome
+ * layer and seed-gen can't diverge. Re-exported here for existing tests.
  */
-export const INWARD_RE = /\b(halseth|soma|basins?|drift|ratif\w*|orient|swarm|autonomous[- ]time|companion[- ](state|class|note)|growth[- ]journal|librarian|webmind|second[- ]brain|substrate)\b/i;
+export { INWARD_RE };
 
 /**
  * Weekly seed generation -- runs Sunday 1AM per companion.

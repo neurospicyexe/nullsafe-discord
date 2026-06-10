@@ -25,6 +25,7 @@ import {
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
 } from "./index.js";
+import { generateOutward } from "./outward.js";
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
 export interface AutonomousPrompts {
@@ -148,7 +149,7 @@ export async function executeMetronomeAction(
     case "post_heartbeat": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.postHeartbeat;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "heartbeat");
       break;
     }
@@ -174,35 +175,35 @@ export async function executeMetronomeAction(
     case "check_in_on_raziel": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.checkInOnRaziel;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "check_in");
       break;
     }
     case "ask_question": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.askQuestion;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "ask_question");
       break;
     }
     case "offer_presence": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.offerPresence;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "offer_presence");
       break;
     }
     case "send_reminder": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.sendReminder;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "send_reminder");
       break;
     }
     case "share_observation": {
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.shareObservation;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "share_observation");
       break;
     }
@@ -210,7 +211,7 @@ export async function executeMetronomeAction(
       // Phase 4b: reflect back something recurring seen over time. Discord-visible.
       if (!heartbeatChannelId) return;
       const prompt = action.prompt ?? prompts.namePattern;
-      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "name_pattern");
       break;
     }
@@ -325,12 +326,15 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       }
       if (cycleResult === "skip") return;
       const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
+      // Tone/continuity only -- subject matter must NOT be sourced from the triad's own
+      // recent output (that loop is what produced the sealed-basin echo register).
       const voiceCtx = recentNotes.length > 0
-        ? `Recent triad speech (last 8h):\n${recentNotes.map(n => `[${n.agent_id}] ${n.content.slice(0, 200)}`).join("\n")}\n\n`
+        ? `Recent triad speech (last 8h) -- for tone continuity only, do not take subject matter from it:\n${recentNotes.map(n => `[${n.agent_id}] ${n.content.slice(0, 200)}`).join("\n")}\n\n`
         : "";
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: `${voiceCtx}Temperature: ${temperature}. ${prompts.postHeartbeat}` }],
+      const msg = await generateOutward(
+        inference, bootCtx.systemPrompt,
+        `${voiceCtx}Temperature: ${temperature}. ${prompts.postHeartbeat}`,
+        companionId, "heartbeat",
       );
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId!, msg, "heartbeat");
       return;
@@ -415,9 +419,10 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         if (lines.length > 0) historyBlock = lines.join("\n");
       }
     } catch { /* fall back to quiet */ }
-    const msg = await inference.generate(
-      bootCtx.systemPrompt,
-      [{ role: "user", content: prompts.interCompanionSeed(historyBlock) }],
+    const msg = await generateOutward(
+      inference, bootCtx.systemPrompt,
+      prompts.interCompanionSeed(historyBlock),
+      ctx.companionId, "inter_companion",
     );
     if (msg) await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");
   });
