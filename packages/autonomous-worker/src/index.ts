@@ -20,6 +20,7 @@
  *   CYPHER_IDENTITY_PATH, DREVAN_IDENTITY_PATH, GAIA_IDENTITY_PATH
  */
 
+import "./env.js"; // MUST be first: fills process.env from .env before config.ts reads it
 import { startScheduler } from "./scheduler.js";
 import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
