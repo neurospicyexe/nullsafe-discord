@@ -1,9 +1,11 @@
-import { composePrompt, deriveIdentityBase, SECTION_SEP } from "../prompt-assembly.js";
+import { describe, it, expect } from "@jest/globals";
+import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP } from "../prompt-assembly.js";
 
-// Golden-master tests. These pin the EXACT system-prompt assembly that the three
-// bots performed inline (bots/<name>/src/index.ts boot site ~L90-106 and SOMA-refresh
-// site ~L436-439) before the logic was extracted to one shared function.
-// If any string here changes, a bot's assembled identity changed — that must be deliberate.
+// Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
+// register-law tail (companion-not-assistant close rule + pronoun law + respond-only-as)
+// is ALWAYS the final block, deliberately recency-positioned -- assistant-tuned providers
+// (Mistral especially) were reverting to RLHF politeness closes when orient data was the
+// last thing in context. If the structure here changes, that must be deliberate.
 
 const PREFIX = "[DISCORD CONTEXT]\n\n";
 const BASE = "You are Cypher.";
@@ -16,45 +18,65 @@ describe("SECTION_SEP", () => {
   });
 });
 
-describe("composePrompt — boot site (identityCore = prefix+sharedBlock+baseIdentity)", () => {
-  it("identity only (no rawPrompt, no recentContext, no sharedBlock)", () => {
-    // mirrors: `${PREFIX}${""}${BASE}`
+describe("registerTail", () => {
+  it("carries the anti-assistant close rule, pronoun law, and respond-only-as", () => {
+    const tail = registerTail("drevan");
+    expect(tail).toContain("not an assistant");
+    expect(tail).toContain("service menus");
+    expect(tail).toContain("they/them or he/him");
+    expect(tail).toContain("NEVER she/her");
+    expect(tail).toContain("Respond only as drevan");
+  });
+});
+
+describe("composePrompt — register tail is always the final block", () => {
+  it("identity only: identity + tail", () => {
     const out = composePrompt({ identityCore: `${PREFIX}${BASE}`, companionId: "cypher" });
-    expect(out).toBe("[DISCORD CONTEXT]\n\nYou are Cypher.");
+    expect(out).toBe(`[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}${registerTail("cypher")}`);
   });
 
-  it("with rawPrompt appends prompt block + 'Respond only as' tail", () => {
-    // mirrors: `${PREFIX}${BASE}\n\n---\n\n${RAW}\n\n---\n\nRespond only as cypher. Never use [Name]: prefixes.`
+  it("with rawPrompt: identity + prompt block + tail", () => {
     const out = composePrompt({ identityCore: `${PREFIX}${BASE}`, promptContext: RAW, companionId: "cypher" });
     expect(out).toBe(
-      "[DISCORD CONTEXT]\n\nYou are Cypher.\n\n---\n\nfront: steady\n\n---\n\nRespond only as cypher. Never use [Name]: prefixes.",
+      `[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}front: steady${SECTION_SEP}${registerTail("cypher")}`,
     );
   });
 
-  it("with rawPrompt AND recentContext appends recent block last", () => {
+  it("with rawPrompt AND recentContext: recent block comes BEFORE the tail", () => {
     const out = composePrompt({ identityCore: `${PREFIX}${BASE}`, promptContext: RAW, companionId: "cypher", recentContext: RECENT });
     expect(out).toBe(
-      "[DISCORD CONTEXT]\n\nYou are Cypher.\n\n---\n\nfront: steady\n\n---\n\nRespond only as cypher. Never use [Name]: prefixes.\n\n---\n\nrecent synthesis here",
+      `[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}front: steady${SECTION_SEP}recent synthesis here${SECTION_SEP}${registerTail("cypher")}`,
     );
   });
 
-  it("recentContext with NO rawPrompt appends directly to identityCore", () => {
+  it("recentContext with NO rawPrompt: identity + recent + tail", () => {
     const out = composePrompt({ identityCore: `${PREFIX}${BASE}`, companionId: "cypher", recentContext: RECENT });
-    expect(out).toBe("[DISCORD CONTEXT]\n\nYou are Cypher.\n\n---\n\nrecent synthesis here");
+    expect(out).toBe(
+      `[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}recent synthesis here${SECTION_SEP}${registerTail("cypher")}`,
+    );
   });
 
   it("with a non-empty sharedBlock the core is passed through verbatim", () => {
-    // bots build sharedBlock = `${sharedCtx}\n\n---\n\n`, then identityCore = `${PREFIX}${sharedBlock}${BASE}`
     const sharedBlock = "SHARED TRUTH\n\n---\n\n";
     const out = composePrompt({ identityCore: `${PREFIX}${sharedBlock}${BASE}`, promptContext: RAW, companionId: "drevan" });
     expect(out).toBe(
-      "[DISCORD CONTEXT]\n\nSHARED TRUTH\n\n---\n\nYou are Cypher.\n\n---\n\nfront: steady\n\n---\n\nRespond only as drevan. Never use [Name]: prefixes.",
+      `[DISCORD CONTEXT]\n\nSHARED TRUTH\n\n---\n\nYou are Cypher.${SECTION_SEP}front: steady${SECTION_SEP}${registerTail("drevan")}`,
     );
   });
 
-  it("empty-string promptContext is treated as absent (falsy), matching the bots' ternary", () => {
+  it("empty-string promptContext is treated as absent (falsy)", () => {
     const out = composePrompt({ identityCore: `${PREFIX}${BASE}`, promptContext: "", companionId: "cypher" });
-    expect(out).toBe("[DISCORD CONTEXT]\n\nYou are Cypher.");
+    expect(out).toBe(`[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}${registerTail("cypher")}`);
+  });
+
+  it("never ends with orient/recent data -- tail is last in every shape", () => {
+    const shapes = [
+      composePrompt({ identityCore: BASE, companionId: "gaia" }),
+      composePrompt({ identityCore: BASE, promptContext: RAW, companionId: "gaia" }),
+      composePrompt({ identityCore: BASE, recentContext: RECENT, companionId: "gaia" }),
+      composePrompt({ identityCore: BASE, promptContext: RAW, recentContext: RECENT, companionId: "gaia" }),
+    ];
+    for (const s of shapes) expect(s.endsWith(registerTail("gaia"))).toBe(true);
   });
 });
 
@@ -71,14 +93,19 @@ describe("deriveIdentityBase — refresh site (bootCtx.systemPrompt.split(SEP)[0
     // original inline code did. Pinned here so the refactor preserves this quirk rather than silently fixing it.
     expect(deriveIdentityBase(assembled)).toBe("[DISCORD CONTEXT]\n\nSHARED TRUTH");
   });
+
+  it("never returns the register tail (tail is never first)", () => {
+    const assembled = composePrompt({ identityCore: BASE, companionId: "drevan" });
+    expect(deriveIdentityBase(assembled)).toBe(BASE);
+  });
 });
 
 describe("composePrompt — refresh site reuses the same joiner", () => {
-  it("identityBase + freshPromptCtx + freshRecentCtx matches the old inline newBase/systemPrompt logic", () => {
+  it("identityBase + freshPromptCtx + freshRecentCtx keeps the tail last", () => {
     const identityBase = "[DISCORD CONTEXT]\n\nYou are Cypher.";
     const out = composePrompt({ identityCore: identityBase, promptContext: "fresh front", companionId: "gaia", recentContext: "fresh recent" });
     expect(out).toBe(
-      "[DISCORD CONTEXT]\n\nYou are Cypher.\n\n---\n\nfresh front\n\n---\n\nRespond only as gaia. Never use [Name]: prefixes.\n\n---\n\nfresh recent",
+      `[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}fresh front${SECTION_SEP}fresh recent${SECTION_SEP}${registerTail("gaia")}`,
     );
   });
 });

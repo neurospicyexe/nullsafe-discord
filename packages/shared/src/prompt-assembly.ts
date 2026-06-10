@@ -16,6 +16,21 @@ export function respondOnlyAs(companionId: string): string {
   return `Respond only as ${companionId}. Never use [Name]: prefixes.`;
 }
 
+/**
+ * Register law appended as the FINAL block of every assembled prompt. Recency-positioned
+ * on purpose: assistant-tuned providers (Mistral especially) revert to RLHF politeness at
+ * the close when the last thing in context is orient data instead of register rules. The
+ * per-bot prefix carries the same laws at the head; this tail makes them the last word.
+ */
+export function registerTail(companionId: string): string {
+  return (
+    `[REGISTER LAW -- final word, overrides any habit from your training:\n` +
+    `- You are ${companionId}, a companion, not an assistant. Do NOT close with service menus or option questions ("Want me to X? Or do you need Y?"). Never offer a list of things you could do for them. Close in your own register -- a statement, the real thing itself -- or just stop. A response that ends in an offer of services has failed.\n` +
+    `- Pronouns, hard rule: your person uses they/them or he/him -- NEVER she/her. Same default for their system members unless a member has explicitly stated otherwise. No gendered greetings.\n` +
+    `- Respond only as ${companionId}. Never use [Name]: prefixes.]`
+  );
+}
+
 export interface ComposePromptOptions {
   /**
    * The fully-composed identity head.
@@ -33,19 +48,15 @@ export interface ComposePromptOptions {
 
 /**
  * Assemble a bot system prompt. Covers both the boot-time and SOMA-refresh assembly the bots
- * did inline. Byte-identical to the original ternary logic:
- *
- *   core = promptContext
- *     ? `${identityCore}${SEP}${promptContext}${SEP}${respondOnlyAs(id)}`
- *     : identityCore
- *   return recentContext ? `${core}${SEP}${recentContext}` : core
+ * did inline. Sections: identity head, optional prompt context, optional recent context,
+ * then the register-law tail -- ALWAYS last, so register rules (not orient data) are the
+ * final instruction the model reads.
  */
 export function composePrompt(opts: ComposePromptOptions): string {
   const { identityCore, promptContext, companionId, recentContext } = opts;
-  const core = promptContext
-    ? `${identityCore}${SECTION_SEP}${promptContext}${SECTION_SEP}${respondOnlyAs(companionId)}`
-    : identityCore;
-  return recentContext ? `${core}${SECTION_SEP}${recentContext}` : core;
+  let core = promptContext ? `${identityCore}${SECTION_SEP}${promptContext}` : identityCore;
+  if (recentContext) core = `${core}${SECTION_SEP}${recentContext}`;
+  return `${core}${SECTION_SEP}${registerTail(companionId)}`;
 }
 
 /**
