@@ -1,6 +1,6 @@
 import { prompt } from "../deepseek.js";
-import { createSeed, appendLog, getRecentSessionNotes, getRecentFeelings, getRecentConclusions } from "../halseth-client.js";
-import { loadIdentity } from "../identity-loader.js";
+import { createSeed, appendLog, getRecentSessionNotes, getRecentFeelings, getRecentConclusions, getValence } from "../halseth-client.js";
+import { loadIdentityRemote } from "../identity-loader.js";
 import { HALSETH_URL, HALSETH_SECRET, COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import { LibrarianClient } from "@nullsafe/shared";
 import { decideSeedSource } from "./seed.js";
@@ -22,18 +22,19 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
   const runId = `seedgen:${companionId}:${Date.now()}`;
   console.log(`[${companionId}/seed-gen] starting weekly generation`);
 
-  const identityText = loadIdentity(companionId);
+  const identityText = await loadIdentityRemote(companionId);
   const name = COMPANION_NAMES[companionId];
 
   // Load session context + active patterns in parallel.
   // orient() is only needed for active_patterns (negative signal).
   // Session notes + feelings + conclusions are the positive seed source.
   const librarian = new LibrarianClient({ url: HALSETH_URL, secret: HALSETH_SECRET, companionId });
-  const [orient, sessionNotes, feelings, conclusions] = await Promise.all([
+  const [orient, sessionNotes, feelings, conclusions, valence] = await Promise.all([
     librarian.botOrient().catch(() => null),
     getRecentSessionNotes(companionId, 8),
     getRecentFeelings(companionId, 8),
     getRecentConclusions(companionId),
+    getValence(companionId, 60),
   ]);
 
   const activePatterns = orient?.active_patterns ?? [];
@@ -85,10 +86,23 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     ? existingSeeds.map(s => `- ${s.slice(0, 80)}`).join("\n")
     : "(none queued)";
 
+  // Valence feedback loop: ratification outcomes bias future seeds.
+  // Accepted = Raziel confirmed it as canon (lean toward more like this).
+  // Declined = named as drift (do not produce more of it).
+  const valenceText = valence && (valence.accepted.length > 0 || valence.declined.length > 0)
+    ? (valence.accepted.length > 0
+        ? `What Raziel ratified as canon recently (lean toward more like this):\n${valence.accepted.map(a => `- ${a.excerpt}`).join("\n").slice(0, 400)}\n`
+        : "") +
+      (valence.declined.length > 0
+        ? `What was declined as drift (do NOT produce more of this):\n${valence.declined.map(d => `- ${d.excerpt}`).join("\n").slice(0, 300)}\n`
+        : "") + "\n"
+    : "";
+
   const userMessage =
     `You are ${name}. Here is your full identity:\n\n${identityText.slice(0, 3000)}\n\n` +
     `${contextBlock}\n\n` +
     avoidText +
+    valenceText +
     `Seeds already queued (do not duplicate these):\n${existingSeedsText}\n\n` +
     `Generate 6 seeds for your autonomous time -- genuinely fit your documented lanes and interests. ` +
     `Not everything needs to be research. Mix freely: something you're curious about, something that delights you, ` +

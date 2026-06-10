@@ -1,5 +1,5 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, setSetting } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
 import type { PipelineContext, Evidence } from "../types.js";
@@ -93,10 +93,17 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `An empty pattern is acceptable but should be the exception, not the default. Most runs deepen something prior even if they don't surface something fresh.\n\n` +
     `${strengthRubric}\n` +
     `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
+    `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
+    `only Raziel can answer, include it in "question_for_raziel" (else null). Also state how you want your next ` +
+    `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
+    `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
+    `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
     `Respond with ONLY valid JSON:\n` +
     `{\n` +
     `  "reflection": "2-3 sentences",\n` +
     `  "new_seeds": ["follow-up topic 1"],\n` +
+    `  "question_for_raziel": null,\n` +
+    `  "next_session": {"pace": "normal", "focus": null},\n` +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
     `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
@@ -121,6 +128,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     let parsed: {
       reflection?: string;
       new_seeds?: string[];
+      question_for_raziel?: string | null;
+      next_session?: { pace?: string; focus?: string | null } | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
       pattern?: {
@@ -189,6 +198,29 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       );
     } else if (parsed.pattern?.note) {
       await appendLog(ctx.runId, "reflect:no-pattern", parsed.pattern.note.slice(0, 120));
+    }
+
+    // Mutuality: question for Raziel -- surfaces in the next session orient.
+    // Non-fatal; question cap (409) is swallowed in the client.
+    const question = typeof parsed.question_for_raziel === "string" ? parsed.question_for_raziel.trim() : "";
+    if (question.length >= 12) {
+      await postQuestion(ctx.companionId, question.slice(0, 600), ctx.seed?.content?.slice(0, 200))
+        .then(() => appendLog(ctx.runId, "reflect:question", question.slice(0, 100)))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] question write failed:`, e));
+    }
+
+    // Self-programmed pacing: the pulse scheduler reads this before deciding
+    // whether to fire an extra session. Honored once, then reset to normal.
+    const pace = parsed.next_session?.pace;
+    if (pace === "eager" || pace === "rest" || (pace === "normal" && parsed.next_session?.focus)) {
+      const program = {
+        pace,
+        focus: typeof parsed.next_session?.focus === "string" ? parsed.next_session.focus.slice(0, 300) : null,
+        set_at: new Date().toISOString(),
+      };
+      await setSetting(ctx.companionId, "autonomous_program", JSON.stringify(program))
+        .then(() => appendLog(ctx.runId, "reflect:program", `pace=${program.pace} focus=${program.focus ? "yes" : "no"}`))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] program write failed:`, e));
     }
 
     // Thread lifecycle

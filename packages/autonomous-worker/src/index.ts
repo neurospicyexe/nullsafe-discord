@@ -23,14 +23,28 @@
 import { startScheduler } from "./scheduler.js";
 import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
+import { runDialectic } from "./dialectic.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
 const onceIdx = args.indexOf("--once");
 const signalAuditIdx = args.indexOf("--signal-audit");
+const dialecticIdx = args.indexOf("--dialectic");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (signalAuditIdx !== -1) {
+if (dialecticIdx !== -1) {
+  // One-shot tension dialectic mode
+  console.log("[autonomous-worker] dialectic mode");
+  runDialectic()
+    .then(outcomes => {
+      console.log(`[autonomous-worker] dialectic complete: ${outcomes.length} tension(s) debated`);
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] dialectic failed:", e);
+      process.exit(1);
+    });
+} else if (signalAuditIdx !== -1) {
   // One-shot signal audit mode
   const companions: CompanionId[] = companionArg ? [companionArg] : ["cypher", "drevan", "gaia"];
   console.log(`[autonomous-worker] signal-audit mode: ${companions.join(", ")}`);

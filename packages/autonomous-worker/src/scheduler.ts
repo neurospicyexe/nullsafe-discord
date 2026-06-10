@@ -7,13 +7,15 @@ import { runPipeline } from "./pipeline.js";
 import { runCompress } from "./phases/compress.js";
 import { runSeedGeneration } from "./phases/seed-gen.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS } from "./config.js";
+import { pulseCheck } from "./pulse.js";
+import { runDialectic } from "./dialectic.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
 const running = new Set<CompanionId>();
 
-async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<void> {
+export async function fireRun(companionId: CompanionId, redis: Redis | null): Promise<void> {
   if (running.has(companionId)) {
     console.log(`[scheduler/${companionId}] already running, skipping`);
     return;
@@ -123,6 +125,28 @@ export function startScheduler(): void {
         );
       }
     })();
+  });
+
+  // SOMA pulse -- variable cadence on top of the anchor crons. Sequential with
+  // a stagger so companions never race for the floor on the same tick.
+  // fireRun is passed as the callback, so idle check + floor lock + overlap
+  // guard apply to pulse-triggered runs exactly as they do to scheduled ones.
+  console.log(`[scheduler] pulse check → cron "${PULSE_CHECK_CRON}"`);
+  cron.schedule(PULSE_CHECK_CRON, () => {
+    (async () => {
+      for (const companionId of COMPANIONS) {
+        await pulseCheck(companionId, id => fireRun(id, redis)).catch(e =>
+          console.error(`[scheduler/${companionId}] pulse check failed:`, e)
+        );
+        await new Promise(r => setTimeout(r, 90_000));
+      }
+    })();
+  });
+
+  // Weekly tension dialectic -- Wednesday 4AM, staggered from the 2AM signal audit.
+  console.log(`[scheduler] dialectic → cron "${DIALECTIC_CRON}"`);
+  cron.schedule(DIALECTIC_CRON, () => {
+    runDialectic().catch(e => console.error("[scheduler] dialectic failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

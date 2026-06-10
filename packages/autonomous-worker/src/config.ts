@@ -106,6 +106,19 @@ export const SEED_THIN_THRESHOLD = 3;
 // a limit=8 fetch without a date filter would misclassify stale rows as recent activity.
 export const SEED_FRESHNESS_WINDOW_MS = 7 * 24 * 3600 * 1000; // 7 days
 
+// SOMA pulse: between anchor crons, a pulse check may trigger an extra run when the
+// companion's primary float (acuity/heat/stillness) runs high, or honor the
+// self-programmed pace from the reflect phase ("eager" | "normal" | "rest").
+export const PULSE_CHECK_CRON = process.env["PULSE_CHECK_CRON"] ?? "30 */4 * * *";
+export const PULSE_FLOAT_THRESHOLD = parseFloat(process.env["PULSE_FLOAT_THRESHOLD"] ?? "0.7");
+export const PULSE_MIN_GAP_MS = parseInt(process.env["PULSE_MIN_GAP_MS"] ?? String(20 * 3600 * 1000), 10);
+export const PULSE_EAGER_GAP_MS = parseInt(process.env["PULSE_EAGER_GAP_MS"] ?? String(12 * 3600 * 1000), 10);
+export const PULSE_MAX_RUNS_PER_DAY = parseInt(process.env["PULSE_MAX_RUNS_PER_DAY"] ?? "2", 10);
+
+// Weekly tension dialectic -- Wednesday 4AM (staggered from Wed 2AM signal audit).
+// Three lenses on each simmering tension, then an honest synthesis.
+export const DIALECTIC_CRON = process.env["DIALECTIC_CRON"] ?? "0 4 * * 3";
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

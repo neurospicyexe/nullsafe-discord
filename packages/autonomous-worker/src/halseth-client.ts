@@ -462,3 +462,132 @@ export async function archiveNotes(
 ): Promise<{ archived: number; skipped: string }> {
   return hFetch("/mind/notes/archive", "POST", { agent_id: agentId, notes, summary }) as Promise<{ archived: number; skipped: string }>;
 }
+
+// ---------------------------------------------------------------------------
+// Identity Kernel -- canonical identity pulled from Halseth (substrate consistency)
+// ---------------------------------------------------------------------------
+
+export async function getKernelBundle(companionId: string): Promise<string | null> {
+  try {
+    const r = await hFetch(`/identity/kernel/${companionId}/bundle`) as { bundle?: string };
+    return r.bundle && r.bundle.length > 200 ? r.bundle : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Valence -- ratification outcomes feeding seed generation
+// ---------------------------------------------------------------------------
+
+export interface ValenceItem { tags: string | null; excerpt: string; entry_type: string }
+export interface Valence { accepted: ValenceItem[]; declined: ValenceItem[] }
+
+export async function getValence(companionId: string, days = 60): Promise<Valence | null> {
+  try {
+    const r = await hFetch(`/mind/growth/valence/${companionId}?days=${days}`) as { valence?: Valence };
+    return r.valence ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Questions -- companions ask Raziel, not just report
+// ---------------------------------------------------------------------------
+
+export async function postQuestion(companionId: string, question: string, context?: string): Promise<void> {
+  try {
+    await hFetch("/mind/questions", "POST", {
+      companion_id: companionId,
+      question,
+      ...(context ? { context } : {}),
+      source: "autonomous",
+    });
+  } catch (e) {
+    // 409 = open-question cap reached; non-fatal by design
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!msg.includes("409")) throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Settings -- self-programmed session pacing lives in companion_settings KV
+// ---------------------------------------------------------------------------
+
+export async function getSetting(companionId: string, key: string): Promise<string | null> {
+  try {
+    const r = await hFetch(`/companion/settings/${companionId}`) as Record<string, string>;
+    return r[key] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setSetting(companionId: string, key: string, value: string): Promise<void> {
+  await hFetch(`/companion/settings/${companionId}`, "POST", { key, value });
+}
+
+// ---------------------------------------------------------------------------
+// SOMA floats -- light state read for the pulse scheduler
+// ---------------------------------------------------------------------------
+
+export interface SomaFloats {
+  soma_float_1: number | null;
+  soma_float_2: number | null;
+  soma_float_3: number | null;
+  float_1_label: string | null;
+  float_2_label: string | null;
+  float_3_label: string | null;
+  current_mood: string | null;
+}
+
+export async function getSomaFloats(companionId: string): Promise<SomaFloats | null> {
+  try {
+    const r = await hFetch(`/mind/soma/${companionId}`) as { soma?: SomaFloats };
+    return r.soma ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tensions -- weekly dialectic reads simmering tensions, writes back outcomes
+// ---------------------------------------------------------------------------
+
+export interface Tension {
+  id: string;
+  companion_id: string;
+  tension_text: string;
+  status: string;
+  first_noted_at: string;
+  notes: string | null;
+}
+
+export async function getSimmeringTensions(companionId: string): Promise<Tension[]> {
+  try {
+    const r = await hFetch(`/companion-growth/tensions/${companionId}?status=simmering`) as { tensions: Tension[] };
+    return r.tensions ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function updateTension(id: string, fields: { status?: string; notes?: string }): Promise<void> {
+  await hFetch(`/companion-growth/tensions/${id}`, "PATCH", fields);
+}
+
+// ---------------------------------------------------------------------------
+// Runs read -- pulse scheduler gap/cap checks
+// ---------------------------------------------------------------------------
+
+export interface RunSummary { id: string; status: string; started_at?: string; created_at?: string; completed_at?: string | null }
+
+export async function getRecentRuns(companionId: string, limit = 5): Promise<RunSummary[]> {
+  try {
+    const r = await hFetch(`/mind/autonomy/runs/${companionId}?limit=${limit}`) as { runs: RunSummary[] };
+    return r.runs ?? [];
+  } catch {
+    return [];
+  }
+}

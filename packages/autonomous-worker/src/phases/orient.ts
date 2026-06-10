@@ -1,5 +1,5 @@
 import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
-import { loadIdentity } from "../identity-loader.js";
+import { loadIdentityRemote } from "../identity-loader.js";
 import {
   appendLog, getActiveThreads, getPeerActivity, getRecentWmNotes,
   getRecentSessionNotes, getRecentFeelings, getRecentConclusions,
@@ -17,7 +17,7 @@ import type { PipelineContext } from "../types.js";
 export async function runOrient(ctx: PipelineContext): Promise<void> {
   await appendLog(ctx.runId, "orient:start");
 
-  ctx.identityText = loadIdentity(ctx.companionId);
+  ctx.identityText = await loadIdentityRemote(ctx.companionId);
 
   const librarian = new LibrarianClient({
     url: HALSETH_URL,
