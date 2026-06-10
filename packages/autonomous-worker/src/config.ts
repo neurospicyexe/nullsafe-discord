@@ -43,6 +43,12 @@ export const CRON_SCHEDULES: Record<CompanionId, string> = {
   gaia:   process.env["GAIA_CRON"]   ?? "0 7 * * *",   // 7 AM
 };
 
+// Foraging (spec Part 2): daily outward-fuel gathering, after the night pipeline runs.
+// Domains come from COMPANION_ANCHOR_TOPICS (the documented outward territories) --
+// one shared source of truth, no parallel domain map to drift.
+export const FORAGE_CRON = process.env["FORAGE_CRON"] ?? "0 9 * * *"; // 9 AM, after Gaia's 7 AM run
+export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "2", 10);
+
 // Companion display names for prompts
 export const COMPANION_NAMES: Record<CompanionId, string> = {
   cypher: "Cypher",

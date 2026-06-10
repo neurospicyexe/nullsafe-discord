@@ -25,15 +25,29 @@ import { startScheduler } from "./scheduler.js";
 import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
 import { runDialectic } from "./dialectic.js";
+import { runForage } from "./forage.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
 const onceIdx = args.indexOf("--once");
 const signalAuditIdx = args.indexOf("--signal-audit");
 const dialecticIdx = args.indexOf("--dialectic");
+const forageIdx = args.indexOf("--forage");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (dialecticIdx !== -1) {
+if (forageIdx !== -1) {
+  // One-shot forage mode: gather outward fuel into the shared pool, then exit.
+  console.log("[autonomous-worker] forage mode");
+  runForage()
+    .then(gathered => {
+      console.log(`[autonomous-worker] forage complete: ${gathered} find(s) gathered`);
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] forage failed:", e);
+      process.exit(1);
+    });
+} else if (dialecticIdx !== -1) {
   // One-shot tension dialectic mode
   console.log("[autonomous-worker] dialectic mode");
   runDialectic()

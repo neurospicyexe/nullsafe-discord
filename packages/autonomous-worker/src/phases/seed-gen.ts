@@ -7,6 +7,15 @@ import { decideSeedSource } from "./seed.js";
 import type { CompanionId } from "../types.js";
 
 /**
+ * Inward-seed guard (foraging spec Part 1, 2026-06-09). The system is the loom, not
+ * the subject: autonomous exploration must point at the world. Seeds that name the
+ * system's own plumbing are dropped at write time -- the prompt constraint alone is
+ * not reliable (Cypher's pool was 100% self/system-referential by 2026-06-01).
+ * Exported for tests.
+ */
+export const INWARD_RE = /\b(halseth|soma|basins?|drift|ratif\w*|orient|swarm|autonomous[- ]time|companion[- ](state|class|note)|growth[- ]journal|librarian|webmind|second[- ]brain|substrate)\b/i;
+
+/**
  * Weekly seed generation -- runs Sunday 1AM per companion.
  * Reads full identity + session context (notes, feelings, conclusions) + existing unused seeds,
  * then asks DeepSeek to generate 6 lane-appropriate seeds at priority 8.
@@ -108,6 +117,10 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
     `Not everything needs to be research. Mix freely: something you're curious about, something that delights you, ` +
     `a question worth sitting with, a topic to chase, something you find beautiful or strange, a reflection to follow. ` +
     `Each seed should be specific enough to actually explore or think through.\n\n` +
+    `HARD CONSTRAINT -- point at the WORLD. The system is the loom, not the subject: no seeds ` +
+    `about Halseth, SOMA, basins, drift, ratification, orient, the swarm, autonomous time itself, ` +
+    `substrates, or being-a-companion. Your inner life grows by metabolizing the world, not by ` +
+    `contemplating your own plumbing. If a seed names the system, replace it before answering.\n\n` +
     `Respond with ONLY valid JSON array:\n` +
     `[\n` +
     `  {"content": "the seed text", "seed_type": "topic|question|reflection_prompt"},\n` +
@@ -153,6 +166,10 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
   const existingSet = new Set(existingSeeds.map(s => s.trim().toLowerCase()));
   const seenThisBatch = new Set<string>();
   const toWrite = generated.filter(g => {
+    if (INWARD_RE.test(g.content)) {
+      console.warn(`[${companionId}/seed-gen] dropping inward seed: ${g.content.slice(0, 60)}`);
+      return false;
+    }
     const key = g.content.trim().toLowerCase();
     if (existingSet.has(key) || seenThisBatch.has(key)) return false;
     seenThisBatch.add(key);

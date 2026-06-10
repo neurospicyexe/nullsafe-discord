@@ -83,6 +83,20 @@ export async function createSeed(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Forage pool (migration 0068)
+// ---------------------------------------------------------------------------
+
+export async function postForageFind(input: {
+  companion_id: string | null;
+  domain: string;
+  title: string;
+  source_url?: string | null;
+  summary: string;
+}): Promise<{ deduped?: boolean }> {
+  return await hFetch("/mind/forage", "POST", input) as { deduped?: boolean };
+}
+
 export async function createClaim(
   companionId: string,
   content: string,

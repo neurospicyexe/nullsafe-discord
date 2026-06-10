@@ -9,7 +9,8 @@ import { runSeedGeneration } from "./phases/seed-gen.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
 import { pulseCheck } from "./pulse.js";
 import { runDialectic } from "./dialectic.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON } from "./config.js";
+import { runForage } from "./forage.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -147,6 +148,14 @@ export function startScheduler(): void {
   console.log(`[scheduler] dialectic → cron "${DIALECTIC_CRON}"`);
   cron.schedule(DIALECTIC_CRON, () => {
     runDialectic().catch(e => console.error("[scheduler] dialectic failed:", e));
+  });
+
+  // Daily forage -- gathers outward fuel into the shared pool. Deliberately after the
+  // night pipeline runs so fresh finds land before human-present sessions, not during.
+  // No floor lock needed: foraging writes to Halseth only, never speaks in Discord.
+  console.log(`[scheduler] forage → cron "${FORAGE_CRON}"`);
+  cron.schedule(FORAGE_CRON, () => {
+    runForage().catch(e => console.error("[scheduler] forage failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");
