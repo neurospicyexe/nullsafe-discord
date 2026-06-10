@@ -30,7 +30,7 @@ describe("createAdapter fallback chain (Finding 4b)", () => {
     // DeepSeek (primary) 503s on both attempts; Kimi (moonshot) then succeeds.
     const mockFetch = jest.fn(async (url: string) => {
       if (url.includes("deepseek.com")) return { ok: false, status: 503 } as any;
-      if (url.includes("moonshot.cn")) {
+      if (url.includes("moonshot.ai")) {
         return {
           ok: true,
           json: async () => ({ choices: [{ message: { content: "hello from kimi" } }] }),

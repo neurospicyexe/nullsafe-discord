@@ -242,7 +242,8 @@ class KimiAdapter implements InferenceAdapter {
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
     try {
-      const res = await this.fetchFn("https://api.moonshot.cn/v1/chat/completions", {
+      // .ai is the international platform (platform.moonshot.ai keys); .cn keys 401 here and vice versa.
+      const res = await this.fetchFn("https://api.moonshot.ai/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
