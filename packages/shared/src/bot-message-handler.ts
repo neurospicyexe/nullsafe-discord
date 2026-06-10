@@ -480,6 +480,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           authorIsCompanion: isCompanionPost,
           depth: chainDepth,
           addressedCompanion,
+          voiceInput,
         },
       );
       const typingInterval = setInterval(() => { ch.sendTyping().catch(() => {}); }, 4_000);

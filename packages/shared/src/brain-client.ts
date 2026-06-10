@@ -26,6 +26,7 @@ export interface ThoughtPacketMetadata {
   front_member?: string | null;
   guild_id?: string;
   addressed_companion?: string;  // companion directly named in message ("Dre" → "drevan")
+  voice_input?: boolean;         // message arrived as voice (STT) -- Brain routing must not go all-silent
 }
 
 export interface ThoughtPacket {
@@ -69,6 +70,7 @@ export function buildThoughtPacket(
     authorIsCompanion?: boolean;
     depth?: number;
     addressedCompanion?: string;
+    voiceInput?: boolean;
   },
 ): ThoughtPacket {
   return {
@@ -93,6 +95,7 @@ export function buildThoughtPacket(
       front_member: opts?.frontMember,
       guild_id: opts?.guildId,
       addressed_companion: opts?.addressedCompanion,
+      ...(opts?.voiceInput ? { voice_input: true } : {}),
     },
   };
 }
