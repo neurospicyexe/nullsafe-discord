@@ -37,6 +37,7 @@ import {
   reportVoiceScore, type VoiceCompanionId,
   consumeTripwires, tripwireBlock,
   runDistillation,
+  isListenEnabled, runListenPipeline, reactToExperience,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
@@ -92,6 +93,7 @@ export interface MessageHandlerDeps {
   MODEL_SWITCH_TRIGGER: RegExp;
   MODEL_SWITCH_LIST_INTRO: string;
   MODEL_SWITCH_SUCCESS: (label: string) => string;
+  LISTEN_TRIGGER: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
   IN_CHARACTER_FALLBACK: string;
@@ -114,6 +116,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
+    LISTEN_TRIGGER,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -243,6 +246,41 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           librarian.setSetting("active_model", arg));
         await (message.channel as TextChannel).send(MODEL_SWITCH_SUCCESS(entry.label));
         return;
+      }
+    }
+
+    // Owner listen command: <prefix>: listen <url>  (shared-experience Phase 1).
+    // Downloads + analyzes on this box, then FALLS THROUGH to the normal reply
+    // path with a [HEARD] block appended -- so the in-voice response rides the
+    // full context assembly (Brain swarm or direct), not a side channel.
+    let pendingMediaId: string | null = null;
+    if (attribution.isOwner) {
+      const listenMatch = effectiveContent.match(LISTEN_TRIGGER);
+      if (listenMatch) {
+        if (!isListenEnabled()) {
+          await (message.channel as TextChannel).send("listening pipeline isn't enabled on this box (MEDIA_LISTEN_ENABLED).");
+          return;
+        }
+        const mediaUrl = listenMatch[1]!.trim().replace(/^<|>$/g, ""); // Discord <url> unwrap
+        if (!/^https?:\/\//i.test(mediaUrl)) {
+          await (message.channel as TextChannel).send("give me an http(s) link to listen to.");
+          return;
+        }
+        await (message.channel as TextChannel).send("\u{1F3A7} listening...");
+        try {
+          const listen = await runListenPipeline(mediaUrl, {
+            companionId: COMPANION_ID,
+            sharedBy: author,
+            frontState: pkMemberName ?? null,
+          });
+          pendingMediaId = listen.experienceId;
+          effectiveContent = `${effectiveContent.trim()}\n\n[HEARD -- the track was downloaded and analyzed; you actually listened to it. Respond to the music itself.]\n${listen.heardBlock}`;
+          // fall through to the normal flow below -- no return.
+        } catch (err) {
+          console.error(`[${COMPANION_ID}] listen pipeline failed:`, err);
+          await (message.channel as TextChannel).send(`couldn't hear that one: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+          return;
+        }
       }
     }
 
@@ -609,6 +647,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // Voice drift telemetry (0070): pattern-score this reply against lane doctrine.
       // Fire-and-forget; clean replies are sampled at 10%, violations always land.
       reportVoiceScore(COMPANION_ID as VoiceCompanionId, response, message.channelId);
+      // Shared-experience: this reply IS the companion's reaction to the track.
+      if (pendingMediaId) {
+        const mediaId = pendingMediaId;
+        writeQueue.fireAndForget(`media:react:${COMPANION_ID}:${mediaId}`, () =>
+          reactToExperience(mediaId, COMPANION_ID, response));
+      }
     }
 
     if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});

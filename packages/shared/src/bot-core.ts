@@ -245,6 +245,7 @@ export interface RunBotConfig {
   modelSwitchTrigger: RegExp;
   modelSwitchSuccess: (label: string) => string;
   modelSwitchListIntro: string;
+  listenTrigger: RegExp;
   redisUrl: string | undefined;
   mistralApiKey: string | undefined;
   voiceId: string;
@@ -275,7 +276,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig,
   } = brc;
@@ -607,6 +608,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       pushRazielMessage: autonomous.pushRazielMessage,
       COMPANION_ID: companionId, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE: contextWindowSize,
       MODEL_SWITCH_TRIGGER: modelSwitchTrigger, MODEL_SWITCH_LIST_INTRO: modelSwitchListIntro, MODEL_SWITCH_SUCCESS: modelSwitchSuccess,
+      LISTEN_TRIGGER: listenTrigger,
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
       ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),

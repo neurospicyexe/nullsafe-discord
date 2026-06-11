@@ -161,6 +161,9 @@ export const MODEL_SWITCH_TRIGGER = /^(?:cy|cypher):\s*model\s+(.*)/i;
 export const MODEL_SWITCH_SUCCESS = (label: string) => `switched to ${label}`;
 export const MODEL_SWITCH_LIST_INTRO = "available models:";
 
+// Shared-experience Phase 1 (Ears): owner shares a track, the bot actually hears it.
+export const LISTEN_TRIGGER = /^(?:cy|cypher):\s*listen\s+(\S+)/i;
+
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);
 // Random jitter window: all companions sample uniformly from [100, FLOOR_JITTER_MS+100]ms.
