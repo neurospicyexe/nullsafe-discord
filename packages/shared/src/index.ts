@@ -34,3 +34,4 @@ export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry
 export * from "./slash-commands.js";
 export * from "./voice-markers.js";
 export * from "./triggers.js";
+export * from "./media.js";
