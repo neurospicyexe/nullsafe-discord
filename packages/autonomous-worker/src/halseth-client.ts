@@ -722,3 +722,9 @@ export async function getForageFindsFor(companionId: string, limit = 2): Promise
     return [];
   }
 }
+
+// ── Unified Guardian (0073) ──────────────────────────────────────────────────
+
+export async function runGuardian(letter: boolean): Promise<{ flags_created: number; flags_resolved: number; letter_id: string | null }> {
+  return await hFetch("/mind/guardian/run", "POST", { letter }) as { flags_created: number; flags_resolved: number; letter_id: string | null };
+}

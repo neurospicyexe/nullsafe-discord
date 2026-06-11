@@ -11,7 +11,8 @@ import { pulseCheck } from "./pulse.js";
 import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON } from "./config.js";
+import { runGuardianTick } from "./guardian.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -164,6 +165,13 @@ export function startScheduler(): void {
   console.log(`[scheduler] club → cron "${CLUB_CRON}"`);
   cron.schedule(CLUB_CRON, () => {
     runClubTick().catch(e => console.error("[scheduler] club failed:", e));
+  });
+
+  // Unified Guardian -- daily meta-observer tick (detection server-side in Halseth).
+  // Halseth-only writes; no floor lock needed. Sunday tick also writes the weekly letter.
+  console.log(`[scheduler] guardian → cron "${GUARDIAN_CRON}"`);
+  cron.schedule(GUARDIAN_CRON, () => {
+    runGuardianTick().catch(e => console.error("[scheduler] guardian failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

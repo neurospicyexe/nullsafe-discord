@@ -132,6 +132,12 @@ export const CLUB_CRON = process.env["CLUB_CRON"] ?? "0 18 * * *";
 export const CLUB_GATHER_DAYS = parseFloat(process.env["CLUB_GATHER_DAYS"] ?? "2");
 export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4");
 
+// Unified Guardian (0073) -- daily 8AM tick (after the night pipeline, before the
+// 9AM forage). Detection runs server-side in Halseth; this is just the trigger.
+// Letter day 0 = Sunday: weekly meta-commentary to Raziel rides that day's tick.
+export const GUARDIAN_CRON = process.env["GUARDIAN_CRON"] ?? "0 8 * * *";
+export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?? "0", 10);
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

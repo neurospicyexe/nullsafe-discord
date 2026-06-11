@@ -27,6 +27,7 @@ import { runSignalAudit } from "./phases/signal-audit.js";
 import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
+import { runGuardianTick } from "./guardian.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -35,9 +36,22 @@ const signalAuditIdx = args.indexOf("--signal-audit");
 const dialecticIdx = args.indexOf("--dialectic");
 const forageIdx = args.indexOf("--forage");
 const clubIdx = args.indexOf("--club");
+const guardianIdx = args.indexOf("--guardian");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (clubIdx !== -1) {
+if (guardianIdx !== -1) {
+  // One-shot guardian tick: run detectors server-side, then exit.
+  console.log("[autonomous-worker] guardian mode");
+  runGuardianTick()
+    .then(() => {
+      console.log("[autonomous-worker] guardian tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] guardian tick failed:", e);
+      process.exit(1);
+    });
+} else if (clubIdx !== -1) {
   // One-shot club tick: advance the current round's phase, then exit.
   console.log("[autonomous-worker] club mode");
   runClubTick()
