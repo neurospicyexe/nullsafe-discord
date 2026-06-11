@@ -160,8 +160,12 @@ export async function runListenPipeline(
   try {
     // 1. Download + metadata in one pass. --print-json emits the info dict on stdout.
     let info: Record<string, unknown>;
+    // YTDLP_EXTRA_ARGS: space-separated extras, e.g. "--js-runtimes node:/path/to/node"
+    // (YouTube EJS extraction wants a JS runtime; the VPS has nvm node, not deno).
+    const extraArgs = (process.env["YTDLP_EXTRA_ARGS"] ?? "").split(" ").filter(Boolean);
     try {
       const { stdout } = await execFileP(YTDLP, [
+        ...extraArgs,
         "--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "mp3",
         "--audio-quality", "5", "--print-json", "--no-progress",
         "-o", path.join(jobDir, "track.%(ext)s"), url,
