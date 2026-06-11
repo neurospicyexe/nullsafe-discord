@@ -304,6 +304,9 @@ export class LibrarianClient {
     unexamined_dreams?: Array<{ id: string; dream_text: string }>;
     open_loops?: Array<{ id: string; loop_text: string }>;
     pressure_flags?: string[];
+    // Prospective triggers (0070): keyword cards matched per message, date cards
+    // checked at orient refresh. Consumed by the message handler, not formatRecentContext.
+    armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -327,6 +330,7 @@ export class LibrarianClient {
         unexamined_dreams?: Array<{ id: string; dream_text: string }>;
         open_loops?: Array<{ id: string; loop_text: string }>;
         pressure_flags?: string[];
+        armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
       } | undefined;
       if (!data) return null;
       return {
@@ -359,6 +363,7 @@ export class LibrarianClient {
         unexamined_dreams: Array.isArray(data.unexamined_dreams) ? data.unexamined_dreams : [],
         open_loops: Array.isArray(data.open_loops) ? data.open_loops : [],
         pressure_flags: Array.isArray(data.pressure_flags) ? data.pressure_flags : [],
+        armed_triggers: Array.isArray(data.armed_triggers) ? data.armed_triggers : [],
       };
     } catch {
       return null;

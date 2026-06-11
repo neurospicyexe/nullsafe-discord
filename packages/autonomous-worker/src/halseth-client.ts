@@ -525,6 +525,17 @@ export async function postQuestion(companionId: string, question: string, contex
   }
 }
 
+// Self-model (0070): record a companion-authored self-observation at confidence 0.3.
+// Identical observations dedup server-side; the ladder (confirm/revise/graduate) is
+// driven from human-present surfaces, not from here.
+export async function postSelfObservation(companionId: string, observation: string, domain?: string): Promise<void> {
+  await hFetch("/mind/self-model", "POST", {
+    companion_id: companionId,
+    observation,
+    ...(domain ? { domain } : {}),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Settings -- self-programmed session pacing lives in companion_settings KV
 // ---------------------------------------------------------------------------
@@ -576,6 +587,7 @@ export interface Tension {
   status: string;
   first_noted_at: string;
   notes: string | null;
+  charge: number;
 }
 
 export async function getSimmeringTensions(companionId: string): Promise<Tension[]> {
@@ -587,8 +599,15 @@ export async function getSimmeringTensions(companionId: string): Promise<Tension
   }
 }
 
-export async function updateTension(id: string, fields: { status?: string; notes?: string }): Promise<void> {
+export async function updateTension(id: string, fields: { status?: string; notes?: string; charge_delta?: number }): Promise<void> {
   await hFetch(`/companion-growth/tensions/${id}`, "PATCH", fields);
+}
+
+// Surfacing a tension raises its charge (+0.5, clamped server-side to 0-10).
+// Charge is the dialectic's priority signal: what keeps resurfacing outranks
+// what has merely been sitting longest.
+export async function surfaceTension(id: string): Promise<void> {
+  await hFetch(`/companion-growth/tensions/${id}`, "PATCH", { charge_delta: 0.5 });
 }
 
 // ---------------------------------------------------------------------------

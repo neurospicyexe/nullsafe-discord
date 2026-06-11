@@ -12,6 +12,7 @@
 // bot-side via botDir — those paths resolve against the bot's own module location.
 
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
+import { setArmedTriggers } from "./triggers.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
@@ -101,6 +102,7 @@ export async function bootSession(opts: BootSessionOptions): Promise<BootSession
     try {
       const orient = await librarian.botOrient();
       recentContext = formatRecentContext(orient);
+      setArmedTriggers(companionId, orient?.armed_triggers ?? []);
       if (recentContext) console.log(`${tag} botOrient: ${recentContext.length} chars loaded`);
     } catch { console.warn(`${tag} botOrient failed at boot, starting cold`); }
 
@@ -173,6 +175,9 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
       : recentContextRef.value;
 
     recentContextRef.value = freshRecentCtx;
+    if (orientResult.status === "fulfilled") {
+      setArmedTriggers(companionId, orientResult.value?.armed_triggers ?? []);
+    }
 
     bootCtx.systemPrompt = composePrompt({ identityCore: identityBase, promptContext: freshPromptCtx ?? undefined, companionId, recentContext: freshRecentCtx });
 

@@ -34,6 +34,8 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
+  reportVoiceScore, type VoiceCompanionId,
+  consumeTripwires, tripwireBlock,
   runDistillation,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -380,6 +382,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Prospective tripwires (0070): armed keyword cards matched against this human
+    // message (+ any date cards whose moment arrived). Consuming fires them in
+    // Halseth -- a tripwire surfaces exactly once, in the reply where it matched.
+    if (!senderCtx.isCompanionBot) {
+      const tripped = consumeTripwires(COMPANION_ID, effectiveContent);
+      if (tripped.length > 0) {
+        contextPrompt += tripwireBlock(tripped);
+        console.log(`[${COMPANION_ID}] tripwire fired: ${tripped.map(t => t.id).join(", ")}`);
+      }
+    }
+
     // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
     // Skip for short messages (< 20 chars) -- searches on "ok" or "lol" produce noise.
     // Continuity: recent prior user turns (current msg already appended, so excluded)
@@ -593,6 +606,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         channel_id: message.channelId,
         message_id: sent[0]!.id,
       });
+      // Voice drift telemetry (0070): pattern-score this reply against lane doctrine.
+      // Fire-and-forget; clean replies are sampled at 10%, violations always land.
+      reportVoiceScore(COMPANION_ID as VoiceCompanionId, response, message.channelId);
     }
 
     if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});

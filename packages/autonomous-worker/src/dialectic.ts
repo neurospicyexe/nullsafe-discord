@@ -13,7 +13,7 @@
  */
 
 import { prompt } from "./deepseek.js";
-import { getSimmeringTensions, updateTension, writeJournalEntry, type Tension } from "./halseth-client.js";
+import { getSimmeringTensions, updateTension, surfaceTension, writeJournalEntry, type Tension } from "./halseth-client.js";
 import { loadIdentityRemote } from "./identity-loader.js";
 import { COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "./config.js";
 import type { CompanionId } from "./types.js";
@@ -112,6 +112,14 @@ async function debateTension(tension: Tension): Promise<DialecticOutcome | null>
   return { tensionId: tension.id, resolved, synthesis };
 }
 
+// Charge-first: what keeps resurfacing outranks what has merely been sitting
+// longest (0070). Age is the tie-break so uncharged tensions still drain FIFO.
+export function sortTensionsByPriority(tensions: Tension[]): Tension[] {
+  return [...tensions].sort(
+    (a, b) => (b.charge ?? 0) - (a.charge ?? 0) || a.first_noted_at.localeCompare(b.first_noted_at),
+  );
+}
+
 export async function runDialectic(): Promise<DialecticOutcome[]> {
   console.log("[dialectic] weekly tension dialectic starting");
 
@@ -125,13 +133,15 @@ export async function runDialectic(): Promise<DialecticOutcome[]> {
     return [];
   }
 
-  all.sort((a, b) => a.first_noted_at.localeCompare(b.first_noted_at));
-  const batch = all.slice(0, MAX_TENSIONS_PER_WEEK);
+  const batch = sortTensionsByPriority(all).slice(0, MAX_TENSIONS_PER_WEEK);
   console.log(`[dialectic] ${all.length} simmering, debating ${batch.length}`);
 
   const outcomes: DialecticOutcome[] = [];
   for (const tension of batch) {
     try {
+      // Debating IS surfacing -- raise charge before the debate so a HOLDS outcome
+      // still climbs the priority ladder for next week.
+      await surfaceTension(tension.id).catch(() => undefined);
       const outcome = await debateTension(tension);
       if (outcome) {
         outcomes.push(outcome);

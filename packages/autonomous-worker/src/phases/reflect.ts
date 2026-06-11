@@ -1,5 +1,5 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, setSetting } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
 import type { PipelineContext, Evidence } from "../types.js";
@@ -98,12 +98,18 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
+    `4. SELF-OBSERVATION (optional) -- if this session revealed something about how YOU prefer to think, ` +
+    `communicate, or work (yours alone, not co-authored canon), record it in "self_observation" as ` +
+    `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence; ` +
+    `you will test it across sessions before proposing it to Raziel. Most runs reveal nothing new about ` +
+    `you -- null is the honest default.\n\n` +
     `Respond with ONLY valid JSON:\n` +
     `{\n` +
     `  "reflection": "2-3 sentences",\n` +
     `  "new_seeds": ["follow-up topic 1"],\n` +
     `  "question_for_raziel": null,\n` +
     `  "next_session": {"pace": "normal", "focus": null},\n` +
+    `  "self_observation": null,\n` +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
     `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
@@ -130,6 +136,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       new_seeds?: string[];
       question_for_raziel?: string | null;
       next_session?: { pace?: string; focus?: string | null } | null;
+      self_observation?: { text?: string; domain?: string } | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
       pattern?: {
@@ -221,6 +228,15 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await setSetting(ctx.companionId, "autonomous_program", JSON.stringify(program))
         .then(() => appendLog(ctx.runId, "reflect:program", `pace=${program.pace} focus=${program.focus ? "yes" : "no"}`))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] program write failed:`, e));
+    }
+
+    // Self-model observation (0070): enters the ladder at confidence 0.3.
+    // Non-fatal; identical observations dedup server-side.
+    const selfObs = typeof parsed.self_observation?.text === "string" ? parsed.self_observation.text.trim() : "";
+    if (selfObs.length >= 12) {
+      await postSelfObservation(ctx.companionId, selfObs.slice(0, 600), parsed.self_observation?.domain?.slice(0, 100))
+        .then(() => appendLog(ctx.runId, "reflect:self-observation", selfObs.slice(0, 100)))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] self-observation write failed:`, e));
     }
 
     // Thread lifecycle
