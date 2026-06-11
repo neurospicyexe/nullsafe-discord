@@ -26,6 +26,7 @@ import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
 import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
+import { runClubTick } from "./club.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -33,9 +34,22 @@ const onceIdx = args.indexOf("--once");
 const signalAuditIdx = args.indexOf("--signal-audit");
 const dialecticIdx = args.indexOf("--dialectic");
 const forageIdx = args.indexOf("--forage");
+const clubIdx = args.indexOf("--club");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (forageIdx !== -1) {
+if (clubIdx !== -1) {
+  // One-shot club tick: advance the current round's phase, then exit.
+  console.log("[autonomous-worker] club mode");
+  runClubTick()
+    .then(() => {
+      console.log("[autonomous-worker] club tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] club tick failed:", e);
+      process.exit(1);
+    });
+} else if (forageIdx !== -1) {
   // One-shot forage mode: gather outward fuel into the shared pool, then exit.
   console.log("[autonomous-worker] forage mode");
   runForage()

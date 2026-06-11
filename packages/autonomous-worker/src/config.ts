@@ -125,6 +125,13 @@ export const PULSE_MAX_RUNS_PER_DAY = parseInt(process.env["PULSE_MAX_RUNS_PER_D
 // Three lenses on each simmering tension, then an honest synthesis.
 export const DIALECTIC_CRON = process.env["DIALECTIC_CRON"] ?? "0 4 * * 3";
 
+// The Club (0072) -- daily 6PM tick advances whatever phase the round is in.
+// gathering holds CLUB_GATHER_DAYS before voting; active holds CLUB_ACTIVE_DAYS
+// before discussion + close; a new round opens 1 day after the last closed.
+export const CLUB_CRON = process.env["CLUB_CRON"] ?? "0 18 * * *";
+export const CLUB_GATHER_DAYS = parseFloat(process.env["CLUB_GATHER_DAYS"] ?? "2");
+export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4");
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

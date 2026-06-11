@@ -624,3 +624,101 @@ export async function getRecentRuns(companionId: string, limit = 5): Promise<Run
     return [];
   }
 }
+
+// ---------------------------------------------------------------------------
+// The Club (migration 0072) -- rounds / recommendations / votes / discussions
+// ---------------------------------------------------------------------------
+
+export interface ClubRound {
+  id: string;
+  status: "gathering" | "voting" | "active" | "closed";
+  winning_recommendation_id: string | null;
+  opened_at: string;
+  activated_at: string | null;
+  closed_at: string | null;
+}
+
+export interface ClubRecommendation {
+  id: string;
+  round_id: string;
+  media_kind: string;
+  title: string;
+  creator: string | null;
+  url: string | null;
+  recommended_by: string;
+  pitch: string | null;
+  created_at: string;
+}
+
+export interface ClubVote {
+  round_id: string;
+  recommendation_id: string;
+  voter: string;
+  reason: string | null;
+}
+
+export interface ClubCurrent {
+  round: ClubRound | null;
+  recommendations: ClubRecommendation[];
+  votes: ClubVote[];
+}
+
+export async function getClubCurrent(): Promise<ClubCurrent> {
+  return await hFetch("/mind/club/current") as ClubCurrent;
+}
+
+export async function getLatestClubRound(): Promise<ClubRound | null> {
+  const r = await hFetch("/mind/club/rounds?limit=1") as { rounds: ClubRound[] };
+  return r.rounds?.[0] ?? null;
+}
+
+export async function openClubRound(): Promise<string> {
+  const r = await hFetch("/mind/club/round", "POST", {}) as { round: { id: string } };
+  return r.round.id;
+}
+
+export async function postClubRecommendation(input: {
+  media_kind: string; title: string; creator?: string | null; url?: string | null;
+  recommended_by: string; pitch?: string | null;
+}): Promise<void> {
+  await hFetch("/mind/club/recommend", "POST", input);
+}
+
+export async function postClubVoteWrite(input: {
+  recommendation_id: string; voter: string; reason?: string | null;
+}): Promise<void> {
+  await hFetch("/mind/club/vote", "POST", input);
+}
+
+export async function patchClubRoundStatus(
+  roundId: string,
+  status: string,
+  winningRecommendationId?: string | null,
+): Promise<void> {
+  await hFetch(`/mind/club/${roundId}/status`, "PATCH", {
+    status,
+    ...(winningRecommendationId !== undefined ? { winning_recommendation_id: winningRecommendationId } : {}),
+  });
+}
+
+export async function postClubDiscussion(roundId: string, companionId: string, reflection: string): Promise<void> {
+  await hFetch(`/mind/club/${roundId}/discuss`, "POST", { companion_id: companionId, reflection });
+}
+
+export async function getRecentMediaExperiences(limit = 3): Promise<Array<{ title: string; artist: string | null }>> {
+  try {
+    const r = await hFetch(`/mind/media/recent?limit=${limit}`) as { experiences: Array<{ title: string; artist: string | null }> };
+    return r.experiences ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getForageFindsFor(companionId: string, limit = 2): Promise<Array<{ title: string; domain: string; summary: string }>> {
+  try {
+    const r = await hFetch(`/mind/forage/${companionId}?limit=${limit}`) as { finds: Array<{ title: string; domain: string; summary: string }> };
+    return r.finds ?? [];
+  } catch {
+    return [];
+  }
+}
