@@ -215,6 +215,16 @@ export async function executeMetronomeAction(
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "name_pattern");
       break;
     }
+    case "share_media": {
+      // Phase 2 club layer: share a song/find/piece in the channel with one line on
+      // why -- companions initiating shared experience, not just reacting to it.
+      if (!heartbeatChannelId) return;
+      const prompt = action.prompt
+        ?? "Share one piece of media (a song, article, video, or find) worth the channel's time -- include a link if you have one and one line on why it's worth their time. Your taste, not duty.";
+      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
+      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "share_media");
+      break;
+    }
     case "write_note_to_raziel": {
       // Phase 4b: private note to Raziel -- Halseth only, never Discord. Lands in the
       // companion journal tagged letter_to_raziel; surfaces in Hearth /journal.
