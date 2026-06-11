@@ -46,6 +46,15 @@ describe("buildHeardBlock", () => {
     expect(block).toContain("A minor");
     expect(block.length).toBeLessThan(2600); // lyrics excerpted, not dumped
   });
+  it("renders hear-music's real key shape ({tonic, mode, confidence})", () => {
+    const block = buildHeardBlock(
+      { title: "Tone", artist: null, duration_sec: 5 },
+      { tempo_bpm: 198.77, tempo_estimated: true, key: { tonic: "A", mode: "minor", confidence: 0.682 }, onset_count: 0, duration: 5 },
+      null,
+    );
+    expect(block).toContain("Key: A minor");
+    expect(block).toContain("0.682");
+  });
   it("handles missing key and lyrics", () => {
     const block = buildHeardBlock(
       { title: "X", artist: null, duration_sec: null },

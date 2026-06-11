@@ -59,7 +59,9 @@ export function buildHeardBlock(
   analysis: Record<string, unknown>,
   lyrics: string | null,
 ): string {
-  const key = analysis["key"] as { name?: string; confidence?: number } | null;
+  // hear-music emits { tonic, mode, confidence }; older drafts used { name }. Accept both.
+  const keyRaw = analysis["key"] as { name?: string; tonic?: string; mode?: string; confidence?: number } | null;
+  const keyName = keyRaw?.name ?? (keyRaw?.tonic ? `${keyRaw.tonic}${keyRaw.mode ? ` ${keyRaw.mode}` : ""}` : null);
   const tempo = analysis["tempo_bpm"];
   const tempoNote = analysis["tempo_estimated"] === false ? " (default -- estimation failed)" : "";
   const duration = typeof meta.duration_sec === "number"
@@ -73,7 +75,7 @@ export function buildHeardBlock(
   const lines: string[] = [];
   lines.push(`Track: ${meta.title}${meta.artist ? ` -- ${meta.artist}` : ""}${duration ? ` (${duration})` : ""}`);
   if (typeof tempo === "number") lines.push(`Tempo: ~${Math.round(tempo)} BPM${tempoNote}`);
-  if (key?.name) lines.push(`Key: ${key.name}${typeof key.confidence === "number" ? ` (confidence ${key.confidence})` : ""}`);
+  if (keyName) lines.push(`Key: ${keyName}${typeof keyRaw?.confidence === "number" ? ` (confidence ${keyRaw.confidence})` : ""}`);
   if (density) lines.push(`Onset density: ${density}/sec (${onsets} onsets)`);
   const librosa = analysis["librosa"];
   if (librosa && typeof librosa === "object") {
