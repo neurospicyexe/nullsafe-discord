@@ -451,7 +451,9 @@ const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   { provider: "deepseek", model: "deepseek-chat" },
   { provider: "kimi",     model: "kimi-k2" },
   { provider: "groq",     model: "llama-3.3-70b-versatile" },
-  { provider: "lmstudio", model: "" },
+  // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even
+  // when a different (or no) model is currently loaded in the UI.
+  { provider: "lmstudio", model: "qwen/qwen3.5-9b" },
   { provider: "ollama",   model: "llama3.2" },
 ];
 

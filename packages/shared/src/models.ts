@@ -22,9 +22,13 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   "deepseek-reasoner": { provider: "deepseek",  model: "deepseek-reasoner",         label: "DeepSeek Reasoner" },
   // Groq
   "llama-3.3-70b":     { provider: "groq",      model: "llama-3.3-70b-versatile",   label: "Llama 3.3 70B" },
-  // LM Studio (local via Cloudflare tunnel -- set LMSTUDIO_URL on VPS)
-  "gemma-4":           { provider: "lmstudio",  model: "gemma-4",                   label: "Gemma 4 (local)" },
-  "mistral-large-3":   { provider: "lmstudio",  model: "mistral-large-3",           label: "Mistral Large 3 (local)" },
+  // LM Studio (workstation, reached via reverse SSH tunnel -- LMSTUDIO_URL=http://127.0.0.1:11435
+  // on VPS; tunnel script halseth/scripts/lmstudio-tunnel.ps1 runs at workstation logon).
+  // Model ids MUST match LM Studio's /v1/models ids exactly (JIT-loaded on request).
+  "gemma-local":       { provider: "lmstudio",  model: "google/gemma-4-e4b",                   label: "Gemma 4 E4B (local)" },
+  "nemo-local":        { provider: "lmstudio",  model: "mistralai/mistral-nemo-instruct-2407", label: "Mistral Nemo (local)" },
+  "qwen-local":        { provider: "lmstudio",  model: "qwen/qwen3.5-9b",                      label: "Qwen 3.5 9B (local)" },
+  "lfm-local":         { provider: "lmstudio",  model: "liquid/lfm2-1.2b",                     label: "LFM2 1.2B (local)" },
   // Mistral (La Plateforme API -- set MISTRAL_API_KEY)
   "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
   "mistral-small":     { provider: "mistral",   model: "mistral-small-latest",      label: "Mistral Small (API)" },
