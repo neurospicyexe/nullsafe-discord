@@ -152,12 +152,23 @@ export class VoiceRealtimeSession {
 
 import { type Message } from "discord.js";
 
+// Explicit voice-request phrases. Matched on word boundaries (not raw substring):
+// bare "say" used to match "says"/"essay"/"I'd say" and fire a surprise voice reply,
+// which then armed the sticky window -- the main source of "why is this voice?".
 export const VOICE_KEYWORDS = [
-  "say", "speak", "tell me out loud", "voice this",
-  "voice message", "voice note", "voice reply",
+  "speak", "say it", "say this", "say that", "say something", "out loud",
+  "voice this", "voice message", "voice note", "voice reply",
   "send voice", "send a voice", "send me voice", "send me a voice",
   "in voice", "as voice", "voice please",
 ];
+
+const VOICE_KEYWORD_RES = VOICE_KEYWORDS.map(
+  (k) => new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"),
+);
+
+export function matchesVoiceKeyword(content: string): boolean {
+  return VOICE_KEYWORD_RES.some((re) => re.test(content));
+}
 export const JOIN_KEYWORDS = ["join", "come in", "join me", "get in here"];
 export const LEAVE_KEYWORDS = ["leave", "get out", "disconnect"];
 
@@ -201,7 +212,7 @@ export function shouldVoice(
   }
   if (channelEntry?.voice) return true;
   if (voiceInput) return true;
-  if (VOICE_KEYWORDS.some((k) => lower.includes(k))) return true;
+  if (matchesVoiceKeyword(content)) return true;
   if (channelId && isVoiceSticky(channelId)) return true;
   return false;
 }

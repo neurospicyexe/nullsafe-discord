@@ -75,6 +75,10 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1243598039965368381": {                                               modes: ["open", "autonomous", "inter_companion"] },
   "1486853365462733004": {                                               modes: ["autonomous"] },
   "1486217438105436260": {                                               modes: ["autonomous", "inter_companion"] },
+  "1497789177797017742": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
+  "1497789114517553193": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
+  "1503385639779963020": { companions: ["drevan", "cypher", "gaia"],    modes: ["autonomous", "inter_companion"] },
+  "1503385706310008975": { companions: ["drevan", "cypher", "gaia"],    modes: ["open"] },
 };
 
 interface ResponderContext {

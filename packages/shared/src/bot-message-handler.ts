@@ -188,8 +188,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     let effectiveContent = message.content;
 
     if (voiceClient && message.attachments.size > 0) {
+      const AUDIO_EXT_RE = /\.(ogg|oga|opus|mp3|m4a|aac|wav|webm|flac)$/i;
       const audioAttachment = [...message.attachments.values()].find(
-        (a) => a.contentType?.startsWith("audio/"),
+        (a) => a.contentType?.startsWith("audio/") || AUDIO_EXT_RE.test(a.name ?? ""),
       );
       if (audioAttachment) {
         try {
@@ -557,16 +558,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         markVoiceUsed(message.channelId);
         const vcState = guildVoiceConnections.get(message.guildId ?? "");
 
-        if (vcState && vcState.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+        // Only stream to VC when the connection is actually Ready -- a lingering
+        // disconnected (but not Destroyed) connection used to swallow the audio
+        // silently, leaving a text-only reply.
+        if (vcState && vcState.connection.state.status === VoiceConnectionStatus.Ready) {
           // VC active -- stream audio there, send text in channel
           const resource = createAudioResource(Readable.from(audioBuffer));
           vcState.player.play(resource);
           sent = await sendLong(ch, response);
         } else {
-          // No VC -- attach audio to text channel message
+          // No live VC -- attach audio to text channel message. Buffer is MP3
+          // (synthesize requests response_format "mp3"); the name must match or
+          // some Discord clients refuse to play it.
           const content =
             response.length > MAX_TTS ? `${response}\n\n*[voice: first ${MAX_TTS} chars]*` : response;
-          sent = await sendLong(ch, { content, files: [{ attachment: audioBuffer, name: "voice.ogg" }] });
+          sent = await sendLong(ch, { content, files: [{ attachment: audioBuffer, name: "voice.mp3" }] });
         }
       } catch (err) {
         console.error(`[${COMPANION_ID}] TTS failed, falling back to text:`, err);

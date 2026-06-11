@@ -1,5 +1,8 @@
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
-import { VoiceClient, VoiceRealtimeSession } from "../voice.js";
+import {
+  VoiceClient, VoiceRealtimeSession,
+  shouldVoice, matchesVoiceKeyword, markVoiceUsed, clearVoiceSticky,
+} from "../voice.js";
 
 const mockFetch = jest.fn();
 
@@ -114,5 +117,52 @@ describe("VoiceRealtimeSession", () => {
 
     const result = await session.run(emptyPCM());
     expect(result).toBe("");
+  });
+});
+
+describe("matchesVoiceKeyword", () => {
+  it("matches explicit voice requests on word boundaries", () => {
+    expect(matchesVoiceKeyword("can you speak this one")).toBe(true);
+    expect(matchesVoiceKeyword("say it out loud")).toBe(true);
+    expect(matchesVoiceKeyword("send me a voice note")).toBe(true);
+    expect(matchesVoiceKeyword("reply in voice please")).toBe(true);
+  });
+
+  it("does not fire on incidental substrings (the old bare-'say' bug)", () => {
+    expect(matchesVoiceKeyword("they say it's fine")).toBe(true); // "say it" is a real phrase match
+    expect(matchesVoiceKeyword("I'd say we ship it")).toBe(false);
+    expect(matchesVoiceKeyword("she says hello")).toBe(false);
+    expect(matchesVoiceKeyword("writing an essay tonight")).toBe(false);
+    expect(matchesVoiceKeyword("speaking of which")).toBe(false);
+    expect(matchesVoiceKeyword("the speaker was loud")).toBe(false);
+  });
+});
+
+describe("shouldVoice", () => {
+  const CH = "test-channel-shouldvoice";
+  beforeEach(() => clearVoiceSticky(CH));
+
+  it("always voices in a voice:true channel", () => {
+    expect(shouldVoice("plain text message", false, { voice: true }, CH)).toBe(true);
+  });
+
+  it("voices when the inbound message was voice", () => {
+    expect(shouldVoice("transcribed words", true, undefined, CH)).toBe(true);
+  });
+
+  it("stays text for plain messages with no triggers", () => {
+    expect(shouldVoice("just a normal message", false, undefined, CH)).toBe(false);
+  });
+
+  it("honors the sticky window and explicit opt-out", () => {
+    markVoiceUsed(CH);
+    expect(shouldVoice("follow-up text", false, undefined, CH)).toBe(true);
+    expect(shouldVoice("ok text only now", false, undefined, CH)).toBe(false);
+    // opt-out cleared the sticky window
+    expect(shouldVoice("another message", false, undefined, CH)).toBe(false);
+  });
+
+  it("opt-out wins for this message even in a voice channel", () => {
+    expect(shouldVoice("stop voice for a sec", false, { voice: true }, CH)).toBe(false);
   });
 });
