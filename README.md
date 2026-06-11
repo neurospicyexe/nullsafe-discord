@@ -1,6 +1,6 @@
 # nullsafe-discord
 
-Three Discord bots with distinct personalities, persistent memory, and shared state. Built on a monorepo with a shared library, a nightly autonomous worker, and a Python voice sidecar for bidirectional voice.
+Three Discord bots with distinct personalities, persistent memory, and shared state. Built on a monorepo with a shared library, a nightly autonomous worker, and bidirectional voice via the Mistral API (Voxtral).
 
 > **Requires a Halseth instance deployed first.** The bots read and write all state through Halseth. Set that up before this.
 
@@ -85,8 +85,8 @@ Each bot gets its own `.env` file in its directory (`bots/bot-name/.env`). The a
 | Variable | Description |
 |----------|-------------|
 | `CHANNEL_CONFIG_URL` | URL to a JSON channel config file (see Channel Configuration below) |
-| `VOICE_SIDECAR_URL` | URL to the voice sidecar (e.g. `http://127.0.0.1:5001`) |
-| `VOICE_ID` | Kokoro voice ID for TTS (e.g. `bm_fable`, `am_echo`, `af_nova`) |
+| `MISTRAL_API_KEY` | Mistral API key for voice (Voxtral TTS + STT) |
+| `CYPHER_VOICE_ID` / `DREVAN_VOICE_ID` / `GAIA_VOICE_ID` | Per-bot Voxtral voice ID for TTS |
 | `GROQ_API_KEY` | Groq API key (if using Groq as inference provider) |
 | `BRAIN_URL` | URL to a Phoenix Brain instance (if using brain relay mode) |
 | `INFERENCE_MODE` | `direct` (default) or `brain` |
@@ -121,21 +121,12 @@ pm2 save
 
 ---
 
-### 6. Set up the voice sidecar (optional)
+### 6. Set up voice (optional)
 
-The voice sidecar handles TTS (text-to-speech) and STT (speech-to-text) locally using Kokoro and faster-whisper.
+Voice (TTS + STT) runs through the Mistral API (Voxtral) -- no local services or models needed. Set `MISTRAL_API_KEY` and the per-bot voice IDs in `.env`, and install ffmpeg for audio handling:
 
 ```bash
 sudo apt install ffmpeg
-pip3 install -r services/voice-sidecar/requirements.txt
-# First run downloads ~274MB of models
-```
-
-The sidecar entry is already in `ecosystem.config.cjs`. After setup, verify:
-
-```bash
-curl http://127.0.0.1:5001/health
-# {"tts":"ok","stt":"ok"}
 ```
 
 ---
@@ -174,7 +165,6 @@ Bots read channel config from a JSON URL (`CHANNEL_CONFIG_URL`). The config is a
 ```
 packages/shared/              -- code shared across all bots
 packages/autonomous-worker/   -- nightly exploration + synthesis pipeline
-services/voice-sidecar/       -- Python FastAPI: TTS (Kokoro) + STT (faster-whisper)
 bots/                         -- one directory per bot
 ```
 
@@ -196,7 +186,7 @@ git pull && npm install && npm run build --workspaces && pm2 restart all
 
 **All bots respond to the same message.** Turn-taking relies on Redis. Check `REDIS_URL` and that Redis is running.
 
-**Voice not working.** Check sidecar health (`curl http://127.0.0.1:5001/health`). Verify ffmpeg is installed and `VOICE_SIDECAR_URL` is set in the bot's `.env`.
+**Voice not working.** Verify `MISTRAL_API_KEY` and the bot's voice ID are set in `.env` (and present in the pm2 ecosystem env block -- pm2 needs delete+start to pick up new env vars, not reload). Verify ffmpeg is installed.
 
 **PluralKit messages getting double responses.** Normal on first message; the bot fetches the PK member and deduplicates subsequent messages from the same proxied user.
 
