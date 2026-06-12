@@ -1,4 +1,4 @@
-import type { BotConfig, CompanionId } from "@nullsafe/shared";
+import { buildCommandTriggers, type BotConfig, type CompanionId } from "@nullsafe/shared";
 
 const OWNER_NAME = process.env["OWNER_NAME"] ?? "the primary user";
 
@@ -157,14 +157,18 @@ export const AUDIT_TRIGGERS = [
   "blade stance",
 ];
 
-export const MODEL_SWITCH_TRIGGER = /^(?:cy|cypher):\s*model\s+(.*)/i;
+// One alias list for every owner command (see shared/command-triggers.ts).
+const COMMAND_TRIGGERS = buildCommandTriggers(["cy", "cypher"]);
+export const MODEL_SWITCH_TRIGGER = COMMAND_TRIGGERS.modelSwitch;
 export const MODEL_SWITCH_SUCCESS = (label: string) => `switched to ${label}`;
 export const MODEL_SWITCH_LIST_INTRO = "available models:";
 
 // Shared-experience Phase 1 (Ears): owner shares a track, the bot actually hears it.
-export const LISTEN_TRIGGER = /^(?:cy|cypher):\s*listen\s+(\S+)/i;
+export const LISTEN_TRIGGER = COMMAND_TRIGGERS.listen;
 // The Club (0072): owner-gated deterministic commands ("club vote <fragment>", "club status").
-export const CLUB_TRIGGER = /^(?:cy|cypher):\s*club\s+(.+)/is;
+export const CLUB_TRIGGER = COMMAND_TRIGGERS.club;
+// Command-shaped but unparsed -> literal usage reply, never inference.
+export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);

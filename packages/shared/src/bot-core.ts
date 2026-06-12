@@ -247,6 +247,8 @@ export interface RunBotConfig {
   modelSwitchListIntro: string;
   listenTrigger: RegExp;
   clubTrigger: RegExp;
+  /** Command-shaped-but-unparsed catcher; usage reply instead of inference. */
+  commandGuard?: RegExp;
   redisUrl: string | undefined;
   mistralApiKey: string | undefined;
   voiceId: string;
@@ -277,7 +279,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig,
   } = brc;
@@ -610,7 +612,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       COMPANION_ID: companionId, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE: contextWindowSize,
       MODEL_SWITCH_TRIGGER: modelSwitchTrigger, MODEL_SWITCH_LIST_INTRO: modelSwitchListIntro, MODEL_SWITCH_SUCCESS: modelSwitchSuccess,
       LISTEN_TRIGGER: listenTrigger,
-    CLUB_TRIGGER: clubTrigger,
+      CLUB_TRIGGER: clubTrigger,
+      ...(commandGuard ? { COMMAND_GUARD: commandGuard } : {}),
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
       ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),

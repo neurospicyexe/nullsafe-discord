@@ -38,6 +38,7 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
+  commandUsage,
   handleClubCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -96,6 +97,7 @@ export interface MessageHandlerDeps {
   MODEL_SWITCH_SUCCESS: (label: string) => string;
   LISTEN_TRIGGER: RegExp;
   CLUB_TRIGGER: RegExp;
+  COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
   IN_CHARACTER_FALLBACK: string;
@@ -118,7 +120,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER,
+    LISTEN_TRIGGER, CLUB_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -299,6 +301,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           return;
         }
       }
+    }
+
+    // Malformed-command guard: command-shaped owner message that none of the
+    // deterministic triggers above matched (valid model/club returned, valid
+    // listen set pendingMediaId). It must get a literal usage reply, NEVER fall
+    // through to inference -- the model narrates fake success (2026-06-11
+    // club-vote incident; 2026-06-12 "dre: listen" miss).
+    if (attribution.isOwner && pendingMediaId === null && COMMAND_GUARD?.test(effectiveContent)) {
+      console.error(`[${COMPANION_ID}] malformed command, sent usage: ${effectiveContent.slice(0, 120)}`);
+      await (message.channel as TextChannel).send(commandUsage(COMPANION_ID));
+      return;
     }
 
     // Structural gate: mode, addressing, companion filter.
