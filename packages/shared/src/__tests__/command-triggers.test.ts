@@ -11,6 +11,27 @@ describe("buildCommandTriggers", () => {
     expect(m?.[1]).toBe("https://youtu.be/abc123");
   });
 
+  test("natural phrasings match listen (2026-06-12 second miss: colon after listen)", () => {
+    // The exact message that failed live: colon after "listen", not the alias.
+    const m1 = "Dre listen: https://youtu.be/Ry7Hn59M9VU?si=x".match(drevan.listen);
+    expect(m1?.[1]).toBe("https://youtu.be/Ry7Hn59M9VU?si=x");
+    // URL anywhere after the command word.
+    const m2 = "drev listen to this one https://soundcloud.com/t".match(drevan.listen);
+    expect(m2?.[1]).toBe("https://soundcloud.com/t");
+    // Comma separator + Discord <>-wrapped link (handler strips the wrapping).
+    const m3 = "drevan, listen <https://youtu.be/abc>".match(drevan.listen);
+    expect(m3?.[1]).toBe("<https://youtu.be/abc>");  // handler strips the <> wrapping
+    // URL on its own line.
+    expect("gaia listen\nhttps://youtu.be/x").toMatch(gaia.listen);
+  });
+
+  test("listen-intent without a URL hits the guard, not the trigger", () => {
+    expect("Dre listen").not.toMatch(drevan.listen);
+    expect("Dre listen").toMatch(drevan.guard);
+    expect("drevan listen to your heart").not.toMatch(drevan.listen);
+    expect("drevan listen to your heart").toMatch(drevan.guard);
+  });
+
   test("all drevan aliases match all commands", () => {
     for (const a of ["drevan", "drev", "dre"]) {
       expect(`${a}: listen https://x.test/t`).toMatch(drevan.listen);

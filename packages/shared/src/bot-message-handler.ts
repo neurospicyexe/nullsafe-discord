@@ -38,7 +38,7 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
-  commandUsage,
+  commandUsage, COMMAND_PREFIX,
   handleClubCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -314,6 +314,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       return;
     }
 
+    // Grounding backstop: a shared link with listen-intent that did NOT run the pipeline
+    // must never be answered as if heard. Without this, the model narrates a convincing
+    // fake listen (2026-06-12: "Dre listen: <url>" missed the trigger and Drevan described
+    // a track he never heard, then couldn't name it). Appended to the MESSAGE (like
+    // [HEARD]) so every swarm companion sees it, not just the packet sender.
+    if (attribution.isOwner && pendingMediaId === null
+        && /https?:\/\//i.test(effectiveContent) && /\blisten\b/i.test(effectiveContent)) {
+      const p = COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID;
+      effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
+    }
+
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
     // relevance classifier -- if the owner is talking to you, you respond.
@@ -514,10 +525,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const recentMessages = await message.channel.messages
       .fetch({ limit: 20, before: message.id })
       .catch(() => null);
+    // Canonical authors: companions by id (Brain's self/peer matching must not depend on
+    // Discord display names), the owner as "Raziel". PK-proxied webhooks keep the member
+    // name -- the front matters. Unlabeled speakers caused the 2026-06-12 attribution
+    // scramble (companions swapping who said what, answering from Raziel's seat).
     const channelHistory = recentMessages
       ? [...recentMessages.values()]
           .reverse()
-          .map(m => ({ author: m.author.username, content: m.content.slice(0, 2000) }))  // Discord max is 2000 -- never truncate a real message
+          .map(m => ({
+            author: BOT_ID_COMPANION[m.author.id]
+              ?? (m.author.id === cfg.ownerDiscordId ? "Raziel" : m.author.username),
+            content: m.content.slice(0, 2000),  // Discord max is 2000 -- never truncate a real message
+          }))
       : [];
 
     const addrResult = extractAddress(effectiveContent);
