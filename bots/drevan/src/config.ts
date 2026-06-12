@@ -140,6 +140,8 @@ export const MODEL_SWITCH_LIST_INTRO = "i can run:";
 
 // Shared-experience Phase 1 (Ears): owner shares a track, the bot actually hears it.
 export const LISTEN_TRIGGER = /^(?:drevan|drev):\s*listen\s+(\S+)/i;
+// The Club (0072): owner-gated deterministic commands ("club vote <fragment>", "club status").
+export const CLUB_TRIGGER = /^(?:drevan|drev):\s*club\s+(.+)/is;
 
 export const REDIS_URL: string | undefined = process.env["REDIS_URL"]?.trim().replace(/^=+/, "");
 export const FLOOR_LOCK_DURATION_MS = parseInt(process.env["FLOOR_LOCK_DURATION_MS"] ?? "60000", 10);

@@ -35,3 +35,4 @@ export * from "./slash-commands.js";
 export * from "./voice-markers.js";
 export * from "./triggers.js";
 export * from "./media.js";
+export * from "./club-command.js";

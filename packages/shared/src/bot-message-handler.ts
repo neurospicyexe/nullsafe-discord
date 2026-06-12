@@ -38,6 +38,7 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
+  handleClubCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
@@ -94,6 +95,7 @@ export interface MessageHandlerDeps {
   MODEL_SWITCH_LIST_INTRO: string;
   MODEL_SWITCH_SUCCESS: (label: string) => string;
   LISTEN_TRIGGER: RegExp;
+  CLUB_TRIGGER: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
   IN_CHARACTER_FALLBACK: string;
@@ -116,7 +118,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER,
+    LISTEN_TRIGGER, CLUB_TRIGGER,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -245,6 +247,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
           librarian.setSetting("active_model", arg));
         await (message.channel as TextChannel).send(MODEL_SWITCH_SUCCESS(entry.label));
+        return;
+      }
+    }
+
+    // Owner club command: <prefix>: club vote <fragment> | club status (0072).
+    // Deterministic Halseth write + literal ack, never routed through inference --
+    // so the model cannot claim a vote it didn't cast (2026-06-11 incident).
+    // Votes here are Raziel's pre-cast (voter='raziel'); companions vote in-voice
+    // at the worker's voting tick.
+    if (attribution.isOwner) {
+      const clubMatch = effectiveContent.match(CLUB_TRIGGER);
+      if (clubMatch) {
+        const reply = await handleClubCommand(clubMatch[1]!, "raziel")
+          .catch(err => `club command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await (message.channel as TextChannel).send(reply);
         return;
       }
     }

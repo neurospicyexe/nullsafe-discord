@@ -113,8 +113,12 @@ async function fetchLyrics(meta: TrackMeta): Promise<string | null> {
 
 async function postExperience(payload: Record<string, unknown>): Promise<string | null> {
   const base = process.env["HALSETH_URL"];
-  const secret = process.env["ADMIN_SECRET"];
-  if (!base || !secret) return null;
+  // VPS bot env carries HALSETH_SECRET (ADMIN_SECRET is the worker-side name).
+  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
+  if (!base || !secret) {
+    console.error("[media] halseth write SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
+    return null;
+  }
   try {
     const res = await fetch(`${base}/mind/media`, {
       method: "POST",
@@ -136,8 +140,11 @@ async function postExperience(payload: Record<string, unknown>): Promise<string 
 
 export async function reactToExperience(experienceId: string, companionId: string, reaction: string): Promise<void> {
   const base = process.env["HALSETH_URL"];
-  const secret = process.env["ADMIN_SECRET"];
-  if (!base || !secret) return;
+  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
+  if (!base || !secret) {
+    console.error("[media] react SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
+    return;
+  }
   const res = await fetch(`${base}/mind/media/${experienceId}/react`, {
     method: "PATCH",
     headers: { "Authorization": `Bearer ${secret}`, "Content-Type": "application/json" },
