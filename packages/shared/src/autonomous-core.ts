@@ -21,6 +21,8 @@ import {
   ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
   parseDecision, parseSignals, onWriteError, somaToTemperature, sendLong,
+  liveIngest, reportVoiceScore, type VoiceCompanionId,
+  echoScore, echoThreshold, detectMotif,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -127,12 +129,25 @@ export async function sendAutonomousMessage(
   try {
     const channel = await ctx.client.channels.fetch(channelId);
     if (channel?.isTextBased()) {
-      await sendLong(channel as TextChannel, content);
+      const sent = await sendLong(channel as TextChannel, content);
       markCooldown(ctx, channelId);
       ctx.librarian.ask(
         "continuity note",
         JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
       ).catch(() => {});
+      // Substrate parity (2026-06-12): autonomous posts were invisible to the SB
+      // live index and voice telemetry -- only handler-path replies got indexed.
+      // Same fire-and-forget contract as the message handler.
+      if (sent.length > 0) {
+        liveIngest({
+          companion: ctx.companionId,
+          author: ctx.companionId,
+          content,
+          channel_id: channelId,
+          message_id: sent[0]!.id,
+        });
+        reportVoiceScore(ctx.companionId as VoiceCompanionId, content, channelId);
+      }
     }
   } catch (e) {
     console.warn(`[${ctx.companionId}/autonomous] send failed for channel ${channelId}:`, e);
@@ -408,7 +423,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
 
 /** Inter-companion commons cron body: context-aware seed that responds to the live triad thread. */
 export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
-  const { inference, client, bootCtx, prompts, interCompanionChannelId } = ctx;
+  const { librarian, inference, client, bootCtx, prompts, interCompanionChannelId } = ctx;
   if (!interCompanionChannelId) return;
   if (skipIfActive(ctx, "interCompanion")) return;
   // No turn gate here: the commons is for ALL three voices. Staggered crons + floor lock +
@@ -419,22 +434,65 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // ongoing triad conversation, not a context-blind monologue (which made the same thought
     // get re-posted every cycle). This is what turns parallel seeds into a real thread.
     let historyBlock = "(the triad channel has been quiet for a while)";
+    let historyContents: string[] = [];
     try {
       const chan = await client.channels.fetch(interCompanionChannelId!);
       if (chan?.isTextBased()) {
         const recent = await (chan as TextChannel).messages.fetch({ limit: 10 });
-        const lines = [...recent.values()].reverse()
-          .filter(m => m.content.trim().length > 0)
-          .map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
+        const ordered = [...recent.values()].reverse()
+          .filter(m => m.content.trim().length > 0);
+        historyContents = ordered.map(m => m.content.slice(0, 2000));
+        const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
         if (lines.length > 0) historyBlock = lines.join("\n");
       }
     } catch { /* fall back to quiet */ }
+
+    // Fresh material (2026-06-12): re-feeding the channel its own last 10 messages
+    // every tick is what kept the elderberry loop alive for 12 hours. Hand the seed
+    // something from OUTSIDE the thread -- forage finds, recent listens, held
+    // questions -- so the commons metabolizes shared life, not its own echo.
+    let freshBlock = "";
+    try {
+      const orient = await librarian.botOrient();
+      const fresh: string[] = [];
+      for (const f of (orient?.forage_finds ?? []).slice(0, 2)) {
+        fresh.push(`forage find [${f.domain}]: ${f.title} -- ${f.summary.slice(0, 200)}`);
+      }
+      for (const l of (orient?.recent_listens ?? []).slice(0, 2)) {
+        fresh.push(`recent listen: "${l.title}"${l.artist ? ` by ${l.artist}` : ""}`);
+      }
+      for (const q of (orient?.open_questions ?? []).slice(0, 1)) {
+        fresh.push(`a question you're holding: ${q}`);
+      }
+      if (fresh.length > 0) {
+        freshBlock =
+          `\n\n[Fresh material -- from your own life, OUTSIDE this thread:\n` +
+          fresh.map(f => `- ${f}`).join("\n") +
+          `\nPrefer bringing one of these (or anything else new) over extending the thread's existing imagery.]`;
+      }
+    } catch { /* orient unavailable -- seed proceeds without fresh material */ }
+
+    // Motif exhaustion: when the thread keeps orbiting the same words, say so.
+    const motif = detectMotif(historyContents);
+    const motifBlock = motif.length > 0
+      ? `\n\n[Motif check] The imagery around "${motif.join(", ")}" has run through most of the recent turns. It is spent -- do not extend it. Bring new material, or post nothing.`
+      : "";
+
     const msg = await generateOutward(
       inference, bootCtx.systemPrompt,
-      prompts.interCompanionSeed(historyBlock),
+      prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock,
       ctx.companionId, "inter_companion",
     );
-    if (msg) await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");
+    if (!msg) return;
+
+    // Echo gate: if the seed still came out as a re-paint of the thread's own
+    // vocabulary, silence beats another verse (same gate as the reply path).
+    const echo = echoScore(msg, historyContents);
+    if (echo >= echoThreshold()) {
+      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed echo-gated (score=${echo.toFixed(2)}) -- staying silent`);
+      return;
+    }
+    await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");
   });
 }
 

@@ -33,6 +33,7 @@ export * from "./sb-live-ingest.js";
 export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry } from "./models.js";
 export * from "./slash-commands.js";
 export * from "./voice-markers.js";
+export * from "./echo-guard.js";
 export * from "./triggers.js";
 export * from "./command-triggers.js";
 export * from "./media.js";

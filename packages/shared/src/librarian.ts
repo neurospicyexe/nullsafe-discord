@@ -307,6 +307,11 @@ export class LibrarianClient {
     // Prospective triggers (0070): keyword cards matched per message, date cards
     // checked at orient refresh. Consumed by the message handler, not formatRecentContext.
     armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
+    // Fresh-material surfaces (2026-06-12): server has returned these since 0068/0071;
+    // mapped now so the inter-companion seed can bring outside material into the commons.
+    forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
+    recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
+    open_questions?: string[];
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -331,6 +336,9 @@ export class LibrarianClient {
         open_loops?: Array<{ id: string; loop_text: string }>;
         pressure_flags?: string[];
         armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
+        forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
+        recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
+        open_questions?: string[];
       } | undefined;
       if (!data) return null;
       return {
@@ -364,6 +372,9 @@ export class LibrarianClient {
         open_loops: Array.isArray(data.open_loops) ? data.open_loops : [],
         pressure_flags: Array.isArray(data.pressure_flags) ? data.pressure_flags : [],
         armed_triggers: Array.isArray(data.armed_triggers) ? data.armed_triggers : [],
+        forage_finds: Array.isArray(data.forage_finds) ? data.forage_finds : [],
+        recent_listens: Array.isArray(data.recent_listens) ? data.recent_listens : [],
+        open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
       };
     } catch {
       return null;

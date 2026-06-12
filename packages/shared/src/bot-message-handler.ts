@@ -34,7 +34,8 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
-  reportVoiceScore, type VoiceCompanionId,
+  reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
+  echoScore, echoThreshold,
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
@@ -461,6 +462,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Voice feedback loop (2026-06-12): when this bot's recent replies have drifted
+    // from lane (rolling score from reportVoiceScore), inject a correction so the
+    // NEXT reply self-rights instead of compounding -- scores were write-only since 0070.
+    const voiceFb = voiceFeedbackBlock(COMPANION_ID as VoiceCompanionId);
+    if (voiceFb) contextPrompt += voiceFb;
+
     // Prospective tripwires (0070): armed keyword cards matched against this human
     // message (+ any date cards whose moment arrived). Consuming fires them in
     // Halseth -- a tripwire surfaces exactly once, in the reply where it matched.
@@ -645,6 +652,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         } else {
           console.warn(`[${COMPANION_ID}] self-switch to unknown model "${switchKey}" -- skipped`);
         }
+      }
+    }
+
+    // Echo gate (2026-06-12): a companion-to-companion reply built mostly from the
+    // channel's own vocabulary is the mirror-hall, not conversation -- suppress to
+    // silence (doctrine). Brain mode already gates server-side; this also covers
+    // direct/fallback inference. Replies to humans are never gated.
+    if (senderCtx.isCompanionBot && response) {
+      const echo = echoScore(response, channelHistory.map(m => m.content));
+      if (echo >= echoThreshold()) {
+        console.warn(`[${COMPANION_ID}] echo-gated reply (score=${echo.toFixed(2)}) -- staying silent`);
+        if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
+        distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+        return;
       }
     }
 

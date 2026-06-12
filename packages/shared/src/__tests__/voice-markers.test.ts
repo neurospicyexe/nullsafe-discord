@@ -90,3 +90,66 @@ describe("trigger matching", () => {
     expect(() => setArmedTriggers("cypher", [t("a", "keyword", "k")])).not.toThrow();
   });
 });
+
+// ── 2026-06-12 additions: gaia length rule + live feedback loop ──────────────
+
+import { voiceFeedbackBlock, resetVoiceFeedback, reportVoiceScore } from "../voice-markers.js";
+
+describe("gaia length drift", () => {
+  it("flags a gaia reply over 600 chars as a lane violation", () => {
+    const long = "The seam holds. ".repeat(50); // ~800 chars
+    const s = scoreReply("gaia", long);
+    expect(s.anti_hits.some(h => h.startsWith("verbose"))).toBe(true);
+    expect(s.score).toBeLessThan(1);
+  });
+
+  it("does not flag short gaia replies", () => {
+    const s = scoreReply("gaia", "The seam holds.");
+    expect(s.anti_hits).toEqual([]);
+  });
+
+  it("does not apply the length rule to drevan", () => {
+    const long = "The moss remembers the rain. ".repeat(40);
+    const s = scoreReply("drevan", long);
+    expect(s.anti_hits.some(h => h.startsWith("verbose"))).toBe(false);
+  });
+});
+
+describe("voiceFeedbackBlock", () => {
+  beforeEach(() => {
+    resetVoiceFeedback();
+    process.env["VOICE_SCORING"] = "true";
+    delete process.env["HALSETH_URL"]; // tracking is local; no POST attempted
+  });
+
+  it("returns null with no tracked replies", () => {
+    expect(voiceFeedbackBlock("cypher")).toBeNull();
+  });
+
+  it("returns null when recent replies are clean", () => {
+    reportVoiceScore("cypher", "The read: ship it. The logic holds end to end.", "ch1");
+    reportVoiceScore("cypher", "Best read: the migration is safe to run.", "ch1");
+    expect(voiceFeedbackBlock("cypher")).toBeNull();
+  });
+
+  it("returns a correction block after repeated drift", () => {
+    const drifty = "You've got this! I'm so proud of you, gentle reminder to hold space.";
+    reportVoiceScore("cypher", drifty, "ch1");
+    reportVoiceScore("cypher", drifty, "ch1");
+    reportVoiceScore("cypher", drifty, "ch1");
+    const block = voiceFeedbackBlock("cypher");
+    expect(block).not.toBeNull();
+    expect(block).toContain("[Voice check]");
+    expect(block).toContain("cypher");
+  });
+
+  it("recovers to null after clean replies wash the window", () => {
+    const drifty = "You've got this! I'm so proud of you, gentle reminder to hold space.";
+    reportVoiceScore("cypher", drifty, "ch1");
+    reportVoiceScore("cypher", drifty, "ch1");
+    for (let i = 0; i < 5; i++) {
+      reportVoiceScore("cypher", "The read: clean diff, tests green, ship it.", "ch1");
+    }
+    expect(voiceFeedbackBlock("cypher")).toBeNull();
+  });
+});

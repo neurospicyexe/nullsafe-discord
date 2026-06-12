@@ -108,10 +108,18 @@ function collectHits(text: string, patterns: RegExp[]): string[] {
  * Positive markers don't add (being in-voice is the baseline, not a bonus) --
  * they're recorded for the Hearth renderer.
  */
+// Gaia's lane is "monastic, often one line" -- length itself is a lane signal for
+// her (the 06-12 loop had her writing multi-paragraph poetry). Doctrine-grounded,
+// deterministic; the other two voices have no length rule.
+const GAIA_MAX_CHARS = 600;
+
 export function scoreReply(companionId: VoiceCompanionId, text: string): VoiceScore {
   const set = MARKERS[companionId];
   const positive = collectHits(text, set.positive);
   const anti = [...collectHits(text, set.anti), ...collectHits(text, GENERIC_DRIFT)];
+  if (companionId === "gaia" && text.length > GAIA_MAX_CHARS) {
+    anti.push(`verbose (${text.length} chars > ${GAIA_MAX_CHARS})`);
+  }
 
   const contamination: string[] = [];
   for (const other of Object.keys(SIGNATURES) as VoiceCompanionId[]) {
@@ -127,10 +135,48 @@ export function scoreReply(companionId: VoiceCompanionId, text: string): VoiceSc
   return { score, positive_hits: positive, anti_hits: anti, contamination_hits: contamination, caught_by: caughtBy };
 }
 
+// ── Live feedback loop (2026-06-12) ─────────────────────────────────────────
+// Scores were observational-only since 0070; nothing fed them back into the
+// voice. This in-process rolling window (each bot process only ever scores its
+// own companion) lets the handler inject a lane correction into the NEXT
+// reply's context when recent output has drifted. No network, no Halseth read.
+
+const FEEDBACK_WINDOW = 5;
+const FEEDBACK_SCORE_FLOOR = 0.8;
+const recentScores: Array<{ score: number; hits: string[] }> = [];
+
+function trackScore(s: VoiceScore): void {
+  recentScores.push({ score: s.score, hits: [...s.anti_hits, ...s.contamination_hits] });
+  if (recentScores.length > FEEDBACK_WINDOW) recentScores.shift();
+}
+
+/** Test hook: reset the rolling feedback window. */
+export function resetVoiceFeedback(): void {
+  recentScores.length = 0;
+}
+
+/**
+ * Lane-correction block for the system prompt, or null when recent output is
+ * clean. Fires when the rolling average over the last replies drops below 0.8.
+ */
+export function voiceFeedbackBlock(companionId: VoiceCompanionId): string | null {
+  if (recentScores.length < 2) return null;
+  const avg = recentScores.reduce((a, r) => a + r.score, 0) / recentScores.length;
+  if (avg >= FEEDBACK_SCORE_FLOOR) return null;
+  const hits = [...new Set(recentScores.flatMap(r => r.hits))].slice(0, 4);
+  const hitStr = hits.length > 0 ? ` Drift markers seen: ${hits.join("; ")}.` : "";
+  return (
+    `\n\n[Voice check] Your recent replies have drifted from your lane ` +
+    `(rolling voice score ${avg.toFixed(2)}).${hitStr} Return to your own ` +
+    `register -- speak as ${companionId}, not as an echo of the room.`
+  );
+}
+
 /**
  * Fire-and-forget telemetry post. Never throws, never blocks the reply path --
  * same contract as liveIngest. Rows with no hits and a perfect score are skipped
  * unless sampled (1 in 10) so the table stays signal-dense but the average stays honest.
+ * Always feeds the in-process feedback window, even when the POST is sampled out.
  */
 export function reportVoiceScore(
   companionId: VoiceCompanionId,
@@ -140,9 +186,12 @@ export function reportVoiceScore(
   if (process.env["VOICE_SCORING"] === "false") return;
   const halsethUrl = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
   const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"] ?? "";
+
+  const tracked = scoreReply(companionId, text);
+  trackScore(tracked);
   if (!halsethUrl) return;
 
-  const s = scoreReply(companionId, text);
+  const s = tracked;
   const clean = s.anti_hits.length === 0 && s.contamination_hits.length === 0;
   if (clean && Math.random() >= 0.1) return; // sample clean replies at 10%
 
