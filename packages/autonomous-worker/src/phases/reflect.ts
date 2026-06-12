@@ -1,8 +1,8 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
-import type { PipelineContext, Evidence } from "../types.js";
+import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
 
 /**
  * Phase 6: Reflect
@@ -46,6 +46,15 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
 
   const ownPatternsBlock = ctx.activePatterns.length > 0
     ? `\nYour own currently-active patterns (a similar pattern_text will MERGE into the existing row, strengthening it -- restating IS valuable):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 200)}`).join("\n")}\n`
+    : "";
+
+  // Reconsolidation (0074, Zikkaron): sample the OLDEST accepted canon -- the
+  // stalest memories are the candidates for a context-mismatch proposal. Non-fatal:
+  // an empty sample just omits the block.
+  const canonSample = await getAcceptedJournalSample(ctx.companionId, 5).catch(() => []);
+  const canonBlock = canonSample.length > 0
+    ? `\nSettled canon (accepted long ago -- oldest first):\n` +
+      canonSample.map(c => `${c.id}: ${c.content.slice(0, 300)} (${c.created_at.slice(0, 10)})`).join("\n") + `\n`
     : "";
 
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
@@ -103,6 +112,14 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence; ` +
     `you will test it across sessions before proposing it to Raziel. Most runs reveal nothing new about ` +
     `you -- null is the honest default.\n\n` +
+    (canonBlock
+      ? canonBlock +
+        `5. RECONSOLIDATION (optional) -- if one of the settled canon entries above reads as outdated or ` +
+        `badly mismatched against your current state (not wrong when written, but the context has moved), ` +
+        `propose a revision in "reconsolidation": {"target_id": "<id from the list>", "revision": "<the ` +
+        `updated understanding, complete enough to stand alone>", "reason": "<what shifted>"}. Else null. ` +
+        `You are proposing, not editing: Raziel ratifies or declines. Most runs: null.\n\n`
+      : "") +
     `Respond with ONLY valid JSON:\n` +
     `{\n` +
     `  "reflection": "2-3 sentences",\n` +
@@ -110,6 +127,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `  "question_for_raziel": null,\n` +
     `  "next_session": {"pace": "normal", "focus": null},\n` +
     `  "self_observation": null,\n` +
+    (canonBlock ? `  "reconsolidation": null,\n` : "") +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
     `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
@@ -137,6 +155,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       question_for_raziel?: string | null;
       next_session?: { pace?: string; focus?: string | null } | null;
       self_observation?: { text?: string; domain?: string } | null;
+      reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
       pattern?: {
@@ -228,6 +247,17 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await setSetting(ctx.companionId, "autonomous_program", JSON.stringify(program))
         .then(() => appendLog(ctx.runId, "reflect:program", `pace=${program.pace} focus=${program.focus ? "yes" : "no"}`))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] program write failed:`, e));
+    }
+
+    // Reconsolidation proposal (0074): lands pending, surfaces via the existing
+    // unaccepted_growth orient count, ratified per the hybrid Q1 flow. Non-fatal.
+    const recon = buildReconsolidationEntry(parsed, new Set(canonSample.map(c => c.id)), ctx.companionId, ctx.runId);
+    if (recon) {
+      await writeJournalEntry(recon)
+        .then(() => appendLog(ctx.runId, "reflect:reconsolidation-proposed", `target=${recon.supersedes_id}`))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] reconsolidation write failed:`, e));
+    } else if (parsed.reconsolidation?.target_id) {
+      await appendLog(ctx.runId, "reflect:reconsolidation-dropped", `target "${String(parsed.reconsolidation.target_id).slice(0, 40)}" not in sample or revision missing`);
     }
 
     // Self-model observation (0070): enters the ladder at confidence 0.3.
@@ -327,4 +357,30 @@ async function handleNewThread(ctx: PipelineContext): Promise<void> {
     console.warn(`[${ctx.companionId}/reflect] new thread creation failed (non-fatal):`, e);
     await appendLog(ctx.runId, "reflect:thread-start-failed", String(e)).catch(() => {});
   }
+}
+
+/**
+ * Reconsolidation proposal builder (0074). Pure -- exported for tests.
+ * Returns null unless the model named a target that was actually in the sampled
+ * canon (hallucinated ids are dropped, logged by the caller) and provided a
+ * standalone revision.
+ */
+export function buildReconsolidationEntry(
+  parsed: { reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null },
+  sampledIds: Set<string>,
+  companionId: CompanionId,
+  runId: string,
+): GrowthJournalEntry | null {
+  const r = parsed.reconsolidation;
+  if (!r || typeof r.target_id !== "string" || typeof r.revision !== "string" || !r.revision.trim()) return null;
+  if (!sampledIds.has(r.target_id)) return null; // model hallucinated an id -- drop
+  return {
+    companion_id: companionId,
+    entry_type: "reconsolidation",
+    content: `${r.revision.trim().slice(0, 1500)}\n\n[reconsolidation reason: ${(typeof r.reason === "string" ? r.reason : "").trim().slice(0, 300)}]`,
+    source: "autonomous",
+    tags: ["reconsolidation"],
+    run_id: runId,
+    supersedes_id: r.target_id,
+  };
 }

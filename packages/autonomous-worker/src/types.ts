@@ -36,12 +36,14 @@ export interface Evidence {
 
 export interface GrowthJournalEntry {
   companion_id: CompanionId;
-  entry_type: "learning" | "insight" | "connection" | "question" | "signal_audit";
+  entry_type: "learning" | "insight" | "connection" | "question" | "signal_audit" | "reconsolidation";
   content: string;
   source: "autonomous" | "conversation" | "reflection";
   tags?: string[];
   run_id?: string;
   thread_id?: string;
+  /** Reconsolidation (0074): id of the accepted entry this proposal would replace. */
+  supersedes_id?: string;
   /** Migration 0062: ids of growth_journal/pattern/marker rows this entry draws on. */
   prehended_ids?: string[];
   /** Migration 0062: evidence quotes (with optional source pointers) backing the content. */

@@ -144,6 +144,17 @@ export async function getRecentJournal(
   return r.journal ?? [];
 }
 
+/** Oldest accepted canon -- reconsolidation candidates for the reflect phase (0074). */
+export async function getAcceptedJournalSample(
+  companionId: string,
+  limit = 5,
+): Promise<Array<{ id: string; entry_type: string; content: string; created_at: string }>> {
+  const r = await hFetch(`/mind/growth/journal/${encodeURIComponent(companionId)}?status=accepted&limit=${limit}`) as {
+    journal: Array<{ id: string; entry_type: string; content: string; created_at: string }>;
+  };
+  return r.journal ?? [];
+}
+
 export async function getRecentPatterns(
   companionId: string,
   limit = 10,
@@ -188,6 +199,7 @@ export async function writeJournalEntry(entry: GrowthJournalEntry): Promise<stri
     ...(entry.prehended_ids?.length ? { prehended_ids: entry.prehended_ids } : {}),
     ...(entry.evidence?.length      ? { evidence: entry.evidence }           : {}),
     ...(entry.novelty               ? { novelty: entry.novelty }             : {}),
+    ...(entry.supersedes_id         ? { supersedes_id: entry.supersedes_id } : {}),
   }) as { id: string };
   return r.id;
 }
