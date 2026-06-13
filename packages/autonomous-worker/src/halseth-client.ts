@@ -740,3 +740,9 @@ export async function getForageFindsFor(companionId: string, limit = 2): Promise
 export async function runGuardian(letter: boolean): Promise<{ flags_created: number; flags_resolved: number; letter_id: string | null }> {
   return await hFetch("/mind/guardian/run", "POST", { letter }) as { flags_created: number; flags_resolved: number; letter_id: string | null };
 }
+
+// ── Motif memory (0076) ──────────────────────────────────────────────────────
+
+export async function detectMotifs(): Promise<{ ok: boolean; detected: Record<string, number> }> {
+  return await hFetch("/mind/motifs/detect", "POST", {}) as { ok: boolean; detected: Record<string, number> };
+}

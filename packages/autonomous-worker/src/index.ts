@@ -28,6 +28,7 @@ import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
+import { runMotifsTick } from "./motifs.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -37,9 +38,22 @@ const dialecticIdx = args.indexOf("--dialectic");
 const forageIdx = args.indexOf("--forage");
 const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
+const motifsIdx = args.indexOf("--motifs");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (guardianIdx !== -1) {
+if (motifsIdx !== -1) {
+  // One-shot motif tick: detect recurring threads server-side, then exit.
+  console.log("[autonomous-worker] motifs mode");
+  runMotifsTick()
+    .then(() => {
+      console.log("[autonomous-worker] motifs tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] motifs tick failed:", e);
+      process.exit(1);
+    });
+} else if (guardianIdx !== -1) {
   // One-shot guardian tick: run detectors server-side, then exit.
   console.log("[autonomous-worker] guardian mode");
   runGuardianTick()

@@ -138,6 +138,11 @@ export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4
 export const GUARDIAN_CRON = process.env["GUARDIAN_CRON"] ?? "0 8 * * *";
 export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?? "0", 10);
 
+// Motif memory (0076) -- daily 8:30AM tick (after the 8AM guardian, before 9AM forage).
+// Detection runs server-side in Halseth; this is just the trigger. Scans the day's
+// new journal/growth entries for recurring symbolic threads, fades the stale ones.
+export const MOTIF_CRON = process.env["MOTIF_CRON"] ?? "30 8 * * *";
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

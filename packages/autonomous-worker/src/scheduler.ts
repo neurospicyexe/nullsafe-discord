@@ -12,7 +12,8 @@ import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON } from "./config.js";
+import { runMotifsTick } from "./motifs.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, MOTIF_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -172,6 +173,13 @@ export function startScheduler(): void {
   console.log(`[scheduler] guardian → cron "${GUARDIAN_CRON}"`);
   cron.schedule(GUARDIAN_CRON, () => {
     runGuardianTick().catch(e => console.error("[scheduler] guardian failed:", e));
+  });
+
+  // Motif memory -- daily tick detects recurring symbolic threads + fades stale ones.
+  // Halseth-only writes; no floor lock needed. Detection runs server-side in Halseth.
+  console.log(`[scheduler] motifs → cron "${MOTIF_CRON}"`);
+  cron.schedule(MOTIF_CRON, () => {
+    runMotifsTick().catch(e => console.error("[scheduler] motifs failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");
