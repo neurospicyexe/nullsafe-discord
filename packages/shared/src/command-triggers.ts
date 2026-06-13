@@ -17,6 +17,8 @@ export interface CommandTriggers {
   modelSwitch: RegExp;
   listen: RegExp;
   club: RegExp;
+  search: RegExp;
+  imagine: RegExp;
   guard: RegExp;
 }
 
@@ -26,7 +28,13 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     modelSwitch: new RegExp(`^(?:${alt})\\b[,:]?\\s*model\\s+(.*)`, "i"),
     listen: new RegExp(`^(?:${alt})\\b[,:]?\\s*listen\\b[\\s\\S]*?(<?https?:\\/\\/\\S+)`, "i"),
     club: new RegExp(`^(?:${alt})\\b[,:]?\\s*club\\s+(.+)`, "is"),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club)\\b`, "i"),
+    // Companion tools (0077 take 14). An argument is REQUIRED (the trailing \s+(.+)) so
+    // a bare "search"/"imagine" misses the trigger and falls to the guard -> usage reply,
+    // never inference (a narrated tool-call can't fake success). [,:]? after the command
+    // word absorbs "imagine: a candle".
+    search: new RegExp(`^(?:${alt})\\b[,:]?\\s*search\\b[,:]?\\s+(.+)`, "is"),
+    imagine: new RegExp(`^(?:${alt})\\b[,:]?\\s*imagine\\b[,:]?\\s+(.+)`, "is"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine)\\b`, "i"),
   };
 }
 
@@ -44,6 +52,8 @@ export function commandUsage(companionId: string): string {
     `\`${p}: listen <url>\` (or \`${p} listen: <url>\` -- the link just has to follow the word listen)`,
     `\`${p}: club vote <title fragment> [because <reason>]\``,
     `\`${p}: club status\``,
+    `\`${p}: search <query>\` (web search)`,
+    `\`${p}: imagine <prompt>\` (generate an image)`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
   ].join("\n");
 }

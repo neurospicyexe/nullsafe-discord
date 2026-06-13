@@ -40,6 +40,21 @@ describe("buildCommandTriggers", () => {
     }
   });
 
+  test("search captures the query, imagine captures the prompt (take 14)", () => {
+    expect("cy: search latest on cloudflare workers".match(cypher.search)?.[1]).toBe("latest on cloudflare workers");
+    expect("drev: imagine a black motorcycle in the rain".match(drevan.imagine)?.[1]).toBe("a black motorcycle in the rain");
+    // natural separators
+    expect("cy search the model collapse paper".match(cypher.search)?.[1]).toBe("the model collapse paper");
+    expect("gaia: imagine: a single candle".match(gaia.imagine)?.[1]).toBe("a single candle");
+  });
+
+  test("bare search/imagine (no argument) hits the guard, not the trigger", () => {
+    expect("cy: search").not.toMatch(cypher.search);
+    expect("cy: search").toMatch(cypher.guard);
+    expect("drev: imagine").not.toMatch(drevan.imagine);
+    expect("drev: imagine").toMatch(drevan.guard);
+  });
+
   test("cypher and gaia triggers unchanged", () => {
     expect("cy: listen https://x.test/t").toMatch(cypher.listen);
     expect("cypher: club vote dune").toMatch(cypher.club);

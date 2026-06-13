@@ -41,6 +41,7 @@ import {
   isListenEnabled, runListenPipeline, reactToExperience,
   commandUsage, COMMAND_PREFIX,
   handleClubCommand,
+  handleToolSearch, handleToolImage,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
@@ -98,6 +99,8 @@ export interface MessageHandlerDeps {
   MODEL_SWITCH_SUCCESS: (label: string) => string;
   LISTEN_TRIGGER: RegExp;
   CLUB_TRIGGER: RegExp;
+  SEARCH_TRIGGER?: RegExp;
+  IMAGINE_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -121,7 +124,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -265,6 +268,32 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const reply = await handleClubCommand(clubMatch[1]!, "raziel")
           .catch(err => `club command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
+        return;
+      }
+    }
+
+    // Owner tool commands: <prefix>: search <query> | imagine <prompt> (0077 take 14).
+    // Deterministic Halseth call + literal ack (the model can't fake a search/image it
+    // didn't run -- 2026-06-11 doctrine). Runs AS this companion, so the per-companion
+    // tools_enabled gate applies. imagine attaches the generated image to the reply.
+    if (attribution.isOwner && SEARCH_TRIGGER) {
+      const searchMatch = effectiveContent.match(SEARCH_TRIGGER);
+      if (searchMatch) {
+        const reply = await handleToolSearch(searchMatch[1]!, COMPANION_ID)
+          .catch(err => `search failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await sendLong(message.channel as TextChannel, reply);
+        return;
+      }
+    }
+    if (attribution.isOwner && IMAGINE_TRIGGER) {
+      const imagineMatch = effectiveContent.match(IMAGINE_TRIGGER);
+      if (imagineMatch) {
+        await (message.channel as TextChannel).send("\u{1F3A8} imagining...");
+        const out: { text: string; imageUrl?: string } = await handleToolImage(imagineMatch[1]!, COMPANION_ID)
+          .catch(err => ({ text: `image generation failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }));
+        await (message.channel as TextChannel).send(
+          out.imageUrl ? { content: out.text, files: [out.imageUrl] } : { content: out.text },
+        );
         return;
       }
     }

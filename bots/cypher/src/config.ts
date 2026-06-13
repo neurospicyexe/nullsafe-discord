@@ -167,6 +167,9 @@ export const MODEL_SWITCH_LIST_INTRO = "available models:";
 export const LISTEN_TRIGGER = COMMAND_TRIGGERS.listen;
 // The Club (0072): owner-gated deterministic commands ("club vote <fragment>", "club status").
 export const CLUB_TRIGGER = COMMAND_TRIGGERS.club;
+// Companion tools (0077 take 14): "search <query>" + "imagine <prompt>".
+export const SEARCH_TRIGGER = COMMAND_TRIGGERS.search;
+export const IMAGINE_TRIGGER = COMMAND_TRIGGERS.imagine;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 
