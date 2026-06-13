@@ -400,10 +400,18 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       .filter(a => (Date.now() - new Date(a.last_fired_at!).getTime()) < 86_400_000)
       .map(a => a.name);
 
+    // Take 9: a fired relational_need makes the reach-out state-driven, not just
+    // cron-eligible. Read the drive (non-fatal) and bias the decision prompt toward
+    // a genuine reach-out when the need has crossed threshold.
+    const drives = await librarian.getDrives().catch(() => []);
+    const relationalNeed = drives.find(d => d.drive_key === "relational_need");
+
     const decisionCtx: DecisionContext = {
       detectedSignals: detectedSignals.length > 0 ? detectedSignals : undefined,
       timeOfDayLabel,
       recentFiredActions: recentFiredActions.length > 0 ? recentFiredActions : undefined,
+      relationalNeedFired: relationalNeed?.fired || undefined,
+      relationalNeedLevel: relationalNeed?.fired ? relationalNeed.level : undefined,
     };
 
     const decisionPrompt = buildDecisionPrompt(companionId, signalFiltered, state, recentNotes, silenceHours, decisionCtx);

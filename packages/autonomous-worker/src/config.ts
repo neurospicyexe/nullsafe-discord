@@ -143,6 +143,10 @@ export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?
 // new journal/growth entries for recurring symbolic threads, fades the stale ones.
 export const MOTIF_CRON = process.env["MOTIF_CRON"] ?? "30 8 * * *";
 
+// Creatures (0078, take 10) -- daily 9:30AM tick (after the 9AM forage). Untended
+// trust cools toward baseline + mood re-derives. Server-side in Halseth; thin trigger.
+export const CREATURE_CRON = process.env["CREATURE_CRON"] ?? "30 9 * * *";
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

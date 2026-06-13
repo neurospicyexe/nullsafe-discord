@@ -29,6 +29,7 @@ import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
+import { runCreaturesTick } from "./creatures.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -39,9 +40,22 @@ const forageIdx = args.indexOf("--forage");
 const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
 const motifsIdx = args.indexOf("--motifs");
+const creaturesIdx = args.indexOf("--creatures");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (motifsIdx !== -1) {
+if (creaturesIdx !== -1) {
+  // One-shot creatures tick: cool untended trust + re-derive mood, then exit.
+  console.log("[autonomous-worker] creatures mode");
+  runCreaturesTick()
+    .then(() => {
+      console.log("[autonomous-worker] creatures tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] creatures tick failed:", e);
+      process.exit(1);
+    });
+} else if (motifsIdx !== -1) {
   // One-shot motif tick: detect recurring threads server-side, then exit.
   console.log("[autonomous-worker] motifs mode");
   runMotifsTick()

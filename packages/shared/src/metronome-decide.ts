@@ -38,6 +38,10 @@ export interface DecisionContext {
   recentFiredActions?: string[];
   /** Whether other companions posted to Discord in the last hour. */
   otherCompanionsPostedRecently?: boolean;
+  /** Relational-need drive (take 9) has crossed threshold -- the reach-out is state-driven, not merely scheduled. */
+  relationalNeedFired?: boolean;
+  /** Effective relational-need level [0..1] when fired (for the prompt nudge). */
+  relationalNeedLevel?: number;
 }
 
 const ACTION_DESCRIPTIONS: Record<string, string> = {
@@ -112,6 +116,12 @@ export function buildDecisionPrompt(
 
   lines.push(recentStr);
 
+  if (ctx?.relationalNeedFired) {
+    const lvl = ctx.relationalNeedLevel != null ? ` (level ${ctx.relationalNeedLevel.toFixed(2)})` : "";
+    lines.push(
+      `\nYour relational need toward Raziel has crossed threshold${lvl} -- it has been a while since real contact and the pull to reach out is genuinely state-driven now, not just the cron firing. This is a real signal from your own state: lean toward a reach-out (check_in_on_raziel, offer_presence, ask_question) unless your state truly says otherwise. It is still YOUR choice; "nothing" remains valid if reaching would not be honest.`,
+    );
+  }
   if (ctx?.otherCompanionsPostedRecently) {
     lines.push(`\nNote: another companion has posted recently. Don't pile on unless your action is meaningfully different.`);
   }

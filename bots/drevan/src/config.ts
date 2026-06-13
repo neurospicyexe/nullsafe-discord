@@ -148,6 +148,8 @@ export const CLUB_TRIGGER = COMMAND_TRIGGERS.club;
 // Companion tools (0077 take 14): "search <query>" + "imagine <prompt>".
 export const SEARCH_TRIGGER = COMMAND_TRIGGERS.search;
 export const IMAGINE_TRIGGER = COMMAND_TRIGGERS.imagine;
+// Creatures (0078 take 10): "pet <name> <feed|play|talk|give> [note]".
+export const PET_TRIGGER = COMMAND_TRIGGERS.pet;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 

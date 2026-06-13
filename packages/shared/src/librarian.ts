@@ -592,6 +592,44 @@ export class LibrarianClient {
     }
   }
 
+  /**
+   * Read this companion's drives with their effective (lazily-accrued) levels (take 9).
+   * Returns [] on any error -- a drive read never blocks the heartbeat.
+   */
+  async getDrives(): Promise<Array<{
+    drive_key: string; level: number; threshold: number; fired: boolean; modality: "text" | "voice" | null;
+  }>> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/drives/${encodeURIComponent(this.companionId)}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      type D = { drive_key: string; level: number; threshold: number; fired: boolean; modality: "text" | "voice" | null };
+      const data = await res.json() as { drives?: D[] };
+      return Array.isArray(data.drives) ? data.drives : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Shed a drive on Raziel-contact (take 9). Fire-and-forget from the message path:
+   * any real contact resets the need so the reach-out drive only fires on genuine silence.
+   */
+  async shedDriveContact(driveKey = "relational_need"): Promise<void> {
+    try {
+      await this._fetch(`${this.url}/mind/drives/${encodeURIComponent(this.companionId)}/contact`, {
+        method: "PATCH",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ drive_key: driveKey }),
+        signal: AbortSignal.timeout(5_000),
+      });
+    } catch {
+      // non-fatal -- contact shedding is best-effort
+    }
+  }
+
   /** Record a successful action fire. Updates last_fired_at and fire_count_today. */
   async recordMetronomeActionFired(actionId: string): Promise<void> {
     try {

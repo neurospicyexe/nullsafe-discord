@@ -746,3 +746,9 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
 export async function detectMotifs(): Promise<{ ok: boolean; detected: Record<string, number> }> {
   return await hFetch("/mind/motifs/detect", "POST", {}) as { ok: boolean; detected: Record<string, number> };
 }
+
+// ── Creatures (0078, take 10) ─────────────────────────────────────────────────
+
+export async function tickCreatures(): Promise<{ ok: boolean; ticked: number; total: number }> {
+  return await hFetch("/mind/creatures/tick", "POST", {}) as { ok: boolean; ticked: number; total: number };
+}

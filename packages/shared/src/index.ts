@@ -39,3 +39,4 @@ export * from "./command-triggers.js";
 export * from "./media.js";
 export * from "./club-command.js";
 export * from "./tools-command.js";
+export * from "./creature-command.js";

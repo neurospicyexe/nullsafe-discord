@@ -42,6 +42,7 @@ import {
   commandUsage, COMMAND_PREFIX,
   handleClubCommand,
   handleToolSearch, handleToolImage,
+  handlePetCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
@@ -101,6 +102,7 @@ export interface MessageHandlerDeps {
   CLUB_TRIGGER: RegExp;
   SEARCH_TRIGGER?: RegExp;
   IMAGINE_TRIGGER?: RegExp;
+  PET_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -124,7 +126,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -177,6 +179,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       isMentioned: message.mentions.has(client.user?.id ?? ""),
       userTier,
     };
+
+    // Take 9 contact-hook: any real Raziel contact sheds this companion's relational
+    // need, so the drive-driven reach-out only fires on genuine silence. Fire-and-forget
+    // (shedDriveContact swallows its own errors) -- never blocks the message path.
+    if (attribution.isOwner) {
+      writeQueue.fireAndForget(`drive:contact:${COMPANION_ID}`, () => librarian.shedDriveContact());
+    }
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
@@ -294,6 +303,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         await (message.channel as TextChannel).send(
           out.imageUrl ? { content: out.text, files: [out.imageUrl] } : { content: out.text },
         );
+        return;
+      }
+    }
+
+    // Owner pet command: <prefix>: pet <name> <feed|play|talk|give> [note] (0078 take 10).
+    // Deterministic Halseth interact + literal ack -- the model can't narrate a feeding
+    // it never did. Actor is "raziel".
+    if (attribution.isOwner && PET_TRIGGER) {
+      const petMatch = effectiveContent.match(PET_TRIGGER);
+      if (petMatch) {
+        const reply = await handlePetCommand(petMatch[1]!, "raziel")
+          .catch(err => `pet command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await (message.channel as TextChannel).send(reply);
         return;
       }
     }
