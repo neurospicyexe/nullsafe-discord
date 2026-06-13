@@ -178,7 +178,11 @@ export async function executeMetronomeAction(
     case "write_journal": {
       const prompt = action.prompt ?? prompts.writeJournal;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome"] })).catch(onWriteError(companionId, "journal entry"));
+      // companion_journal (its actual intent), NOT human_journal. "add journal entry"
+      // routed to journal_add -> human_journal AND rejected the `content` field, so this
+      // silently no-op'd every fire. "add companion note" -> companion_journal handles
+      // {content, tags:[...]} correctly (2026-06-13 bug hunt).
+      if (content) librarian.ask("add companion note", JSON.stringify({ content, tags: ["metronome"], source: "metronome" })).catch(onWriteError(companionId, "journal entry"));
       break;
     }
     case "write_feeling": {
@@ -245,7 +249,10 @@ export async function executeMetronomeAction(
       // companion journal tagged letter_to_raziel; surfaces in Hearth /journal.
       const prompt = action.prompt ?? prompts.writeNoteToRaziel;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("add journal entry", JSON.stringify({ entry_type: "reflection", content, tags: ["metronome", "letter_to_raziel"] })).catch(onWriteError(companionId, "note to raziel"));
+      // companion_journal tagged letter_to_raziel (surfaces in Hearth /journal), same
+      // pattern as the guardian weekly letter. Was routing to human_journal + rejected
+      // on the `content` field -> silent no-op (2026-06-13 bug hunt).
+      if (content) librarian.ask("add companion note", JSON.stringify({ content, tags: ["metronome", "letter_to_raziel"], source: "metronome" })).catch(onWriteError(companionId, "note to raziel"));
       break;
     }
     case "nothing":
