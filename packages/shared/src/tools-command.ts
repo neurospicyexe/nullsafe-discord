@@ -69,6 +69,15 @@ export async function handleToolSearch(query: string, companionId: string): Prom
   return formatSearchReply(q, results);
 }
 
+/** Handle `council <question>`. Convenes a council round; the worker runs the ritual. (take 8) */
+export async function handleCouncilConvene(question: string): Promise<string> {
+  const q = question.trim();
+  if (!q) return "give the council a question.";
+  const res = await toolsFetch("/mind/council/convene", { question: q, asked_by: "raziel" });
+  if (!res.ok) return `couldn't convene the council: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`;
+  return `council convened on: "${q.slice(0, 160)}" — the triad will answer, rank blind, and Gaia will synthesize. check back with "council status".`;
+}
+
 /** Handle `imagine <prompt>`. Returns ack text + an optional image url to attach. */
 export async function handleToolImage(prompt: string, companionId: string): Promise<{ text: string; imageUrl?: string }> {
   const p = prompt.trim();

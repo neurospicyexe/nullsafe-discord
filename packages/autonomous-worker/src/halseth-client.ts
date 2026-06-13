@@ -540,11 +540,12 @@ export async function postQuestion(companionId: string, question: string, contex
 // Self-model (0070): record a companion-authored self-observation at confidence 0.3.
 // Identical observations dedup server-side; the ladder (confirm/revise/graduate) is
 // driven from human-present surfaces, not from here.
-export async function postSelfObservation(companionId: string, observation: string, domain?: string): Promise<void> {
+export async function postSelfObservation(companionId: string, observation: string, domain?: string, kind: "preference" | "skill" = "preference"): Promise<void> {
   await hFetch("/mind/self-model", "POST", {
     companion_id: companionId,
     observation,
     ...(domain ? { domain } : {}),
+    ...(kind === "skill" ? { kind } : {}),
   });
 }
 
@@ -751,4 +752,29 @@ export async function detectMotifs(): Promise<{ ok: boolean; detected: Record<st
 
 export async function tickCreatures(): Promise<{ ok: boolean; ticked: number; total: number }> {
   return await hFetch("/mind/creatures/tick", "POST", {}) as { ok: boolean; ticked: number; total: number };
+}
+
+// ── Council (0080, take 8) ────────────────────────────────────────────────────
+
+export async function getNextCouncilQuestion(): Promise<{ id: string; question: string; asked_by: string } | null> {
+  const r = await hFetch("/mind/council/next-open") as { question: { id: string; question: string; asked_by: string } | null };
+  return r.question;
+}
+
+export async function postCouncilAnswer(questionId: string, companionId: string, answer: string): Promise<void> {
+  await hFetch("/mind/council/answer", "POST", { question_id: questionId, companion_id: companionId, answer });
+}
+
+export async function postCouncilRanking(questionId: string, rankerId: string, ranking: string[]): Promise<void> {
+  await hFetch("/mind/council/ranking", "POST", { question_id: questionId, ranker_id: rankerId, ranking });
+}
+
+export async function finalizeCouncil(questionId: string, synthesis: string): Promise<{ winning_companion_id: string | null }> {
+  return await hFetch(`/mind/council/${encodeURIComponent(questionId)}/finalize`, "POST", { synthesis }) as { winning_companion_id: string | null };
+}
+
+// ── Dream association modes (take 3) ──────────────────────────────────────────
+
+export async function associateDreams(): Promise<{ ok: boolean; written: Record<string, number> }> {
+  return await hFetch("/mind/dreams/associate", "POST", {}) as { ok: boolean; written: Record<string, number> };
 }

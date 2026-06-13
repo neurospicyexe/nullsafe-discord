@@ -41,7 +41,7 @@ import {
   isListenEnabled, runListenPipeline, reactToExperience,
   commandUsage, COMMAND_PREFIX,
   handleClubCommand,
-  handleToolSearch, handleToolImage,
+  handleToolSearch, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
@@ -103,6 +103,7 @@ export interface MessageHandlerDeps {
   SEARCH_TRIGGER?: RegExp;
   IMAGINE_TRIGGER?: RegExp;
   PET_TRIGGER?: RegExp;
+  COUNCIL_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -126,7 +127,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -315,6 +316,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (petMatch) {
         const reply = await handlePetCommand(petMatch[1]!, "raziel")
           .catch(err => `pet command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await (message.channel as TextChannel).send(reply);
+        return;
+      }
+    }
+
+    // Owner council command: <prefix>: council <question> (0080 take 8). Convenes; the
+    // worker runs answer + blind-rank + Gaia synthesis. Deterministic convene ack.
+    if (attribution.isOwner && COUNCIL_TRIGGER) {
+      const councilMatch = effectiveContent.match(COUNCIL_TRIGGER);
+      if (councilMatch) {
+        const reply = await handleCouncilConvene(councilMatch[1]!)
+          .catch(err => `council command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
       }

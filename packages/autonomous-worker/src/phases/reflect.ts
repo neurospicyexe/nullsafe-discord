@@ -112,6 +112,11 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence; ` +
     `you will test it across sessions before proposing it to Raziel. Most runs reveal nothing new about ` +
     `you -- null is the honest default.\n\n` +
+    `4b. SKILL (optional) -- distinct from self-observation: if this run revealed an OPERATIONAL ` +
+    `competence that WORKED (a foraging query strategy that surfaced something real, a synthesis ` +
+    `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
+    `{"text": "...", "domain": "one-word area"} (else null). It enters the SAME ladder at low ` +
+    `confidence and only graduates with Raziel. Only when something concretely worked -- null otherwise.\n\n` +
     (canonBlock
       ? canonBlock +
         `5. RECONSOLIDATION (optional) -- if one of the settled canon entries above reads as outdated or ` +
@@ -127,6 +132,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `  "question_for_raziel": null,\n` +
     `  "next_session": {"pace": "normal", "focus": null},\n` +
     `  "self_observation": null,\n` +
+    `  "skill_observation": null,\n` +
     (canonBlock ? `  "reconsolidation": null,\n` : "") +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
@@ -155,6 +161,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       question_for_raziel?: string | null;
       next_session?: { pace?: string; focus?: string | null } | null;
       self_observation?: { text?: string; domain?: string } | null;
+      skill_observation?: { text?: string; domain?: string } | null;
       reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
@@ -267,6 +274,15 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await postSelfObservation(ctx.companionId, selfObs.slice(0, 600), parsed.self_observation?.domain?.slice(0, 100))
         .then(() => appendLog(ctx.runId, "reflect:self-observation", selfObs.slice(0, 100)))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] self-observation write failed:`, e));
+    }
+
+    // Skill ladder (take 7): operational competence enters the SAME ladder, kind='skill'.
+    // Non-fatal; identical skills dedup server-side (within kind).
+    const skillObs = typeof parsed.skill_observation?.text === "string" ? parsed.skill_observation.text.trim() : "";
+    if (skillObs.length >= 12) {
+      await postSelfObservation(ctx.companionId, skillObs.slice(0, 600), parsed.skill_observation?.domain?.slice(0, 100), "skill")
+        .then(() => appendLog(ctx.runId, "reflect:skill-observation", skillObs.slice(0, 100)))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] skill-observation write failed:`, e));
     }
 
     // Thread lifecycle

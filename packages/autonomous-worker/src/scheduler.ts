@@ -14,7 +14,9 @@ import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
 import { runCreaturesTick } from "./creatures.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, MOTIF_CRON, CREATURE_CRON } from "./config.js";
+import { runCouncilTick } from "./council.js";
+import { runDreamAssociate } from "./dream-associate.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -188,6 +190,20 @@ export function startScheduler(): void {
   console.log(`[scheduler] creatures → cron "${CREATURE_CRON}"`);
   cron.schedule(CREATURE_CRON, () => {
     runCreaturesTick().catch(e => console.error("[scheduler] creatures failed:", e));
+  });
+
+  // Council -- checks for an open convened question and runs the full ritual. Cheap
+  // no-op when none is open. LLM-driven; no floor lock (writes to Halseth only).
+  console.log(`[scheduler] council → cron "${COUNCIL_CRON}"`);
+  cron.schedule(COUNCIL_CRON, () => {
+    runCouncilTick().catch(e => console.error("[scheduler] council failed:", e));
+  });
+
+  // Dream association -- entity-cluster + temporal-pattern dreams from recent journals.
+  // Server-side detection in Halseth; thin trigger.
+  console.log(`[scheduler] dreams → cron "${DREAM_CRON}"`);
+  cron.schedule(DREAM_CRON, () => {
+    runDreamAssociate().catch(e => console.error("[scheduler] dreams failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

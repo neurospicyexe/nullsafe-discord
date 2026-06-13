@@ -30,6 +30,8 @@ import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
 import { runCreaturesTick } from "./creatures.js";
+import { runCouncilTick } from "./council.js";
+import { runDreamAssociate } from "./dream-associate.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -41,9 +43,23 @@ const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
 const motifsIdx = args.indexOf("--motifs");
 const creaturesIdx = args.indexOf("--creatures");
+const councilIdx = args.indexOf("--council");
+const dreamsIdx = args.indexOf("--dreams");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 
-if (creaturesIdx !== -1) {
+if (councilIdx !== -1) {
+  // One-shot council tick: run the ritual for the oldest open question, then exit.
+  console.log("[autonomous-worker] council mode");
+  runCouncilTick()
+    .then(id => { console.log(`[autonomous-worker] council tick complete${id ? ` (${id})` : " (no open question)"}`); process.exit(0); })
+    .catch(e => { console.error("[autonomous-worker] council tick failed:", e); process.exit(1); });
+} else if (dreamsIdx !== -1) {
+  // One-shot dream association tick.
+  console.log("[autonomous-worker] dreams mode");
+  runDreamAssociate()
+    .then(() => { console.log("[autonomous-worker] dreams tick complete"); process.exit(0); })
+    .catch(e => { console.error("[autonomous-worker] dreams tick failed:", e); process.exit(1); });
+} else if (creaturesIdx !== -1) {
   // One-shot creatures tick: cool untended trust + re-derive mood, then exit.
   console.log("[autonomous-worker] creatures mode");
   runCreaturesTick()

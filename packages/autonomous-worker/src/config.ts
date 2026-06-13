@@ -147,6 +147,14 @@ export const MOTIF_CRON = process.env["MOTIF_CRON"] ?? "30 8 * * *";
 // trust cools toward baseline + mood re-derives. Server-side in Halseth; thin trigger.
 export const CREATURE_CRON = process.env["CREATURE_CRON"] ?? "30 9 * * *";
 
+// Council (0080, take 8) -- checks for an open question every 30 min and runs the full
+// ritual (answer + blind rank + Gaia synthesis). Cheap no-op when none is open.
+export const COUNCIL_CRON = process.env["COUNCIL_CRON"] ?? "*/30 * * * *";
+
+// Dream association (take 3) -- daily 2:30AM, after the night pipeline writes journals.
+// entity-cluster + temporal-pattern dreams from recent growth_journal. Server-side.
+export const DREAM_CRON = process.env["DREAM_CRON"] ?? "30 2 * * *";
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

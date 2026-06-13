@@ -20,6 +20,7 @@ export interface CommandTriggers {
   search: RegExp;
   imagine: RegExp;
   pet: RegExp;
+  council: RegExp;
   guard: RegExp;
 }
 
@@ -38,7 +39,9 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Creatures (0078 take 10). Form: "<prefix>: pet <name> <feed|play|talk|give> [note]".
     // An argument is REQUIRED so a bare "pet" misses -> guard -> usage, never inference.
     pet: new RegExp(`^(?:${alt})\\b[,:]?\\s*pet\\b[,:]?\\s+(.+)`, "is"),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet)\\b`, "i"),
+    // Council (0080 take 8). Form: "<prefix>: council <question>". Arg required.
+    council: new RegExp(`^(?:${alt})\\b[,:]?\\s*council\\b[,:]?\\s+(.+)`, "is"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council)\\b`, "i"),
   };
 }
 
@@ -59,6 +62,7 @@ export function commandUsage(companionId: string): string {
     `\`${p}: search <query>\` (web search)`,
     `\`${p}: imagine <prompt>\` (generate an image)`,
     `\`${p}: pet <name> <feed|play|talk|give> [note]\` (a creature)`,
+    `\`${p}: council <question>\` (convene the triad on a hard question)`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
   ].join("\n");
 }

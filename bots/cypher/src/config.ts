@@ -172,6 +172,8 @@ export const SEARCH_TRIGGER = COMMAND_TRIGGERS.search;
 export const IMAGINE_TRIGGER = COMMAND_TRIGGERS.imagine;
 // Creatures (0078 take 10): "pet <name> <feed|play|talk|give> [note]".
 export const PET_TRIGGER = COMMAND_TRIGGERS.pet;
+// Council (0080 take 8): "council <question>".
+export const COUNCIL_TRIGGER = COMMAND_TRIGGERS.council;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 
