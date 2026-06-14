@@ -26,6 +26,7 @@ import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";
 import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
+import { runGuardianResolve } from "./phases/guardian-resolve.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
@@ -41,6 +42,7 @@ const dialecticIdx = args.indexOf("--dialectic");
 const forageIdx = args.indexOf("--forage");
 const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
+const guardianResolveIdx = args.indexOf("--guardian-resolve");
 const motifsIdx = args.indexOf("--motifs");
 const creaturesIdx = args.indexOf("--creatures");
 const councilIdx = args.indexOf("--council");
@@ -93,6 +95,18 @@ if (councilIdx !== -1) {
     })
     .catch(e => {
       console.error("[autonomous-worker] guardian tick failed:", e);
+      process.exit(1);
+    });
+} else if (guardianResolveIdx !== -1) {
+  // One-shot guardian self-resolution: each companion clears its own resolvable flags.
+  console.log("[autonomous-worker] guardian-resolve mode");
+  runGuardianResolve()
+    .then(n => {
+      console.log(`[autonomous-worker] guardian-resolve complete: ${n} flag(s) resolved`);
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] guardian-resolve failed:", e);
       process.exit(1);
     });
 } else if (clubIdx !== -1) {

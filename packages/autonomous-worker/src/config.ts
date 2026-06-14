@@ -138,6 +138,15 @@ export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4
 export const GUARDIAN_CRON = process.env["GUARDIAN_CRON"] ?? "0 8 * * *";
 export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?? "0", 10);
 
+// Guardian self-resolution (2026-06-14) -- daily 8:45AM tick, AFTER the 8AM guardian
+// detection + 8:30 motif, so it acts on fresh flags. Each companion reads its OWN
+// live flags and clears the self-resolvable classes (loop_stuck close/hold, starved
+// tension pool) in voice. Identity-level decisions (basins, canon-accept) are NOT
+// touched here -- those route to Raziel / the weekly high-substrate pass.
+export const GUARDIAN_RESOLVE_CRON = process.env["GUARDIAN_RESOLVE_CRON"] ?? "45 8 * * *";
+// Max flags one companion resolves per tick -- bounds DeepSeek cost + keeps it deliberate.
+export const GUARDIAN_RESOLVE_MAX = parseInt(process.env["GUARDIAN_RESOLVE_MAX"] ?? "5", 10);
+
 // Motif memory (0076) -- daily 8:30AM tick (after the 8AM guardian, before 9AM forage).
 // Detection runs server-side in Halseth; this is just the trigger. Scans the day's
 // new journal/growth entries for recurring symbolic threads, fades the stale ones.

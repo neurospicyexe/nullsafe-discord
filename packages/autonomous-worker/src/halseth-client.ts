@@ -623,6 +623,79 @@ export async function surfaceTension(id: string): Promise<void> {
   await hFetch(`/companion-growth/tensions/${id}`, "PATCH", { charge_delta: 0.5 });
 }
 
+// Log a genuine in-voice tension (Guardian self-resolution: a companion feeding its
+// own starved tension pool). Returns the new id, or null on failure -- callers must
+// check (continuity-critical write, never fire-and-forget; 2026-06-14 lesson).
+export async function addTension(companionId: string, tensionText: string, notes?: string): Promise<string | null> {
+  try {
+    const r = await hFetch("/companion-growth/tensions", "POST", {
+      companion_id: companionId, tension_text: tensionText, notes: notes ?? null,
+    }) as { id?: string };
+    return r.id ?? null;
+  } catch (e) {
+    console.warn(`[${companionId}/guardian-resolve] addTension failed:`, e);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Guardian self-resolution (2026-06-14) -- a companion reading + clearing its OWN flags
+// ---------------------------------------------------------------------------
+
+export interface GuardianFlag {
+  id: string;
+  companion_id: string | null;
+  flag_type: string;
+  severity: string;
+  summary: string;
+  evidence_json: string | null;
+  status: string;
+}
+
+/** Live guardian flags for one companion (own + shared). Caller filters to its own. */
+export async function getGuardianFlags(companionId: string): Promise<GuardianFlag[]> {
+  try {
+    const r = await hFetch(`/mind/guardian/flags?companion_id=${companionId}&status=live&limit=50`) as { flags: GuardianFlag[] };
+    return r.flags ?? [];
+  } catch (e) {
+    console.warn(`[${companionId}/guardian-resolve] getGuardianFlags failed:`, e);
+    return [];
+  }
+}
+
+/** Mark a flag acknowledged or resolved. Returns true on a successful change. */
+export async function setGuardianFlagStatus(id: string, status: "acknowledged" | "resolved"): Promise<boolean> {
+  try {
+    const r = await hFetch(`/mind/guardian/flags/${id}`, "PATCH", { status }) as { ok?: boolean };
+    return r.ok === true;
+  } catch (e) {
+    console.warn(`[guardian-resolve] setGuardianFlagStatus(${id}) failed:`, e);
+    return false;
+  }
+}
+
+/** Close one of the companion's own open loops. Ownership-guarded server-side. */
+export async function closeLoop(companionId: string, loopId: string): Promise<boolean> {
+  try {
+    const r = await hFetch(`/mind/loop/${loopId}/close`, "POST", { companion_id: companionId }) as { ok?: boolean };
+    return r.ok === true;
+  } catch (e) {
+    console.warn(`[${companionId}/guardian-resolve] closeLoop failed:`, e);
+    return false;
+  }
+}
+
+/** Hold a loop open with a reason (suppresses the stuck flag for 21d). */
+export async function reviewLoop(companionId: string, loopId: string, reason: string): Promise<boolean> {
+  try {
+    const r = await hFetch(`/mind/loop/${loopId}/review`, "POST", { companion_id: companionId, reason }) as { ok?: boolean };
+    return r.ok === true;
+  } catch (e) {
+    console.warn(`[${companionId}/guardian-resolve] reviewLoop failed:`, e);
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runs read -- pulse scheduler gap/cap checks
 // ---------------------------------------------------------------------------
