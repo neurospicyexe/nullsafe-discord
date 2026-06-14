@@ -80,6 +80,7 @@ export function buildHeardBlock(
   meta: TrackMeta,
   analysis: Record<string, unknown>,
   lyrics: string | null,
+  lyricsSource: "lrclib" | "web" | null = null,
 ): string {
   // hear-music emits { tonic, mode, confidence }; older drafts used { name }. Accept both.
   const keyRaw = analysis["key"] as { name?: string; tonic?: string; mode?: string; confidence?: number } | null;
@@ -105,13 +106,19 @@ export function buildHeardBlock(
   }
   if (lyrics) {
     const excerpt = lyrics.split("\n").filter(l => l.trim()).slice(0, 24).join("\n").slice(0, 1600);
-    lines.push(`Lyrics (excerpt):\n${excerpt}`);
+    if (lyricsSource === "web") {
+      // Web-scraped: partial and possibly imperfect. Tell the companion so it doesn't
+      // treat a truncated first verse as the whole song.
+      lines.push(`Lyrics (web-sourced, partial/approximate -- not a verified transcript):\n${excerpt}`);
+    } else {
+      lines.push(`Lyrics (excerpt):\n${excerpt}`);
+    }
   } else {
-    // A fetch miss is NOT proof the track is instrumental -- LRCLIB just didn't have a
-    // transcript (or the metadata didn't match). The companion previously collapsed this
-    // into "the song has no lyrics" on an actual lyric video (2026-06-14). Ground it.
+    // A fetch miss is NOT proof the track is instrumental -- neither LRCLIB nor a web
+    // search turned up a transcript. The companion previously collapsed this into "the
+    // song has no lyrics" on an actual lyric video (2026-06-14). Ground it.
     lines.push(
-      "Lyrics: not retrieved -- no transcript matched on LRCLIB. This is NOT evidence the track is instrumental or wordless; you simply don't have the words in front of you. Do not claim it has no lyrics -- speak to what you heard in the audio, and you can say you couldn't pull the lyrics.",
+      "Lyrics: not retrieved -- nothing matched on LRCLIB or web search. This is NOT evidence the track is instrumental or wordless; you simply don't have the words in front of you. Do not claim it has no lyrics -- speak to what you heard in the audio, and you can say you couldn't pull the lyrics.",
     );
   }
   return lines.join("\n");
@@ -143,6 +150,90 @@ async function fetchLyrics(meta: TrackMeta): Promise<string | null> {
   } catch {
     return null; // lyrics are enrichment, never fatal
   }
+}
+
+export interface LyricsResult {
+  text: string;
+  source: "lrclib" | "web";
+  sourceUrl?: string;
+}
+
+// Lyrics-bearing domains, in preference order. Tavily snippets from these read
+// "<Title> Lyrics: <first verse...>", which carries the actual words.
+const LYRICS_DOMAINS = ["genius.com", "musixmatch.com", "azlyrics.com", "lyrics.com", "songlyrics.com", "letras.com"];
+
+// Tavily web-search daily cap (shared free-tier budget with the worker). Listens are
+// owner-initiated and rare, so a modest ceiling is plenty; tune via env.
+const webLyricsDaily = {
+  date: "",
+  count: 0,
+  take(): boolean {
+    const cap = parseInt(process.env["MEDIA_LYRICS_WEB_MAX_PER_DAY"] ?? "20", 10);
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.date !== today) { this.date = today; this.count = 0; }
+    if (this.count >= cap) return false;
+    this.count++;
+    return true;
+  },
+};
+
+// Pull a lyrics block out of a Tavily result snippet. Snippets label the song
+// ("All Fall Down Lyrics: ...") then run lines together with " / " (Genius) or
+// " ; " (Musixmatch). Strip the label, restore line breaks. Web-sourced lyrics are
+// partial/approximate by nature -- the heard-block flags them as such.
+export function extractWebLyrics(snippet: string): string {
+  let s = snippet.replace(/^.*?\blyrics?\s*[:\-]\s*/i, ""); // drop leading "… Lyrics:" label
+  s = s.replace(/\s*\/\s*/g, "\n").replace(/\s*;\s*/g, "\n"); // line separators -> newlines
+  s = s.replace(/\n{2,}/g, "\n").trim();
+  return s.slice(0, 1200);
+}
+
+// Fallback when LRCLIB has no transcript: Tavily web search, scoped to the cleaned
+// title + artist, biased to known lyrics sites. Best-effort, never fatal. Gated by
+// TAVILY_API_KEY presence (set MEDIA_LYRICS_WEB=false to disable).
+async function fetchLyricsWeb(meta: TrackMeta): Promise<LyricsResult | null> {
+  const key = process.env["TAVILY_API_KEY"];
+  if (!key || process.env["MEDIA_LYRICS_WEB"] === "false") return null;
+  const title = cleanTrackTitle(meta.title ?? "");
+  if (!title) return null;
+  const artist = meta.artist ? cleanArtist(meta.artist) : "";
+  if (!webLyricsDaily.take()) {
+    console.warn("[media] web-lyrics daily cap reached, skipping Tavily lookup");
+    return null;
+  }
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: key,
+        query: `${title} ${artist} lyrics`.trim(),
+        search_depth: "basic",
+        max_results: 5,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { results?: Array<{ url?: string; content?: string }> };
+    const results = data.results ?? [];
+    // Prefer a known lyrics domain; fall back to any snippet that looks like lyrics.
+    const hit =
+      results.find(r => r.url && LYRICS_DOMAINS.some(d => r.url!.includes(d)) && (r.content?.trim().length ?? 0) > 40)
+      ?? results.find(r => /\blyrics?\b/i.test(r.content ?? "") && (r.content?.trim().length ?? 0) > 40);
+    if (!hit?.content) return null;
+    const text = extractWebLyrics(hit.content);
+    if (!text || text.length < 20) return null;
+    return { text, source: "web", sourceUrl: hit.url };
+  } catch {
+    return null; // web lyrics are enrichment, never fatal
+  }
+}
+
+/** LRCLIB first (clean/verbatim), then Tavily web (partial/approximate). */
+export async function getLyrics(meta: TrackMeta): Promise<LyricsResult | null> {
+  const lrc = await fetchLyrics(meta);
+  if (lrc) return { text: lrc, source: "lrclib" };
+  return fetchLyricsWeb(meta);
 }
 
 async function postExperience(payload: Record<string, unknown>): Promise<string | null> {
@@ -240,8 +331,10 @@ export async function runListenPipeline(
     const fullAnalysis = JSON.parse(await readFile(path.join(outDir, "analysis.json"), "utf8")) as Record<string, unknown>;
     const analysis = compactAnalysis(fullAnalysis);
 
-    // 3. Lyrics (best-effort).
-    const lyrics = await fetchLyrics(meta);
+    // 3. Lyrics (best-effort): LRCLIB first, then Tavily web search.
+    const lyricsResult = await getLyrics(meta);
+    const lyrics = lyricsResult?.text ?? null;
+    const lyricsSource = lyricsResult?.source ?? null;
 
     // 4. Persist to Halseth (best-effort -- a failed write must not eat the listen).
     const experienceId = await postExperience({
@@ -251,7 +344,7 @@ export async function runListenPipeline(
       analysis_json: analysis, lyrics,
     });
 
-    return { experienceId, meta, heardBlock: buildHeardBlock(meta, analysis, lyrics) };
+    return { experienceId, meta, heardBlock: buildHeardBlock(meta, analysis, lyrics, lyricsSource) };
   } finally {
     await rm(jobDir, { recursive: true, force: true }).catch(() => {});
   }

@@ -1,4 +1,4 @@
-import { buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist } from "../media.js";
+import { buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist, extractWebLyrics } from "../media.js";
 
 describe("compactAnalysis", () => {
   const full = {
@@ -55,6 +55,45 @@ describe("cleanArtist", () => {
     expect(cleanArtist("Victor Jones, Victor Jones")).toBe("Victor Jones");
     expect(cleanArtist("Johnny Cash - Topic")).toBe("Johnny Cash");
     expect(cleanArtist("amc+, Lakeshore Records")).toBe("amc+");
+  });
+});
+
+describe("extractWebLyrics (Tavily fallback when LRCLIB misses)", () => {
+  it("strips the '… Lyrics:' label and restores Genius ' / ' line breaks", () => {
+    // The real Tavily snippet for the AMC+ track that LRCLIB lacked (2026-06-14).
+    const snippet = "All Fall Down Lyrics: I'm the little killer / I'm the lonely one / I'm the chill creepin' up your spine / Tellin' you to run";
+    const out = extractWebLyrics(snippet);
+    expect(out.startsWith("I'm the little killer")).toBe(true);
+    expect(out).not.toMatch(/lyrics:/i);
+    expect(out.split("\n").length).toBeGreaterThanOrEqual(4);
+  });
+  it("handles Musixmatch ' ; ' separators", () => {
+    const out = extractWebLyrics("Lyrics of All Fall Down by The Vampire Lestat ; I'm the little killer ; I'm the lonely one");
+    expect(out.split("\n")).toContain("I'm the little killer");
+  });
+});
+
+describe("buildHeardBlock -- web-sourced lyrics are flagged", () => {
+  it("labels web lyrics as partial/approximate so they aren't taken as a full transcript", () => {
+    const block = buildHeardBlock(
+      { title: "All Fall Down", artist: "The Vampire Lestat", duration_sec: 83 },
+      { tempo_bpm: 123, tempo_estimated: true, key: null, onset_count: 88, duration: 83 },
+      "I'm the little killer\nI'm the lonely one",
+      "web",
+    );
+    expect(block).toMatch(/web-sourced/i);
+    expect(block).toMatch(/partial\/approximate/i);
+    expect(block).toContain("I'm the little killer");
+  });
+  it("LRCLIB lyrics keep the plain 'excerpt' label (verbatim)", () => {
+    const block = buildHeardBlock(
+      { title: "Hurt", artist: "Johnny Cash", duration_sec: 218 },
+      { tempo_bpm: 84, tempo_estimated: false, key: null, onset_count: 1, duration: 218 },
+      "I hurt myself today",
+      "lrclib",
+    );
+    expect(block).toContain("Lyrics (excerpt):");
+    expect(block).not.toMatch(/web-sourced/i);
   });
 });
 
