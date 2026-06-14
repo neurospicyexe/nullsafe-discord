@@ -880,8 +880,20 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
 
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
+// NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --
+// the 15s hFetch default aborts mid-pass and the disconnect cancels the server request.
 export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null }> {
-  return await hFetch("/mind/clearing/run", "POST", {}) as { skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null };
+  const res = await fetch(`${HALSETH_URL}/mind/clearing/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HALSETH_SECRET}` },
+    body: "{}",
+    signal: AbortSignal.timeout(290_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Halseth POST /mind/clearing/run → ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return await res.json() as { skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null };
 }
 
 // ── Motif memory (0076) ──────────────────────────────────────────────────────
