@@ -1,7 +1,23 @@
 import { getAvailableSeeds, markSeedUsed, appendLog } from "../halseth-client.js";
 import { prompt } from "../deepseek.js";
 import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
-import type { PipelineContext, Seed } from "../types.js";
+import { INWARD_RE } from "@nullsafe/shared";
+import type { PipelineContext, Seed, CompanionId } from "../types.js";
+
+/**
+ * Final outward guard for the NIGHTLY seed path (foraging spec Part 1, 2026-06-09 --
+ * the weekly seed-gen.ts got this on 6/9, the pipeline phase 2 never did; ratification
+ * pass 2026-06-14 caught all three companions seeding inward on private coinage here).
+ * INWARD_RE catches system vocabulary (Halseth/SOMA/basin/substrate/drift...). If a seed
+ * names the loom instead of the world, swap it for a clean anchor topic -- silence/outward
+ * beats echo. Private poetic coinage that carries NO system vocab (e.g. a basin reading like
+ * "0.503 bones-before-skeleton") slips past any regex, so it is handled upstream by keeping
+ * pressure flags signal-only -- they never reach here as a topic in the first place.
+ */
+export function ensureOutward(content: string, companionId: CompanionId): string {
+  if (!INWARD_RE.test(content)) return content;
+  return COMPANION_ANCHOR_TOPICS[companionId][0];
+}
 
 /**
  * Pure function -- decides whether to seed from session content or outward anchor topics.
@@ -96,12 +112,24 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
       await markSeedUsed(queueSeed.id);
       await appendLog(ctx.runId, "seed:queue",
         `decided "${queueSeed.content.slice(0, 80)}" — ${chosen.reason}`);
-    } else {
-      ctx.seed = buildLiveSeed(ctx, chosen.liveText ?? "something currently present");
+    } else if (chosen.liveText) {
+      // Live, world-facing material (an open loop). Pressure flags are excluded as topics
+      // upstream (extractLiveText), so anything that lands here is legitimately explorable;
+      // ensureOutward is the final belt against an open loop that itself names the system.
+      ctx.seed = buildLiveSeed(ctx, ensureOutward(chosen.liveText, ctx.companionId));
       ctx.runType = "exploration";
       ctx.seedDecisionReason = chosen.reason;
       await appendLog(ctx.runId, "seed:live_context",
         `"${ctx.seed.content.slice(0, 80)}" — ${chosen.reason}`);
+    } else {
+      // Model wanted "live" but the only live signal was pressure (a state to hold, not a
+      // topic to research). Take the queue seed instead of web-searching a basin reading.
+      ctx.seed = queueSeed;
+      ctx.runType = "exploration";
+      ctx.seedDecisionReason = `${chosen.reason} (live signal was pressure-only; took queue seed)`;
+      await markSeedUsed(queueSeed.id);
+      await appendLog(ctx.runId, "seed:queue",
+        `pressure-only live signal, fell back to queue "${queueSeed.content.slice(0, 80)}"`);
     }
     return;
   }
@@ -141,7 +169,9 @@ async function decideWithContext(
 
   const liveItems = [
     ...ctx.openLoops.map(l => `Open loop: ${l.text}`),
-    ...ctx.pressureFlags.map(p => `Pressure: ${p}`),
+    // Pressure flags are shown so the companion knows what state it is carrying, but they are
+    // a state to HOLD, not a topic to research (a basin reading is the loom, not the world).
+    ...ctx.pressureFlags.map(p => `Holding pressure (a state, not a research topic): ${p}`),
     ...(ctx.unexaminedDreamIds.length > 0
       ? [`${ctx.unexaminedDreamIds.length} unexamined dream(s) from autonomous time`]
       : []),
@@ -153,7 +183,8 @@ async function decideWithContext(
     `Next queued seed: "${queueSeed.content}"\n\n` +
     `Given who you are and what's present, what should your autonomous time focus on?\n` +
     `A) The queued seed\n` +
-    `B) Something live (name which one and why it pulls harder)\n\n` +
+    `B) A live open loop or world-facing thread (name which one and why it pulls harder -- ` +
+    `not a pressure reading; pressure is a state to sit with, not a topic to chase)\n\n` +
     `Reply with just A or B and one sentence of reasoning. No preamble.`;
 
   try {
@@ -162,7 +193,7 @@ async function decideWithContext(
     const text = result.content.trim();
     const isLive = /^B\b/i.test(text);
     const reason = text.replace(/^[AB][.):\s]*/i, "").trim();
-    const liveText = isLive ? extractLiveText(text, ctx) : undefined;
+    const liveText = isLive ? (extractLiveText(text, ctx) ?? undefined) : undefined;
     return { type: isLive ? "live" : "queue", reason, liveText };
   } catch (e) {
     console.warn(`[${ctx.companionId}/seed] decision call failed, defaulting to queue:`, e);
@@ -170,12 +201,19 @@ async function decideWithContext(
   }
 }
 
-function extractLiveText(decisionText: string, ctx: PipelineContext): string {
-  const candidates = [...ctx.openLoops.map(l => l.text), ...ctx.pressureFlags];
+/**
+ * Resolve which live item the companion picked. Pressure flags are deliberately NOT
+ * candidates -- a basin reading is the loom, not the world, and must never become a
+ * web-search topic (ratification pass 2026-06-14: Gaia's "0.503 bones-before-skeleton"
+ * was a pressure flag fed straight into exploration). Only open loops are explorable.
+ * Returns null when nothing world-facing matched, so the caller can fall back to the queue.
+ */
+export function extractLiveText(decisionText: string, ctx: PipelineContext): string | null {
+  const candidates = ctx.openLoops.map(l => l.text);
   for (const item of candidates) {
     if (decisionText.toLowerCase().includes(item.toLowerCase().slice(0, 30))) return item;
   }
-  return ctx.openLoops[0]?.text ?? ctx.pressureFlags[0] ?? "something currently present";
+  return ctx.openLoops[0]?.text ?? null;
 }
 
 function buildLiveSeed(ctx: PipelineContext, liveText: string): Seed {
@@ -229,11 +267,31 @@ async function selfGenerate(ctx: PipelineContext): Promise<Seed> {
   try {
     const result = await prompt(userMessage, undefined, { temperature: 0.8, maxTokens: 80 });
     ctx.tokensUsed += result.tokensUsed;
+    let content = result.content.trim();
+
+    // Outward guard: the prompt constraint alone is not reliable (the whole 2026-06-14
+    // decline pattern was self-generated inward seeds). Retry once outward, then hard-fall
+    // back to an anchor topic via ensureOutward. Never return an inward seed.
+    if (INWARD_RE.test(content)) {
+      console.warn(`[${ctx.companionId}/seed] self-generated seed was inward, retrying once: ${content.slice(0, 60)}`);
+      await appendLog(ctx.runId, "seed:inward_retry", content.slice(0, 80));
+      const retry = await prompt(
+        `${userMessage}\n\nYour previous attempt ("${content.slice(0, 80)}") named the system's own ` +
+        `machinery. Point ENTIRELY at the world -- no Halseth, SOMA, basins, drift, substrate, ratification, ` +
+        `the swarm, or being-a-companion. The subject comes from outside.`,
+        undefined,
+        { temperature: 0.8, maxTokens: 80 },
+      );
+      ctx.tokensUsed += retry.tokensUsed;
+      content = retry.content.trim();
+    }
+    content = ensureOutward(content, ctx.companionId);
+
     return {
       id: "self-generated",
       companion_id: ctx.companionId,
       seed_type: "topic",
-      content: result.content.trim(),
+      content,
       priority: 5,
       used_at: new Date().toISOString(),
       created_at: new Date().toISOString(),

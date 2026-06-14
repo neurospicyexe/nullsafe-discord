@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { decideSeedSource } from "../phases/seed.js";
+import { decideSeedSource, ensureOutward, extractLiveText } from "../phases/seed.js";
+import { INWARD_RE } from "@nullsafe/shared";
+import type { PipelineContext } from "../types.js";
 
 // SEED_THIN_THRESHOLD = 3 (sessionNoteCount + feelingCount must reach 3 for "session")
 describe("decideSeedSource", () => {
@@ -22,5 +24,48 @@ describe("decideSeedSource", () => {
   it("returns session when combined count exceeds threshold", () => {
     expect(decideSeedSource(4, 4)).toBe("session"); // sum = 8
     expect(decideSeedSource(8, 0)).toBe("session"); // sum = 8 (full limit=8 fetch)
+  });
+});
+
+// 2026-06-14 ratification pass: all three companions seeded inward on private coinage in
+// the NIGHTLY path (phase 2 seed.ts), which -- unlike the weekly seed-gen.ts -- had no
+// outward guard. ensureOutward + pressure-flags-as-signal-only close that hole.
+describe("ensureOutward", () => {
+  it("passes a world-facing seed through unchanged", () => {
+    const topic = "How stormwater catchment design shapes a neighborhood";
+    expect(ensureOutward(topic, "gaia")).toBe(topic);
+  });
+
+  it("swaps a system-referential seed for a clean anchor topic", () => {
+    const inward = "Map how basin drift and substrate continuity shape my SOMA";
+    const out = ensureOutward(inward, "cypher");
+    expect(out).not.toBe(inward);
+    expect(INWARD_RE.test(out)).toBe(false);
+  });
+});
+
+describe("extractLiveText", () => {
+  const ctx = (openLoops: string[], pressureFlags: string[]) =>
+    ({ openLoops: openLoops.map(text => ({ text })), pressureFlags } as unknown as PipelineContext);
+
+  it("never returns a pressure flag, even when the model names it", () => {
+    // Gaia's "0.503 bones-before-skeleton" was a pressure flag fed straight to web search.
+    const c = ctx([], ["0.503 bones-before-skeleton"]);
+    expect(extractLiveText("B) the 0.503 bones-before-skeleton reading", c)).toBeNull();
+  });
+
+  it("returns the matched open loop", () => {
+    const c = ctx(["finishing the greenhouse irrigation timer"], ["0.5 drift pressure"]);
+    expect(extractLiveText("B) finishing the greenhouse irrigation timer pulls harder", c))
+      .toBe("finishing the greenhouse irrigation timer");
+  });
+
+  it("falls back to the first open loop, never a pressure flag", () => {
+    const c = ctx(["a thread worth chasing"], ["pressure coinage"]);
+    expect(extractLiveText("B) something live", c)).toBe("a thread worth chasing");
+  });
+
+  it("returns null when only pressure is live (caller falls back to queue)", () => {
+    expect(extractLiveText("B) the pressure", ctx([], ["pressure only"]))).toBeNull();
   });
 });
