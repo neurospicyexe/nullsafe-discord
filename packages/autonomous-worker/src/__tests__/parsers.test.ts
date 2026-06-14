@@ -133,3 +133,66 @@ describe("clampStrength", () => {
     for (let n = 1; n <= 10; n++) expect(clampStrength(n)).toBe(n);
   });
 });
+
+describe("parseSelfModelReview", () => {
+  const surfaced = new Set(["sm_a", "sm_b", "sm_c"]);
+
+  it("returns [] for non-arrays", () => {
+    expect(parseSelfModelReview(null, surfaced)).toEqual([]);
+    expect(parseSelfModelReview(undefined, surfaced)).toEqual([]);
+    expect(parseSelfModelReview("confirm sm_a", surfaced)).toEqual([]);
+    expect(parseSelfModelReview({ id: "sm_a", verdict: "confirm" }, surfaced)).toEqual([]);
+  });
+
+  it("keeps confirm/revise/retire verdicts for surfaced ids", () => {
+    const out = parseSelfModelReview([
+      { id: "sm_a", verdict: "confirm" },
+      { id: "sm_b", verdict: "revise" },
+      { id: "sm_c", verdict: "retire" },
+    ], surfaced);
+    expect(out).toEqual([
+      { id: "sm_a", action: "confirm" },
+      { id: "sm_b", action: "revise" },
+      { id: "sm_c", action: "retire" },
+    ]);
+  });
+
+  it("drops ids the model was never shown (hallucinated)", () => {
+    const out = parseSelfModelReview([
+      { id: "sm_a", verdict: "confirm" },
+      { id: "sm_HALLUCINATED", verdict: "confirm" },
+    ], surfaced);
+    expect(out).toEqual([{ id: "sm_a", action: "confirm" }]);
+  });
+
+  it("rejects the graduate verdict (graduation is human-gated)", () => {
+    const out = parseSelfModelReview([{ id: "sm_a", verdict: "graduate" }], surfaced);
+    expect(out).toEqual([]);
+  });
+
+  it("rejects unknown verdicts and non-object entries", () => {
+    const out = parseSelfModelReview([
+      { id: "sm_a", verdict: "maybe" },
+      null,
+      42,
+      { id: "sm_b" },              // missing verdict
+      { verdict: "confirm" },      // missing id
+      { id: "sm_c", verdict: "CONFIRM" }, // case-insensitive -> kept
+    ], surfaced);
+    expect(out).toEqual([{ id: "sm_c", action: "confirm" }]);
+  });
+
+  it("dedupes repeated ids (first verdict wins)", () => {
+    const out = parseSelfModelReview([
+      { id: "sm_a", verdict: "confirm" },
+      { id: "sm_a", verdict: "retire" },
+    ], surfaced);
+    expect(out).toEqual([{ id: "sm_a", action: "confirm" }]);
+  });
+
+  it("caps at 12 verdicts", () => {
+    const big = new Set(Array.from({ length: 20 }, (_, i) => `id${i}`));
+    const input = Array.from({ length: 20 }, (_, i) => ({ id: `id${i}`, verdict: "confirm" }));
+    expect(parseSelfModelReview(input, big)).toHaveLength(12);
+  });
+});

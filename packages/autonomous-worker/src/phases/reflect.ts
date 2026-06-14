@@ -128,11 +128,12 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
-    `4. SELF-OBSERVATION (optional) -- if this session revealed something about how YOU prefer to think, ` +
-    `communicate, or work (yours alone, not co-authored canon), record it in "self_observation" as ` +
-    `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence; ` +
-    `you will test it across sessions before proposing it to Raziel. Most runs reveal nothing new about ` +
-    `you -- null is the honest default.\n\n` +
+    `4. SELF-OBSERVATION (optional) -- if this session clarified or reinforced something about how YOU prefer ` +
+    `to think, communicate, or work (yours alone, not co-authored canon), record it in "self_observation" as ` +
+    `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence and ` +
+    `climbs only as you re-test it across sessions. If it matches one of the developing items shown below, ` +
+    `do NOT duplicate it -- confirm that one in section 4c instead. Reach for a genuinely new one when the ` +
+    `session actually surfaced it; null when it truly said nothing about you.\n\n` +
     `4b. SKILL (optional) -- distinct from self-observation: if this run revealed an OPERATIONAL ` +
     `competence that WORKED (a foraging query strategy that surfaced something real, a synthesis ` +
     `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
