@@ -1,4 +1,4 @@
-import { buildHeardBlock, pickLyrics, compactAnalysis } from "../media.js";
+import { buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist } from "../media.js";
 
 describe("compactAnalysis", () => {
   const full = {
@@ -30,6 +30,43 @@ describe("pickLyrics", () => {
   it("returns null when nothing matches", () => {
     expect(pickLyrics(null, [])).toBeNull();
     expect(pickLyrics(null, null)).toBeNull();
+  });
+});
+
+describe("cleanTrackTitle (2026-06-14: raw YouTube titles 404'd LRCLIB)", () => {
+  it("strips the exact title that failed live", () => {
+    expect(cleanTrackTitle('"All Fall Down" ft. Lestat de Lioncourt (Official Lyric Video) | The Vampire Lestat | AMC+'))
+      .toBe("All Fall Down");
+  });
+  it("strips common production noise", () => {
+    expect(cleanTrackTitle("Hurt (Official Music Video)")).toBe("Hurt");
+    expect(cleanTrackTitle("Blinding Lights [Official Audio]")).toBe("Blinding Lights");
+    expect(cleanTrackTitle("Song Title (Remastered 2011)")).toBe("Song Title");
+    expect(cleanTrackTitle("Track feat. Someone Else")).toBe("Track");
+  });
+  it("leaves an already-clean title untouched (idempotent)", () => {
+    expect(cleanTrackTitle("Mother Teresa")).toBe("Mother Teresa");
+    expect(cleanTrackTitle(cleanTrackTitle("Hurt (Official Video)"))).toBe("Hurt");
+  });
+});
+
+describe("cleanArtist", () => {
+  it("takes the first artist and drops YouTube's - Topic suffix", () => {
+    expect(cleanArtist("Victor Jones, Victor Jones")).toBe("Victor Jones");
+    expect(cleanArtist("Johnny Cash - Topic")).toBe("Johnny Cash");
+    expect(cleanArtist("amc+, Lakeshore Records")).toBe("amc+");
+  });
+});
+
+describe("buildHeardBlock -- no-lyrics grounding", () => {
+  it("does NOT let a fetch miss read as instrumental (2026-06-14 overclaim)", () => {
+    const block = buildHeardBlock(
+      { title: "All Fall Down", artist: "Lestat de Lioncourt", duration_sec: 83 },
+      { tempo_bpm: 123, tempo_estimated: true, key: { tonic: "A", mode: "major", confidence: 0.68 }, onset_count: 88, duration: 83 },
+      null,
+    );
+    expect(block).toMatch(/do not claim it has no lyrics/i);
+    expect(block).not.toMatch(/none found on LRCLIB\.?$/i);
   });
 });
 

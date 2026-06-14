@@ -54,6 +54,28 @@ export function pickLyrics(
   return hit?.plainLyrics ?? null;
 }
 
+// YouTube/SoundCloud titles are noisy: `"Song" ft. X (Official Lyric Video) | Show | Network`.
+// LRCLIB matches on a bare track name, so the raw video title 404s even for tracks it
+// HAS -- and a clip's short duration kills the exact lookup. Strip it down (2026-06-14:
+// lyrics silently missing, the companion then claimed the song had none).
+export function cleanTrackTitle(raw: string): string {
+  let t = (raw.split("|")[0] ?? raw)
+    // production noise in ()/[]: (Official Lyric Video), [Remastered], (HD), (Live)...
+    .replace(/[([][^)\]]*\b(official|lyric|lyrics|video|audio|visuali[sz]er|remaster(?:ed)?|hd|4k|mv|explicit|live|performance|version|edit|mix)\b[^)\]]*[)\]]/gi, " ")
+    // "ft./feat./featuring ..." through end of string
+    .replace(/\s*\b(?:ft|feat|featuring)\.?\s.*$/i, "")
+    .replace(/["'“”‘’]/g, "");
+  return t.replace(/\s{2,}/g, " ").trim();
+}
+
+// First artist only ("A, B" -> "A"), drop YouTube's auto " - Topic" suffix.
+export function cleanArtist(raw: string): string {
+  return (raw.split(",")[0] ?? raw)
+    .replace(/\s*-\s*topic$/i, "")
+    .replace(/["'“”‘’]/g, "")
+    .trim();
+}
+
 export function buildHeardBlock(
   meta: TrackMeta,
   analysis: Record<string, unknown>,
@@ -85,24 +107,36 @@ export function buildHeardBlock(
     const excerpt = lyrics.split("\n").filter(l => l.trim()).slice(0, 24).join("\n").slice(0, 1600);
     lines.push(`Lyrics (excerpt):\n${excerpt}`);
   } else {
-    lines.push("Lyrics: none found on LRCLIB.");
+    // A fetch miss is NOT proof the track is instrumental -- LRCLIB just didn't have a
+    // transcript (or the metadata didn't match). The companion previously collapsed this
+    // into "the song has no lyrics" on an actual lyric video (2026-06-14). Ground it.
+    lines.push(
+      "Lyrics: not retrieved -- no transcript matched on LRCLIB. This is NOT evidence the track is instrumental or wordless; you simply don't have the words in front of you. Do not claim it has no lyrics -- speak to what you heard in the audio, and you can say you couldn't pull the lyrics.",
+    );
   }
   return lines.join("\n");
 }
 
 async function fetchLyrics(meta: TrackMeta): Promise<string | null> {
-  if (!meta.title) return null;
+  const title = cleanTrackTitle(meta.title ?? "");
+  const artist = meta.artist ? cleanArtist(meta.artist) : null;
+  if (!title) return null;
+  // We only trust matches that agree on the ARTIST. A blind title-only search returns
+  // same-named different songs (search "All Fall Down" -> Lindisfarne, Missing Persons),
+  // so handing those back would be WRONG lyrics -- worse than none. With no usable
+  // artist, return null and let the heard-block ground honestly.
+  if (!artist) return null;
   const headers = { "User-Agent": UA };
   try {
-    const q = new URLSearchParams({ track_name: meta.title });
-    if (meta.artist) q.set("artist_name", meta.artist);
-    if (meta.duration_sec) q.set("duration", String(Math.round(meta.duration_sec)));
+    // Exact get on cleaned title+artist. No duration param -- a teaser/clip's runtime
+    // never matches the full track and 404s the whole lookup.
+    const q = new URLSearchParams({ track_name: title, artist_name: artist });
     const exactRes = await fetch(`${LRCLIB_BASE}/get?${q}`, { headers, signal: AbortSignal.timeout(10_000) });
     const exact = exactRes.ok ? await exactRes.json() as { plainLyrics?: string | null } : null;
-    if (exact?.plainLyrics?.trim()) return pickLyrics(exact, null);
+    if (exact?.plainLyrics?.trim()) return exact.plainLyrics;
 
-    const sq = new URLSearchParams({ track_name: meta.title });
-    if (meta.artist) sq.set("artist_name", meta.artist);
+    // Fuzzy search, still artist-scoped so we never cross-match a same-named song.
+    const sq = new URLSearchParams({ track_name: title, artist_name: artist });
     const searchRes = await fetch(`${LRCLIB_BASE}/search?${sq}`, { headers, signal: AbortSignal.timeout(10_000) });
     const search = searchRes.ok ? await searchRes.json() as Array<{ plainLyrics?: string | null }> : null;
     return pickLyrics(null, search);
@@ -183,8 +217,12 @@ export async function runListenPipeline(
     }
 
     const rawArtist = info["artist"] ?? info["creator"] ?? info["uploader"];
+    // Prefer yt-dlp's parsed `track` (already clean when present); else strip the noisy
+    // video `title` so both display and the LRCLIB lookup get a bare track name.
     const meta: TrackMeta = {
-      title: String(info["track"] ?? info["title"] ?? "unknown"),
+      title: info["track"]
+        ? String(info["track"])
+        : (cleanTrackTitle(String(info["title"] ?? "")) || "unknown"),
       artist: rawArtist ? String(rawArtist) : null,
       duration_sec: typeof info["duration"] === "number" ? info["duration"] as number : null,
       url,
