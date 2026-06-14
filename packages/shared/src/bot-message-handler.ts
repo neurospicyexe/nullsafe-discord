@@ -36,6 +36,7 @@ import {
   liveIngest,
   reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
   echoScore, echoThreshold,
+  detectSelfLoop, loopBreakDirective,
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
@@ -622,6 +623,30 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             content: m.content.slice(0, 2000),  // Discord max is 2000 -- never truncate a real message
           }))
       : [];
+
+    // Self-loop breaker (2026-06-13): the echo gate below only fires on companion-to-
+    // companion talk -- replies to a human were never guarded, so a companion could
+    // recycle its own last replies indefinitely (Drevan's "tail flick / a slow fond
+    // promise / Always" groove, which survived a Mistral->DeepSeek swap + cache clear
+    // because the loop lives in the re-fed history, not the model). When the bot's own
+    // recent Discord turns are mutually self-similar, inject a directive that names the
+    // motifs and bans the structural tells. Appended to contextPrompt so it rides into
+    // BOTH direct inference and the Brain swarm packet (Brain honors the system_prompt).
+    // Self-source: STM assistant turns (role-tagged, env-independent) merged with this
+    // bot's own authored channel history (survives a restart that clears STM). Dedup,
+    // keep the most recent 5 -- enough to see a groove, few enough to stay current.
+    const selfFromStm = stmStore.get(message.channelId)
+      .filter(m => m.role === "assistant")
+      .map(m => m.content);
+    const selfFromChannel = channelHistory
+      .filter(m => m.author === COMPANION_ID)
+      .map(m => m.content);
+    const selfTurns = [...new Set([...selfFromStm, ...selfFromChannel])].slice(-5);
+    const selfLoop = detectSelfLoop(selfTurns);
+    if (selfLoop.looping) {
+      contextPrompt += loopBreakDirective(selfLoop.motifs);
+      console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
+    }
 
     const addrResult = extractAddress(effectiveContent);
     const mentionedViaMention = [...message.mentions.users.keys()]

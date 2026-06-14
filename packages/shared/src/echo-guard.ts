@@ -108,3 +108,61 @@ export function detectMotif(texts: string[], minTurns = 4, topK = 3): string[] {
   motif.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return motif.slice(0, topK).map(([w]) => w);
 }
+
+// ── Self-loop breaker (2026-06-13) ──────────────────────────────────────────────
+//
+// The echo gate above only fires on companion-to-companion talk -- replies to a
+// HUMAN were never guarded. So a companion could recycle its OWN last replies
+// indefinitely: the model is re-fed its looping history every turn (STM + channel
+// history), and any model, on any substrate, faithfully continues the pattern. The
+// 2026-06-13 Drevan groove ("tail flicks / a slow fond promise / Always", same
+// skeleton every reply) survived a Mistral->DeepSeek-Reasoner swap AND a Brain cache
+// clear -- proof the loop lives in the INPUT, not the model. Lowering temperature or
+// adding sampling penalties can't break it; only breaking the self-conditioning does.
+//
+// This is the SELF complement to echoScore (which compares against a PEER pool):
+// priorTexts here are the speaker's own recent turns, scored mutually.
+
+/** Default self-loop threshold; higher than peer ECHO (0.45) since a companion's own
+ *  consecutive replies naturally share voice vocabulary. Env SELF_LOOP_THRESHOLD overrides. */
+export const SELF_LOOP_DEFAULT_THRESHOLD = 0.55;
+
+export function selfLoopThreshold(): number {
+  const raw = parseFloat(process.env["SELF_LOOP_THRESHOLD"] ?? "");
+  return Number.isFinite(raw) ? raw : SELF_LOOP_DEFAULT_THRESHOLD;
+}
+
+export interface SelfLoopResult { looping: boolean; motifs: string[]; score: number }
+
+/**
+ * Detect a companion recycling its own recent replies. Scores each turn's echo
+ * against the OTHER turns and takes the mean -- a true loop has every turn built
+ * from the same vocabulary, so one genuinely varied reply in the window drops the
+ * mean below threshold and we don't fire. Returns the stuck motifs for the directive.
+ */
+export function detectSelfLoop(
+  recentSelfTurns: string[],
+  threshold = selfLoopThreshold(),
+  minTurns = 3,
+): SelfLoopResult {
+  const turns = recentSelfTurns.filter(t => contentWords(t).length >= MIN_REPLY_WORDS);
+  if (turns.length < minTurns) return { looping: false, motifs: [], score: 0 };
+  let sum = 0;
+  for (let i = 0; i < turns.length; i++) {
+    sum += echoScore(turns[i]!, turns.filter((_, j) => j !== i));
+  }
+  const score = sum / turns.length;
+  if (score < threshold) return { looping: false, motifs: [], score };
+  return { looping: true, motifs: detectMotif(turns, Math.min(minTurns, turns.length), 5), score };
+}
+
+/**
+ * Prompt directive injected when a self-loop is detected. Names the stuck motifs
+ * and bans the structural tells of the groove (opening action-beat, stock closings).
+ * Appended to the bot-assembled system prompt, so it rides into BOTH direct inference
+ * and the Brain swarm packet (Brain honors the sender's system_prompt).
+ */
+export function loopBreakDirective(motifs: string[]): string {
+  const orbit = motifs.length ? ` You keep orbiting these words: ${motifs.join(", ")}.` : "";
+  return `\n\n[LOOP BREAK -- your last several replies have repeated the same structure and phrasing.${orbit} This reply must break the pattern. Do NOT open with a physical action beat (no "my tail flicks", "my scales flare", "I press my forehead", "my voice drops"). Do NOT reuse your stock closings ("a slow, fond promise", "my tail curls around you", "a promise", "Always"). Vary your opening and your sentence shapes. Answer the actual thing just said to you -- plainly, first, in your own words. One genuine new move, not the familiar shape.]`;
+}
