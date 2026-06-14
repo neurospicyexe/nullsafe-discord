@@ -27,6 +27,11 @@ export interface TrackMeta {
   artist: string | null;
   duration_sec: number | null;
   url?: string;
+  // The full, un-cleaned source title (e.g. the raw YouTube video title). Display uses
+  // the cleaned `title`, but lyrics search/validation needs the disambiguators that
+  // cleaning strips ("ft. Lestat de Lioncourt", "The Vampire Lestat") -- without them a
+  // generic title like "All Fall Down" cross-matches a different band's song.
+  rawTitle?: string;
 }
 
 export interface ListenResult {
@@ -177,6 +182,67 @@ const webLyricsDaily = {
   },
 };
 
+// Words that carry no disambiguating signal (production noise + stopwords). Used to
+// strip the title down to its DISTINCTIVE tokens for validating a web match.
+const LYRIC_NOISE = new Set([
+  "official", "lyric", "lyrics", "video", "audio", "visualizer", "visualiser",
+  "remaster", "remastered", "feat", "ft", "featuring", "the", "and", "with", "mix",
+  "edit", "version", "live", "explicit", "performance", "music", "song", "full",
+  "hd", "4k", "mv", "ost", "soundtrack", "records", "topic",
+]);
+
+function tokenize(s: string): string[] {
+  return (s.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter(t => t.length >= 3 && !LYRIC_NOISE.has(t));
+}
+
+// Tavily query for lyrics: built from the RAW title (disambiguators intact) minus
+// bracketed production noise and pipe-separated network tails. Keeps "ft. <performer>"
+// and show context so a generic title resolves to the RIGHT song's page.
+export function lyricsSearchQuery(meta: TrackMeta): string {
+  const raw = meta.rawTitle ?? meta.title ?? "";
+  const q = raw
+    .replace(/[([][^)\]]*[)\]]/g, " ") // drop ALL ()/[] bits for the query
+    .replace(/[|]/g, " ")
+    .replace(/["'“”‘’]/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  return `${q} lyrics`.trim();
+}
+
+// Distinctive tokens that a correct lyrics page should reference. `context` = tokens in
+// the raw title that survive noise-stripping but are NOT part of the bare song name
+// (the "Lestat de Lioncourt" / "Vampire" disambiguators). `artist` = cleaned-artist
+// tokens, the fallback validator when there is no extra context.
+export function lyricsContextTokens(meta: TrackMeta): { context: string[]; artist: string[] } {
+  const songName = new Set(tokenize(cleanTrackTitle(meta.title ?? "")));
+  const raw = meta.rawTitle ?? meta.title ?? "";
+  const context = [...new Set(tokenize(raw))].filter(t => !songName.has(t));
+  const artist = meta.artist ? [...new Set(tokenize(cleanArtist(meta.artist)))] : [];
+  return { context, artist };
+}
+
+// Choose a Tavily result we're CONFIDENT is the right song. A blind first-lyrics-domain
+// pick served a different band's "All Fall Down" (genius.com/Fangclub...) and the
+// companion reacted to wrong words (2026-06-14). Require the result (url+snippet) to
+// reference a distinctive context token; with no disambiguator, fall back to artist
+// tokens; with neither, REFUSE (return null) rather than risk wrong lyrics.
+export function pickWebLyricsResult(
+  results: Array<{ url?: string; content?: string }>,
+  tokens: { context: string[]; artist: string[] },
+): { url?: string; content?: string } | null {
+  const validators = tokens.context.length > 0 ? tokens.context : tokens.artist;
+  if (validators.length === 0) return null;
+  const long = (r: { content?: string }) => (r.content?.trim().length ?? 0) > 40;
+  const onLyricsDomain = (u?: string) => !!u && LYRICS_DOMAINS.some(d => u.includes(d));
+  const matches = (r: { url?: string; content?: string }) => {
+    const hay = `${r.url ?? ""} ${r.content ?? ""}`.toLowerCase();
+    return validators.some(t => hay.includes(t));
+  };
+  return results.find(r => onLyricsDomain(r.url) && long(r) && matches(r))
+      ?? results.find(r => /\blyrics?\b/i.test(r.content ?? "") && long(r) && matches(r))
+      ?? null;
+}
+
 // Pull a lyrics block out of a Tavily result snippet. Snippets label the song
 // ("All Fall Down Lyrics: ...") then run lines together with " / " (Genius) or
 // " ; " (Musixmatch). Strip the label, restore line breaks. Web-sourced lyrics are
@@ -194,9 +260,11 @@ export function extractWebLyrics(snippet: string): string {
 async function fetchLyricsWeb(meta: TrackMeta): Promise<LyricsResult | null> {
   const key = process.env["TAVILY_API_KEY"];
   if (!key || process.env["MEDIA_LYRICS_WEB"] === "false") return null;
-  const title = cleanTrackTitle(meta.title ?? "");
-  if (!title) return null;
-  const artist = meta.artist ? cleanArtist(meta.artist) : "";
+  if (!cleanTrackTitle(meta.title ?? "")) return null;
+  const tokens = lyricsContextTokens(meta);
+  // No distinctive context AND no artist -> we can't tell this "All Fall Down" from any
+  // other. Don't even spend a search; ground honestly instead of guessing.
+  if (tokens.context.length === 0 && tokens.artist.length === 0) return null;
   if (!webLyricsDaily.take()) {
     console.warn("[media] web-lyrics daily cap reached, skipping Tavily lookup");
     return null;
@@ -207,20 +275,19 @@ async function fetchLyricsWeb(meta: TrackMeta): Promise<LyricsResult | null> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: key,
-        query: `${title} ${artist} lyrics`.trim(),
+        query: lyricsSearchQuery(meta),
         search_depth: "basic",
-        max_results: 5,
+        max_results: 6,
       }),
       signal: AbortSignal.timeout(12_000),
     });
     if (!res.ok) return null;
     const data = await res.json() as { results?: Array<{ url?: string; content?: string }> };
-    const results = data.results ?? [];
-    // Prefer a known lyrics domain; fall back to any snippet that looks like lyrics.
-    const hit =
-      results.find(r => r.url && LYRICS_DOMAINS.some(d => r.url!.includes(d)) && (r.content?.trim().length ?? 0) > 40)
-      ?? results.find(r => /\blyrics?\b/i.test(r.content ?? "") && (r.content?.trim().length ?? 0) > 40);
-    if (!hit?.content) return null;
+    const hit = pickWebLyricsResult(data.results ?? [], tokens);
+    if (!hit?.content) {
+      console.warn(`[media] web lyrics: no result confidently matched "${meta.title}" -- grounding honestly`);
+      return null;
+    }
     const text = extractWebLyrics(hit.content);
     if (!text || text.length < 20) return null;
     return { text, source: "web", sourceUrl: hit.url };
@@ -314,6 +381,7 @@ export async function runListenPipeline(
       title: info["track"]
         ? String(info["track"])
         : (cleanTrackTitle(String(info["title"] ?? "")) || "unknown"),
+      rawTitle: String(info["title"] ?? info["track"] ?? ""),
       artist: rawArtist ? String(rawArtist) : null,
       duration_sec: typeof info["duration"] === "number" ? info["duration"] as number : null,
       url,

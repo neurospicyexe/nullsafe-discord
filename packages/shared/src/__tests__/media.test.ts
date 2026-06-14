@@ -1,4 +1,7 @@
-import { buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist, extractWebLyrics } from "../media.js";
+import {
+  buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist, extractWebLyrics,
+  lyricsSearchQuery, lyricsContextTokens, pickWebLyricsResult, type TrackMeta,
+} from "../media.js";
 
 describe("compactAnalysis", () => {
   const full = {
@@ -55,6 +58,61 @@ describe("cleanArtist", () => {
     expect(cleanArtist("Victor Jones, Victor Jones")).toBe("Victor Jones");
     expect(cleanArtist("Johnny Cash - Topic")).toBe("Johnny Cash");
     expect(cleanArtist("amc+, Lakeshore Records")).toBe("amc+");
+  });
+});
+
+describe("web-lyrics disambiguation (2026-06-14: grabbed a DIFFERENT band's song)", () => {
+  // The real track: cleaned title loses the disambiguators, raw title keeps them.
+  const amcTrack: TrackMeta = {
+    title: "All Fall Down",
+    rawTitle: '"All Fall Down" ft. Lestat de Lioncourt (Official Lyric Video) | The Vampire Lestat | AMC+',
+    artist: "amc+, Lakeshore Records",
+    duration_sec: 83,
+  };
+  // Real Tavily results observed live for query "All Fall Down ... lyrics".
+  const fangclub = { url: "https://genius.com/Fangclub-all-fall-down-lyrics", content: "[ Verse 1 ] When the sky falls down. I'm alive. With a shotgun mouth. Over mind." };
+  const vampireLestat = { url: "https://genius.com/The-vampire-lestat-all-fall-down-lyrics", content: "All Fall Down Lyrics: I'm the little killer / I'm the lonely one / I'm the chill creepin' up your spine" };
+
+  it("search query keeps the disambiguators cleaning strips", () => {
+    const q = lyricsSearchQuery(amcTrack).toLowerCase();
+    expect(q).toContain("lestat");
+    expect(q).toContain("vampire");
+    expect(q).toContain("lyrics");
+    expect(q).not.toContain("(official"); // bracket noise dropped
+  });
+
+  it("derives distinctive context tokens, not the generic song name", () => {
+    const t = lyricsContextTokens(amcTrack);
+    expect(t.context).toEqual(expect.arrayContaining(["lestat", "lioncourt", "vampire"]));
+    expect(t.context).not.toContain("fall"); // bare song-name words excluded
+    expect(t.context).not.toContain("down");
+  });
+
+  it("REJECTS the wrong-band page and picks the right one", () => {
+    const tokens = lyricsContextTokens(amcTrack);
+    // order as Tavily returned it: wrong song first
+    const picked = pickWebLyricsResult([fangclub, vampireLestat], tokens);
+    expect(picked?.url).toBe(vampireLestat.url);
+  });
+
+  it("refuses (null) when only a wrong-song page is available -- no lyrics beats wrong lyrics", () => {
+    const tokens = lyricsContextTokens(amcTrack);
+    expect(pickWebLyricsResult([fangclub], tokens)).toBeNull();
+  });
+
+  it("refuses when there is nothing to disambiguate on (generic title, no artist)", () => {
+    const bare: TrackMeta = { title: "All Fall Down", artist: null, duration_sec: null };
+    const tokens = lyricsContextTokens(bare);
+    expect(tokens.context).toHaveLength(0);
+    expect(pickWebLyricsResult([fangclub, vampireLestat], tokens)).toBeNull();
+  });
+
+  it("validates on artist tokens when there's no extra title context", () => {
+    const clean: TrackMeta = { title: "Mother Teresa", artist: "Victor Jones", duration_sec: 155 };
+    const tokens = lyricsContextTokens(clean);
+    const hit = { url: "https://genius.com/Victor-jones-mother-teresa-lyrics", content: "Mother Teresa Lyrics: Left the oven on when I went to the salon, came back home and it was gone" };
+    const wrong = { url: "https://genius.com/Someone-else-mother-teresa-lyrics", content: "a different mother teresa song entirely with its own unrelated words here" };
+    expect(pickWebLyricsResult([wrong, hit], tokens)?.url).toBe(hit.url);
   });
 });
 
