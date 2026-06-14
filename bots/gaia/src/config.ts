@@ -1,4 +1,4 @@
-import { buildCommandTriggers, type BotConfig, type CompanionId } from "@nullsafe/shared";
+import { buildCommandTriggers, COMPANION_ALIASES, type BotConfig, type CompanionId } from "@nullsafe/shared";
 
 const OWNER_NAME = process.env["OWNER_NAME"] ?? "the primary user";
 
@@ -133,7 +133,7 @@ export const PULSE_INTERVAL = 8;
 export const IN_CHARACTER_FALLBACK = "present.";
 
 // One alias list for every owner command (see shared/command-triggers.ts).
-const COMMAND_TRIGGERS = buildCommandTriggers(["gaia"]);
+const COMMAND_TRIGGERS = buildCommandTriggers(COMPANION_ALIASES.gaia);
 export const MODEL_SWITCH_TRIGGER = COMMAND_TRIGGERS.modelSwitch;
 export const MODEL_SWITCH_SUCCESS = (label: string) => `${label}.`;
 export const MODEL_SWITCH_LIST_INTRO = "available:";

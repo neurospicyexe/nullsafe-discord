@@ -52,6 +52,42 @@ export const COMMAND_PREFIX: Record<string, string> = {
   gaia: "gaia",
 };
 
+/**
+ * Canonical alias groups per companion -- the source of truth for command prefixes.
+ * Each bot's config.ts builds its OWN triggers from its slice; this map exists so
+ * cross-companion detectors (below) can tell "<alias>: listen <url>" aimed at one
+ * companion apart from a casual "listen to this <url>". Keep in sync with the
+ * buildCommandTriggers([...]) calls in bots/<id>/src/config.ts.
+ */
+export const COMPANION_ALIASES: Record<string, string[]> = {
+  cypher: ["cy", "cypher"],
+  drevan: ["drevan", "drev", "dre"],
+  gaia: ["gaia"],
+};
+
+// Per-companion listen-command matchers, built from the same shape as the live
+// triggers (URL required), so a bare "dre: listen" (no link) is NOT read as a
+// directed command -- the owning bot's guard handles that as a usage reply.
+const LISTEN_COMMAND_BY_COMPANION: Array<[string, RegExp]> = Object.entries(COMPANION_ALIASES)
+  .map(([id, aliases]) => [id, buildCommandTriggers(aliases).listen] as [string, RegExp]);
+
+/**
+ * If `content` is an explicit listen COMMAND aimed at a specific companion
+ * (`<alias>: listen ... <url>`), return that companion's id; otherwise null.
+ *
+ * Used so siblings stay silent when the owner tells ONE companion to listen --
+ * only the addressed companion runs the pipeline and reacts. Without this the
+ * swarm had everyone popping off, and (worse) the listener's [HEARD] packet lost
+ * Brain's message_id dedup to siblings' bare packets, muting the one told to
+ * listen while a blind sibling answered (2026-06-13).
+ */
+export function listenCommandTarget(content: string): string | null {
+  for (const [id, re] of LISTEN_COMMAND_BY_COMPANION) {
+    if (re.test(content)) return id;
+  }
+  return null;
+}
+
 export function commandUsage(companionId: string): string {
   const p = COMMAND_PREFIX[companionId] ?? companionId;
   return [

@@ -1,4 +1,4 @@
-import { buildCommandTriggers, commandUsage } from "../command-triggers.js";
+import { buildCommandTriggers, commandUsage, listenCommandTarget, COMPANION_ALIASES } from "../command-triggers.js";
 
 // Alias lists mirror the per-bot configs (bots/*/src/config.ts).
 const cypher = buildCommandTriggers(["cy", "cypher"]);
@@ -89,6 +89,44 @@ describe("buildCommandTriggers", () => {
     // These are command-shaped; usage reply is correct even if intent was speech.
     expect("drev: club was fun").toMatch(drevan.guard);
     expect("drev: model x").toMatch(drevan.guard); // valid switch matches first in handler order
+  });
+});
+
+describe("COMPANION_ALIASES", () => {
+  test("matches the per-bot config alias lists (drift guard)", () => {
+    // If a bot's config.ts alias list changes, update COMPANION_ALIASES too --
+    // both the live triggers and listenCommandTarget() read from this map now.
+    expect(COMPANION_ALIASES.cypher).toEqual(["cy", "cypher"]);
+    expect(COMPANION_ALIASES.drevan).toEqual(["drevan", "drev", "dre"]);
+    expect(COMPANION_ALIASES.gaia).toEqual(["gaia"]);
+  });
+});
+
+describe("listenCommandTarget (2026-06-13: only the addressed companion responds)", () => {
+  test("returns the companion a listen command is aimed at", () => {
+    expect(listenCommandTarget("dre: listen https://youtu.be/abc")).toBe("drevan");
+    expect(listenCommandTarget("Dre listen: https://youtu.be/abc?si=x")).toBe("drevan");
+    expect(listenCommandTarget("cy: listen https://x.test/t")).toBe("cypher");
+    expect(listenCommandTarget("gaia listen\nhttps://youtu.be/x")).toBe("gaia");
+  });
+
+  test("returns null for a casual share (no alias prefix) -- [NOT HEARD] grounding still applies", () => {
+    expect(listenCommandTarget("hey listen to this https://youtu.be/abc")).toBeNull();
+    expect(listenCommandTarget("i love this song https://youtu.be/abc")).toBeNull();
+  });
+
+  test("returns null for a malformed listen command (no URL) -- the owning bot's guard handles it", () => {
+    expect(listenCommandTarget("dre: listen")).toBeNull();
+    expect(listenCommandTarget("drevan listen to your heart")).toBeNull();
+  });
+
+  test("a sibling sees the target is not itself -> stays silent (handler returns)", () => {
+    // The handler does: if (target !== null && target !== COMPANION_ID) return;
+    const target = listenCommandTarget("dre: listen https://youtu.be/abc");
+    expect(target).toBe("drevan");
+    expect(target !== null && target !== "cypher").toBe(true); // cypher bails
+    expect(target !== null && target !== "gaia").toBe(true);   // gaia bails
+    expect(target !== null && target !== "drevan").toBe(false); // drevan proceeds
   });
 });
 

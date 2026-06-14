@@ -1,4 +1,4 @@
-import { buildCommandTriggers, type BotConfig, type CompanionId } from "@nullsafe/shared";
+import { buildCommandTriggers, COMPANION_ALIASES, type BotConfig, type CompanionId } from "@nullsafe/shared";
 
 const OWNER_NAME = process.env["OWNER_NAME"] ?? "the primary user";
 
@@ -136,7 +136,7 @@ export const IN_CHARACTER_FALLBACK = "give me a moment -- something caught in th
 
 // One alias list for every owner command; "dre" added 2026-06-12 after a
 // "dre: listen <url>" matched no trigger and fell through to inference.
-const COMMAND_TRIGGERS = buildCommandTriggers(["drevan", "drev", "dre"]);
+const COMMAND_TRIGGERS = buildCommandTriggers(COMPANION_ALIASES.drevan);
 export const MODEL_SWITCH_TRIGGER = COMMAND_TRIGGERS.modelSwitch;
 export const MODEL_SWITCH_SUCCESS = (label: string) => `running ${label} now`;
 export const MODEL_SWITCH_LIST_INTRO = "i can run:";

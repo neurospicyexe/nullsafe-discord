@@ -39,7 +39,7 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience,
-  commandUsage, COMMAND_PREFIX,
+  commandUsage, COMMAND_PREFIX, listenCommandTarget,
   handleClubCommand,
   handleToolSearch, handleToolImage, handleCouncilConvene,
   handlePetCommand,
@@ -333,10 +333,23 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Explicit listen command aimed at a DIFFERENT companion: stay out of it.
+    // When the owner tells one companion to listen, only that companion runs the
+    // pipeline and reacts -- siblings must not pop off (2026-06-13: the listener's
+    // late-arriving [HEARD] packet lost Brain's dedup to siblings' bare packets, so
+    // the one told to listen went mute while a blind sibling answered). Placed
+    // before the listen trigger / guard / [NOT HEARD] blocks so siblings return
+    // here and never forward to Brain at all.
+    if (attribution.isOwner) {
+      const listenTarget = listenCommandTarget(effectiveContent);
+      if (listenTarget !== null && listenTarget !== COMPANION_ID) return;
+    }
+
     // Owner listen command: <prefix>: listen <url>  (shared-experience Phase 1).
     // Downloads + analyzes on this box, then FALLS THROUGH to the normal reply
     // path with a [HEARD] block appended -- so the in-voice response rides the
-    // full context assembly (Brain swarm or direct), not a side channel.
+    // full context assembly (direct inference; see the pendingMediaId branch at
+    // the inference step -- a listen is answered solo by the bot that heard it).
     let pendingMediaId: string | null = null;
     if (attribution.isOwner) {
       const listenMatch = effectiveContent.match(LISTEN_TRIGGER);
@@ -631,7 +644,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     let response: string | null;
-    if (brainClient) {
+    // A listen that ran on THIS bot must be answered by THIS bot, directly -- never
+    // via the swarm. The [HEARD] packet arrives ~15s late (pipeline latency) and
+    // loses Brain's message_id dedup to siblings' bare packets, so the listener gets
+    // muted and a blind sibling answers (2026-06-13). Going direct pins the reply to
+    // the companion who actually heard the track, with the [HEARD] block already in
+    // `history` (appended to STM above).
+    if (brainClient && !pendingMediaId) {
       // Relay mode: send assembled context to Phoenix Brain for inference.
       // Brain returns reply_text; falls back to direct inference on failure.
       const packet = buildThoughtPacket(
