@@ -138,6 +138,11 @@ export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4
 export const GUARDIAN_CRON = process.env["GUARDIAN_CRON"] ?? "0 8 * * *";
 export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?? "0", 10);
 
+// Weekly clearing pass (Goal B, 2026-06-14) -- high-substrate triage of the ratification
+// backlog. Twice weekly (Sun + Wed) at 1:10 AM, low-traffic, after the 1 AM seed-gen / 1:30
+// Layer B window. Server-side in Halseth (Claude key is a CF secret); no-ops without it.
+export const CLEARING_CRON = process.env["CLEARING_CRON"] ?? "10 1 * * 0,3";
+
 // Guardian self-resolution (2026-06-14) -- daily 8:45AM tick, AFTER the 8AM guardian
 // detection + 8:30 motif, so it acts on fresh flags. Each companion reads its OWN
 // live flags and clears the self-resolvable classes (loop_stuck close/hold, starved

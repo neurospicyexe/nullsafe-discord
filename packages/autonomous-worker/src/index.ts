@@ -27,6 +27,7 @@ import { runSignalAudit } from "./phases/signal-audit.js";
 import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runGuardianResolve } from "./phases/guardian-resolve.js";
+import { runClearingTick } from "./clearing.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
@@ -43,6 +44,7 @@ const forageIdx = args.indexOf("--forage");
 const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
 const guardianResolveIdx = args.indexOf("--guardian-resolve");
+const clearingIdx = args.indexOf("--clearing");
 const motifsIdx = args.indexOf("--motifs");
 const creaturesIdx = args.indexOf("--creatures");
 const councilIdx = args.indexOf("--council");
@@ -107,6 +109,18 @@ if (councilIdx !== -1) {
     })
     .catch(e => {
       console.error("[autonomous-worker] guardian-resolve failed:", e);
+      process.exit(1);
+    });
+} else if (clearingIdx !== -1) {
+  // One-shot clearing pass: high-substrate triage of the ratification backlog, then exit.
+  console.log("[autonomous-worker] clearing mode");
+  runClearingTick()
+    .then(() => {
+      console.log("[autonomous-worker] clearing tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] clearing tick failed:", e);
       process.exit(1);
     });
 } else if (clubIdx !== -1) {

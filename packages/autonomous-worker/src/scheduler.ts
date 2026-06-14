@@ -13,11 +13,12 @@ import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runGuardianResolve } from "./phases/guardian-resolve.js";
+import { runClearingTick } from "./clearing.js";
 import { runMotifsTick } from "./motifs.js";
 import { runCreaturesTick } from "./creatures.js";
 import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON } from "./config.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -184,6 +185,13 @@ export function startScheduler(): void {
   console.log(`[scheduler] guardian-resolve → cron "${GUARDIAN_RESOLVE_CRON}"`);
   cron.schedule(GUARDIAN_RESOLVE_CRON, () => {
     runGuardianResolve().catch(e => console.error("[scheduler] guardian-resolve failed:", e));
+  });
+
+  // Weekly clearing pass -- high-substrate triage of the ratification backlog (auto-decline
+  // drift, shortlist real growth for Raziel). Decision runs server-side in Halseth.
+  console.log(`[scheduler] clearing → cron "${CLEARING_CRON}"`);
+  cron.schedule(CLEARING_CRON, () => {
+    runClearingTick().catch(e => console.error("[scheduler] clearing failed:", e));
   });
 
   // Motif memory -- daily tick detects recurring symbolic threads + fades stale ones.

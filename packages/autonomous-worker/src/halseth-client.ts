@@ -815,6 +815,12 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
   return await hFetch("/mind/guardian/run", "POST", { letter }) as { flags_created: number; flags_resolved: number; letter_id: string | null };
 }
 
+// Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
+// in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
+export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; letter_id: string | null }> {
+  return await hFetch("/mind/clearing/run", "POST", {}) as { skipped?: string; pending: number; declined: number; shortlisted: number; letter_id: string | null };
+}
+
 // ── Motif memory (0076) ──────────────────────────────────────────────────────
 
 export async function detectMotifs(): Promise<{ ok: boolean; detected: Record<string, number> }> {
