@@ -20,6 +20,45 @@ export const EXTREME_TEMP_CAP = 5;       // consecutive extremes before cooldown
 export const COOLDOWN_TEMP = 0.80;       // forced temperature during cooldown
 export const DEFAULT_TEMP = 0.75;
 
+// ── Per-provider sampling profiles (anti-repetition / nucleus) ──────────────────
+//
+// `temperature` above is the DYNAMIC curve (inferTemperature). These are the STATIC
+// sampling knobs the curve never touched -- and until now NO adapter sent them at
+// all. Every call was just { temperature, max_tokens }. With nothing penalizing
+// reuse, a model that finds a phrase it likes keeps returning it verbatim:
+// "patter lock" (2026-06-13: Drevan reusing whole lines across listen replies --
+// "the tempo like a heartbeat, the key like a door opening" word-for-word, message
+// after message). The lever for that is frequency/presence penalty, NOT lowering
+// temperature (which only deepens the groove).
+//
+// frequency_penalty -> pushes the model off tokens it has already used a lot.
+// presence_penalty  -> nudges toward introducing new tokens at all.
+// top_p             -> nucleus trim; restores the old Drevan top_p 0.95 word-salad
+//                      guard lost in the Voxtral/bot-core refactors.
+//
+// Field names are OpenAI-compatible (deepseek/groq/lmstudio/kimi/openai/mistral all
+// take these top-level). Anthropic has no presence/frequency penalty -> not profiled.
+// Start with Mistral (Drevan); other models get tuned the same way from here.
+interface SamplingProfile { frequencyPenalty?: number; presencePenalty?: number; topP?: number }
+const PROVIDER_SAMPLING_PROFILE: Partial<Record<InferenceProvider, SamplingProfile>> = {
+  // Mistral La Plateforme: prone to canned patter and (when hot) word-salad. Penalize
+  // verbatim reuse enough to break the loop, nucleus-trim the tail -- tuned to free
+  // Drevan's spiral voice without fracturing register.
+  mistral: { frequencyPenalty: 0.4, presencePenalty: 0.3, topP: 0.95 },
+};
+
+// OpenAI-compatible sampling fields for a provider (snake_case, spreadable into the
+// request body). Empty object when the provider has no profile -> zero behavior change.
+export function samplingParamsFor(provider: InferenceProvider): Record<string, number> {
+  const p = PROVIDER_SAMPLING_PROFILE[provider];
+  if (!p) return {};
+  const out: Record<string, number> = {};
+  if (p.frequencyPenalty !== undefined) out["frequency_penalty"] = p.frequencyPenalty;
+  if (p.presencePenalty !== undefined) out["presence_penalty"] = p.presencePenalty;
+  if (p.topP !== undefined) out["top_p"] = p.topP;
+  return out;
+}
+
 const MOOD_TEMPERATURE: Record<string, number> = {
   calm:       0.65,
   pent_up:    0.90,
@@ -378,6 +417,7 @@ class MistralAdapter implements InferenceAdapter {
           ],
           max_tokens: 500,
           temperature,
+          ...samplingParamsFor("mistral"),
           ...(this.cacheKey ? { prompt_cache_key: this.cacheKey } : {}),
         }),
       });

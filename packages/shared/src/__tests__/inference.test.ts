@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { createAdapter } from "../inference.js";
+import { createAdapter, samplingParamsFor } from "../inference.js";
 import type { ChatMessage } from "../types.js";
 
 describe("DeepSeekAdapter", () => {
@@ -76,5 +76,49 @@ describe("createAdapter fallback chain (Finding 4b)", () => {
 
   it("throws only when no provider is configured at all", () => {
     expect(() => createAdapter("kimi", "kimi-k2", {}, {}, (async () => {}) as any)).toThrow();
+  });
+});
+
+describe("per-provider sampling profile (patter-lock fix)", () => {
+  it("Mistral sends anti-repetition penalties + top_p, not just temperature", async () => {
+    let sentBody: any = null;
+    const mockFetch = jest.fn(async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "hi" } }] }) } as any;
+    });
+    const adapter = createAdapter("mistral", "mistral-large-latest", { mistral: "mk" }, {}, mockFetch as any);
+    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.85);
+
+    // temperature is untouched (the dynamic curve still flows through)
+    expect(sentBody.temperature).toBe(0.85);
+    // the knobs that were missing entirely until now
+    expect(sentBody.frequency_penalty).toBe(0.4);
+    expect(sentBody.presence_penalty).toBe(0.3);
+    expect(sentBody.top_p).toBe(0.95);
+  });
+
+  it("helper returns the OpenAI-compatible param names for Mistral", () => {
+    expect(samplingParamsFor("mistral")).toEqual({
+      frequency_penalty: 0.4,
+      presence_penalty: 0.3,
+      top_p: 0.95,
+    });
+  });
+
+  it("an unprofiled provider gets no sampling overrides (zero behavior change)", () => {
+    expect(samplingParamsFor("deepseek")).toEqual({});
+  });
+
+  it("DeepSeek body stays clean -- no penalties leak into unprofiled providers", async () => {
+    let sentBody: any = null;
+    const mockFetch = jest.fn(async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "hi" } }] }) } as any;
+    });
+    const adapter = createAdapter("deepseek", "deepseek-chat", { deepseek: "dk" }, {}, mockFetch as any);
+    await adapter.generate("system", [{ role: "user", content: "hi" }]);
+    expect(sentBody.frequency_penalty).toBeUndefined();
+    expect(sentBody.presence_penalty).toBeUndefined();
+    expect(sentBody.top_p).toBeUndefined();
   });
 });
