@@ -12,7 +12,8 @@ export async function runClearingTick(): Promise<void> {
     return;
   }
   console.log(
-    `[clearing] tick: ${res.pending} pending reviewed, ${res.declined} declined, ` +
-    `${res.shortlisted} shortlisted` + (res.letter_id ? `, letter ${res.letter_id}` : ""),
+    `[clearing] tick: ${res.pending} growth (${res.declined} declined, ${res.shortlisted} shortlisted), ` +
+    `${res.basins_reviewed} basins (${res.basins_dismissed} dismissed, ${res.basins_surfaced} surfaced)` +
+    (res.letter_id ? `, letter ${res.letter_id}` : ""),
   );
 }

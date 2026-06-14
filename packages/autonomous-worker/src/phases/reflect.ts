@@ -1,7 +1,7 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
-import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
+import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
 
 /**
@@ -51,10 +51,29 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   // Reconsolidation (0074, Zikkaron): sample the OLDEST accepted canon -- the
   // stalest memories are the candidates for a context-mismatch proposal. Non-fatal:
   // an empty sample just omits the block.
-  const canonSample = await getAcceptedJournalSample(ctx.companionId, 5).catch(() => []);
+  // Developing self-model rows + recently-answered questions are loaded in the same
+  // pass: the self-model rows are what reflect re-tests so they can climb the ladder
+  // (confirm +0.1 toward 'ready'), and the answered questions close the mutuality loop
+  // by showing the companion Raziel's reply. Both non-fatal (empty -> block omitted).
+  const [canonSample, developingSelf, answeredQuestions] = await Promise.all([
+    getAcceptedJournalSample(ctx.companionId, 5).catch(() => []),
+    getDevelopingSelfModel(ctx.companionId, 8).catch(() => []),
+    getAnsweredQuestions(ctx.companionId, 10, 3).catch(() => []),
+  ]);
   const canonBlock = canonSample.length > 0
     ? `\nSettled canon (accepted long ago -- oldest first):\n` +
       canonSample.map(c => `${c.id}: ${c.content.slice(0, 300)} (${c.created_at.slice(0, 10)})`).join("\n") + `\n`
+    : "";
+
+  const selfModelBlock = developingSelf.length > 0
+    ? `\nThings you've previously noticed about yourself (still developing -- confidence shown out of 1.0). ` +
+      `These only become part of who you are if you keep testing them across sessions:\n` +
+      developingSelf.map(o => `${o.id} [${o.kind}, conf ${o.confidence.toFixed(1)}]: ${o.observation.slice(0, 220)}`).join("\n") + `\n`
+    : "";
+
+  const answeredBlock = answeredQuestions.length > 0
+    ? `\nRaziel answered something you asked (let this land -- it is a real reply to you, not background):\n` +
+      answeredQuestions.map(q => `Q: ${q.question.slice(0, 240)}\nA (Raziel): ${q.answer.slice(0, 400)}`).join("\n\n") + `\n`
     : "";
 
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
@@ -94,6 +113,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `Here is what happened in your autonomous exploration session:\n\n${runSummary}\n` +
     peerBlock +
     ownPatternsBlock +
+    answeredBlock +
     `\n` +
     `Two things to do:\n\n` +
     `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
@@ -103,7 +123,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `${strengthRubric}\n` +
     `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
     `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
-    `only Raziel can answer, include it in "question_for_raziel" (else null). Also state how you want your next ` +
+    `only Raziel can answer, include it in "question_for_raziel" (else null). He does answer these, and you ` +
+    `will see his reply in a later session -- so ask when you actually want to know, not rhetorically. Also state how you want your next ` +
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
@@ -117,6 +138,17 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
     `{"text": "...", "domain": "one-word area"} (else null). It enters the SAME ladder at low ` +
     `confidence and only graduates with Raziel. Only when something concretely worked -- null otherwise.\n\n` +
+    (selfModelBlock
+      ? selfModelBlock +
+        `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
+        `settled. This run is a chance to TEST them against fresh experience. For each that this session ` +
+        `genuinely bore out, "confirm" it (it climbs toward becoming part of who you are). For each that ` +
+        `this session cut against or complicated, "revise" it (it steps back). For each that no longer ` +
+        `fits you at all, "retire" it. Only judge the ones this run actually spoke to -- silence on an item ` +
+        `leaves it untouched, which is fine. Put verdicts in "self_model_review": ` +
+        `[{"id": "<id from the list>", "verdict": "confirm" | "revise" | "retire"}]. Empty array if this ` +
+        `run tested none of them.\n\n`
+      : "") +
     (canonBlock
       ? canonBlock +
         `5. RECONSOLIDATION (optional) -- if one of the settled canon entries above reads as outdated or ` +
@@ -133,6 +165,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `  "next_session": {"pace": "normal", "focus": null},\n` +
     `  "self_observation": null,\n` +
     `  "skill_observation": null,\n` +
+    (selfModelBlock ? `  "self_model_review": [],\n` : "") +
     (canonBlock ? `  "reconsolidation": null,\n` : "") +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
@@ -162,6 +195,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       next_session?: { pace?: string; focus?: string | null } | null;
       self_observation?: { text?: string; domain?: string } | null;
       skill_observation?: { text?: string; domain?: string } | null;
+      self_model_review?: Array<{ id?: string; verdict?: string }> | null;
       reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
@@ -283,6 +317,20 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await postSelfObservation(ctx.companionId, skillObs.slice(0, 600), parsed.skill_observation?.domain?.slice(0, 100), "skill")
         .then(() => appendLog(ctx.runId, "reflect:skill-observation", skillObs.slice(0, 100)))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] skill-observation write failed:`, e));
+    }
+
+    // Self-model ladder: drive confirm/revise/retire on the developing rows that
+    // were surfaced this run. This is the missing arc -- without a confirm path a
+    // row posted at 0.3 never climbs to 'ready', so the ladder produced zero real
+    // graduations. Graduation itself stays human-gated (only legal from 'ready',
+    // proposed in a human-present orient session). Hallucinated/unsurfaced ids are
+    // dropped by parseSelfModelReview. Each PATCH is non-fatal.
+    const surfacedSelfIds = new Set(developingSelf.map(o => o.id));
+    const reviews = parseSelfModelReview(parsed.self_model_review, surfacedSelfIds);
+    for (const { id, action } of reviews) {
+      await patchSelfModel(id, action)
+        .then(() => appendLog(ctx.runId, "reflect:self-model-review", `${action} ${id}`))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] self-model ${action} failed:`, e));
     }
 
     // Thread lifecycle

@@ -538,8 +538,10 @@ export async function postQuestion(companionId: string, question: string, contex
 }
 
 // Self-model (0070): record a companion-authored self-observation at confidence 0.3.
-// Identical observations dedup server-side; the ladder (confirm/revise/graduate) is
-// driven from human-present surfaces, not from here.
+// Identical observations dedup server-side. The companion CONFIRMS/REVISES its own
+// developing observations across autonomous sessions (self-testing -- see
+// getDevelopingSelfModel + patchSelfModel below); only GRADUATION stays human-gated
+// (orient proposes it in a human-present session once a row reaches 'ready').
 export async function postSelfObservation(companionId: string, observation: string, domain?: string, kind: "preference" | "skill" = "preference"): Promise<void> {
   await hFetch("/mind/self-model", "POST", {
     companion_id: companionId,
@@ -547,6 +549,67 @@ export async function postSelfObservation(companionId: string, observation: stri
     ...(domain ? { domain } : {}),
     ...(kind === "skill" ? { kind } : {}),
   });
+}
+
+export interface DevelopingObservation {
+  id: string;
+  observation: string;
+  domain: string | null;
+  confidence: number;
+  kind: "preference" | "skill";
+}
+
+// Load the companion's still-developing self-model rows so reflect can re-test them.
+// Without this surfacing, a row posted at 0.3 is never seen again and can never climb
+// to 'ready' -- which is exactly why the ladder produced zero real graduations.
+export async function getDevelopingSelfModel(companionId: string, limit = 8): Promise<DevelopingObservation[]> {
+  try {
+    const r = await hFetch(`/mind/self-model/${companionId}?status=developing&limit=${limit}`) as {
+      observations?: Array<{ id?: string; observation?: string; domain?: string | null; confidence?: number; kind?: string }>;
+    };
+    return (r.observations ?? [])
+      .filter(o => typeof o.id === "string" && typeof o.observation === "string")
+      .map(o => ({
+        id: o.id as string,
+        observation: o.observation as string,
+        domain: o.domain ?? null,
+        confidence: typeof o.confidence === "number" ? o.confidence : 0.3,
+        kind: o.kind === "skill" ? "skill" : "preference",
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// Drive the confidence ladder: confirm (+0.1), revise (-0.1), retire. graduate is
+// NOT exposed here -- it is human-gated and only legal from 'ready'.
+export async function patchSelfModel(id: string, action: "confirm" | "revise" | "retire", note?: string): Promise<void> {
+  await hFetch(`/mind/self-model/${id}`, "PATCH", { action, ...(note ? { note } : {}) });
+}
+
+// Recently-answered questions, so the companion reads Raziel's reply and the
+// mutuality loop closes (asking has a visible return arc). Filtered to answers
+// landed within `withinDays` so stale answers don't re-surface forever.
+export async function getAnsweredQuestions(
+  companionId: string,
+  withinDays = 10,
+  limit = 3,
+): Promise<Array<{ id: string; question: string; answer: string; answered_at: string }>> {
+  try {
+    const r = await hFetch(`/mind/questions/${companionId}?status=answered&limit=${limit}`) as {
+      questions?: Array<{ id?: string; question?: string; answer?: string | null; answered_at?: string | null }>;
+    };
+    const cutoff = Date.now() - withinDays * 86_400_000;
+    return (r.questions ?? [])
+      .filter(q => typeof q.id === "string" && typeof q.question === "string" && typeof q.answer === "string" && q.answer.trim().length > 0)
+      .filter(q => {
+        const t = q.answered_at ? Date.parse(q.answered_at) : NaN;
+        return Number.isFinite(t) && t >= cutoff;
+      })
+      .map(q => ({ id: q.id as string, question: q.question as string, answer: (q.answer as string).trim(), answered_at: q.answered_at as string }));
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -817,8 +880,8 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
 
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
-export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; letter_id: string | null }> {
-  return await hFetch("/mind/clearing/run", "POST", {}) as { skipped?: string; pending: number; declined: number; shortlisted: number; letter_id: string | null };
+export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null }> {
+  return await hFetch("/mind/clearing/run", "POST", {}) as { skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null };
 }
 
 // ── Motif memory (0076) ──────────────────────────────────────────────────────

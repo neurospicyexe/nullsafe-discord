@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength } from "../parsers.js";
+import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 
 describe("stripJsonFence", () => {
   it("returns input unchanged when no fence present", () => {

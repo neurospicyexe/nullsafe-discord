@@ -79,3 +79,42 @@ export function clampStrength(n: unknown): number {
   if (typeof n !== "number" || !Number.isFinite(n)) return 3;
   return Math.max(1, Math.min(10, Math.round(n)));
 }
+
+export interface SelfModelVerdict {
+  id: string;
+  action: "confirm" | "revise" | "retire";
+}
+
+/**
+ * Parse the model's `self_model_review` against the set of self-model ids that
+ * were actually surfaced to it this run. This is what lets a developing
+ * observation climb the confidence ladder (confirm +0.1) toward 'ready' -- or
+ * fall back (revise -0.1) / be retired -- across autonomous sessions. Without a
+ * confirm path nothing ever reaches the 0.8 graduation threshold.
+ *
+ * Drops:
+ *   - non-array input
+ *   - entries with a non-string id, or an id the model wasn't shown (hallucinated)
+ *   - unknown verdicts (anything other than confirm|revise|retire)
+ *   - duplicate ids (first verdict wins)
+ *
+ * Pure -- exported for tests. `graduate` is intentionally NOT accepted here:
+ * graduation is human-gated and only legal from 'ready'.
+ */
+export function parseSelfModelReview(input: unknown, surfacedIds: Set<string>): SelfModelVerdict[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: SelfModelVerdict[] = [];
+  for (const entry of input) {
+    if (!entry || typeof entry !== "object") continue;
+    const obj = entry as Record<string, unknown>;
+    const id = typeof obj.id === "string" ? obj.id : "";
+    if (!id || !surfacedIds.has(id) || seen.has(id)) continue;
+    const verdictRaw = typeof obj.verdict === "string" ? obj.verdict.trim().toLowerCase() : "";
+    if (verdictRaw !== "confirm" && verdictRaw !== "revise" && verdictRaw !== "retire") continue;
+    seen.add(id);
+    out.push({ id, action: verdictRaw });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
