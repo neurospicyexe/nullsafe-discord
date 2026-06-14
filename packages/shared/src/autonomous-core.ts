@@ -154,6 +154,37 @@ export async function sendAutonomousMessage(
   }
 }
 
+/** Halseth-only journal writes (write_journal / write_note_to_raziel) go through the
+ *  Librarian "add companion note" path. This has two SILENT failure modes that have bitten
+ *  twice (2026-06-13 journal_add crash, 2026-06-14 the post-fix fire that left no row):
+ *    1. empty generated content makes the old `if (content)` guard skip the write with no trace;
+ *    2. the Librarian returns HTTP 200 with an { error }/{ witness } envelope when an executor
+ *       rejects the payload -- it does NOT throw -- so a fire-and-forget `.catch` is blind.
+ *  Await the write and inspect the envelope so the NEXT failure is loud, not invisible. */
+export async function writeMetronomeJournal(
+  librarian: AutonomousContext["librarian"],
+  companionId: string,
+  label: string,
+  content: string | null,
+  tags: string[],
+): Promise<void> {
+  if (!content || !content.trim()) {
+    console.warn(`[${companionId}/heartbeat] ${label}: content generation returned empty -- write skipped`);
+    return;
+  }
+  try {
+    const res = await librarian.ask(
+      "add companion note",
+      JSON.stringify({ content, tags, source: "metronome" }),
+    );
+    if (!res || (!("ack" in res) && !("id" in res))) {
+      console.warn(`[${companionId}/heartbeat] ${label}: write returned no ack (silent reject) -- ${JSON.stringify(res).slice(0, 200)}`);
+    }
+  } catch (e) {
+    onWriteError(companionId, label)(e);
+  }
+}
+
 export async function executeMetronomeAction(
   ctx: AutonomousContext,
   decision: MetronomeDecision,
@@ -182,7 +213,7 @@ export async function executeMetronomeAction(
       // routed to journal_add -> human_journal AND rejected the `content` field, so this
       // silently no-op'd every fire. "add companion note" -> companion_journal handles
       // {content, tags:[...]} correctly (2026-06-13 bug hunt).
-      if (content) librarian.ask("add companion note", JSON.stringify({ content, tags: ["metronome"], source: "metronome" })).catch(onWriteError(companionId, "journal entry"));
+      await writeMetronomeJournal(librarian, companionId, "journal entry", content, ["metronome"]);
       break;
     }
     case "write_feeling": {
@@ -252,7 +283,7 @@ export async function executeMetronomeAction(
       // companion_journal tagged letter_to_raziel (surfaces in Hearth /journal), same
       // pattern as the guardian weekly letter. Was routing to human_journal + rejected
       // on the `content` field -> silent no-op (2026-06-13 bug hunt).
-      if (content) librarian.ask("add companion note", JSON.stringify({ content, tags: ["metronome", "letter_to_raziel"], source: "metronome" })).catch(onWriteError(companionId, "note to raziel"));
+      await writeMetronomeJournal(librarian, companionId, "note to raziel", content, ["metronome", "letter_to_raziel"]);
       break;
     }
     case "nothing":
