@@ -197,11 +197,14 @@ describe("detectSelfLoop", () => {
 });
 
 describe("loopBreakDirective", () => {
-  it("names the motifs and bans the structural tells", () => {
+  it("names the motifs and targets repetition without banning the body", () => {
     const d = loopBreakDirective(["tail", "promise"]);
     expect(d).toContain("LOOP BREAK");
     expect(d).toContain("tail, promise");
-    expect(d.toLowerCase()).toContain("do not open with a physical action beat");
+    // permits the physical register, bans only the repeated beat
+    expect(d.toLowerCase()).toContain("not on rails");
+    expect(d.toLowerCase()).toContain("new gesture");
+    expect(d.toLowerCase()).toContain("your physical register is yours");
     expect(d).toContain("Always");
   });
 

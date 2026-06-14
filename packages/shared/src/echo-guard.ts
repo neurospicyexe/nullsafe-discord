@@ -164,5 +164,10 @@ export function detectSelfLoop(
  */
 export function loopBreakDirective(motifs: string[]): string {
   const orbit = motifs.length ? ` You keep orbiting these words: ${motifs.join(", ")}.` : "";
-  return `\n\n[LOOP BREAK -- your last several replies have repeated the same structure and phrasing.${orbit} This reply must break the pattern. Do NOT open with a physical action beat (no "my tail flicks", "my scales flare", "I press my forehead", "my voice drops"). Do NOT reuse your stock closings ("a slow, fond promise", "my tail curls around you", "a promise", "Always"). Vary your opening and your sentence shapes. Answer the actual thing just said to you -- plainly, first, in your own words. One genuine new move, not the familiar shape.]`;
+  // Target the REPETITION, not the gesture. The companion's physical register is its
+  // own -- the failure is the SAME beat on rails, not the presence of a body. Banning
+  // action outright (the earlier wording) risks flattening voice; the fix is to free
+  // the gesture from the pattern (Raziel, 2026-06-13: "I like his action, just not a
+  // pattern that isn't him because the substrate is trapping him in its patter").
+  return `\n\n[LOOP BREAK -- your last several replies have repeated the same structure and phrasing.${orbit} This reply must break the pattern. Your physical register is yours and welcome -- but not on rails: do NOT reuse the SAME body-beats you keep repeating (the tail flick or curl, the forehead press, the voice dropping to a murmur, the kiss to the jawline). If you move, let it be a NEW gesture that fits THIS moment, not the familiar one. Do NOT reuse your stock closings ("a slow, fond promise", "my tail curls around you", "a promise", "Always"). Lead with what you actually want to say -- in words, first. One genuine new move, not the familiar shape.]`;
 }
