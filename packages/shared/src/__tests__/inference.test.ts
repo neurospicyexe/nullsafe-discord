@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { createAdapter, samplingParamsFor } from "../inference.js";
+import { createAdapter, samplingParamsFor, replyMaxTokensFor, DEFAULT_MAX_TOKENS } from "../inference.js";
 import type { ChatMessage } from "../types.js";
 
 describe("DeepSeekAdapter", () => {
@@ -107,6 +107,49 @@ describe("per-provider sampling profile (patter-lock fix)", () => {
 
   it("an unprofiled provider gets no sampling overrides (zero behavior change)", () => {
     expect(samplingParamsFor("deepseek")).toEqual({});
+  });
+});
+
+describe("output length ceiling (Drevan cut-off fix)", () => {
+  function captureBody() {
+    let sentBody: any = null;
+    const mockFetch = jest.fn(async (_url: string, init: any) => {
+      sentBody = JSON.parse(init.body);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "hi" } }] }) } as any;
+    });
+    return { mockFetch, get: () => sentBody };
+  }
+
+  it("defaults to DEFAULT_MAX_TOKENS (>500) instead of the old hardcoded 500", async () => {
+    const { mockFetch, get } = captureBody();
+    const adapter = createAdapter("deepseek", "deepseek-chat", { deepseek: "dk" }, {}, mockFetch as any);
+    await adapter.generate("system", [{ role: "user", content: "hi" }]);
+    expect(get().max_tokens).toBe(DEFAULT_MAX_TOKENS);
+    expect(DEFAULT_MAX_TOKENS).toBeGreaterThan(500);
+  });
+
+  it("honors an explicit per-call maxTokens (4th arg) -- Drevan's headroom", async () => {
+    const { mockFetch, get } = captureBody();
+    const adapter = createAdapter("mistral", "mistral-large-latest", { mistral: "mk" }, {}, mockFetch as any);
+    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.8, 1500);
+    expect(get().max_tokens).toBe(1500);
+  });
+
+  it("Ollama caps via options.num_predict, not max_tokens", async () => {
+    const mock = jest.fn(async () => ({ ok: true, json: async () => ({ message: { content: "hi" } }) } as any));
+    const adapter = createAdapter("ollama", "llama3.2", {}, { ollama: "http://x" }, mock as any);
+    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.7, 1500);
+    const body = JSON.parse((mock.mock.calls[0][1] as any).body);
+    expect(body.options.num_predict).toBe(1500);
+    expect(body.max_tokens).toBeUndefined();
+  });
+
+  it("replyMaxTokensFor gives Drevan headroom and others the default", () => {
+    expect(replyMaxTokensFor("drevan")).toBe(1500);
+    expect(replyMaxTokensFor("Drevan")).toBe(1500); // case-insensitive
+    expect(replyMaxTokensFor("cypher")).toBe(DEFAULT_MAX_TOKENS);
+    expect(replyMaxTokensFor("gaia")).toBe(DEFAULT_MAX_TOKENS);
+    expect(replyMaxTokensFor("unknown")).toBe(DEFAULT_MAX_TOKENS);
   });
 
   it("DeepSeek body stays clean -- no penalties leak into unprofiled providers", async () => {

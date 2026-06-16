@@ -2,7 +2,34 @@ import type { ChatMessage } from "./types.js";
 import type { InferenceProvider } from "./models.js";
 
 export interface InferenceAdapter {
-  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number): Promise<string | null>;
+  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number): Promise<string | null>;
+}
+
+// ── Output length ceiling ──────────────────────────────────────────────────────
+//
+// Every adapter used to hardcode `max_tokens: 500` (~1800-2200 chars). That cap is
+// a CEILING, not a target -- the model stops at its own stop token when the thought
+// is done, and only gets truncated when it hits the cap. Drevan's immersive spiral
+// prose routinely wants more than 500 tokens, so his replies terminated with
+// finish_reason="length" MID-SENTENCE -- the "Drevan's messages keep getting cut
+// off" report. (Cypher is declarative and Gaia is monastic, so they rarely
+// approached 500 and never showed the symptom.) sendLong() already splits content
+// over Discord's 2000-char limit into multiple messages, so a higher ceiling has no
+// downside beyond a few cents of output tokens on the verbose companion.
+//
+// 1024 is the new floor for everyone (double the old cap, pure headroom); the live
+// reply path passes a higher per-companion cap for Drevan via the 4th generate arg.
+export const DEFAULT_MAX_TOKENS = 1024;
+
+// Per-companion reply ceiling for the LIVE Discord reply path. Drevan's immersive
+// spiral prose is the one register that routinely runs long, so he gets real
+// headroom; Cypher and Gaia inherit DEFAULT_MAX_TOKENS (still a ceiling -- it never
+// forces length, the model stops when the thought is done). Keyed by lowercase id.
+export const REPLY_MAX_TOKENS: Record<string, number> = {
+  drevan: 1500,
+};
+export function replyMaxTokensFor(companionId: string): number {
+  return REPLY_MAX_TOKENS[companionId.toLowerCase()] ?? DEFAULT_MAX_TOKENS;
 }
 
 // ── Dynamic temperature ────────────────────────────────────────────────────────
@@ -119,14 +146,14 @@ class DeepSeekAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     const body = JSON.stringify({
       model: this.model,
       messages: [
         { role: "system", content: systemPrompt },
         ...messages.map(toApiMessage),
       ],
-      max_tokens: 500,
+      max_tokens: maxTokens,
       temperature,
     });
 
@@ -165,7 +192,7 @@ class GroqAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       const res = await this.fetchFn("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
@@ -179,7 +206,7 @@ class GroqAdapter implements InferenceAdapter {
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
           ],
-          max_tokens: 500,
+          max_tokens: maxTokens,
           temperature,
         }),
       });
@@ -204,7 +231,7 @@ class OllamaAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       const res = await this.fetchFn(`${this.baseUrl}/api/chat`, {
         method: "POST",
@@ -216,7 +243,8 @@ class OllamaAdapter implements InferenceAdapter {
             ...messages.map(toApiMessage),
           ],
           stream: false,
-          options: { temperature },
+          // Ollama caps output via options.num_predict (not max_tokens).
+          options: { temperature, num_predict: maxTokens },
         }),
       });
       if (!res.ok) {
@@ -242,7 +270,7 @@ class LMStudioAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       const res = await this.fetchFn(`${this.baseUrl}/v1/chat/completions`, {
         method: "POST",
@@ -253,7 +281,7 @@ class LMStudioAdapter implements InferenceAdapter {
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
           ],
-          max_tokens: 500,
+          max_tokens: maxTokens,
           temperature,
         }),
       });
@@ -279,7 +307,7 @@ class KimiAdapter implements InferenceAdapter {
     private cacheKey?: string,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       // .ai is the international platform (platform.moonshot.ai keys); .cn keys 401 here and vice versa.
       const res = await this.fetchFn("https://api.moonshot.ai/v1/chat/completions", {
@@ -294,7 +322,7 @@ class KimiAdapter implements InferenceAdapter {
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
           ],
-          max_tokens: 500,
+          max_tokens: maxTokens,
           temperature,
           ...(this.cacheKey ? { prompt_cache_key: this.cacheKey } : {}),
         }),
@@ -320,7 +348,7 @@ class OpenAIAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       const res = await this.fetchFn("https://api.openai.com/v1/chat/completions", {
         method: "POST",
@@ -334,7 +362,7 @@ class OpenAIAdapter implements InferenceAdapter {
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
           ],
-          max_tokens: 500,
+          max_tokens: maxTokens,
           temperature,
         }),
       });
@@ -359,7 +387,7 @@ class AnthropicAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       const res = await this.fetchFn("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -371,7 +399,7 @@ class AnthropicAdapter implements InferenceAdapter {
         },
         body: JSON.stringify({
           model: this.model,
-          max_tokens: 500,
+          max_tokens: maxTokens,
           system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
           messages: messages.map(m => ({ role: m.role, content: m.content })),
           // Anthropic clamps temperature to [0, 1]; our default (1.3) would 400.
@@ -400,7 +428,7 @@ class MistralAdapter implements InferenceAdapter {
     private cacheKey?: string,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
     try {
       // Mistral La Plateforme is OpenAI-compatible.
       const res = await this.fetchFn("https://api.mistral.ai/v1/chat/completions", {
@@ -415,7 +443,7 @@ class MistralAdapter implements InferenceAdapter {
             { role: "system", content: systemPrompt },
             ...messages.map(toApiMessage),
           ],
-          max_tokens: 500,
+          max_tokens: maxTokens,
           temperature,
           ...samplingParamsFor("mistral"),
           ...(this.cacheKey ? { prompt_cache_key: this.cacheKey } : {}),
@@ -439,9 +467,9 @@ class MistralAdapter implements InferenceAdapter {
 class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number): Promise<string | null> {
     for (const { name, adapter } of this.adapters) {
-      const result = await adapter.generate(systemPrompt, messages, temperature);
+      const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens);
       if (result !== null) {
         console.log(`[inference] ${name} responded`);
         return result;
