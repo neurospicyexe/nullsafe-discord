@@ -1,4 +1,6 @@
-import { formatSearchReply, formatImageReply } from "../tools-command.js";
+import { jest, beforeAll, afterEach } from "@jest/globals";
+import { formatSearchReply, formatImageReply, handleCouncilConvene } from "../tools-command.js";
+import { CHANNEL } from "../events.js";
 
 describe("formatSearchReply", () => {
   test("lists found results as a deterministic ack (title + url)", () => {
@@ -37,5 +39,48 @@ describe("formatImageReply", () => {
   test("omits the attachment when no url is present", () => {
     const out = formatImageReply("x", { url: "", key: "" });
     expect(out.imageUrl).toBeUndefined();
+  });
+});
+
+describe("handleCouncilConvene wake publishing", () => {
+  const realFetch = global.fetch;
+  beforeAll(() => {
+    process.env["HALSETH_URL"] = "https://h.test";
+    process.env["HALSETH_SECRET"] = "secret";
+  });
+  afterEach(() => { global.fetch = realFetch; });
+
+  function fakeRedis() {
+    return { publish: jest.fn().mockResolvedValue(1) };
+  }
+
+  test("publishes a council wake when convene succeeds and redis is provided", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }) as unknown as typeof fetch;
+    const redis = fakeRedis();
+    const reply = await handleCouncilConvene("should we ship?", redis as never);
+    expect(reply).toContain("council convened on");
+    expect(redis.publish).toHaveBeenCalledTimes(1);
+    expect(redis.publish).toHaveBeenCalledWith(CHANNEL.wake, expect.stringContaining("\"kind\":\"council\""));
+  });
+
+  test("does NOT publish when the convene call fails", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as unknown as typeof fetch;
+    const redis = fakeRedis();
+    const reply = await handleCouncilConvene("q", redis as never);
+    expect(reply).toContain("couldn't convene the council");
+    expect(redis.publish).not.toHaveBeenCalled();
+  });
+
+  test("does not throw and still acks when redis is absent", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }) as unknown as typeof fetch;
+    const reply = await handleCouncilConvene("q", null);
+    expect(reply).toContain("council convened on");
+  });
+
+  test("rejects an empty question before any network or publish", async () => {
+    const redis = fakeRedis();
+    const reply = await handleCouncilConvene("   ", redis as never);
+    expect(reply).toContain("give the council a question");
+    expect(redis.publish).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,8 @@
  *   ns:events:inter_note:{id}   — a note was written to companion {id}
  *   ns:events:session_pulse     — a bot's session is active (heartbeat)
  *   ns:events:presence:{id}     — companion {id} presence heartbeat
+ *   ns:events:wake              — a ritual was triggered; wake the worker to run it now
+ *                                 instead of waiting for its next cron tick
  */
 
 import { Redis } from "ioredis";
@@ -26,6 +28,7 @@ export const CHANNEL = {
   sessionPulse:      "ns:events:session_pulse",
   presence:          (companionId: string) => `ns:events:presence:${companionId}`,
   explorationPulse:  "ns:events:exploration_pulse",
+  wake:              "ns:events:wake",
 } as const;
 
 // Presence TTL: if a companion doesn't pulse within this window, it's considered inactive.
@@ -70,6 +73,19 @@ export interface ExplorationPulsePayload {
   exploredAt: string; // ISO 8601
 }
 
+// Ritual ticks that the worker normally polls for on a cron. A wake lets the
+// triggering action (e.g. a council convene) run the ritual immediately instead
+// of waiting up to a full cron interval. The cron stays as the safety-net fallback,
+// so a missed/failed wake never loses the work.
+export type WakeKind = "council" | "club" | "forage" | "guardian";
+
+export interface WakePayload {
+  kind: WakeKind;
+  reason?: string;       // human-readable trigger, e.g. "convene"
+  requestedBy?: string;  // who triggered it (companion id or "raziel")
+  at: string;            // ISO 8601
+}
+
 // ── Publisher ─────────────────────────────────────────────────────────────────
 
 /**
@@ -108,6 +124,14 @@ export async function publishSessionPulse(redis: Redis, payload: SessionPulsePay
  */
 export async function publishExplorationPulse(redis: Redis, payload: ExplorationPulsePayload): Promise<void> {
   await publish(redis, CHANNEL.explorationPulse, payload);
+}
+
+/**
+ * Wake the autonomous worker to run a ritual now instead of waiting for its cron tick.
+ * Non-throwing (like all publishers): if the bus is down, the cron fallback still runs the ritual.
+ */
+export async function publishWake(redis: Redis, payload: WakePayload): Promise<void> {
+  await publish(redis, CHANNEL.wake, payload);
 }
 
 /**
@@ -264,6 +288,27 @@ export function onExplorationPulse(subscriber: Redis, handler: EventHandler<Expl
   subscriber.on("message", listener);
   return () => {
     subscriber.unsubscribe(CHANNEL.explorationPulse).catch(() => {});
+    subscriber.off("message", listener);
+  };
+}
+
+/**
+ * Subscribe to wake events (broadcast channel). The autonomous worker uses this to run
+ * a ritual immediately when triggered, instead of waiting for the next cron tick.
+ * Returns an unsubscribe function.
+ */
+export function onWake(subscriber: Redis, handler: EventHandler<WakePayload>): () => void {
+  subscriber.subscribe(CHANNEL.wake).catch((e) =>
+    console.error("[events] subscribe wake failed:", e)
+  );
+  const listener = (ch: string, message: string) => {
+    if (ch !== CHANNEL.wake) return;
+    try { handler(JSON.parse(message) as WakePayload); }
+    catch (e) { console.warn("[events] wake parse error:", e); }
+  };
+  subscriber.on("message", listener);
+  return () => {
+    subscriber.unsubscribe(CHANNEL.wake).catch(() => {});
     subscriber.off("message", listener);
   };
 }

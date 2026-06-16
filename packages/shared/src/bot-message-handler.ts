@@ -327,7 +327,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && COUNCIL_TRIGGER) {
       const councilMatch = effectiveContent.match(COUNCIL_TRIGGER);
       if (councilMatch) {
-        const reply = await handleCouncilConvene(councilMatch[1]!)
+        const reply = await handleCouncilConvene(councilMatch[1]!, redis)
           .catch(err => `council command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;

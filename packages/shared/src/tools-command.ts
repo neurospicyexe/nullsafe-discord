@@ -6,6 +6,9 @@
 // (the 2026-06-11 deterministic-ack doctrine). The call runs AS the companion
 // (companion_id), so the per-companion tools_enabled gate applies.
 
+import type { Redis } from "ioredis";
+import { publishWake } from "./events.js";
+
 const SEARCH_LIST_CAP = 5;
 
 interface SearchResult {
@@ -69,12 +72,21 @@ export async function handleToolSearch(query: string, companionId: string): Prom
   return formatSearchReply(q, results);
 }
 
-/** Handle `council <question>`. Convenes a council round; the worker runs the ritual. (take 8) */
-export async function handleCouncilConvene(question: string): Promise<string> {
+/**
+ * Handle `council <question>`. Convenes a council round; the worker runs the ritual. (take 8)
+ *
+ * When `redis` is supplied, publishes a wake so the worker runs the ritual immediately
+ * instead of waiting for its next council cron tick (up to 30 min). The wake is fire-and-forget:
+ * if it fails or redis is absent, the cron fallback still runs the ritual.
+ */
+export async function handleCouncilConvene(question: string, redis: Redis | null = null): Promise<string> {
   const q = question.trim();
   if (!q) return "give the council a question.";
   const res = await toolsFetch("/mind/council/convene", { question: q, asked_by: "raziel" });
   if (!res.ok) return `couldn't convene the council: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`;
+  if (redis) {
+    await publishWake(redis, { kind: "council", reason: "convene", requestedBy: "raziel", at: new Date().toISOString() });
+  }
   return `council convened on: "${q.slice(0, 160)}" — the triad will answer, rank blind, and Gaia will synthesize. check back with "council status".`;
 }
 

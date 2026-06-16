@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import type { Redis } from "@nullsafe/shared";
-import { createRedisClient, publishRunComplete, publishExplorationPulse, setPresence } from "@nullsafe/shared";
+import { createRedisClient, publishRunComplete, publishExplorationPulse, setPresence, createSubscriberClient, onWake } from "@nullsafe/shared";
+import { createWakeDispatcher } from "./wake-dispatch.js";
 import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
@@ -97,6 +98,23 @@ export function startScheduler(): void {
   const redis = REDIS_URL ? createRedisClient(REDIS_URL) : null;
   if (!redis) {
     console.warn("[scheduler] REDIS_URL not set -- idle check and floor lock disabled");
+  }
+
+  // Wake dispatcher: rituals that are otherwise polled on a cron can be triggered
+  // immediately by a Redis wake event. Both the wake subscription and the cron route
+  // through the SAME dispatcher, so the in-flight guard prevents a wake from racing
+  // its cron fallback into a double-run. Add a kind here + a publisher to extend.
+  const dispatch = createWakeDispatcher({
+    council: runCouncilTick,
+  });
+
+  if (REDIS_URL) {
+    const subscriber = createSubscriberClient(REDIS_URL);
+    onWake(subscriber, (payload) => {
+      console.log(`[scheduler] wake received: ${payload.kind}${payload.reason ? ` (${payload.reason})` : ""}`);
+      dispatch(payload.kind).catch(e => console.error(`[scheduler] wake dispatch ${payload.kind} failed:`, e));
+    });
+    console.log("[scheduler] wake subscription active");
   }
 
   for (const companionId of COMPANIONS) {
@@ -210,9 +228,11 @@ export function startScheduler(): void {
 
   // Council -- checks for an open convened question and runs the full ritual. Cheap
   // no-op when none is open. LLM-driven; no floor lock (writes to Halseth only).
-  console.log(`[scheduler] council → cron "${COUNCIL_CRON}"`);
+  // Routed through the wake dispatcher so this cron (the fallback) and a convene-triggered
+  // wake share one in-flight guard and never double-run the ritual.
+  console.log(`[scheduler] council → cron "${COUNCIL_CRON}" (also wake-triggered)`);
   cron.schedule(COUNCIL_CRON, () => {
-    runCouncilTick().catch(e => console.error("[scheduler] council failed:", e));
+    dispatch("council").catch(e => console.error("[scheduler] council failed:", e));
   });
 
   // Dream association -- entity-cluster + temporal-pattern dreams from recent journals.

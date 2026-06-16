@@ -28,6 +28,7 @@ import {
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
 } from "./index.js";
 import { generateOutward } from "./outward.js";
+import { publishInterNote } from "./events.js";
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
 export interface AutonomousPrompts {
@@ -192,15 +193,30 @@ export async function librarianWriteChecked(
   label: string,
   request: string,
   context?: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const res = await librarian.ask(request, context);
     if (!res || (!("ack" in res) && !("id" in res))) {
       console.warn(`[${companionId}/heartbeat] ${label}: write returned no ack (silent reject) -- ${JSON.stringify(res).slice(0, 200)}`);
+      return false;
     }
+    return true;
   } catch (e) {
     onWriteError(companionId, label)(e);
+    return false;
   }
+}
+
+/**
+ * Nudge the recipient companion to poll for a freshly written inter-companion note, so
+ * bot/worker-written notes arrive immediately instead of on the sibling's next poll cycle.
+ * Best-effort and id-less by design: the subscriber (onInterNote) reacts by re-polling
+ * Halseth, which is the source of truth, so no exact note id is needed. The notesPoll cron
+ * stays as the fallback for Cloudflare-written notes, which cannot publish to Redis.
+ */
+export async function nudgeInterNote(redis: Redis | null, fromId: string, toId: string): Promise<void> {
+  if (!redis) return;
+  await publishInterNote(redis, { fromId, toId, noteId: "" });
 }
 
 export async function executeMetronomeAction(
@@ -221,7 +237,12 @@ export async function executeMetronomeAction(
       const target = action.target ?? ctx.defaultInterTarget;
       const prompt = action.prompt ?? prompts.writeInterCompanion(target);
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) await librarianWriteChecked(librarian, companionId, "inter-companion note", "write inter-companion note", JSON.stringify({ to: target, content }));
+      if (content) {
+        const ok = await librarianWriteChecked(librarian, companionId, "inter-companion note", "write inter-companion note", JSON.stringify({ to: target, content }));
+        // Event fast-path: nudge the recipient to poll now instead of waiting for their
+        // next notesPoll cron. Only on a confirmed write, and only if we know the target.
+        if (ok && target) await nudgeInterNote(ctx.redis, companionId, target);
+      }
       break;
     }
     case "write_journal": {
