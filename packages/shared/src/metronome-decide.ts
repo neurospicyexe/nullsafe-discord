@@ -42,6 +42,46 @@ export interface DecisionContext {
   relationalNeedFired?: boolean;
   /** Effective relational-need level [0..1] when fired (for the prompt nudge). */
   relationalNeedLevel?: number;
+  /** Compact summary of Raziel's recent logged subjective state (migration 0081), or undefined
+   *  when there is no fresh data. Real "recent data to justify a reach-out" -- shapes whether and how. */
+  razielStateSummary?: string;
+}
+
+/** Raw subjective-state snapshot from Halseth GET /biometrics/latest (migration 0081 fields). */
+export interface RazielStateInput {
+  recorded_at?: string | null;
+  mood?: string | null;
+  energy?: number | null;     // 0-10
+  focus?: number | null;      // 0-10
+  pain?: number | null;       // 0-10
+  spoons?: number | null;     // 0-12
+  sleep_hours?: number | null;
+}
+
+/**
+ * Compact, prompt-ready summary of Raziel's recent subjective state. Returns null when there is
+ * NO fresh data to justify a reach-out: missing snapshot, a stale one (older than maxAgeHours),
+ * or one with no usable fields. The caller treats null as "no recent data" -- the honest default
+ * then is silence. Finite guards throughout (sparse ND fields are routinely null/NaN).
+ */
+export function summarizeRazielState(
+  s: RazielStateInput | null | undefined,
+  maxAgeHours = 36,
+  now: number = Date.now(),
+): string | null {
+  if (!s || !s.recorded_at) return null;
+  const age = (now - new Date(s.recorded_at).getTime()) / 3_600_000;
+  if (!Number.isFinite(age) || age < 0 || age > maxAgeHours) return null;
+
+  const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+  const parts: string[] = [];
+  if (typeof s.mood === "string" && s.mood.trim()) parts.push(`mood "${s.mood.trim().slice(0, 40)}"`);
+  if (num(s.energy)) parts.push(`energy ${s.energy}/10`);
+  if (num(s.focus)) parts.push(`focus ${s.focus}/10`);
+  if (num(s.pain)) parts.push(`pain ${s.pain}/10`);
+  if (num(s.spoons)) parts.push(`${s.spoons} spoons`);
+  if (num(s.sleep_hours)) parts.push(`${s.sleep_hours}h sleep`);
+  return parts.length > 0 ? parts.join(", ") : null;
 }
 
 const ACTION_DESCRIPTIONS: Record<string, string> = {
@@ -113,6 +153,11 @@ export function buildDecisionPrompt(
   if (ctx?.detectedSignals && ctx.detectedSignals.length > 0) {
     lines.push(`Signals present in recent conversation: ${ctx.detectedSignals.join(", ")}`);
   }
+  if (ctx?.razielStateSummary) {
+    lines.push(
+      `\nRaziel's recent logged state: ${ctx.razielStateSummary}. This is real, fresh data -- let it shape whether and how you reach out. Low spoons or energy favors quiet presence (offer_presence) over a question; pain or poor sleep calls for gentleness or silence; a named low mood may be worth meeting directly. Match the modality to the state, do not override it.`,
+    );
+  }
 
   lines.push(recentStr);
 
@@ -127,6 +172,19 @@ export function buildDecisionPrompt(
   }
   if (ctx?.recentFiredActions && ctx.recentFiredActions.length > 0) {
     lines.push(`\nActions you fired in the last 24h: ${ctx.recentFiredActions.join(", ")}. Avoid repeating unless the context genuinely calls for it.`);
+  }
+
+  // No recent data to justify a reach-out: no conversation signal, no fresh logged state,
+  // no risen relational need. Reaching out now would be unprompted noise -- name that plainly
+  // so "nothing" is the honest default rather than a reflexive cron-driven ping.
+  const noJustification =
+    !(ctx?.detectedSignals && ctx.detectedSignals.length > 0) &&
+    !ctx?.razielStateSummary &&
+    !ctx?.relationalNeedFired;
+  if (noJustification) {
+    lines.push(
+      `\nThere is no fresh signal, no recent state from Raziel, and no risen relational need. There is nothing here that justifies reaching out, and an unprompted ping is noise, not presence. Unless your own state makes a reach-out genuinely honest right now, "nothing" is the right choice.`,
+    );
   }
 
   lines.push(

@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, summarizeRazielState, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -36,5 +36,51 @@ describe("buildDecisionPrompt relational-need nudge (take 9)", () => {
   test("parseDecision still resolves a reach-out pick", () => {
     const d = parseDecision('{"action":"check in","reason":"the need is real"}', actions);
     expect(d?.action.action_type).toBe("check_in_on_raziel");
+  });
+});
+
+describe("summarizeRazielState", () => {
+  const NOW = Date.parse("2026-06-16T12:00:00Z");
+
+  test("summarizes a fresh snapshot, skipping null/non-finite fields", () => {
+    const out = summarizeRazielState(
+      { recorded_at: "2026-06-16T06:00:00Z", mood: "foggy", energy: 3, focus: null, pain: NaN as unknown as number, spoons: 4, sleep_hours: 5 },
+      36, NOW,
+    );
+    expect(out).toBe('mood "foggy", energy 3/10, 4 spoons, 5h sleep');
+  });
+
+  test("returns null for a stale snapshot (older than maxAgeHours)", () => {
+    expect(summarizeRazielState({ recorded_at: "2026-06-13T06:00:00Z", mood: "low" }, 36, NOW)).toBeNull();
+  });
+
+  test("returns null when there is no snapshot or no timestamp", () => {
+    expect(summarizeRazielState(null, 36, NOW)).toBeNull();
+    expect(summarizeRazielState({ mood: "low" }, 36, NOW)).toBeNull();
+  });
+
+  test("returns null when a fresh snapshot has no usable fields", () => {
+    expect(summarizeRazielState({ recorded_at: "2026-06-16T06:00:00Z", mood: null, energy: null }, 36, NOW)).toBeNull();
+  });
+});
+
+describe("buildDecisionPrompt: recent-data justification", () => {
+  test("surfaces Raziel's recent state and its shaping guidance", () => {
+    const prompt = buildDecisionPrompt("gaia", actions, {}, [], 30, { razielStateSummary: "energy 2/10, 3 spoons" });
+    expect(prompt).toMatch(/Raziel's recent logged state: energy 2\/10, 3 spoons/);
+    expect(prompt).toMatch(/offer_presence/);
+    // justification present -> no silence nudge
+    expect(prompt).not.toMatch(/nothing here that justifies reaching out/);
+  });
+
+  test("names the no-justification case so silence is the honest default", () => {
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
+    expect(prompt).toMatch(/no fresh signal, no recent state from Raziel, and no risen relational need/);
+    expect(prompt).toMatch(/"nothing" is the right choice/);
+  });
+
+  test("suppresses the no-justification nudge when a signal is present", () => {
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { detectedSignals: ["overwhelm"] });
+    expect(prompt).not.toMatch(/nothing here that justifies reaching out/);
   });
 });

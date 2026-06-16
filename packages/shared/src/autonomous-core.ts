@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  parseDecision, parseSignals, onWriteError, somaToTemperature, sendLong,
+  parseDecision, parseSignals, summarizeRazielState, onWriteError, somaToTemperature, sendLong,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
@@ -479,12 +479,18 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     const drives = await librarian.getDrives().catch(() => []);
     const relationalNeed = drives.find(d => d.drive_key === "relational_need");
 
+    // Raziel's recent subjective ND-state (migration 0081) is the "recent data to justify a
+    // reach-out": fresh low spoons/energy/mood shapes the modality; no fresh snapshot means
+    // no justifying data, and buildDecisionPrompt leans the companion toward silence.
+    const razielState = await librarian.getRazielState().catch(() => null);
+
     const decisionCtx: DecisionContext = {
       detectedSignals: detectedSignals.length > 0 ? detectedSignals : undefined,
       timeOfDayLabel,
       recentFiredActions: recentFiredActions.length > 0 ? recentFiredActions : undefined,
       relationalNeedFired: relationalNeed?.fired || undefined,
       relationalNeedLevel: relationalNeed?.fired ? relationalNeed.level : undefined,
+      razielStateSummary: summarizeRazielState(razielState) ?? undefined,
     };
 
     const decisionPrompt = buildDecisionPrompt(companionId, signalFiltered, state, recentNotes, silenceHours, decisionCtx);

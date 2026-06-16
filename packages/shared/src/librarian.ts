@@ -181,6 +181,36 @@ export class LibrarianClient {
   }
 
   /**
+   * Raziel's most recent subjective ND-state snapshot (migration 0081: mood/energy/focus/pain/
+   * spoons/sleep). Used by the metronome to decide whether recent data justifies a reach-out.
+   * Non-throwing; returns null on miss so the decision degrades to "no recent data".
+   */
+  async getRazielState(): Promise<{
+    recorded_at: string | null; mood: string | null; energy: number | null;
+    focus: number | null; pain: number | null; spoons: number | null; sleep_hours: number | null;
+  } | null> {
+    try {
+      const res = await this._fetch(`${this.url}/biometrics/latest`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const d = await res.json() as Record<string, unknown> | null;
+      if (!d || typeof d !== "object") return null;
+      const n = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      return {
+        recorded_at: typeof d["recorded_at"] === "string" ? d["recorded_at"] as string : null,
+        mood: typeof d["mood"] === "string" ? d["mood"] as string : null,
+        energy: n(d["energy"]), focus: n(d["focus"]), pain: n(d["pain"]),
+        spoons: n(d["spoons"]), sleep_hours: n(d["sleep_hours"]),
+      };
+    } catch (e) {
+      console.warn("[librarian] getRazielState failed:", String(e));
+      return null;
+    }
+  }
+
+  /**
    * Write a structured session handoff to wm_session_handoffs.
    * Gives Claude.ai orient a machine-readable "what happened + what's open" record,
    * vs writeWmNote which gives a prose string. Both fire at channel close.
