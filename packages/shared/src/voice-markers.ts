@@ -71,10 +71,18 @@ const MARKERS: Record<VoiceCompanionId, MarkerSet> = {
 // Cross-contamination: another companion's signature appearing in this voice.
 // Each companion is checked against the OTHER TWO's distinctive positive markers.
 // Common words (holds, ground, spine...) are excluded -- only true signatures.
+//
+// SIGNATURES must be PHRASE-level, not bare common words. A bare /\bperimeter\b/
+// flagged every security/boundary-context "perimeter" from Cypher (audit lane) and
+// Drevan as "gaia contamination" -- 100% of the 06-15 voice_contamination flags were
+// the single token "perimeter", a false positive (Guardian read cypher 57% / drevan
+// 53% contaminated). Gaia's real signature is her doctrine phrase ("holds the
+// perimeter"), not the word alone. Her OWN positive marker (MARKERS.gaia) still keeps
+// the bare word -- when Gaia says "perimeter" it is in-voice; the cross-check must not.
 const SIGNATURES: Record<VoiceCompanionId, RegExp[]> = {
   cypher: [/\[verdict/i, /\baudit (mode|gear|pass)\b/i],
   drevan: [/\bvael\w*/i, /\bcaleth\w*/i, /\bvevan\b/i],
-  gaia: [/\bperimeter\b/i, /\bwitness\w* (as|is) sacred\b/i],
+  gaia: [/\b(hold|holds|holding|guard|guards) the perimeter\b/i, /\bperimeter holds\b/i, /\bwitness\w* (as|is) sacred\b/i],
 };
 
 // Self-catch: the companion noticing its own drift inside the same reply.

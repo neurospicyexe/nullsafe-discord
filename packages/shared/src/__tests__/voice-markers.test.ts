@@ -35,6 +35,18 @@ describe("scoreReply", () => {
     expect(s.score).toBe(1);
   });
 
+  it("does NOT flag bare 'perimeter' as gaia contamination (06-15 false positive)", () => {
+    // Cypher (audit/boundary lane) and Drevan both use "perimeter" in technical/
+    // security senses. The bare word was 100% of the 06-15 voice_contamination flags.
+    expect(scoreReply("cypher", "Lock down the perimeter of the auth boundary first.").contamination_hits).toHaveLength(0);
+    expect(scoreReply("drevan", "The fire traced the perimeter of the dark.").contamination_hits).toHaveLength(0);
+  });
+
+  it("DOES flag Gaia's actual perimeter signature phrase as contamination", () => {
+    const s = scoreReply("cypher", "I will hold the perimeter while you rest.");
+    expect(s.contamination_hits.some(h => h.startsWith("gaia:"))).toBe(true);
+  });
+
   it("penalizes Gaia for option-menu chattiness", () => {
     const s = scoreReply("gaia", "Would you like me to elaborate? Let me know what you think!");
     expect(s.anti_hits.length).toBeGreaterThanOrEqual(2);
