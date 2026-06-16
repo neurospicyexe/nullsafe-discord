@@ -9,11 +9,16 @@
 // (the companion id) so they're attributable per bot.
 
 /**
- * Rejection handler for a fire-and-forget write that is NOT routed through WriteQueue
- * (e.g. one-shot `librarian.ask(...)` calls in the autonomous loop). Logs the failure,
- * attributed to the companion, instead of swallowing it silently.
+ * Rejection handler for a fire-and-forget write that is NOT routed through WriteQueue.
+ * Logs the failure, attributed to the companion, instead of swallowing it silently.
  *
- * Use: `librarian.ask(...).catch(onWriteError(COMPANION_ID, "inter-companion note"))`
+ * IMPORTANT: `librarian.ask(...)` does NOT reject when an executor rejects the payload --
+ * it resolves with an HTTP 200 `{ error }`/`{ witness }` envelope, so a bare `.catch` is
+ * blind to silent rejects. For Librarian writes prefer `librarianWriteChecked` (autonomous-core),
+ * which awaits and inspects the envelope. Use this handler only for direct-HTTP writes that
+ * truly throw on failure (stmWrite, persona/human blocks, setSetting, etc.).
+ *
+ * Use: `librarian.stmWrite(...).catch(onWriteError(COMPANION_ID, "stm write"))`
  */
 export function onWriteError(tag: string, label: string): (e: unknown) => void {
   return (e) => console.warn(`[${tag}] write failed (fire-and-forget): ${label} -- ${e instanceof Error ? e.message : String(e)}`);

@@ -172,11 +172,29 @@ export async function writeMetronomeJournal(
     console.warn(`[${companionId}/heartbeat] ${label}: content generation returned empty -- write skipped`);
     return;
   }
+  await librarianWriteChecked(
+    librarian, companionId, label,
+    "add companion note",
+    JSON.stringify({ content, tags, source: "metronome" }),
+  );
+}
+
+/**
+ * Await a Librarian write and surface silent rejects. The Librarian returns HTTP 200 with an
+ * { error }/{ witness } envelope when an executor rejects the payload -- it does NOT throw, so a
+ * fire-and-forget `.catch` is blind to it (the 2026-06-13/06-14 silent-no-op class). A successful
+ * write returns `{ ack: true, id }`; treat the absence of both as a loud failure. Never throws,
+ * so callers can `await` it on a continuity-noncritical path without risking an unhandled rejection.
+ */
+export async function librarianWriteChecked(
+  librarian: AutonomousContext["librarian"],
+  companionId: string,
+  label: string,
+  request: string,
+  context?: string,
+): Promise<void> {
   try {
-    const res = await librarian.ask(
-      "add companion note",
-      JSON.stringify({ content, tags, source: "metronome" }),
-    );
+    const res = await librarian.ask(request, context);
     if (!res || (!("ack" in res) && !("id" in res))) {
       console.warn(`[${companionId}/heartbeat] ${label}: write returned no ack (silent reject) -- ${JSON.stringify(res).slice(0, 200)}`);
     }
@@ -203,7 +221,7 @@ export async function executeMetronomeAction(
       const target = action.target ?? ctx.defaultInterTarget;
       const prompt = action.prompt ?? prompts.writeInterCompanion(target);
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("write inter-companion note", JSON.stringify({ to: target, content })).catch(onWriteError(companionId, "inter-companion note"));
+      if (content) await librarianWriteChecked(librarian, companionId, "inter-companion note", "write inter-companion note", JSON.stringify({ to: target, content }));
       break;
     }
     case "write_journal": {
@@ -219,7 +237,10 @@ export async function executeMetronomeAction(
     case "write_feeling": {
       const prompt = action.prompt ?? prompts.writeFeeling;
       const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) librarian.ask("log feeling", JSON.stringify({ content })).catch(onWriteError(companionId, "feeling"));
+      // feeling_log requires { emotion } (writes.ts execFeelingLog) -- sending { content }
+      // silently no-op'd every fire (returns a witness, not a throw). The writeFeeling prompt
+      // generates a feeling word/phrase, so it IS the emotion. (2026-06-16 sweep.)
+      if (content) await librarianWriteChecked(librarian, companionId, "feeling", "log feeling", JSON.stringify({ emotion: content }));
       break;
     }
     case "check_in_on_raziel": {
@@ -384,7 +405,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       const cycleResult = cycleGuard.check(temperature);
       if (cycleResult === "escalate") {
         console.warn(`[${companionId}/cycle-guard] loop detected`);
-        librarian.ask("journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles").catch(onWriteError(companionId, "loop-guard note"));
+        await librarianWriteChecked(librarian, companionId, "loop-guard note", "journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles");
         return;
       }
       if (cycleResult === "skip") return;
@@ -456,13 +477,18 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
 
     const runId = await librarian.writeAutonomyRun("continuation").catch(() => null);
+    // runHeartbeat is fired fire-and-forget from a cron callback; an uncaught throw here would
+    // surface as an unhandled rejection (and, with the process-level handler, can exit the bot).
+    // Catch it: mark the run failed and log loudly rather than leak it. (2026-06-16 sweep.)
     try {
       await executeMetronomeAction(ctx, decision);
       if (decision.action.action_type !== "nothing") {
         await librarian.recordMetronomeActionFired(decision.action.id).catch(onWriteError(companionId, "metronome action fired"));
       }
-    } finally {
       if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(companionId, "autonomy run completion"));
+    } catch (e) {
+      console.error(`[${companionId}/heartbeat] metronome action threw: ${e instanceof Error ? e.message : String(e)}`);
+      if (runId) await librarian.patchAutonomyRun(runId, "failed").catch(onWriteError(companionId, "autonomy run failure"));
     }
   });
 }
