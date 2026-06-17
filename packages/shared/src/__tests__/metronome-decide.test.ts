@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -113,5 +113,29 @@ describe("filterReachOutWhenUnjustified", () => {
       expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(true);
     }
     expect(REACH_OUT_TO_RAZIEL_ACTIONS.has("post_heartbeat")).toBe(false);
+  });
+});
+
+describe("isMyHeartbeatWindow", () => {
+  const order = ["drevan", "cypher", "gaia"] as const;
+  const W = 4 * 3_600_000;
+
+  test("assigns exactly one companion per window and cycles through all of them", () => {
+    for (let i = 0; i < 6; i++) {
+      const now = i * W;
+      const on = order.filter(c => isMyHeartbeatWindow(c, order, now, W));
+      expect(on).toHaveLength(1);                     // never zero, never a pile-on
+      expect(on[0]).toBe(order[i % order.length]);    // deterministic rotation
+    }
+  });
+
+  test("advances to the next companion at the next window (never freezes)", () => {
+    expect(isMyHeartbeatWindow("drevan", order, 0, W)).toBe(true);
+    expect(isMyHeartbeatWindow("drevan", order, W, W)).toBe(false);
+    expect(isMyHeartbeatWindow("cypher", order, W, W)).toBe(true);
+  });
+
+  test("returns false for an empty order rather than throwing", () => {
+    expect(isMyHeartbeatWindow("drevan", [], 0, W)).toBe(false);
   });
 });

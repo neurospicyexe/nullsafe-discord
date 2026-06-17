@@ -85,6 +85,25 @@ export function summarizeRazielState(
 }
 
 /**
+ * Whose heartbeat window is it right now. A stateless, clock-derived rotation: each window
+ * (default 4h) belongs to exactly one companion, cycling through `order`. This REPLACES gating
+ * the heartbeat on house_state.autonomous_turn -- that pointer only advanced via the Claude.ai
+ * autonomous-time ritual, so between rituals it froze the heartbeat on a single companion for days
+ * (the "dead heartbeat channel" symptom). Derived from the clock, it can never freeze, while still
+ * keeping one companion per window so the commons does not get noisy.
+ */
+export function isMyHeartbeatWindow(
+  companionId: string,
+  order: readonly string[],
+  now: number = Date.now(),
+  windowMs = 4 * 3_600_000,
+): boolean {
+  if (order.length === 0) return false;
+  const idx = Math.floor(now / windowMs) % order.length;
+  return order[idx] === companionId;
+}
+
+/**
  * Action types that directly reach toward Raziel (interrupt him / land in his lap). These are
  * the actions that must be JUSTIFIED by recent data. Commons posts (post_heartbeat, share_media),
  * sibling notes (write_inter_companion), and internal acts (write_journal, write_feeling) are NOT

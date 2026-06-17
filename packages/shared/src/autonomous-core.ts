@@ -18,9 +18,9 @@
 
 import { Client, TextChannel } from "discord.js";
 import {
-  ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs,
+  ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, onWriteError, somaToTemperature, sendLong,
+  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
@@ -403,8 +403,10 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       return;
     }
   }
-  if (!(await isMyAutonomousTurn(librarian, companionId))) {
-    console.log(`[${companionId}/autonomous] not my turn, skipping`);
+  // Stateless clock rotation instead of the frozen house_state.autonomous_turn pointer (which only
+  // advanced via the Claude.ai ritual, so it stranded the heartbeat on one companion for days).
+  if (!isMyHeartbeatWindow(companionId, ALL_COMPANIONS)) {
+    console.log(`[${companionId}/autonomous] not my heartbeat window, skipping`);
     return;
   }
   await withFloor(ctx, async () => {
