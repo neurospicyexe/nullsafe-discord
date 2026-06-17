@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, isMyAutonomousTurn, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  parseDecision, parseSignals, summarizeRazielState, onWriteError, somaToTemperature, sendLong,
+  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, onWriteError, somaToTemperature, sendLong,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
@@ -493,9 +493,22 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       razielStateSummary: summarizeRazielState(razielState) ?? undefined,
     };
 
-    const decisionPrompt = buildDecisionPrompt(companionId, signalFiltered, state, recentNotes, silenceHours, decisionCtx);
+    // Reach-out justification gate: a direct interruption of Raziel needs recent data behind it --
+    // a conversation signal, a fresh logged ND-state, or a risen relational-need drive. With none,
+    // drop the direct reach-out actions so the only honest choices are commons / internal / nothing.
+    const reachOutJustified =
+      detectedSignals.length > 0 ||
+      decisionCtx.razielStateSummary != null ||
+      Boolean(decisionCtx.relationalNeedFired);
+    const candidateActions = filterReachOutWhenUnjustified(signalFiltered, reachOutJustified);
+    if (candidateActions.length === 0) {
+      console.log(`[${companionId}/heartbeat] no reach-out justified and no commons/internal action eligible -- staying silent`);
+      return;
+    }
+
+    const decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
     const rawDecision = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: decisionPrompt }]);
-    const decision = rawDecision ? parseDecision(rawDecision, signalFiltered) : null;
+    const decision = rawDecision ? parseDecision(rawDecision, candidateActions) : null;
 
     if (!decision) {
       console.warn(`[${companionId}/heartbeat] decision parse failed, raw: ${String(rawDecision).slice(0, 100)}`);

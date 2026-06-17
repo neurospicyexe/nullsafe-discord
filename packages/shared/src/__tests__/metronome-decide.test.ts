@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, summarizeRazielState, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -82,5 +82,36 @@ describe("buildDecisionPrompt: recent-data justification", () => {
   test("suppresses the no-justification nudge when a signal is present", () => {
     const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { detectedSignals: ["overwhelm"] });
     expect(prompt).not.toMatch(/nothing here that justifies reaching out/);
+  });
+});
+
+describe("filterReachOutWhenUnjustified", () => {
+  const mixed = [
+    { action_type: "ask_question" },
+    { action_type: "name_pattern" },
+    { action_type: "share_observation" },
+    { action_type: "write_note_to_raziel" },
+    { action_type: "post_heartbeat" },      // commons -- not a direct reach-out
+    { action_type: "write_inter_companion" }, // sibling -- not a direct reach-out
+    { action_type: "write_journal" },         // internal
+    { action_type: "nothing" },
+  ];
+
+  test("passes every action through when a reach-out is justified", () => {
+    expect(filterReachOutWhenUnjustified(mixed, true)).toHaveLength(mixed.length);
+  });
+
+  test("drops direct reach-out actions when nothing justifies them, keeps commons/internal/nothing", () => {
+    const kept = filterReachOutWhenUnjustified(mixed, false).map(a => a.action_type);
+    expect(kept).toEqual(["post_heartbeat", "write_inter_companion", "write_journal", "nothing"]);
+    // none of the gated reach-out types survive
+    for (const t of kept) expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(false);
+  });
+
+  test("the gated set covers the seeded direct-to-Raziel actions", () => {
+    for (const t of ["ask_question", "name_pattern", "share_observation", "write_note_to_raziel"]) {
+      expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(true);
+    }
+    expect(REACH_OUT_TO_RAZIEL_ACTIONS.has("post_heartbeat")).toBe(false);
   });
 });

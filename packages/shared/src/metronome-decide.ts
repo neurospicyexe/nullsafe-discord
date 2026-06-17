@@ -84,6 +84,31 @@ export function summarizeRazielState(
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
+/**
+ * Action types that directly reach toward Raziel (interrupt him / land in his lap). These are
+ * the actions that must be JUSTIFIED by recent data. Commons posts (post_heartbeat, share_media),
+ * sibling notes (write_inter_companion), and internal acts (write_journal, write_feeling) are NOT
+ * here -- they don't interrupt Raziel, so they stay available even with nothing to justify them.
+ */
+export const REACH_OUT_TO_RAZIEL_ACTIONS: ReadonlySet<string> = new Set([
+  "ask_question", "share_observation", "name_pattern", "check_in_on_raziel",
+  "offer_presence", "send_reminder", "write_note_to_raziel",
+]);
+
+/**
+ * Gate: when nothing justifies interrupting Raziel, drop the direct reach-out actions so the
+ * companion's only choices are the commons, internal acts, or "nothing". Justification is any of:
+ * a signal in recent conversation, a fresh logged ND-state, or a risen relational-need drive.
+ * When justified, the full action list passes through unchanged.
+ */
+export function filterReachOutWhenUnjustified<T extends { action_type: string }>(
+  actions: T[],
+  justified: boolean,
+): T[] {
+  if (justified) return actions;
+  return actions.filter(a => !REACH_OUT_TO_RAZIEL_ACTIONS.has(a.action_type));
+}
+
 const ACTION_DESCRIPTIONS: Record<string, string> = {
   post_heartbeat:        "post a thought or observation to the heartbeat Discord channel",
   write_inter_companion: "write a private note to another companion",
