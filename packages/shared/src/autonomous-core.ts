@@ -22,7 +22,7 @@ import {
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
   parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
-  echoScore, echoThreshold, detectMotif,
+  echoScore, echoThreshold, detectMotif, relativeTime,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -573,7 +573,9 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         fresh.push(`forage find [${f.domain}]: ${f.title} -- ${f.summary.slice(0, 200)}`);
       }
       for (const l of (orient?.recent_listens ?? []).slice(0, 2)) {
-        fresh.push(`recent listen: "${l.title}"${l.artist ? ` by ${l.artist}` : ""}`);
+        // Stamp the listen with how long ago it actually was -- without this the model
+        // guesses the timeframe and gets it wrong ("yesterday" for a 2-days-ago track).
+        fresh.push(`listen from ${relativeTime(l.created_at)}: "${l.title}"${l.artist ? ` by ${l.artist}` : ""}`);
       }
       for (const q of (orient?.open_questions ?? []).slice(0, 1)) {
         fresh.push(`a question you're holding: ${q}`);

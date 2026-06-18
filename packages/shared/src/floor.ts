@@ -96,7 +96,13 @@ export async function setLastSpeaker(
 // ---------------------------------------------------------------------------
 
 const LAST_ACTIVITY_KEY = "ns:session:last_activity";
-const LAST_ACTIVITY_TTL_S = 3600; // 1 hour -- auto-expires if bots go down
+// 48h. The metronome's silence floors (silence_min_hours 6-24) measure "hours since Raziel
+// last spoke" as `silenceHours = (now - last_activity)`. A 1h TTL made the key evaporate long
+// before any 6h+ floor could be reached, so silenceHours read as null (= "unknown") on nearly
+// every 4h heartbeat tick -- and a null silence disqualified every floored action, starving the
+// heartbeat channel (2026-06-17). 48h lets silenceHours stay an ACCURATE measure up to two days
+// so the graduated floors work as designed, while still auto-clearing a stale key if bots die.
+const LAST_ACTIVITY_TTL_S = 48 * 3600;
 
 export async function setLastActivity(redis: Redis): Promise<void> {
   await redis.set(LAST_ACTIVITY_KEY, Date.now().toString(), "EX", LAST_ACTIVITY_TTL_S);
