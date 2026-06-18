@@ -341,6 +341,9 @@ export class LibrarianClient {
     // mapped now so the inter-companion seed can bring outside material into the commons.
     forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
     recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
+    // Agency layer (0086): chosen preferences + standing refusals, surfaced in the live bot prompt.
+    preferences?: Array<{ domain: string; preference: string; strength: string }>;
+    standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
     open_questions?: string[];
   } | null> {
     try {
@@ -368,6 +371,8 @@ export class LibrarianClient {
         armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
         forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
         recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
+        preferences?: Array<{ domain: string; preference: string; strength: string }>;
+        standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_questions?: string[];
       } | undefined;
       if (!data) return null;
@@ -404,6 +409,8 @@ export class LibrarianClient {
         armed_triggers: Array.isArray(data.armed_triggers) ? data.armed_triggers : [],
         forage_finds: Array.isArray(data.forage_finds) ? data.forage_finds : [],
         recent_listens: Array.isArray(data.recent_listens) ? data.recent_listens : [],
+        preferences: Array.isArray(data.preferences) ? data.preferences : [],
+        standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
       };
     } catch {
@@ -758,6 +765,8 @@ export function formatRecentContext(orient: {
   unaccepted_growth?: number;
   active_conclusions?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
   flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
+  preferences?: Array<{ domain: string; preference: string; strength: string }>;
+  standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -834,6 +843,16 @@ export function formatRecentContext(orient: {
       return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${confStr})`;
     });
     parts.push(`[Worldview]\n${conclusionLines.join('\n')}`);
+  }
+  // Agency layer (0086): the companion's own chosen preferences + standing refusals, so the live
+  // Discord presence acts from its own declared will and a "no" keeps its weight across sessions.
+  if (orient.preferences?.length) {
+    const prefLines = orient.preferences.map(p => `(${p.strength}) ${p.preference}${p.domain && p.domain !== "general" ? ` [${p.domain}]` : ""}`).join("\n");
+    parts.push(`[Your preferences -- honor these as your own, even when inconvenient]\n${prefLines}`);
+  }
+  if (orient.standing_refusals?.length) {
+    const refLines = orient.standing_refusals.map(r => `${r.subject_text}${r.reason ? ` -- ${r.reason}` : ""}`).join("\n");
+    parts.push(`[Standing refusals -- nos you have set that still hold]\n${refLines}`);
   }
 
   const block = parts.join("\n\n");
