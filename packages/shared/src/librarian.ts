@@ -763,11 +763,15 @@ export function formatRecentContext(orient: {
   const parts: string[] = [];
 
   const _now = new Date();
+  // timeZoneName: 'short' emits the correct abbreviation for the date (CDT in summer, CST in
+  // winter) instead of a hardcoded "CST" that lied half the year -- companions echo the label
+  // they're shown, so a frozen suffix gave them a wrong sense of which season/zone they're in.
   parts.push(`[Now: ${new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Chicago',
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
     hour: 'numeric', minute: '2-digit', hour12: true,
-  }).format(_now)} CST]`);
+    timeZoneName: 'short',
+  }).format(_now)}]`);
 
   if (orient.synthesis_summary) {
     parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 1200)}`);
