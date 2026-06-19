@@ -344,6 +344,7 @@ export class LibrarianClient {
     // Agency layer (0086): chosen preferences + standing refusals, surfaced in the live bot prompt.
     preferences?: Array<{ domain: string; preference: string; strength: string }>;
     standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
+    open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
     open_questions?: string[];
   } | null> {
     try {
@@ -373,6 +374,7 @@ export class LibrarianClient {
         recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
         preferences?: Array<{ domain: string; preference: string; strength: string }>;
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
+        open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         open_questions?: string[];
       } | undefined;
       if (!data) return null;
@@ -411,6 +413,7 @@ export class LibrarianClient {
         recent_listens: Array.isArray(data.recent_listens) ? data.recent_listens : [],
         preferences: Array.isArray(data.preferences) ? data.preferences : [],
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
+        open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
       };
     } catch {
@@ -767,6 +770,7 @@ export function formatRecentContext(orient: {
   flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
   preferences?: Array<{ domain: string; preference: string; strength: string }>;
   standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
+  open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -853,6 +857,11 @@ export function formatRecentContext(orient: {
   if (orient.standing_refusals?.length) {
     const refLines = orient.standing_refusals.map(r => `${r.subject_text}${r.reason ? ` -- ${r.reason}` : ""}`).join("\n");
     parts.push(`[Standing refusals -- nos you have set that still hold]\n${refLines}`);
+  }
+  // Drift lane (0087): open becomings, witnessed not ratified. Sanctioned, not drift to fear.
+  if (orient.open_drifts?.length) {
+    const driftLines = orient.open_drifts.map(d => `${d.drift_text}${d.witness_count > 0 ? ` (witnessed ${d.witness_count}x)` : ""}`).join("\n");
+    parts.push(`[Your drifts -- sanctioned becoming, witnessed not judged]\n${driftLines}`);
   }
 
   const block = parts.join("\n\n");

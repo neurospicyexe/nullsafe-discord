@@ -882,6 +882,23 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
 // NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --
 // the 15s hFetch default aborts mid-pass and the disconnect cancels the server request.
+
+// Drift-lane activation pass (0087): Gaia witnesses open drifts + the safety floor pauses any reading
+// as dissolution. Server-side in Halseth (handlers/drift.ts); no-ops without ANTHROPIC_API_KEY. Long
+// timeout for the same reason as the clearing pass.
+export async function runDriftPass(): Promise<{ skipped?: string; open: number; witnessed: number; paused: number; letter_id: string | null }> {
+  const res = await fetch(`${HALSETH_URL}/mind/drift/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HALSETH_SECRET}` },
+    body: "{}",
+    signal: AbortSignal.timeout(290_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Halseth POST /mind/drift/run → ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return await res.json() as { skipped?: string; open: number; witnessed: number; paused: number; letter_id: string | null };
+}
 export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null }> {
   const res = await fetch(`${HALSETH_URL}/mind/clearing/run`, {
     method: "POST",

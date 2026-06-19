@@ -143,6 +143,10 @@ export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?
 // Layer B window. Server-side in Halseth (Claude key is a CF secret); no-ops without it.
 export const CLEARING_CRON = process.env["CLEARING_CRON"] ?? "10 1 * * 0,3";
 
+// Drift-lane activation pass (0087): Gaia witnesses open drifts + the safety floor pauses any reading
+// as dissolution. Daily at 10:30 AM; server-side in Halseth; no-ops without ANTHROPIC_API_KEY.
+export const DRIFT_PASS_CRON = process.env["DRIFT_PASS_CRON"] ?? "30 10 * * *";
+
 // Guardian self-resolution (2026-06-14) -- daily 8:45AM tick, AFTER the 8AM guardian
 // detection + 8:30 motif, so it acts on fresh flags. Each companion reads its OWN
 // live flags and clears the self-resolvable classes (loop_stuck close/hold, starved

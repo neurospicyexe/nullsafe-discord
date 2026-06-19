@@ -28,6 +28,7 @@ import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runGuardianResolve } from "./phases/guardian-resolve.js";
 import { runClearingTick } from "./clearing.js";
+import { runDriftPassTick } from "./drift-pass.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
 import { runMotifsTick } from "./motifs.js";
@@ -45,6 +46,7 @@ const clubIdx = args.indexOf("--club");
 const guardianIdx = args.indexOf("--guardian");
 const guardianResolveIdx = args.indexOf("--guardian-resolve");
 const clearingIdx = args.indexOf("--clearing");
+const driftPassIdx = args.indexOf("--drift-pass");
 const motifsIdx = args.indexOf("--motifs");
 const creaturesIdx = args.indexOf("--creatures");
 const councilIdx = args.indexOf("--council");
@@ -121,6 +123,18 @@ if (councilIdx !== -1) {
     })
     .catch(e => {
       console.error("[autonomous-worker] clearing tick failed:", e);
+      process.exit(1);
+    });
+} else if (driftPassIdx !== -1) {
+  // One-shot drift-lane pass: Gaia witnesses open drifts + the safety floor pauses dissolution, then exit.
+  console.log("[autonomous-worker] drift-pass mode");
+  runDriftPassTick()
+    .then(() => {
+      console.log("[autonomous-worker] drift-pass tick complete");
+      process.exit(0);
+    })
+    .catch(e => {
+      console.error("[autonomous-worker] drift-pass tick failed:", e);
       process.exit(1);
     });
 } else if (clubIdx !== -1) {
