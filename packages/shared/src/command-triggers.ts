@@ -97,7 +97,7 @@ export function commandUsage(companionId: string): string {
     `\`${p}: club status\``,
     `\`${p}: search <query>\` (web search)`,
     `\`${p}: imagine <prompt>\` (generate an image)`,
-    `\`${p}: pet <name> <feed|play|talk|give> [note]\` (a creature)`,
+    `\`${p}: pet <name>\` (a creature -- add \`feed|play|talk|give\` + a note to vary it)`,
     `\`${p}: council <question>\` (convene the triad on a hard question)`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
   ].join("\n");

@@ -8,6 +8,11 @@
 const VALID_ACTIONS = ["feed", "play", "talk", "give"] as const;
 type Action = typeof VALID_ACTIONS[number];
 
+// "pet" is the command verb, not an action -- so the most natural input, "<prefix>: pet Sol",
+// has no action keyword. Rather than erroring (the 2026-06-20 bug: the command had never once
+// fired because nobody appends a second verb), default a bare name to a gentle affection act.
+const DEFAULT_PET_ACTION: Action = "play";
+
 interface CreatureRow {
   id: string;
   name: string;
@@ -34,9 +39,19 @@ export function parsePetCommand(
   arg: string,
 ): { name: string; action: Action; note: string | null } | { error: string } {
   const tokens = arg.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length < 2) return { error: "usage: pet <name> <feed|play|talk|give> [note]" };
+  if (tokens.length < 1) return { error: "usage: pet <name> [feed|play|talk|give] [note]" };
   const actionIdx = tokens.findIndex(t => (VALID_ACTIONS as readonly string[]).includes(t.toLowerCase()));
-  if (actionIdx <= 0) return { error: "name an action: feed, play, talk, or give (after the creature's name)" };
+
+  // No action keyword present. A single bare name ("pet Sol") is the natural form -> gentle
+  // default. Multiple words with no valid action ("pet Sol cuddle") is almost certainly a
+  // botched action, not a multi-word name, so steer them to the real verbs.
+  if (actionIdx === -1) {
+    if (tokens.length === 1) return { name: tokens[0]!, action: DEFAULT_PET_ACTION, note: null };
+    return { error: "name an action: feed, play, talk, or give -- or just \"pet <name>\"" };
+  }
+  // Action keyword present but nothing before it ("pet feed") -> no creature named.
+  if (actionIdx === 0) return { error: "name the creature first: pet <name> <feed|play|talk|give>" };
+
   const name = tokens.slice(0, actionIdx).join(" ");
   const action = tokens[actionIdx]!.toLowerCase() as Action;
   const note = tokens.slice(actionIdx + 1).join(" ").trim() || null;

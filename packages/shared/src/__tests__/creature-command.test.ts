@@ -10,8 +10,11 @@ describe("parsePetCommand", () => {
     const r = parsePetCommand("Mr Whiskers play");
     expect(r).toEqual({ name: "Mr Whiskers", action: "play", note: null });
   });
-  test("rejects a missing action", () => {
-    expect(parsePetCommand("Sol")).toHaveProperty("error");
+  test("bare name defaults to a gentle action (the natural 'pet Sol')", () => {
+    expect(parsePetCommand("Sol")).toEqual({ name: "Sol", action: "play", note: null });
+  });
+  test("rejects a botched action after the name", () => {
+    // multi-word with no valid action -> steer to real verbs, don't treat as a name
     expect(parsePetCommand("Sol cuddle")).toHaveProperty("error");
   });
   test("rejects an action with no name before it", () => {
