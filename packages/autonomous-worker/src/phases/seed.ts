@@ -206,7 +206,14 @@ async function decideWithContext(
  * candidates -- a basin reading is the loom, not the world, and must never become a
  * web-search topic (ratification pass 2026-06-14: Gaia's "0.503 bones-before-skeleton"
  * was a pressure flag fed straight into exploration). Only open loops are explorable.
- * Returns null when nothing world-facing matched, so the caller can fall back to the queue.
+ *
+ * Resolution order:
+ *  1. An open loop whose text the decision names -> that loop.
+ *  2. Otherwise, when open loops exist, the FIRST open loop -- the model expressed a
+ *     preference for live/world-facing material, so honor it with a real (never-pressure)
+ *     loop rather than dropping back to the queue. This fallback is intentional and tested.
+ *  3. Only when NO open loops exist (e.g. the live signal was pressure-only) -> null, and
+ *     the caller falls back to the queued seed.
  */
 export function extractLiveText(decisionText: string, ctx: PipelineContext): string | null {
   const candidates = ctx.openLoops.map(l => l.text);
