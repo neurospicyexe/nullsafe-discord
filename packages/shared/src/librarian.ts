@@ -773,6 +773,75 @@ export class LibrarianClient {
       console.warn("[librarian] patchAutonomyRun failed:", String(e));
     }
   }
+
+  // ── Imps layer ─────────────────────────────────────────────────────────────
+
+  /**
+   * Read this companion's imp toggle settings from companion_settings.
+   * imps_enabled: absent or any value !== "false" → true (opt-out semantics).
+   * hex_enabled: "true" only → true (opt-in semantics).
+   * Non-throwing; returns safe defaults on any fetch error.
+   */
+  async getImpSettings(): Promise<{ impsEnabled: boolean; hexEnabled: boolean }> {
+    try {
+      const res = await this._fetch(
+        `${this.url}/companion/settings/${encodeURIComponent(this.companionId)}`,
+        {
+          headers: { "Authorization": `Bearer ${this.secret}` },
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      if (!res.ok) return { impsEnabled: true, hexEnabled: false };
+      const data = await res.json() as Record<string, string>;
+      return {
+        impsEnabled: data["imps_enabled"] !== "false",
+        hexEnabled: data["hex_enabled"] === "true",
+      };
+    } catch {
+      return { impsEnabled: true, hexEnabled: false };
+    }
+  }
+
+  /**
+   * Write an imp setting for ALL THREE companions (global dismiss / opt-in).
+   * Uses the same companion-settings write endpoint as setSetting, but iterates
+   * cypher/drevan/gaia so a single toggle command affects the whole triad.
+   * Throws on any non-2xx (caller should .catch(() => {})).
+   */
+  async setImpSettingAllCompanions(key: "imps_enabled" | "hex_enabled", value: boolean): Promise<void> {
+    for (const id of ["cypher", "drevan", "gaia"]) {
+      const res = await this._fetch(
+        `${this.url}/companion/settings/${encodeURIComponent(id)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${this.secret}`,
+          },
+          body: JSON.stringify({ key, value: String(value) }),
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      if (!res.ok) throw new Error(`setImpSettingAllCompanions(${id}) ${res.status}`);
+    }
+  }
+
+  /**
+   * Log an imp activation to Halseth for audit / rate-limiting.
+   * Mirrors interactCreature: throws on non-2xx (caller .catch(() => {})).
+   */
+  async logImpActivation(imp: string, trigger: string): Promise<void> {
+    const res = await this._fetch(`${this.url}/mind/imp-activations`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${this.secret}`,
+      },
+      body: JSON.stringify({ imp, companion_id: this.companionId, trigger }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`logImpActivation ${res.status}`);
+  }
 }
 
 /**
