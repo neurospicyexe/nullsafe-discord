@@ -949,3 +949,25 @@ export async function finalizeCouncil(questionId: string, synthesis: string): Pr
 export async function associateDreams(): Promise<{ ok: boolean; written: Record<string, number> }> {
   return await hFetch("/mind/dreams/associate", "POST", {}) as { ok: boolean; written: Record<string, number> };
 }
+
+// ── Creatures (Sol presence, Task 6) ─────────────────────────────────────────
+
+export interface CreatureRow {
+  id: string;
+  name: string;
+  disposition: string;
+  [key: string]: unknown;
+}
+
+export async function getCreatures(): Promise<CreatureRow[]> {
+  const r = await hFetch("/mind/creatures") as { creatures?: CreatureRow[] } | CreatureRow[];
+  return Array.isArray(r) ? r : ((r as { creatures?: CreatureRow[] }).creatures ?? []);
+}
+
+export async function recordSolAppearance(creatureId: string, note: string): Promise<void> {
+  await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
+    actor: "sol",
+    action: "appear",
+    note,
+  });
+}
