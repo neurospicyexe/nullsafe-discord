@@ -346,6 +346,9 @@ export class LibrarianClient {
     standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
     open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
     open_questions?: string[];
+    // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
+    // pet crow's state. Rendered verbatim into recentContext via formatRecentContext.
+    sol_block?: string | null;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -376,6 +379,7 @@ export class LibrarianClient {
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         open_questions?: string[];
+        sol_block?: string | null;
       } | undefined;
       if (!data) return null;
       return {
@@ -415,6 +419,7 @@ export class LibrarianClient {
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
+        sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
       };
     } catch {
       return null;
@@ -771,6 +776,7 @@ export function formatRecentContext(orient: {
   preferences?: Array<{ domain: string; preference: string; strength: string }>;
   standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
   open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
+  sol_block?: string | null;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -806,6 +812,9 @@ export function formatRecentContext(orient: {
   }
   if (orient.active_tensions?.length) {
     parts.push(`[Tensions] ${orient.active_tensions.join(" | ")}`);
+  }
+  if (orient.sol_block) {
+    parts.push(orient.sol_block.slice(0, 400));
   }
   if (orient.relational_state_owner?.length) {
     parts.push(`[Relational/Primary] ${orient.relational_state_owner.join(" | ")}`);

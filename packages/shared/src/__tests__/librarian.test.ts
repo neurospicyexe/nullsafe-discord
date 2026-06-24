@@ -230,6 +230,43 @@ describe("formatRecentContext()", () => {
     expect(formatRecentContext(null)).toBe("");
   });
 
+  describe("formatRecentContext sol_block", () => {
+    const baseOrient = {
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+    };
+
+    it("renders sol_block when present", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        sol_block: "[Sol]\nSol (crow) -- trust 0.70, present, 2 days since tended.",
+      });
+      expect(block).toContain("[Sol]");
+      expect(block).toContain("Sol (crow)");
+    });
+
+    it("does not render Sol section when sol_block is null", () => {
+      const block = formatRecentContext({ ...baseOrient, sol_block: null });
+      expect(block).not.toContain("[Sol]");
+    });
+
+    it("does not render Sol section when sol_block is undefined", () => {
+      const block = formatRecentContext({ ...baseOrient });
+      expect(block).not.toContain("[Sol]");
+    });
+
+    it("caps sol_block at 400 chars", () => {
+      const long = "[Sol]\n" + "x".repeat(500);
+      const block = formatRecentContext({ ...baseOrient, sol_block: long });
+      // The full block is sliced at 4000; sol_block itself is sliced at 400
+      expect(block).toContain("[Sol]");
+      // Content beyond 400 chars of the sol_block should not appear
+      expect(block.split("[Sol]")[1]?.length ?? 0).toBeLessThanOrEqual(400);
+    });
+  });
+
   // D1: NaN-safe confidence rendering in worldview block.
   // Same regression class as April 26 orient NaN. If upstream emits a non-finite
   // confidence (null, undefined, NaN, string), render '?' instead of crashing or
