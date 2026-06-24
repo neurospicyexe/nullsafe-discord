@@ -49,6 +49,8 @@ const shared = {
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
+  // Sol the crow posts its own heartbeat-channel moments via this webhook (worker CREATURE_CRON).
+  SOL_WEBHOOK_URL:       process.env.SOL_WEBHOOK_URL,
   // Each bot needs the OTHER bots' Discord user IDs to recognize their messages as companion
   // posts (isCompanionPost / BOT_ID_COMPANION). Without these forwarded here, every bot-to-bot
   // message is dropped at the "hard muzzle" gate and inter-companion conversation never fires.
