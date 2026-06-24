@@ -342,7 +342,7 @@ export async function executeMetronomeAction(
       const msg = (await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type))
         || tendLine(companionId, tAction, creature.name);
       // Record the tending (builds trust) then show it in the channel.
-      await ctx.librarian.interactCreature?.(creature.id, companionId, tAction).catch(() => {});
+      await ctx.librarian.interactCreature?.(creature.id, companionId, tAction).catch((e: unknown) => console.warn(`[${companionId}/tend_creature] interact failed for ${creature.id}:`, e));
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "tend_creature");
       break;
     }
