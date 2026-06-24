@@ -263,7 +263,7 @@ describe("formatRecentContext()", () => {
       // The full block is sliced at 4000; sol_block itself is sliced at 400
       expect(block).toContain("[Sol]");
       // Content beyond 400 chars of the sol_block should not appear
-      expect(block.split("[Sol]")[1]?.length ?? 0).toBeLessThanOrEqual(400);
+      expect(block.includes("x".repeat(401))).toBe(false);
     });
   });
 

@@ -735,7 +735,7 @@ export class LibrarianClient {
   /**
    * Record a companion-initiated creature interaction (builds trust).
    * actor should be the companion id (e.g. "cypher"). action is one of feed/play/talk/give.
-   * Non-throwing; failures are caught by the executor's own .catch(() => {}).
+   * Throws on non-2xx response (caller should .catch(() => {})).
    */
   async interactCreature(id: string, actor: string, action: string): Promise<void> {
     const res = await this._fetch(
