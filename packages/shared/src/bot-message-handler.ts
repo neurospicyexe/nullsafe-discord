@@ -50,6 +50,39 @@ import {
   ChannelConfigCache, PkDedup, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
 } from "./index.js";
+import { selectImp, impRider, type ImpState } from "./imps.js";
+
+// ---------------------------------------------------------------------------
+// Imp context cache (module-level, per-process = per companion bot).
+// TTL: 5 minutes so imp flavor adds zero per-message HTTP cost.
+// ---------------------------------------------------------------------------
+interface ImpContextCache {
+  state: ImpState | null;
+  settings: { impsEnabled: boolean; hexEnabled: boolean };
+  at: number;
+}
+const IMP_CONTEXT_TTL_MS = 5 * 60 * 1_000;
+let _impContextCache: ImpContextCache | null = null;
+
+async function getImpContext(
+  librarian: LibrarianClient,
+  now: number,
+): Promise<{ state: ImpState | null; settings: { impsEnabled: boolean; hexEnabled: boolean } }> {
+  if (_impContextCache && now - _impContextCache.at < IMP_CONTEXT_TTL_MS) {
+    return { state: _impContextCache.state, settings: _impContextCache.settings };
+  }
+  const [rawState, rawSettings] = await Promise.all([
+    librarian.getRazielState().catch(() => null),
+    librarian.getImpSettings().catch(() => null),
+  ]);
+  const state: ImpState | null = rawState
+    ? { mood: rawState.mood, energy: rawState.energy, focus: rawState.focus,
+        pain: rawState.pain, spoons: rawState.spoons, sleep_hours: rawState.sleep_hours }
+    : null;
+  const settings = rawSettings ?? { impsEnabled: false, hexEnabled: false };
+  _impContextCache = { state, settings, at: now };
+  return { state, settings };
+}
 
 /** Minimal shape of the per-bot `loadBotConfig()` result the handler reads. */
 export interface MessageHandlerCfg {
@@ -663,6 +696,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
     }
 
+    // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
+    // Raziel's logged state. Gaia exempt + disabled-gate live inside selectImp. Never the voice.
+    let systemPromptWithImp = contextPrompt;
+    try {
+      const { state, settings } = await getImpContext(librarian, Date.now());
+      const imp = selectImp(COMPANION_ID, state as ImpState | null, settings, pkMemberName ?? null);
+      if (imp) {
+        systemPromptWithImp = `${contextPrompt}\n\n${impRider(imp)}`;
+        const trig = state ? `mood=${state.mood ?? "?"},spoons=${state.spoons ?? "?"},pain=${state.pain ?? "?"}` : "";
+        librarian.logImpActivation(imp, trig).catch(() => {});
+      }
+    } catch { /* imps never break a reply */ }
+
     const addrResult = extractAddress(effectiveContent);
     const mentionedViaMention = [...message.mentions.users.keys()]
       .flatMap(id => { const c = BOT_ID_COMPANION[id]; return c ? [c] : []; });
@@ -699,7 +745,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         message.channelId,
         message.id,
         effectiveContent,
-        contextPrompt,
+        systemPromptWithImp,
         history.slice(-CONTEXT_WINDOW_SIZE),
         channelHistory,
         temperature,
@@ -718,7 +764,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+        response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -739,11 +785,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+          response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
         }
       }
     } else {
-      response = await adapterRef.current.generate(contextPrompt, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+      response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
     }
 
     if (!response) {
