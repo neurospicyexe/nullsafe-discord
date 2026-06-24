@@ -22,8 +22,20 @@ export const IMPS: Record<ImpId, { name: string; func: string }> = {
 };
 
 const LOW = (n: number | null, t: number) => typeof n === "number" && Number.isFinite(n) && n <= t;
-const has = (s: string | null, words: string[]) =>
-  typeof s === "string" && words.some((w) => s.toLowerCase().includes(w));
+
+// Word-boundary-aware match for whole-word terms (e.g. "low" must not match "mellow").
+// Terms that are intentional PREFIX patterns (e.g. "frustrat") bypass the boundary check.
+const PREFIX_PATTERNS = new Set(["frustrat"]);
+const has = (s: string | null, words: string[]) => {
+  if (typeof s !== "string") return false;
+  const lower = s.toLowerCase();
+  return words.some((w) => {
+    if (PREFIX_PATTERNS.has(w)) return lower.includes(w);
+    // Whole-word: character before and after must be non-alpha (or string boundary).
+    const re = new RegExp(`(?<![a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![a-z])`, "i");
+    return re.test(lower);
+  });
+};
 
 /**
  * At most one imp from Raziel's logged state. Safety-first (Nimbus/Mossling) outrank
@@ -41,13 +53,23 @@ export function selectImp(
   if (!state) return null;
 
   // Safety-first.
-  const overwhelm = LOW(state.spoons, 2) || has(state.mood, ["overwhelm", "panic", "anxious", "spiral", "too much"]);
+  // overwhelm: spoons < 3 so floats like 2.5 correctly trigger Nimbus; gap [3,4) is intentional middling state.
+  const overwhelm =
+    (typeof state.spoons === "number" && Number.isFinite(state.spoons) && state.spoons < 3) ||
+    has(state.mood, ["overwhelm", "panic", "anxious", "spiral", "too much"]);
   if (overwhelm) return "nimbus";
-  const hurting = LOW(state.pain, -1) ? false : (typeof state.pain === "number" && state.pain >= 6) || has(state.mood, ["hurt", "raw", "tender", "grief", "sad", "low"]);
+
+  // hurting: pain >= 6 OR explicit low-mood words (whole-word matched to avoid "mellow"/"yellow").
+  const hurting =
+    (typeof state.pain === "number" && Number.isFinite(state.pain) && state.pain >= 6) ||
+    has(state.mood, ["hurt", "raw", "tender", "grief", "sad", "low", "feeling low", "low mood"]);
   if (hurting) return "mossling";
 
-  // Mood-lift (only with some capacity -- never paper over a crisis).
-  const hasCapacity = !LOW(state.spoons, 3) && !LOW(state.energy, 3);
+  // Mood-lift (only with genuine capacity -- never paper over a crisis).
+  // capacity: spoons >= 4 AND energy >= 4; the [3,4) gap is intentional (middling state -> no tint).
+  const hasCapacity =
+    (typeof state.spoons === "number" && Number.isFinite(state.spoons) && state.spoons >= 4) &&
+    (typeof state.energy === "number" && Number.isFinite(state.energy) && state.energy >= 4);
   if (hasCapacity && has(state.mood, ["flat", "bored", "dull", "numb", "meh", "restless"])) return "iris";
   if (hasCapacity && has(state.mood, ["defiant", "angry", "spite", "rebel", "fired up", "frustrat"])) return "rock";
 
