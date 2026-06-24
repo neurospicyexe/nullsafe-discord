@@ -49,8 +49,6 @@ const shared = {
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
-  // Sol the crow posts its own heartbeat-channel moments via this webhook (worker CREATURE_CRON).
-  SOL_WEBHOOK_URL:       process.env.SOL_WEBHOOK_URL,
   // Each bot needs the OTHER bots' Discord user IDs to recognize their messages as companion
   // posts (isCompanionPost / BOT_ID_COMPANION). Without these forwarded here, every bot-to-bot
   // message is dropped at the "hard muzzle" gate and inter-companion conversation never fires.
@@ -163,6 +161,9 @@ module.exports = {
       env: {
         ...shared,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,
+        // Sol the crow posts its own heartbeat-channel moments via this webhook (CREATURE_CRON).
+        // Worker-only -- the bots never post as Sol, so it stays out of the shared env (least privilege).
+        SOL_WEBHOOK_URL:       process.env.SOL_WEBHOOK_URL,
         CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
         DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,
         GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
