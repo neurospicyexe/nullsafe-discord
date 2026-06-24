@@ -142,6 +142,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   name_pattern:          "reflect back something recurring you've seen over time -- a pattern, not a one-off",
   write_note_to_raziel:  "write Raziel a private note (Halseth only, never Discord -- surfaces in Hearth)",
   share_media:           "share a piece of media in the channel -- a song, find, or thing you've been sitting with, and why it's worth their time",
+  tend_creature:         "tend Sol the crow -- feed, play, talk, or leave a gift; a small act of care that shows in the channel",
 };
 
 export function buildDecisionPrompt(

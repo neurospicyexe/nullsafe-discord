@@ -28,6 +28,7 @@ import {
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
 } from "./index.js";
 import { generateOutward } from "./outward.js";
+import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
@@ -326,6 +327,23 @@ export async function executeMetronomeAction(
       // pattern as the guardian weekly letter. Was routing to human_journal + rejected
       // on the `content` field -> silent no-op (2026-06-13 bug hunt).
       await writeMetronomeJournal(librarian, companionId, "note to raziel", content, ["metronome", "letter_to_raziel"]);
+      break;
+    }
+    case "tend_creature": {
+      if (!heartbeatChannelId) return;
+      // Resolve the target creature (default Sol) and its id.
+      const creatures = await ctx.librarian.creaturesList?.().catch(() => []) ?? [];
+      const target = (action.target ?? "Sol").toLowerCase();
+      const creature = creatures.find((c: { name: string }) => c.name.toLowerCase() === target) ?? creatures[0];
+      if (!creature) break;
+      const seed = Date.now();
+      const tAction = pickTendAction(companionId, seed);
+      const prompt = action.prompt ?? `Tend ${creature.name} the crow with a small act of care (${tAction}). One line, your voice.`;
+      const msg = (await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type))
+        || tendLine(companionId, tAction, creature.name);
+      // Record the tending (builds trust) then show it in the channel.
+      await ctx.librarian.interactCreature?.(creature.id, companionId, tAction).catch(() => {});
+      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "tend_creature");
       break;
     }
     case "nothing":

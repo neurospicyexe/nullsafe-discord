@@ -713,6 +713,47 @@ export class LibrarianClient {
   }
 
   /**
+   * List all creatures from Halseth. Used by the tend_creature metronome executor
+   * to resolve Sol's id before posting the interact. Mirrors the auth/env pattern
+   * in creature-command.ts -- direct REST, not via the Librarian NL endpoint.
+   * Non-throwing; returns [] on error so the executor can degrade gracefully.
+   */
+  async creaturesList(): Promise<Array<{ id: string; name: string }>> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/creatures`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!res.ok) return [];
+      const json = await res.json().catch(() => ({})) as { creatures?: Array<{ id: string; name: string }> };
+      return Array.isArray(json.creatures) ? json.creatures : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Record a companion-initiated creature interaction (builds trust).
+   * actor should be the companion id (e.g. "cypher"). action is one of feed/play/talk/give.
+   * Non-throwing; failures are caught by the executor's own .catch(() => {}).
+   */
+  async interactCreature(id: string, actor: string, action: string): Promise<void> {
+    const res = await this._fetch(
+      `${this.url}/mind/creatures/${encodeURIComponent(id)}/interact`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${this.secret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ actor, action }),
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!res.ok) throw new Error(`interactCreature ${res.status}`);
+  }
+
+  /**
    * Close an autonomy_run after the action completes or fails.
    * Non-throwing -- run tracking is best-effort.
    */
