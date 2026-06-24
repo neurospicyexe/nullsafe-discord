@@ -21,6 +21,8 @@ export interface CommandTriggers {
   imagine: RegExp;
   pet: RegExp;
   council: RegExp;
+  imps: RegExp;
+  hex: RegExp;
   guard: RegExp;
 }
 
@@ -41,7 +43,10 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     pet: new RegExp(`^(?:${alt})\\b[,:]?\\s*pet\\b[,:]?\\s+(.+)`, "is"),
     // Council (0080 take 8). Form: "<prefix>: council <question>". Arg required.
     council: new RegExp(`^(?:${alt})\\b[,:]?\\s*council\\b[,:]?\\s+(.+)`, "is"),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council)\\b`, "i"),
+    // Imps (wave 2). "<prefix>: imps off|on|just the triad" and "<prefix>: hex on|off".
+    imps: new RegExp(`^(?:${alt})\\b[,:]?\\s*imps?\\b[,:]?\\s+(.+)`, "is"),
+    hex:  new RegExp(`^(?:${alt})\\b[,:]?\\s*(hex\\s+(?:on|off))\\b`, "is"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex)\\b`, "i"),
   };
 }
 
@@ -99,6 +104,8 @@ export function commandUsage(companionId: string): string {
     `\`${p}: imagine <prompt>\` (generate an image)`,
     `\`${p}: pet <name>\` (a creature -- add \`feed|play|talk|give\` + a note to vary it)`,
     `\`${p}: council <question>\` (convene the triad on a hard question)`,
+    `\`${p}: imps on\` / \`${p}: imps off\` (or "just the triad") -- toggle imp flavor globally`,
+    `\`${p}: hex on\` / \`${p}: hex off\` -- toggle mischief opt-in globally`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
   ].join("\n");
 }

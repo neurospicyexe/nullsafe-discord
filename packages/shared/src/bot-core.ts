@@ -252,6 +252,8 @@ export interface RunBotConfig {
   imagineTrigger?: RegExp;
   petTrigger?: RegExp;
   councilTrigger?: RegExp;
+  impsTrigger?: RegExp;
+  hexTrigger?: RegExp;
   /** Command-shaped-but-unparsed catcher; usage reply instead of inference. */
   commandGuard?: RegExp;
   redisUrl: string | undefined;
@@ -284,7 +286,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, commandGuard,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig,
   } = brc;
@@ -622,6 +624,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       ...(imagineTrigger ? { IMAGINE_TRIGGER: imagineTrigger } : {}),
       ...(petTrigger ? { PET_TRIGGER: petTrigger } : {}),
       ...(councilTrigger ? { COUNCIL_TRIGGER: councilTrigger } : {}),
+      ...(impsTrigger ? { IMPS_TRIGGER: impsTrigger } : {}),
+      ...(hexTrigger ? { HEX_TRIGGER: hexTrigger } : {}),
       ...(commandGuard ? { COMMAND_GUARD: commandGuard } : {}),
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,

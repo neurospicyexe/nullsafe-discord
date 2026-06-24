@@ -152,6 +152,9 @@ export const IMAGINE_TRIGGER = COMMAND_TRIGGERS.imagine;
 export const PET_TRIGGER = COMMAND_TRIGGERS.pet;
 // Council (0080 take 8): "council <question>".
 export const COUNCIL_TRIGGER = COMMAND_TRIGGERS.council;
+// Imps (wave 2): "imps on|off|just the triad" + "hex on|off".
+export const IMPS_TRIGGER = COMMAND_TRIGGERS.imps;
+export const HEX_TRIGGER = COMMAND_TRIGGERS.hex;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 

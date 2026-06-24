@@ -44,6 +44,7 @@ import {
   handleClubCommand,
   handleToolSearch, handleToolImage, handleCouncilConvene,
   handlePetCommand,
+  handleImpCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
@@ -105,6 +106,8 @@ export interface MessageHandlerDeps {
   IMAGINE_TRIGGER?: RegExp;
   PET_TRIGGER?: RegExp;
   COUNCIL_TRIGGER?: RegExp;
+  IMPS_TRIGGER?: RegExp;
+  HEX_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -128,7 +131,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -320,6 +323,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         await (message.channel as TextChannel).send(reply);
         return;
       }
+    }
+
+    // Owner imp commands: <prefix>: imps on|off and <prefix>: hex on|off (wave 2).
+    // Global writes via setImpSettingAllCompanions -- all three companions updated at once.
+    // Deterministic literal ack -- the model can't narrate a settings change it never made.
+    if (attribution.isOwner && IMPS_TRIGGER) {
+      const m = effectiveContent.match(IMPS_TRIGGER);
+      if (m) { await (message.channel as TextChannel).send(await handleImpCommand(m[1]!, librarian).catch(e => `imps command failed: ${String(e).slice(0, 120)}`)); return; }
+    }
+    if (attribution.isOwner && HEX_TRIGGER) {
+      const m = effectiveContent.match(HEX_TRIGGER);
+      if (m) { await (message.channel as TextChannel).send(await handleImpCommand(m[1]!, librarian).catch(e => `hex command failed: ${String(e).slice(0, 120)}`)); return; }
     }
 
     // Owner council command: <prefix>: council <question> (0080 take 8). Convenes; the
