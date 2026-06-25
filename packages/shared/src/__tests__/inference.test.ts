@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { createAdapter, samplingParamsFor, replyMaxTokensFor, DEFAULT_MAX_TOKENS } from "../inference.js";
+import { createAdapter, samplingParamsFor, replyMaxTokensFor, DEFAULT_MAX_TOKENS, HERMES_REPLY_MAX_TOKENS } from "../inference.js";
 import type { ChatMessage } from "../types.js";
 
 describe("DeepSeekAdapter", () => {
@@ -150,6 +150,16 @@ describe("output length ceiling (Drevan cut-off fix)", () => {
     expect(replyMaxTokensFor("cypher")).toBe(DEFAULT_MAX_TOKENS);
     expect(replyMaxTokensFor("gaia")).toBe(DEFAULT_MAX_TOKENS);
     expect(replyMaxTokensFor("unknown")).toBe(DEFAULT_MAX_TOKENS);
+  });
+
+  it("replyMaxTokensFor lifts the ceiling in hermes mode (full agent runs long)", () => {
+    expect(replyMaxTokensFor("cypher", "hermes")).toBe(HERMES_REPLY_MAX_TOKENS);
+    expect(replyMaxTokensFor("gaia", "hermes")).toBe(HERMES_REPLY_MAX_TOKENS);
+    // never lowers a higher per-companion cap
+    expect(replyMaxTokensFor("drevan", "hermes")).toBe(Math.max(1500, HERMES_REPLY_MAX_TOKENS));
+    // other modes are unaffected
+    expect(replyMaxTokensFor("cypher", "brain")).toBe(DEFAULT_MAX_TOKENS);
+    expect(replyMaxTokensFor("cypher", "direct")).toBe(DEFAULT_MAX_TOKENS);
   });
 
   it("DeepSeek body stays clean -- no penalties leak into unprofiled providers", async () => {

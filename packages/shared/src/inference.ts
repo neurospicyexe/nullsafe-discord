@@ -28,8 +28,17 @@ export const DEFAULT_MAX_TOKENS = 1024;
 export const REPLY_MAX_TOKENS: Record<string, number> = {
   drevan: 1500,
 };
-export function replyMaxTokensFor(companionId: string): number {
-  return REPLY_MAX_TOKENS[companionId.toLowerCase()] ?? DEFAULT_MAX_TOKENS;
+
+// Hermes relay (INFERENCE_MODE=hermes) runs the FULL agent per reply -- orient + SOUL.md +
+// Halseth MCP + tool narration -- which is far more verbose than the terse DeepSeek
+// completions the per-companion caps above were tuned for. A 1024/1500 ceiling truncates a
+// long agent reply mid-thought (the 2026-06-15 Drevan cutoff class). Lift the ceiling for
+// hermes mode; the model still stops when the thought is done, this only raises the cap.
+export const HERMES_REPLY_MAX_TOKENS = 3072;
+
+export function replyMaxTokensFor(companionId: string, inferenceMode?: string): number {
+  const base = REPLY_MAX_TOKENS[companionId.toLowerCase()] ?? DEFAULT_MAX_TOKENS;
+  return inferenceMode === "hermes" ? Math.max(base, HERMES_REPLY_MAX_TOKENS) : base;
 }
 
 // ── Dynamic temperature ────────────────────────────────────────────────────────

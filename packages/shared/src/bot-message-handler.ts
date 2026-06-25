@@ -170,6 +170,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
   } = deps;
 
+    // INFERENCE_MODE=hermes forces every adapter build to the local Hermes agent (see
+    // createAdapter forceHermes). Surfaced here for the reply-token ceiling (full agent runs
+    // long) and the model-switch branches (routing is owned by Hermes, not Discord).
+    const inferenceMode = apiUrls.forceHermes ? "hermes" : undefined;
+
     if (message.author.id === client.user?.id) return;
 
     const BOT_ID_COMPANION: Record<string, string> = {};
@@ -282,6 +287,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             .map(([k, e]) => `\`${k}\` -- ${e.label}`)
             .join("\n");
           await (message.channel as TextChannel).send(`${MODEL_SWITCH_LIST_INTRO}\n${list}`);
+          return;
+        }
+
+        // Under the Hermes relay, model choice lives inside the agent (per-profile `/model`);
+        // forceHermes ignores the requested provider, so a Discord switch cannot change
+        // routing. Tell the truth instead of acking a no-op (narrated-success trap, 06-11).
+        if (apiUrls.forceHermes) {
+          await (message.channel as TextChannel).send(
+            "model routing is handled by Hermes right now -- switch inside my agent, not from Discord.");
           return;
         }
 
@@ -764,7 +778,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+        response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -785,11 +799,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+          response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
         }
       }
     } else {
-      response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID));
+      response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
     }
 
     if (!response) {
@@ -804,7 +818,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (tokenMatch) {
         response = response.replace(MODEL_TOKEN_RE, "").trim();
         const switchKey = tokenMatch[1].trim().toLowerCase();
-        if (ALL_MODELS[switchKey]) {
+        if (apiUrls.forceHermes) {
+          // Hermes owns model routing; the token is already stripped from the visible reply.
+          // Don't rebuild/journal/announce a switch that forceHermes would silently ignore.
+        } else if (ALL_MODELS[switchKey]) {
           const entry = ALL_MODELS[switchKey];
           adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);
           activeModelRef.key = switchKey;
