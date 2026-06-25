@@ -59,8 +59,12 @@ export interface BotConfig {
   blueDiscordId?: string;
   /** When set, bot relays inference to Phoenix Brain instead of calling DeepSeek directly. */
   brainUrl?: string;
-  /** "brain" = relay to Phoenix Brain; "direct" (default) = bot handles inference. */
-  inferenceMode?: "direct" | "brain";
+  /** "brain" = relay to Phoenix Brain; "hermes" = relay to the local Hermes agent API server; "direct" (default) = bot handles inference. */
+  inferenceMode?: "direct" | "brain" | "hermes";
+  /** Base URL of this companion's local Hermes API server, e.g. http://127.0.0.1:8642/v1 (INFERENCE_MODE=hermes). */
+  hermesUrl?: string;
+  /** Bearer token (API_SERVER_KEY) for the local Hermes API server. */
+  hermesApiKey?: string;
 }
 
 export interface BootContext {

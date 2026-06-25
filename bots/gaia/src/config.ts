@@ -42,8 +42,10 @@ export function loadBotConfig(): BotConfig {
     brainUrl: process.env["BRAIN_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceMode: (() => {
       const v = (process.env["INFERENCE_MODE"] ?? "direct").trim().replace(/^=+/, "");
-      return (v === "brain" ? "brain" : "direct") as "direct" | "brain";
+      return (v === "brain" ? "brain" : v === "hermes" ? "hermes" : "direct") as "direct" | "brain" | "hermes";
     })(),
+    hermesUrl: process.env["HERMES_API_URL"]?.trim().replace(/^=+/, "") || undefined,
+    hermesApiKey: process.env["HERMES_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
   };
 }
 

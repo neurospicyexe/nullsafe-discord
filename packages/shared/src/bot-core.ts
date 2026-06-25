@@ -296,6 +296,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     : null;
   if (brainClient) {
     console.log(`[${companionId}] inference mode: brain (${env.brainUrl})`);
+  } else if (env.inferenceMode === "hermes" && env.hermesUrl) {
+    console.log(`[${companionId}] inference mode: hermes (${env.hermesUrl})`);
   } else {
     console.log(`[${companionId}] inference mode: direct`);
   }
@@ -384,10 +386,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     openai:    env.openaiApiKey,
     anthropic: env.anthropicApiKey,
     mistral:   env.mistralApiKey,
+    hermes:    env.hermesApiKey,
   };
   const apiUrls: AdapterUrls = {
     ollama:   env.ollamaUrl,
     lmstudio: env.lmstudioUrl,
+    hermes:   env.hermesUrl,
+    forceHermes: env.inferenceMode === "hermes" && !!env.hermesUrl,
   };
 
   let activeModelKey: string | null = env.inferenceModel ?? null;

@@ -299,6 +299,53 @@ class LMStudioAdapter implements InferenceAdapter {
   }
 }
 
+// Hermes agent API server (OpenAI-compatible /v1/chat/completions, bearer-gated).
+// Unlike LMStudioAdapter, this sends Authorization and allows a long timeout: each call
+// runs the FULL Hermes agent (orient, SOUL.md, Halseth MCP, tools), which can take tens of
+// seconds. The agent's own SOUL is the identity; the systemPrompt we send is supplemental
+// Discord-context framing.
+class HermesAdapter implements InferenceAdapter {
+  constructor(
+    private baseUrl: string,
+    private apiKey: string,
+    private model: string = "",
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
+    try {
+      const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model: this.model || "default",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: maxTokens,
+          temperature,
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) {
+        console.warn(`[inference:hermes] non-2xx response: ${res.status}`);
+        return null;
+      }
+      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
+      return data.choices?.[0]?.message?.content ?? null;
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:hermes] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
+  }
+}
+
 class KimiAdapter implements InferenceAdapter {
   constructor(
     private apiKey: string,
@@ -487,8 +534,13 @@ export interface AdapterKeys {
   openai?: string;
   anthropic?: string;
   mistral?: string;
+  hermes?: string;   // bearer token for the local Hermes API server (API_SERVER_KEY)
 }
-export interface AdapterUrls { ollama?: string; lmstudio?: string }
+// `hermes` = base URL of the local Hermes API server (e.g. http://127.0.0.1:8642/v1).
+// `forceHermes` = when true (INFERENCE_MODE=hermes), every createAdapter call returns the
+// Hermes agent adapter regardless of the requested provider, so model-switch rebuilds can't
+// clobber the relay. Dormant when false.
+export interface AdapterUrls { ollama?: string; lmstudio?: string; hermes?: string; forceHermes?: boolean }
 
 // Build a single-provider adapter, or null when its credential / URL is absent.
 function buildAdapter(
@@ -538,6 +590,14 @@ export function createAdapter(
   // .env.brain holds KIMI_API_KEY), DON'T throw -- fall through to whatever provider IS
   // configured locally. Brain runs the real swarm voice; this adapter is only the
   // direct-mode fallback, so any working local provider suffices.
+  //
+  // Hermes relay (INFERENCE_MODE=hermes): when forced, ALL adapter builds return the Hermes
+  // agent adapter regardless of the requested provider. This makes the relay robust against
+  // every model-switch rebuild site without per-site guards. Model choice lives inside Hermes
+  // (per-profile `/model`), so the Discord model-switch command becomes a no-op for routing.
+  if (urls.forceHermes && urls.hermes) {
+    return new HermesAdapter(urls.hermes, keys.hermes ?? "", "", fetchFn);
+  }
   const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
   const primary = buildAdapter(provider, model, keys, urls, fetchFn, cacheKey);
   if (primary) chain.push({ name: provider, adapter: primary });
