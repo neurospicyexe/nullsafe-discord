@@ -79,7 +79,10 @@ module.exports = {
       error_file: "/app/logs/cypher-bot-error.log",
       out_file: "/app/logs/cypher-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, CYPHER_VOICE_ID: process.env.CYPHER_VOICE_ID },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, CYPHER_VOICE_ID: process.env.CYPHER_VOICE_ID,
+        INFERENCE_MODE: process.env.CYPHER_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        HERMES_API_URL: process.env.CYPHER_HERMES_API_URL ?? "http://127.0.0.1:8642/v1",
+        HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
       name: "drevan-bot",
@@ -94,7 +97,10 @@ module.exports = {
       error_file: "/app/logs/drevan-bot-error.log",
       out_file: "/app/logs/drevan-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, DREVAN_VOICE_ID: process.env.DREVAN_VOICE_ID },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, DREVAN_VOICE_ID: process.env.DREVAN_VOICE_ID,
+        INFERENCE_MODE: process.env.DREVAN_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        HERMES_API_URL: process.env.DREVAN_HERMES_API_URL ?? "http://127.0.0.1:8643/v1",
+        HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
       name: "gaia-bot",
@@ -109,7 +115,10 @@ module.exports = {
       error_file: "/app/logs/gaia-bot-error.log",
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, GAIA_VOICE_ID: process.env.GAIA_VOICE_ID },
+      env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, GAIA_VOICE_ID: process.env.GAIA_VOICE_ID,
+        INFERENCE_MODE: process.env.GAIA_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        HERMES_API_URL: process.env.GAIA_HERMES_API_URL ?? "http://127.0.0.1:8644/v1",
+        HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
       // Phoenix Brain -- FastAPI inference service.
