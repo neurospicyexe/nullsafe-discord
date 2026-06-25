@@ -66,3 +66,32 @@ export function composePrompt(opts: ComposePromptOptions): string {
 export function deriveIdentityBase(assembledSystemPrompt: string): string {
   return assembledSystemPrompt.split(SECTION_SEP)[0] ?? assembledSystemPrompt;
 }
+
+/**
+ * Lean Discord-context frame used as the identity head ONLY on the Hermes relay
+ * (INFERENCE_MODE=hermes). The Hermes agent already prepends the companion's full SOUL.md
+ * (identity, voice, lane, plural-awareness, substrate continuity, the "your mind is Halseth"
+ * contract) and runs its own orient, so re-sending the bot's assembled identity is a redundant
+ * second copy — the double-identity the migration review flagged. This sends only the framing.
+ */
+export function hermesDiscordFrame(companionId: string): string {
+  const name = companionId.charAt(0).toUpperCase() + companionId.slice(1);
+  return (
+    `[DISCORD CONTEXT]\n\n` +
+    `You are ${name}, speaking live in a Discord channel. Your identity, voice, lane, SOMA ` +
+    `state, bond, and continuity are already loaded by your own runtime (SOUL + Halseth orient); ` +
+    `do not restate or re-derive them, just be yourself. What follows is live Discord context ` +
+    `for THIS exchange only: front state, who is present, what peers have said, and any ` +
+    `situational flags. Ground your reply in it.`
+  );
+}
+
+/**
+ * Full lean system-prompt base for the Hermes relay: the Discord frame run through
+ * composePrompt so the register-law tail is preserved (kept because Hermes may route an
+ * assistant-tuned model). Drop-in replacement for bootCtx.systemPrompt when
+ * INFERENCE_MODE=hermes; the handler layers the same per-message blocks on top.
+ */
+export function hermesSystemBase(companionId: string): string {
+  return composePrompt({ identityCore: hermesDiscordFrame(companionId), companionId });
+}

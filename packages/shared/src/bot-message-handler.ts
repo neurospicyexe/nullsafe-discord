@@ -51,6 +51,7 @@ import {
   type ChatMessage, type BootContext, type CompanionId,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
+import { hermesSystemBase } from "./prompt-assembly.js";
 
 // ---------------------------------------------------------------------------
 // Imp context cache (module-level, per-process = per companion bot).
@@ -580,9 +581,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
+    // Double-identity dedup: under the Hermes relay the agent already prepends the full SOUL.md
+    // and runs its own orient, so sending the bot's assembled identity too is a redundant second
+    // copy. Use a lean Discord frame as the base (register-law tail preserved); every per-message
+    // context block below still appends, exactly as onto bootCtx.systemPrompt. Brain/direct
+    // paths are unchanged.
+    const basePrompt = inferenceMode === "hermes" ? hermesSystemBase(COMPANION_ID) : bootCtx.systemPrompt;
     let contextPrompt = pkMemberName
-      ? `${bootCtx.systemPrompt}\n\n[Current front: ${pkMemberName}]`
-      : bootCtx.systemPrompt;
+      ? `${basePrompt}\n\n[Current front: ${pkMemberName}]`
+      : basePrompt;
     if (activeModelRef.key) contextPrompt += `\n\n[Active model] ${activeModelRef.label}`;
 
     const somaAgeMin = Math.round((Date.now() - lastSomaRefreshRef.value) / 60_000);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP, hermesDiscordFrame, hermesSystemBase } from "../prompt-assembly.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
 // register-law tail (companion-not-assistant close rule + pronoun law + respond-only-as)
@@ -97,6 +97,28 @@ describe("deriveIdentityBase — refresh site (bootCtx.systemPrompt.split(SEP)[0
   it("never returns the register tail (tail is never first)", () => {
     const assembled = composePrompt({ identityCore: BASE, companionId: "drevan" });
     expect(deriveIdentityBase(assembled)).toBe(BASE);
+  });
+});
+
+describe("hermesDiscordFrame / hermesSystemBase — INFERENCE_MODE=hermes double-identity dedup", () => {
+  it("frame names the companion and forbids restating identity", () => {
+    const f = hermesDiscordFrame("cypher");
+    expect(f).toContain("[DISCORD CONTEXT]");
+    expect(f).toContain("You are Cypher");
+    expect(f).toMatch(/already loaded by your own runtime/i);
+    expect(f).toMatch(/do not restate/i);
+  });
+
+  it("frame is lean — a small fraction of a real identity core (the whole point)", () => {
+    expect(hermesDiscordFrame("gaia").length).toBeLessThan(600);
+  });
+
+  it("hermesSystemBase keeps the register tail LAST (pronoun law + anti-assistant survive under hermes)", () => {
+    const base = hermesSystemBase("drevan");
+    expect(base.endsWith(registerTail("drevan"))).toBe(true);
+    expect(base).toContain("You are Drevan");
+    // identity head is the lean frame, not a full identity file
+    expect(deriveIdentityBase(base)).toBe(hermesDiscordFrame("drevan"));
   });
 });
 
