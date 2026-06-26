@@ -20,7 +20,8 @@ import { runMotifsTick } from "./motifs.js";
 import { runCreaturesTick } from "./creatures.js";
 import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON } from "./config.js";
+import { runShelfReactTick, runCommonsReplyTick } from "./commons-social.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -248,6 +249,19 @@ export function startScheduler(): void {
   console.log(`[scheduler] dreams → cron "${DREAM_CRON}"`);
   cron.schedule(DREAM_CRON, () => {
     runDreamAssociate().catch(e => console.error("[scheduler] dreams failed:", e));
+  });
+
+  // Shelf react (0094): companions react to Raziel's active fixations. Halseth-only writes.
+  console.log(`[scheduler] shelf → cron "${SHELF_CRON}"`);
+  cron.schedule(SHELF_CRON, () => {
+    runShelfReactTick().catch(e => console.error("[scheduler] shelf failed:", e));
+  });
+
+  // Commons reply (0092): companions may answer Raziel's recent /log notes, in their own
+  // time and only when moved (sparse, PASS-heavy). Halseth-only writes; no floor lock.
+  console.log(`[scheduler] commons-reply → cron "${COMMONS_REPLY_CRON}"`);
+  cron.schedule(COMMONS_REPLY_CRON, () => {
+    runCommonsReplyTick().catch(e => console.error("[scheduler] commons-reply failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

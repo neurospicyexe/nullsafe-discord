@@ -181,6 +181,8 @@ export const IMPS_TRIGGER = COMMAND_TRIGGERS.imps;
 export const HEX_TRIGGER = COMMAND_TRIGGERS.hex;
 // Hearth write layer (0092): "log <thought>" drops a global commons post (async wall).
 export const LOG_TRIGGER = COMMAND_TRIGGERS.log;
+// Obsession shelf (0094): "into <thing>" / "into list" / "into drop <frag>".
+export const INTO_TRIGGER = COMMAND_TRIGGERS.into;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 

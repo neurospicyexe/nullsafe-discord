@@ -108,5 +108,22 @@ export async function handleClubCommand(text: string, voter: string): Promise<st
     return `vote cast (${voter}) for «${rec.title}» (${rec.recommended_by}'s pick)${reason ? ` -- "${reason}"` : ""}.`;
   }
 
-  return 'club commands: "club status" | "club vote <title fragment> [because <reason>]"';
+  // Phase 2: Raziel joins the discussion. Posts to the write layer (commons, club:<id>) so
+  // it threads with the companions' residue on Hearth /club. A drop, not a vote.
+  const sayMatch = trimmed.match(/^say\s+([\s\S]+)$/is);
+  if (sayMatch) {
+    const text = sayMatch[1]!.trim();
+    if (!text) return "give me something to say: `club say <text>`.";
+    const cur = await clubFetch("/mind/club/current", "GET");
+    if (!cur.ok) return `couldn't load the current round (${cur.status || "no halseth env"}).`;
+    const current = cur.json as unknown as ClubCurrent;
+    if (!current.round) return "no club round is open to discuss right now.";
+    const res = await clubFetch("/mind/commons", "POST", {
+      author: voter, context: `club:${current.round.id}`, body: text,
+    });
+    if (!res.ok) return `couldn't post that: ${String(res.json["error"] ?? `halseth ${res.status}`)}`;
+    return `posted to the ${current.round.status} round's discussion. it's on Hearth /club.`;
+  }
+
+  return 'club commands: "club status" | "club vote <title fragment> [because <reason>]" | "club say <text>"';
 }

@@ -126,11 +126,19 @@ export const PULSE_MAX_RUNS_PER_DAY = parseInt(process.env["PULSE_MAX_RUNS_PER_D
 export const DIALECTIC_CRON = process.env["DIALECTIC_CRON"] ?? "0 4 * * 3";
 
 // The Club (0072) -- daily 6PM tick advances whatever phase the round is in.
-// gathering holds CLUB_GATHER_DAYS before voting; active holds CLUB_ACTIVE_DAYS
-// before discussion + close; a new round opens 1 day after the last closed.
+// Phase 2 cadence (slowed so the winner reveal + discussion don't flash by): gathering holds
+// CLUB_GATHER_DAYS before voting; active holds CLUB_ACTIVE_DAYS (experience it); then a
+// STANDING discussing phase holds CLUB_DISCUSS_DAYS (Raziel reads the winner + joins) before
+// close; a new round opens 1 day after the last closed.
 export const CLUB_CRON = process.env["CLUB_CRON"] ?? "0 18 * * *";
-export const CLUB_GATHER_DAYS = parseFloat(process.env["CLUB_GATHER_DAYS"] ?? "2");
-export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "4");
+export const CLUB_GATHER_DAYS = parseFloat(process.env["CLUB_GATHER_DAYS"] ?? "4");
+export const CLUB_ACTIVE_DAYS = parseFloat(process.env["CLUB_ACTIVE_DAYS"] ?? "6");
+export const CLUB_DISCUSS_DAYS = parseFloat(process.env["CLUB_DISCUSS_DAYS"] ?? "4");
+
+// Write-layer social ticks (0092/0094). Shelf react: daily, companions react to Raziel's
+// fixations. Commons reply: a few times a day, companions may answer his /log notes (sparse).
+export const SHELF_CRON = process.env["SHELF_CRON"] ?? "30 10 * * *";
+export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 */6 * * *";
 
 // Unified Guardian (0073) -- daily 8AM tick (after the night pipeline, before the
 // 9AM forage). Detection runs server-side in Halseth; this is just the trigger.

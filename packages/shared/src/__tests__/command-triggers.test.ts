@@ -69,6 +69,18 @@ describe("buildCommandTriggers", () => {
     expect("cy: log").toMatch(cypher.guard);
   });
 
+  test("into captures the shelf arg across aliases (0094)", () => {
+    expect("cy: into Severance".match(cypher.into)?.[1]).toBe("Severance");
+    expect("dre into: show: The Bear".match(drevan.into)?.[1]).toBe("show: The Bear");
+    expect("gaia: into list".match(gaia.into)?.[1]).toBe("list");
+    expect("cy: into drop Severance".match(cypher.into)?.[1]).toBe("drop Severance");
+  });
+
+  test("bare into (no arg) hits the guard, not the trigger", () => {
+    expect("cy: into").not.toMatch(cypher.into);
+    expect("cy: into").toMatch(cypher.guard);
+  });
+
   test("cypher and gaia triggers unchanged", () => {
     expect("cy: listen https://x.test/t").toMatch(cypher.listen);
     expect("cypher: club vote dune").toMatch(cypher.club);

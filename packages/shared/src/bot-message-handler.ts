@@ -43,6 +43,7 @@ import {
   commandUsage, COMMAND_PREFIX, listenCommandTarget,
   handleClubCommand,
   handleLogCommand,
+  handleIntoCommand,
   handleToolSearch, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
@@ -144,6 +145,7 @@ export interface MessageHandlerDeps {
   IMPS_TRIGGER?: RegExp;
   HEX_TRIGGER?: RegExp;
   LOG_TRIGGER?: RegExp;
+  INTO_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -167,7 +169,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -408,6 +410,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (logMatch) {
         const reply = await handleLogCommand(logMatch[1]!)
           .catch(err => `log command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await (message.channel as TextChannel).send(reply);
+        return;
+      }
+    }
+
+    // Owner shelf command: <prefix>: into <thing> | into list | into drop <frag> (0094).
+    // Deterministic Halseth write + literal ack. A bare "into" falls to the guard -> usage.
+    if (attribution.isOwner && INTO_TRIGGER) {
+      const intoMatch = effectiveContent.match(INTO_TRIGGER);
+      if (intoMatch) {
+        const reply = await handleIntoCommand(intoMatch[1]!)
+          .catch(err => `into command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
       }

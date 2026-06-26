@@ -780,11 +780,70 @@ export async function getRecentRuns(companionId: string, limit = 5): Promise<Run
 
 export interface ClubRound {
   id: string;
-  status: "gathering" | "voting" | "active" | "closed";
+  status: "gathering" | "voting" | "active" | "discussing" | "closed";
   winning_recommendation_id: string | null;
   opened_at: string;
   activated_at: string | null;
+  discussing_at: string | null;
   closed_at: string | null;
+}
+
+export interface CommonsPost {
+  id: string;
+  author: string;
+  context: string;
+  body: string;
+  reply_to: string | null;
+  created_at: string;
+}
+
+/** Posts in one context (the write layer, 0092). Used by the club grace check + reply step. */
+export async function getCommonsPosts(context: string, limit = 30): Promise<CommonsPost[]> {
+  try {
+    const r = await hFetch(`/mind/commons?context=${encodeURIComponent(context)}&limit=${limit}`) as { posts: CommonsPost[] };
+    return r.posts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Drop a post into the write layer (companion reply, club residue, etc.). Returns id or null. */
+export async function postCommonsPost(author: string, context: string, body: string, replyTo?: string | null): Promise<string | null> {
+  try {
+    const r = await hFetch("/mind/commons", "POST", { author, context, body, reply_to: replyTo ?? null }) as { id?: string };
+    return r.id ?? null;
+  } catch (e) {
+    console.warn(`[commons] post failed (${author}/${context}):`, e);
+    return null;
+  }
+}
+
+/** Recent posts across ALL contexts (for the reply step to find unanswered Raziel notes). */
+export async function getCommonsFeed(limit = 20): Promise<CommonsPost[]> {
+  try {
+    const r = await hFetch(`/mind/commons/feed?limit=${limit}`) as { posts: CommonsPost[] };
+    return r.posts ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export interface ObsessionItem {
+  id: string;
+  title: string;
+  kind: string;
+  note: string | null;
+  status: string;
+}
+
+/** Raziel's shelf items (0094). The triad reacts to active ones via commons (shelf:<id>). */
+export async function getObsessions(status = "active"): Promise<ObsessionItem[]> {
+  try {
+    const r = await hFetch(`/mind/shelf?status=${encodeURIComponent(status)}`) as { items: ObsessionItem[] };
+    return r.items ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export interface ClubRecommendation {

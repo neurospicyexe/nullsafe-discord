@@ -19,20 +19,23 @@ import { prompt } from "./deepseek.js";
 import { loadIdentityRemote } from "./identity-loader.js";
 import {
   getClubCurrent, getLatestClubRound, openClubRound, postClubRecommendation,
-  postClubVoteWrite, patchClubRoundStatus, postClubDiscussion,
+  postClubVoteWrite, patchClubRoundStatus, postClubDiscussion, getCommonsPosts,
   getRecentMediaExperiences, getForageFindsFor,
   type ClubRound, type ClubRecommendation, type ClubVote,
 } from "./halseth-client.js";
 import {
   COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS,
-  CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS,
+  CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS, CLUB_DISCUSS_DAYS,
 } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 const DAY_MS = 24 * 3600 * 1000;
 const REOPEN_AFTER_CLOSE_DAYS = 1;
+// Grace (Phase 2): don't seal the discussion while Raziel is actively posting in it, but
+// cap the extension so it can never hang -- discussing_at + discussDays + this many days.
+const DISCUSS_GRACE_CAP_DAYS = 3;
 
-export type PhaseAction = "open" | "vote" | "discuss" | "wait";
+export type PhaseAction = "open" | "vote" | "discuss" | "seal" | "wait";
 
 /** Decide what this tick should do, from the latest round (any status). */
 export function decidePhaseAction(
@@ -40,6 +43,7 @@ export function decidePhaseAction(
   now: Date,
   gatherDays: number,
   activeDays: number,
+  discussDays: number,
 ): PhaseAction {
   if (!round) return "open";
   const age = (stamp: string | null): number =>
@@ -53,10 +57,34 @@ export function decidePhaseAction(
       // A previous tick moved to voting but died before the tally -- resume.
       return "vote";
     case "active":
+      // Winner is set; the triad has had the active days to experience it. Move into a
+      // STANDING discussing phase (companions post residue) rather than closing in one tick.
       return age(round.activated_at) >= activeDays ? "discuss" : "wait";
+    case "discussing":
+      return age(round.discussing_at) >= discussDays ? "seal" : "wait";
     default:
       return "wait";
   }
+}
+
+/**
+ * Whether a discussing round may seal now. The timer says yes; the grace rule defers a seal
+ * while Raziel is mid-conversation (a club:<id> commons post in the last 24h), but never past
+ * the hard cap so a round can't hang. Pure -- exported for tests.
+ */
+export function maySealDiscussion(
+  round: ClubRound,
+  lastRazielPostAt: string | null,
+  now: Date,
+  discussDays: number,
+): boolean {
+  if (!round.discussing_at) return true;
+  const start = new Date(round.discussing_at).getTime();
+  const ageDays = (now.getTime() - start) / DAY_MS;
+  if (ageDays >= discussDays + DISCUSS_GRACE_CAP_DAYS) return true; // hard cap: always seal
+  if (!lastRazielPostAt) return true;                              // nobody's talking -> seal on timer
+  const sincePostHrs = (now.getTime() - new Date(lastRazielPostAt).getTime()) / 3600_000;
+  return sincePostHrs >= 24;                                       // defer only while he's active
 }
 
 /** Most votes wins; tie -> earliest-created recommendation; no votes -> earliest rec. */
@@ -180,7 +208,7 @@ async function companionDiscuss(speaker: CompanionId, roundId: string, winner: C
 
 export async function runClubTick(): Promise<void> {
   const latest = await getLatestClubRound();
-  const action = decidePhaseAction(latest, new Date(), CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS);
+  const action = decidePhaseAction(latest, new Date(), CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS, CLUB_DISCUSS_DAYS);
   console.log(`[club] latest round: ${latest ? `${latest.id.slice(0, 8)} (${latest.status})` : "none"} -> ${action}`);
 
   if (action === "wait") return;
@@ -211,6 +239,7 @@ export async function runClubTick(): Promise<void> {
       // A round with zero candidates can't go anywhere useful; close it out.
       console.warn("[club] no candidates gathered -- advancing round to closed");
       await patchClubRoundStatus(current.round.id, "active", null);
+      await patchClubRoundStatus(current.round.id, "discussing");
       await patchClubRoundStatus(current.round.id, "closed");
       return;
     }
@@ -230,20 +259,42 @@ export async function runClubTick(): Promise<void> {
     return;
   }
 
-  // action === "discuss"
-  const current = await getClubCurrent();
-  if (!current.round) {
-    console.warn("[club] discuss action but no current round -- skipping");
+  if (action === "discuss") {
+    const current = await getClubCurrent();
+    if (!current.round) {
+      console.warn("[club] discuss action but no current round -- skipping");
+      return;
+    }
+    const winner = current.recommendations.find(r => r.id === current.round!.winning_recommendation_id) ?? null;
+    for (const speaker of COMPANIONS) {
+      try {
+        await companionDiscuss(speaker, current.round.id, winner);
+      } catch (err) {
+        console.error(`[club] ${speaker} discussion failed:`, err);
+      }
+    }
+    // Stand in the discussing phase -- do NOT close. Raziel reads the winner + the triad's
+    // residue and joins (cy: club say / Hearth /club) across the discuss window; a later
+    // tick seals it. This is the fix for "voting happens and then it's the next voting".
+    await patchClubRoundStatus(current.round.id, "discussing");
+    console.log(`[club] round ${current.round.id.slice(0, 8)} -> discussing (winner: ${winner ? winner.title : "none"})`);
     return;
   }
-  const winner = current.recommendations.find(r => r.id === current.round!.winning_recommendation_id) ?? null;
-  for (const speaker of COMPANIONS) {
-    try {
-      await companionDiscuss(speaker, current.round.id, winner);
-    } catch (err) {
-      console.error(`[club] ${speaker} discussion failed:`, err);
-    }
+
+  // action === "seal" -- close a discussing round, honoring the grace rule.
+  if (!latest) return;
+  const lastRazielPostAt = await getLatestRazielClubPostAt(latest.id).catch(() => null);
+  if (!maySealDiscussion(latest, lastRazielPostAt, new Date(), CLUB_DISCUSS_DAYS)) {
+    console.log(`[club] discussion held open -- Raziel posted within 24h (round ${latest.id.slice(0, 8)})`);
+    return;
   }
-  await patchClubRoundStatus(current.round.id, "closed");
-  console.log(`[club] round ${current.round.id.slice(0, 8)} closed`);
+  await patchClubRoundStatus(latest.id, "closed");
+  console.log(`[club] round ${latest.id.slice(0, 8)} closed -- discussion sealed`);
+}
+
+/** Latest Raziel post in a round's discussion thread (commons, context='club:<id>'), or null. */
+async function getLatestRazielClubPostAt(roundId: string): Promise<string | null> {
+  const posts = await getCommonsPosts(`club:${roundId}`, 30).catch(() => []);
+  const mine = posts.filter(p => p.author === "raziel").map(p => p.created_at).sort();
+  return mine.length > 0 ? mine[mine.length - 1]! : null;
 }

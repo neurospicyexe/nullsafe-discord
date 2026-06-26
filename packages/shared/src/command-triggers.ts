@@ -24,6 +24,7 @@ export interface CommandTriggers {
   imps: RegExp;
   hex: RegExp;
   log: RegExp;
+  into: RegExp;
   guard: RegExp;
 }
 
@@ -50,7 +51,10 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Hearth write layer (0092). Form: "<prefix>: log <thought>". Arg required so a bare
     // "log" misses -> guard -> usage, never inference. Drops a 'global' commons post.
     log: new RegExp(`^(?:${alt})\\b[,:]?\\s*log\\b[,:]?\\s+([\\s\\S]+)`, "is"),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log)\\b`, "i"),
+    // Obsession shelf (0094). "<prefix>: into <thing>" / "into list" / "into drop <frag>".
+    // Arg required so a bare "into" misses -> guard -> usage.
+    into: new RegExp(`^(?:${alt})\\b[,:]?\\s*into\\b[,:]?\\s+([\\s\\S]+)`, "is"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
   };
 }
 
@@ -112,5 +116,6 @@ export function commandUsage(companionId: string): string {
     `\`${p}: hex on\` / \`${p}: hex off\` -- toggle mischief opt-in globally`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
     `\`${p}: log <thought>\` (drop a note in your Hearth log -- no reply needed)`,
+    `\`${p}: into <thing>\` (add to your shelf) -- also \`into list\` / \`into drop <name>\``,
   ].join("\n");
 }
