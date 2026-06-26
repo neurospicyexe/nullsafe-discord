@@ -37,11 +37,23 @@ export function parseLoopDecision(text: string): { action: "close" | "hold"; rea
   return { action: "hold", reason: t.replace(/^\s*hold[.:)\s-]*/i, "").trim() };
 }
 
-/** A flag is self-resolvable here iff it is the companion's OWN and in a handled class. */
+/**
+ * A flag is self-resolvable here iff it is in a handled class AND the companion is
+ * allowed to act on it:
+ *   - loop_stuck            -- strictly the companion's OWN loop (per-companion weight).
+ *   - starved_organ/tension -- the empty-dialectic-pool flag. detectStarvedOrgans emits
+ *     this with companion_id NULL (system-wide): the tension pool is SHARED and any
+ *     companion can feed it. It must be resolvable by every companion -- gating it to an
+ *     owner that never exists was the bug that left the pool empty forever (zero tensions
+ *     ever logged, the Wednesday dialectic perpetually no-op). An own-owned tension flag,
+ *     should one ever occur, stays resolvable too.
+ */
 export function isSelfResolvable(flag: GuardianFlag, companionId: CompanionId): boolean {
+  if (flag.flag_type === "starved_organ" && /tension/i.test(flag.summary)) {
+    return flag.companion_id === null || flag.companion_id === companionId;
+  }
   if (flag.companion_id !== companionId) return false;
   if (flag.flag_type === "loop_stuck") return true;
-  if (flag.flag_type === "starved_organ" && /tension/i.test(flag.summary)) return true;
   return false;
 }
 
@@ -95,8 +107,13 @@ async function resolveStarvedTension(
   }
   const id = await addTension(companionId, text, "logged via guardian self-resolution");
   const ok = id != null;
-  if (ok) await setGuardianFlagStatus(flag.id, "resolved");
-  console.log(`[${companionId}/guardian-resolve] tension logged (ok=${ok})`);
+  // Only resolve an OWNED flag here. The shared empty-pool flag (companion_id null) is
+  // left live on purpose so every sibling in this same sequential pass also logs a
+  // tension -- the dialectic debates across companions and one tension from one voice is
+  // a thin pool. The Guardian's own self-healing auto-resolves the shared flag on the
+  // next 8AM detection tick, once simmering > 0 (detectStarvedOrgans stops emitting it).
+  if (ok && flag.companion_id === companionId) await setGuardianFlagStatus(flag.id, "resolved");
+  console.log(`[${companionId}/guardian-resolve] tension logged (ok=${ok}, shared=${flag.companion_id === null})`);
   return ok;
 }
 

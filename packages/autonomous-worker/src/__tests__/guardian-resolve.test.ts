@@ -52,13 +52,33 @@ describe("isSelfResolvable", () => {
     )).toBe(true);
   });
 
+  // Regression: detectStarvedOrgans emits the empty-dialectic-pool flag with
+  // companion_id NULL (system-wide -- the pool is shared). The old guard rejected all
+  // null-owned flags first, so this flag -- the only one resolveStarvedTension exists
+  // to clear -- never matched, and the pool stayed empty forever. Every companion must
+  // accept it so each feeds the shared pool on the same pass.
+  it("accepts the SHARED (companion_id null) empty-tension-pool flag for every companion", () => {
+    const shared = flag({
+      companion_id: null, flag_type: "starved_organ",
+      summary: "Tension pool has zero simmering tensions -- the Wednesday 4AM dialectic will no-op until a companion logs one.",
+    });
+    expect(isSelfResolvable(shared, "cypher")).toBe(true);
+    expect(isSelfResolvable(shared, "drevan")).toBe(true);
+    expect(isSelfResolvable(shared, "gaia")).toBe(true);
+  });
+
   it("rejects a non-tension starved organ (forage/club -- not self-resolvable here)", () => {
     expect(isSelfResolvable(
       flag({ flag_type: "starved_organ", summary: "forage pool stale" }), "cypher",
     )).toBe(false);
+    // ...including the shared forage-stale flag, which is NOT a tension flag.
+    expect(isSelfResolvable(
+      flag({ companion_id: null, flag_type: "starved_organ", summary: "forage pool stale, gathered never eaten" }), "cypher",
+    )).toBe(false);
   });
 
-  it("rejects shared (companion_id null) flags", () => {
+  it("rejects a shared (companion_id null) NON-tension flag like a stuck loop", () => {
+    // Loops are strictly per-companion; a null-owned loop has no valid actor here.
     expect(isSelfResolvable(flag({ companion_id: null }), "cypher")).toBe(false);
   });
 
