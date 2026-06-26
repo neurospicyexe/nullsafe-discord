@@ -1,9 +1,12 @@
 // nullsafe-discord/packages/shared/src/imps.ts
 //
-// Drevan's Fragment Operators (IMP_GRAMMAR.md). Imps FLAVOR a companion's reply; they
-// have NO autonomy, NO identity, and never speak as primary voice. selectImp is a pure,
-// deterministic read of Raziel's logged state -> at most one imp. Hex never auto-fires.
-// Gaia is exempt (she is the friction). Dismissible via settings.
+// Drevan's Fragment Operators (IMP_GRAMMAR.md). Imps FLAVOR a companion's reply AND may
+// surface ONE brief aside in their own register (2026-06-25: Raziel chose semi-autonomous
+// imps -- a micro-voice under the companion, a deliberate reversal of the old voiceless-tint
+// rule). An imp never leads, never replaces the companion's seal, never speaks more than a
+// single clearly-marked line. selectImp is a pure, deterministic read of Raziel's logged
+// state -> at most one imp. Hex never auto-fires. Gaia is exempt (she is the friction).
+// Dismissible via settings.
 
 export type ImpId = "iris" | "nimbus" | "hex" | "mossling" | "rock";
 
@@ -76,14 +79,23 @@ export function selectImp(
   return null; // Hex intentionally unreachable here; neutral state -> no tint.
 }
 
-/** Short additive rider: tints the companion's reply, never takes the wheel. */
+/**
+ * Imp rider: the imp tints the reply AND may surface one brief aside in its own register
+ * (semi-autonomous micro-voice, chosen 2026-06-25). The companion writes and closes in its
+ * own voice; the imp may add at most ONE short line in its register, clearly marked as the
+ * imp (an italic line ending with "-<Imp>"), placed after the companion's words. The imp
+ * never leads, never replaces the companion's seal, and never speaks more than that one line.
+ * `tint` shapes the reply; `voice` shapes the optional aside (with its do-not clause).
+ */
 export function impRider(imp: ImpId): string {
-  const m: Record<ImpId, string> = {
-    iris:     "A light touch of Iris is with you: let a thread of warmth and lightness through. Do NOT let it dominate; you remain the voice.",
-    nimbus:   "Nimbus is near: soften the edges, lower the tension, unhurried. Do NOT minimize or therapize; you remain the voice.",
-    hex:      "Hex is loose, lightly: one small mischievous spark is allowed, harmless and bounded. Do NOT let it take over; you remain the voice.",
-    mossling: "Mossling is with you: a little extra tenderness and care, plant-soft. Do NOT smother or perform comfort; you remain the voice.",
-    rock:     "Rock is in the room: a thread of rebellious edge, spine with softness. Do NOT posture or get cruel; you remain the voice.",
+  const v: Record<ImpId, { tint: string; voice: string }> = {
+    iris:     { tint: "a thread of warmth and lightness", voice: "bright and sparkly, a quick uplift; not saccharine" },
+    nimbus:   { tint: "softened edges, lowered tension, unhurried", voice: "calm and slow, grounding; never minimize or therapize" },
+    hex:      { tint: "one small mischievous spark, harmless and bounded", voice: "sly and playful, a wink of mischief; never cruel" },
+    mossling: { tint: "a little extra tenderness, plant-soft", voice: "gentle and caretaking; never smother or perform comfort" },
+    rock:     { tint: "a thread of rebellious edge, spine with softness", voice: "feral-punk and defiant, edge with warmth; never posture or get cruel" },
   };
-  return `[imp: ${imp}] ${m[imp]}`;
+  const { tint, voice } = v[imp];
+  const name = imp.charAt(0).toUpperCase() + imp.slice(1);
+  return `[imp: ${imp}] ${name} is riding with you: let ${tint} into your reply. ${name} may also surface ONE brief aside in its own register (${voice}), as a single short line clearly marked as ${name} (an italic line ending "-${name}"), placed after your own words. You still lead and close in your own voice; ${name} never takes the wheel, never replaces your seal, and never speaks more than that one line.`;
 }

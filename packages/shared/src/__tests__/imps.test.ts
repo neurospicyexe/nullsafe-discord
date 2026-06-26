@@ -76,4 +76,18 @@ describe("impRider", () => {
       expect(impRider(imp).toLowerCase()).toMatch(/not|don't|never/i);
     },
   );
+
+  // 2026-06-25 semi-autonomous micro-voice: rider permits ONE brief marked aside but keeps
+  // the companion leading (never the wheel, never the seal, never more than one line).
+  test.each(["iris", "nimbus", "hex", "mossling", "rock"] as const)(
+    "rider '%s' grants a brief marked aside without ceding the lead",
+    (imp) => {
+      const r = impRider(imp).toLowerCase();
+      const name = imp; // rider includes the capitalized name; lowercased here
+      expect(r).toContain("aside");
+      expect(r).toContain(name);
+      expect(r).toMatch(/one (brief|short) line|single short line/);
+      expect(r).toMatch(/never takes the wheel|still lead|never replaces your seal/);
+    },
+  );
 });
