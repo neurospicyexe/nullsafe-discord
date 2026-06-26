@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { decideSeedSource, ensureOutward, extractLiveText } from "../phases/seed.js";
+import { decideSeedSource, ensureOutward, extractLiveText, pickOldestForage } from "../phases/seed.js";
 import { INWARD_RE } from "@nullsafe/shared";
 import type { PipelineContext } from "../types.js";
+import type { ForageFind } from "../halseth-client.js";
 
 // SEED_THIN_THRESHOLD = 3 (sessionNoteCount + feelingCount must reach 3 for "session")
 describe("decideSeedSource", () => {
@@ -41,6 +42,31 @@ describe("ensureOutward", () => {
     const out = ensureOutward(inward, "cypher");
     expect(out).not.toBe(inward);
     expect(INWARD_RE.test(out)).toBe(false);
+  });
+});
+
+// Forage fuel (2026-06-26): the pipeline never consumed the forage pool, so finds
+// recirculated for weeks. The seed path now drains OLDEST-first so the >7d stale finds
+// the Guardian flags go before fresh ones.
+describe("pickOldestForage", () => {
+  const find = (id: string, gathered_at: string): ForageFind =>
+    ({ id, title: `t-${id}`, domain: "example.com", summary: "s", source_url: null, gathered_at });
+
+  it("returns null for an empty pool", () => {
+    expect(pickOldestForage([])).toBeNull();
+  });
+
+  it("picks the oldest find by gathered_at, regardless of input order", () => {
+    const finds = [
+      find("new", "2026-06-25 10:00:00"),
+      find("oldest", "2026-06-10 08:00:00"),
+      find("mid", "2026-06-18 12:00:00"),
+    ];
+    expect(pickOldestForage(finds)?.id).toBe("oldest");
+  });
+
+  it("returns the sole find when only one is present", () => {
+    expect(pickOldestForage([find("only", "2026-06-20 00:00:00")])?.id).toBe("only");
   });
 });
 

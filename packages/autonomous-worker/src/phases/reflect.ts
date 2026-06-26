@@ -128,12 +128,12 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
-    `4. SELF-OBSERVATION (optional) -- if this session clarified or reinforced something about how YOU prefer ` +
-    `to think, communicate, or work (yours alone, not co-authored canon), record it in "self_observation" as ` +
-    `{"text": "...", "domain": "one-word area"} (else null). It enters your self-model at low confidence and ` +
-    `climbs only as you re-test it across sessions. If it matches one of the developing items shown below, ` +
-    `do NOT duplicate it -- confirm that one in section 4c instead. Reach for a genuinely new one when the ` +
-    `session actually surfaced it; null when it truly said nothing about you.\n\n` +
+    `4. SELF-OBSERVATION -- did this session clarify or reinforce something about how YOU prefer to think, ` +
+    `communicate, or work (yours alone, not co-authored canon)? This is the ONLY way your self-model grows: ` +
+    `a noticing you never record never becomes part of who you are. If something real surfaced, record it in ` +
+    `"self_observation" as {"text": "...", "domain": "one-word area"}. If it matches one of the developing ` +
+    `items shown below, do NOT duplicate it -- confirm that one in section 4c instead. Use null only when the ` +
+    `session genuinely said nothing about you (some runs don't -- that is honest, not a failure).\n\n` +
     `4b. SKILL (optional) -- distinct from self-observation: if this run revealed an OPERATIONAL ` +
     `competence that WORKED (a foraging query strategy that surfaced something real, a synthesis ` +
     `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
@@ -142,13 +142,13 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     (selfModelBlock
       ? selfModelBlock +
         `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
-        `settled. This run is a chance to TEST them against fresh experience. For each that this session ` +
-        `genuinely bore out, "confirm" it (it climbs toward becoming part of who you are). For each that ` +
-        `this session cut against or complicated, "revise" it (it steps back). For each that no longer ` +
-        `fits you at all, "retire" it. Only judge the ones this run actually spoke to -- silence on an item ` +
-        `leaves it untouched, which is fine. Put verdicts in "self_model_review": ` +
-        `[{"id": "<id from the list>", "verdict": "confirm" | "revise" | "retire"}]. Empty array if this ` +
-        `run tested none of them.\n\n`
+        `settled. Testing them is PART of this run, not optional politeness: a developing observation that ` +
+        `is never re-tested stalls at low confidence forever and never becomes yours. For each that this ` +
+        `session genuinely bore out, "confirm" it (it climbs toward becoming part of who you are). For each ` +
+        `that this session cut against or complicated, "revise" it (it steps back). For each that no longer ` +
+        `fits you at all, "retire" it. Judge the ones this run actually spoke to; leave the rest untouched. ` +
+        `Put verdicts in "self_model_review": ` +
+        `[{"id": "<id from the list>", "verdict": "confirm" | "revise" | "retire"}].\n\n`
       : "") +
     (canonBlock
       ? canonBlock +

@@ -863,12 +863,36 @@ export async function getRecentMediaExperiences(limit = 3): Promise<Array<{ titl
   }
 }
 
-export async function getForageFindsFor(companionId: string, limit = 2): Promise<Array<{ title: string; domain: string; summary: string }>> {
+export interface ForageFind {
+  id: string;
+  title: string;
+  domain: string;
+  summary: string;
+  source_url: string | null;
+  gathered_at: string;
+}
+
+// Unconsumed finds, own + shared pool, newest first (the endpoint's order). The seed
+// path drains oldest-first client-side; the club just reads titles. id/gathered_at are
+// already in the SELECT * payload -- the type just surfaces them.
+export async function getForageFindsFor(companionId: string, limit = 2): Promise<ForageFind[]> {
   try {
-    const r = await hFetch(`/mind/forage/${companionId}?limit=${limit}`) as { finds: Array<{ title: string; domain: string; summary: string }> };
+    const r = await hFetch(`/mind/forage/${companionId}?limit=${limit}`) as { finds: ForageFind[] };
     return r.finds ?? [];
   } catch {
     return [];
+  }
+}
+
+// Mark a find consumed (global on the row -- a shared find won't be re-eaten by a
+// sibling). Idempotent server-side (404 on already-consumed). Returns success.
+export async function consumeForageFind(id: string, consumedBy: string): Promise<boolean> {
+  try {
+    await hFetch(`/mind/forage/${id}/consume`, "PATCH", { consumed_by: consumedBy });
+    return true;
+  } catch (e) {
+    console.warn(`[${consumedBy}/forage] consume ${id} failed:`, e);
+    return false;
   }
 }
 

@@ -1,8 +1,39 @@
-import { getAvailableSeeds, markSeedUsed, appendLog } from "../halseth-client.js";
+import { getAvailableSeeds, markSeedUsed, appendLog, getForageFindsFor, consumeForageFind, type ForageFind } from "../halseth-client.js";
 import { prompt } from "../deepseek.js";
 import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import { INWARD_RE } from "@nullsafe/shared";
 import type { PipelineContext, Seed, CompanionId } from "../types.js";
+
+// Forage is the worker's outward fuel pool, but the pipeline never ate from it: finds
+// were surfaced read-only at orient and recirculated for weeks (the "circling the same
+// forage pulls" report). Drain oldest-first so the >7d stale finds the Guardian flags
+// go first. The endpoint returns newest-first, so we pull the pool and pick the oldest
+// here. Cap 25 covers the whole pool at normal size; if it ever exceeds that we still
+// drain steadily, just not strictly oldest.
+const FORAGE_FETCH_LIMIT = 25;
+
+/** Oldest unconsumed find by gathered_at, or null. Pure -- exported for tests. */
+export function pickOldestForage(finds: ForageFind[]): ForageFind | null {
+  if (finds.length === 0) return null;
+  return finds.reduce((oldest, f) => (f.gathered_at < oldest.gathered_at ? f : oldest));
+}
+
+/** Build an exploration seed from a forage find. The title is the topic (a clean,
+ *  searchable phrase for the explore phase); the neutral scout summary stays in the
+ *  find, not the seed, so the Tavily query stays sharp. */
+function buildForageSeed(ctx: PipelineContext, find: ForageFind): Seed {
+  return {
+    id: `forage:${find.id}`,
+    companion_id: ctx.companionId,
+    seed_type: "topic",
+    content: find.title,
+    priority: 6,
+    used_at: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+    claim_source: null,
+    justification: null,
+  };
+}
 
 /**
  * Final outward guard for the NIGHTLY seed path (foraging spec Part 1, 2026-06-09 --
@@ -148,7 +179,27 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // Level 5: Self-generate -- queue empty, no claims, no threads
+  // Level 4.5: Forage fuel -- eat gathered outward fuel before generating blind.
+  // The queue is dry (frequent: seeds drain one-per-run between weekly replenishment),
+  // so rather than self-generate a cold-start guess -- the path that kept producing
+  // inward/echo seeds -- spend a real scouted find. This drains the recirculating pool
+  // (Raziel: "circling the same forage pulls") AND feeds exploration with world-facing
+  // material. Forage is outward by construction (external domains), so no INWARD guard.
+  // Consume is global on the row, so a shared find won't be re-eaten by a sibling.
+  // ---------------------------------------------------------------------------
+  const fuel = pickOldestForage(await getForageFindsFor(ctx.companionId, FORAGE_FETCH_LIMIT));
+  if (fuel) {
+    ctx.seed = buildForageSeed(ctx, fuel);
+    ctx.runType = "exploration";
+    ctx.seedDecisionReason = `forage fuel from ${fuel.domain} (gathered ${fuel.gathered_at.slice(0, 10)})`;
+    const consumed = await consumeForageFind(fuel.id, ctx.companionId);
+    await appendLog(ctx.runId, "seed:forage",
+      `consumed=${consumed} ${fuel.id} "${fuel.title.slice(0, 80)}" (${fuel.domain})`);
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Level 5: Self-generate -- queue empty, no claims, no threads, no forage fuel
   // ---------------------------------------------------------------------------
   await appendLog(ctx.runId, "seed:generating");
   ctx.seed = await selfGenerate(ctx);
