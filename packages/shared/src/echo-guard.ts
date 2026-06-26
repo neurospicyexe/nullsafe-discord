@@ -38,7 +38,7 @@ const WORD_RE = /[a-z']+/g;
 export const MIN_REPLY_WORDS = 8; // below this, too short to judge -- never gate
 
 /** Default gate threshold; env ECHO_GUARD_THRESHOLD overrides (bots), SWARM_ECHO_THRESHOLD (Brain). */
-export const ECHO_DEFAULT_THRESHOLD = 0.45;
+export const ECHO_DEFAULT_THRESHOLD = 0.38;
 
 export function echoThreshold(): number {
   const raw = parseFloat(process.env["ECHO_GUARD_THRESHOLD"] ?? "");
@@ -95,7 +95,7 @@ export function echoScore(reply: string, priorTexts: Iterable<string>): number {
  * of the turns examined. Top-k by turn count -- the words an exhausted theme
  * keeps orbiting. Empty array = no stuck motif.
  */
-export function detectMotif(texts: string[], minTurns = 4, topK = 3): string[] {
+export function detectMotif(texts: string[], minTurns = 3, topK = 3): string[] {
   if (texts.length < minTurns) return [];
   const turnCounts = new Map<string, number>();
   for (const t of texts) {
@@ -103,7 +103,7 @@ export function detectMotif(texts: string[], minTurns = 4, topK = 3): string[] {
       turnCounts.set(w, (turnCounts.get(w) ?? 0) + 1);
     }
   }
-  const floor = Math.max(minTurns, Math.floor(texts.length * 0.6));
+  const floor = Math.max(minTurns, Math.floor(texts.length * 0.5));
   const motif = [...turnCounts.entries()].filter(([, c]) => c >= floor);
   motif.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return motif.slice(0, topK).map(([w]) => w);
