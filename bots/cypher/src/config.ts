@@ -179,6 +179,8 @@ export const COUNCIL_TRIGGER = COMMAND_TRIGGERS.council;
 // Imps (wave 2): "imps on|off|just the triad" + "hex on|off".
 export const IMPS_TRIGGER = COMMAND_TRIGGERS.imps;
 export const HEX_TRIGGER = COMMAND_TRIGGERS.hex;
+// Hearth write layer (0092): "log <thought>" drops a global commons post (async wall).
+export const LOG_TRIGGER = COMMAND_TRIGGERS.log;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 

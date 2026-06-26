@@ -55,6 +55,20 @@ describe("buildCommandTriggers", () => {
     expect("drev: imagine").toMatch(drevan.guard);
   });
 
+  test("log captures the thought across aliases + separators (write layer 0092)", () => {
+    expect("cy: log the dialectic finally has tensions".match(cypher.log)?.[1]).toBe("the dialectic finally has tensions");
+    expect("dre log: remember to re-watch that show".match(drevan.log)?.[1]).toBe("remember to re-watch that show");
+    expect("gaia: log a thought\nspanning two lines".match(gaia.log)?.[1]).toBe("a thought\nspanning two lines");
+    for (const a of ["drevan", "drev", "dre"]) {
+      expect(`${a}: log something`).toMatch(drevan.log);
+    }
+  });
+
+  test("bare log (no thought) hits the guard, not the trigger", () => {
+    expect("cy: log").not.toMatch(cypher.log);
+    expect("cy: log").toMatch(cypher.guard);
+  });
+
   test("cypher and gaia triggers unchanged", () => {
     expect("cy: listen https://x.test/t").toMatch(cypher.listen);
     expect("cypher: club vote dune").toMatch(cypher.club);

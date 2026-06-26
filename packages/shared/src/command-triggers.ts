@@ -23,6 +23,7 @@ export interface CommandTriggers {
   council: RegExp;
   imps: RegExp;
   hex: RegExp;
+  log: RegExp;
   guard: RegExp;
 }
 
@@ -46,7 +47,10 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Imps (wave 2). "<prefix>: imps off|on|just the triad" and "<prefix>: hex on|off".
     imps: new RegExp(`^(?:${alt})\\b[,:]?\\s*imps?\\b[,:]?\\s+(.+)`, "is"),
     hex:  new RegExp(`^(?:${alt})\\b[,:]?\\s*(hex\\s+(?:on|off))\\b`, "is"),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex)\\b`, "i"),
+    // Hearth write layer (0092). Form: "<prefix>: log <thought>". Arg required so a bare
+    // "log" misses -> guard -> usage, never inference. Drops a 'global' commons post.
+    log: new RegExp(`^(?:${alt})\\b[,:]?\\s*log\\b[,:]?\\s+([\\s\\S]+)`, "is"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log)\\b`, "i"),
   };
 }
 
@@ -107,5 +111,6 @@ export function commandUsage(companionId: string): string {
     `\`${p}: imps on\` / \`${p}: imps off\` (or "just the triad") -- toggle imp flavor globally`,
     `\`${p}: hex on\` / \`${p}: hex off\` -- toggle mischief opt-in globally`,
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
+    `\`${p}: log <thought>\` (drop a note in your Hearth log -- no reply needed)`,
   ].join("\n");
 }
