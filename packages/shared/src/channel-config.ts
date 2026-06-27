@@ -136,6 +136,35 @@ export function isDirectAddress(content: string, companionId: CompanionId): bool
   return false;
 }
 
+// Genuine VOCATIVE address to one companion -- the name (or alias) used to CALL them,
+// not a narrative mention. Used ONLY on the companion-to-companion path, where the loose
+// `extractAddress` (bare \bname\b) turned every name-drop into a cascade. Vocative =
+// the name is the whole message, or is followed by address punctuation (","/":"), or
+// trails an address comma at the end ("..., gaia?").
+//   "Gaia, you held the perimeter" / "gaia:" / "cy" (alone) / "what now, gaia?" => true
+//   "Gaia hasn't spoken up yet" / "Gaia. You held..." / "I trust cypher" => false
+export function isVocativeAddress(content: string, companionId: CompanionId): boolean {
+  const lower = content.toLowerCase().trim();
+  const alias = COMPANION_ALIASES[companionId];
+  const names = alias ? [companionId, alias] : [companionId];
+  for (const name of names) {
+    if (lower === name) return true;                                   // sole content
+    if (new RegExp(`\\b${name}\\s*[,:]`).test(lower)) return true;     // "name," / "name :"
+    if (new RegExp(`[,:]\\s*${name}\\b[?.! ]*$`).test(lower)) return true; // "..., name?"
+  }
+  return false;
+}
+
+// Genuine VOCATIVE group call -- a group phrase used to address everyone, not a trigger
+// word buried in prose. Punctuation-required so a system/help message ("(or 'just the
+// triad')") or a narrative line ("the triad has been loud") does NOT summon all three.
+//   "you three, listen" / "triad:" / "okay everyone:" => true
+//   "(or 'just the triad')" / "the triad held" => false
+export function isVocativeGroupCall(content: string): boolean {
+  const lower = content.toLowerCase().trim();
+  return /\b(triad|all of you|you all|you three|everyone)\s*[,:]/.test(lower);
+}
+
 /**
  * Returns a random stagger delay (ms) before responding in inter_companion channels.
  * Returns 0 for other channel modes — no delay needed.
@@ -199,11 +228,15 @@ export function shouldRespond(
   // (no name address) do not trigger other companions -- that's what causes loops.
   if (sender.isCompanionBot) {
     if (!modes.includes("inter_companion")) return false;
-    const addr = extractAddress(content);
-    if (addr.type === "named") return addr.id === myId;
-    if (addr.type === "named_multi") return addr.ids.includes(myId);
-    if (addr.type === "group") return true;
-    return false; // ambient bot message -- no response
+    // Peer messages trigger a companion ONLY on a genuine VOCATIVE address -- a name or
+    // group phrase used to CALL someone ("Gaia, ..." / "you three:"), never a bare
+    // narrative mention ("Gaia hasn't spoken up yet") or a trigger word buried in a
+    // system/help message ("(or 'just the triad')"). The loose extractAddress used here
+    // before turned every name-drop and every command menu into a cascade -- the
+    // 2026-06-26 loops. Genuine vocative exchange is still allowed, and bounded by
+    // MAX_BOT_RESPONSES_PER_HUMAN + the pingpong cooldown above.
+    if (isVocativeGroupCall(content)) return true;
+    return isVocativeAddress(content, myId);
   }
 
   // From here: message is from a human.
