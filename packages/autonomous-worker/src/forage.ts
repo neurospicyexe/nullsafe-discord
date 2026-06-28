@@ -85,6 +85,18 @@ export async function runForage(): Promise<number> {
       console.error(`[${companionId}/forage] companion pass failed:`, e);
     }
   }
-  console.log(`[forage] pass complete: ${gathered} find(s) gathered`);
+  if (gathered === 0) {
+    // 0 finds across EVERY companion + domain is not normal variance: it almost always means
+    // the upstream search returned [] for all of them (TAVILY_API_KEY invalid, daily cap, or
+    // quota). search() degrades quietly by design, so without a loud signal here the failure
+    // is invisible until the Guardian's pool-staleness flag fires ~7 days later -- exactly how
+    // foraging silently died 2026-06-16 -> 06-28. Make it loud so the next one is caught same-day.
+    console.error(
+      "[forage] pass complete: 0 finds gathered across ALL companions -- probable upstream " +
+      "search failure (check TAVILY_API_KEY / Tavily daily cap / quota)",
+    );
+  } else {
+    console.log(`[forage] pass complete: ${gathered} find(s) gathered`);
+  }
   return gathered;
 }
