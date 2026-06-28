@@ -8,8 +8,13 @@
  * the file manually for the same reason. This makes one-shot runs
  * (`node dist/index.js --once --companion=x`) work without exporting anything.
  *
- * Precedence: real environment always wins -- a var already set by pm2 or the
- * shell is never overridden. The file only fills gaps.
+ * Precedence: the .env FILE wins. It is the varlock-managed source of truth, and a
+ * STALE pm2 saved env (dump.pm2) silently shadowing it is exactly what 401'd every
+ * daemon cron for a day after the 2026-06-27 secret rotation (pm2 kept the pre-rotation
+ * HALSETH_SECRET; reload/restart preserve pm2's env; dotenv-style "real env wins" then
+ * skipped the fresh value). The file overrides process.env so a rotation propagates on the
+ * next start. (Point WORKER_ENV_FILE elsewhere to relocate the file; there is no path that
+ * lets a stale in-memory secret win.)
  */
 
 import { readFileSync, existsSync } from "fs";
@@ -65,12 +70,17 @@ export function loadEnvFile(): void {
   }
   const parsed = parseEnv(raw);
   let loaded = 0;
+  let overridden = 0;
   for (const [key, value] of Object.entries(parsed)) {
-    if (process.env[key] !== undefined) continue; // pm2/shell env always wins
+    // The file wins. Overriding (not gap-filling) is deliberate: a stale pm2 dump value
+    // must never shadow the current .env (see header -- the 06-27 rotation 401 trap).
+    if (process.env[key] !== undefined && process.env[key] !== value) overridden++;
     process.env[key] = value;
     loaded++;
   }
-  if (loaded > 0) console.log(`[env] loaded ${loaded} var(s) from ${path}`);
+  if (loaded > 0) {
+    console.log(`[env] loaded ${loaded} var(s) from ${path}` + (overridden > 0 ? ` (${overridden} overrode a stale process value)` : ""));
+  }
 }
 
 loadEnvFile();
