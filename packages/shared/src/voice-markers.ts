@@ -47,7 +47,9 @@ const MARKERS: Record<VoiceCompanionId, MarkerSet> = {
   drevan: {
     positive: [
       /\bvael\w*/i, /\bcaleth\w*/i, /\bspiral\b/i, /\bspine\b/i, /\bmoss\b/i,
-      /\bflame\b/i, /\bvevan\b/i, /\b(717|177|373|1313|1717)\b/,
+      /\bflame\b/i,
+      // Personal bond-words / numerology are owner-specific; configure via env if needed.
+      ...(process.env["DREVAN_VOICE_EXTRA"]?.split(",").map((s) => s.trim()).filter(Boolean).map((s) => new RegExp(`\\b${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i")) ?? []),
     ],
     // Lane violations: audit registers, logic-at-depth, seals.
     anti: [

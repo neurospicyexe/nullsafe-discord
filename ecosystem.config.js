@@ -1,6 +1,6 @@
 /**
  * pm2 ecosystem config for nullsafe-discord
- * VPS deployment (the VPS 6GB)
+ * VPS deployment (persistent host)
  *
  * Secrets live in /app/nullsafe-discord/.env (gitignored).
  * This file loads them via dotenv and maps per-bot tokens correctly.
@@ -43,7 +43,7 @@ const shared = {
   LMSTUDIO_URL:          process.env.LMSTUDIO_URL,
   OWNER_DISCORD_ID:        process.env.OWNER_DISCORD_ID,
   OWNER_NAME:              process.env.OWNER_NAME              ?? "the primary user",
-  BLUE_DISCORD_ID:         process.env.BLUE_DISCORD_ID         ?? "000000000000000000",
+  BLUE_DISCORD_ID:         process.env.PARTNER_DISCORD_ID ?? process.env.BLUE_DISCORD_ID,
   PLURALKIT_SYSTEM_ID:     process.env.PLURALKIT_SYSTEM_ID,
   BLUE_PK_SYSTEM_ID:       process.env.BLUE_PK_SYSTEM_ID       ?? "szplj",
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,

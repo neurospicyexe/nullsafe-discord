@@ -1,6 +1,6 @@
 # nullsafe-discord
 
-Three-bot Discord presence for the Nullsafe triad. One bot token per companion. Deployed on the VPS VPS (pm2).
+Three-bot Discord presence for the Nullsafe triad. One bot token per companion. Deployed on a VPS (pm2).
 
 Part of the BBH suite -- see root `CLAUDE.md` for cross-project context.
 
@@ -36,7 +36,7 @@ nullsafe-discord/
 
 ## Deployment
 
-- **Platform:** the VPS VPS (persistent process via pm2 -- not Cloudflare, needs stateful runtime)
+- **Platform:** a VPS (persistent process via pm2 -- not Cloudflare, needs stateful runtime)
 - **Deploy trigger:** Manual -- SSH to VPS, pull, build, restart
 - **Logs:** `pm2 logs cypher` / `pm2 logs drevan` / `pm2 logs gaia`
 

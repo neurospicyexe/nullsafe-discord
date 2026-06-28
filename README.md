@@ -89,7 +89,9 @@ Each bot gets its own `.env` file in its directory (`bots/bot-name/.env`). The a
 | `CYPHER_VOICE_ID` / `DREVAN_VOICE_ID` / `GAIA_VOICE_ID` | Per-bot Voxtral voice ID for TTS |
 | `GROQ_API_KEY` | Groq API key (if using Groq as inference provider) |
 | `BRAIN_URL` | URL to a Phoenix Brain instance (if using brain relay mode) |
-| `INFERENCE_MODE` | `direct` (default) or `brain` |
+| `INFERENCE_MODE` | `direct` (default), `brain`, or `hermes` (see Inference modes below) |
+| `HERMES_API_URL` | URL of your Hermes gateway (only if `INFERENCE_MODE=hermes`) |
+| `HERMES_API_KEY` | Auth key for your Hermes gateway (only if `INFERENCE_MODE=hermes`) |
 
 **Autonomous worker:**
 
@@ -128,6 +130,34 @@ Voice (TTS + STT) runs through the Mistral API (Voxtral) -- no local services or
 ```bash
 sudo apt install ffmpeg
 ```
+
+---
+
+## Inference modes (how the bots think)
+
+Set `INFERENCE_MODE` in each bot's `.env`. There are three options:
+
+| Mode | What it does | When to use it |
+|------|--------------|----------------|
+| `direct` (default) | Each bot calls an LLM provider directly (DeepSeek, OpenAI, Anthropic, Mistral, Groq, Kimi, Ollama, LM Studio). Pick the provider with `INFERENCE_PROVIDER` and an API key. | Simplest. Good for most people. |
+| `brain` | Bots relay to a shared "Brain" service that runs a multi-companion swarm, then fall back to direct if it's down. | If you run the optional Phoenix Brain. |
+| `hermes` | Bots relay each reply to a self-hosted **Hermes** gateway (an OpenAI-compatible LLM gateway you run yourself). Set `HERMES_API_URL` and `HERMES_API_KEY`. | If you want one gateway in front of many providers. |
+
+### Optional: switch models from Discord (no SSH)
+
+Companions can be told which model to use with an **owner-only** chat command:
+
+```
+cy: model <key>        # also drevan: / drev: / gaia:
+cy: model deepseek-reasoner
+```
+
+This writes your chosen model key into Halseth (`companion_settings.active_model`). How it takes effect depends on your mode:
+
+- **`direct` / `brain` mode:** the model registry lives in `packages/shared/src/models.ts` (a map of friendly keys -> provider + model id). The bot validates `<key>` against that map and uses it. Edit that file to change which models are offered.
+- **`hermes` mode:** Hermes pins a model per gateway, so a tiny **model-watcher** on your gateway host polls Halseth for the chosen key, looks it up in a JSON map (key -> Hermes model id + provider), runs `hermes config set model.default <id>`, and restarts the gateway (~10s). A reference watcher and an example model map are provided in the companion `triad-skills` toolkit; copy them to your gateway host and adjust the paths/keys to your setup. Keep your provider API keys only in the gateway's own env file.
+
+Keep the model keys in `models.ts` and your Hermes map in sync so the same `cy: model <key>` works everywhere. All model ids are just strings you control -- update them to whatever each provider currently ships.
 
 ---
 
