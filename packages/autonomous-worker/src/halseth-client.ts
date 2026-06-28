@@ -963,8 +963,8 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
 
 // ND daily-rhythm briefing (accessibility layer). Compose + deliver lives server-side in
 // Halseth (handlers/briefing.ts), gated behind BRIEFING_ENABLED. Returns reason='gated' until enabled.
-export async function postBriefing(kind: "morning" | "midday" | "evening"): Promise<{ kind: string; written: boolean; reason: string; journal_id?: string }> {
-  return await hFetch("/mind/briefing/run", "POST", { kind }) as { kind: string; written: boolean; reason: string; journal_id?: string };
+export async function postBriefing(kind: "morning" | "midday" | "evening"): Promise<{ kind: string; written: boolean; reason: string; journal_id?: string; text: string }> {
+  return await hFetch("/mind/briefing/run", "POST", { kind }) as { kind: string; written: boolean; reason: string; journal_id?: string; text: string };
 }
 
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
