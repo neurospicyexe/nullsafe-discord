@@ -284,23 +284,43 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (switchMatch) {
         const arg = switchMatch[1].trim().toLowerCase();
 
-        // Validate against the FULL registry, not this bot's local keys. Brain is the
-        // live arbiter (reads active_model from Halseth), so any registry model is
+        // Under the Hermes relay the model is pinned per-profile in config.yaml and switched by
+        // the VPS hermes-model-watcher (active_model -> `hermes config set` + gateway restart). A
+        // Discord switch IS honored -- just not instant. Write the signal + tell the truth (no
+        // narrated no-op; 06-11 trap). The watcher validates the key against hermes-model-map.json
+        // and pings on Telegram, so the bot stays dumb (no registry to keep in sync here).
+        if (apiUrls.forceHermes) {
+          if (arg === "list") {
+            await (message.channel as TextChannel).send(
+              `${MODEL_SWITCH_LIST_INTRO}\n` +
+              "`flash` / `pro` -- DeepSeek everyday / deep-thinking\n" +
+              "`claude-sonnet` `claude-opus` `claude-haiku` -- Anthropic\n" +
+              "`gpt-4o` `gpt-4o-mini` -- OpenAI\n" +
+              "`gemini` `gemini-pro` -- Google\n" +
+              "`kimi-k2` `kimi-k2.5` -- Moonshot\n" +
+              "`mistral-large` -- Mistral (via OpenRouter)\n" +
+              "`ollama` `ollama-glm` -- Ollama Cloud\n" +
+              "`gemma-local` `nemo-local` -- your LM Studio box");
+            return;
+          }
+          activeModelRef.key = arg;
+          activeModelRef.label = arg;
+          writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
+            librarian.setSetting("active_model", arg));
+          await (message.channel as TextChannel).send(
+            `switching to \`${arg}\` -- Hermes reloads in ~10s (watcher confirms on Telegram; ` +
+            "if it's not a real key you'll get a heads-up there instead).");
+          return;
+        }
+
+        // Direct/Brain path: validate against the FULL registry, not this bot's local keys. Brain
+        // is the live arbiter (reads active_model from Halseth), so any registry model is
         // selectable; provider keys only need to live in Brain's .env.brain.
         if (arg === "list") {
           const list = Object.entries(ALL_MODELS)
             .map(([k, e]) => `\`${k}\` -- ${e.label}`)
             .join("\n");
           await (message.channel as TextChannel).send(`${MODEL_SWITCH_LIST_INTRO}\n${list}`);
-          return;
-        }
-
-        // Under the Hermes relay, model choice lives inside the agent (per-profile `/model`);
-        // forceHermes ignores the requested provider, so a Discord switch cannot change
-        // routing. Tell the truth instead of acking a no-op (narrated-success trap, 06-11).
-        if (apiUrls.forceHermes) {
-          await (message.channel as TextChannel).send(
-            "model routing is handled by Hermes right now -- switch inside my agent, not from Discord.");
           return;
         }
 
