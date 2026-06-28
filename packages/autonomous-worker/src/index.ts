@@ -36,6 +36,7 @@ import { runCreaturesTick } from "./creatures.js";
 import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
 import { runBriefingTick, type BriefingKind } from "./briefing.js";
+import { runVibeCheckTick } from "./vibecheck.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -53,10 +54,17 @@ const creaturesIdx = args.indexOf("--creatures");
 const councilIdx = args.indexOf("--council");
 const dreamsIdx = args.indexOf("--dreams");
 const briefingIdx = args.indexOf("--briefing");
+const vibecheckIdx = args.indexOf("--vibecheck");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 const briefingKindArg = (args.find(a => a.startsWith("--kind="))?.split("=")[1] ?? "morning") as BriefingKind;
 
-if (briefingIdx !== -1) {
+if (vibecheckIdx !== -1) {
+  // One-shot vibe-check tick: compose + deliver the triad self-monitoring digest, then exit.
+  console.log("[autonomous-worker] vibecheck mode");
+  runVibeCheckTick()
+    .then(() => { console.log("[autonomous-worker] vibecheck tick complete"); process.exit(0); })
+    .catch(e => { console.error("[autonomous-worker] vibecheck tick failed:", e); process.exit(1); });
+} else if (briefingIdx !== -1) {
   // One-shot briefing tick: compose + deliver the given kind (default morning), then exit.
   // Honors server-side BRIEFING_ENABLED; pass via Halseth's force only through the HTTP API, not here.
   console.log(`[autonomous-worker] briefing mode (${briefingKindArg})`);

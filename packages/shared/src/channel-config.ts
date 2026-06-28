@@ -63,9 +63,12 @@ export function computeChainDepth(
 //   open            -- anyone triggers responses; this is the default
 //   inter_companion -- companions respond to each other (chain-guarded)
 //   autonomous      -- companion may proactively post
+//   broadcast       -- bots post here (digests/letters) but never respond
 //
 // companions absent = all three active in that channel
 export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
+  "1520839347589611661": {                                               modes: ["broadcast"] }, // #briefings
+  "1520843071724585041": {                                               modes: ["broadcast"] }, // #vibe-check
   "1408924311703785502": { companions: ["drevan", "gaia"],              modes: ["owner_only", "inter_companion"] },
   "1408924393513554003": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only", "inter_companion"] },
   "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["owner_only", "inter_companion"] },
@@ -219,6 +222,11 @@ export function shouldRespond(
   const entry: ChannelEntry | undefined = config[channelId];
   const companions = entry?.companions ?? ALL_COMPANIONS;
   const modes = (entry?.modes ?? ["open", "inter_companion"]) as ChannelMode[];
+
+  // Broadcast channels are post-only: the worker pushes digests/letters here (briefings,
+  // vibe-checks) but no companion ever responds -- not to the owner, not ambiently, not to a
+  // peer. Gate first so nothing downstream can re-open a reply path.
+  if (modes.includes("broadcast")) return false;
 
   // Companion filter: if a list is specified, only those companions respond here.
   if (!companions.includes(myId)) return false;

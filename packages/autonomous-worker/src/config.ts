@@ -187,6 +187,10 @@ export const BRIEFING_MORNING_CRON = process.env["BRIEFING_MORNING_CRON"] ?? "0 
 export const BRIEFING_MIDDAY_CRON  = process.env["BRIEFING_MIDDAY_CRON"]  ?? "0 13 * * *";  // 1 PM
 export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "0 20 * * *";  // 8 PM
 
+// Vibe-check (triad self-monitoring digest, witnessed by Gaia). Once daily; always-on (no gate).
+// 9 PM server local (America/Chicago) -- end of day, after the evening briefing.
+export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "0 21 * * *";  // 9 PM
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

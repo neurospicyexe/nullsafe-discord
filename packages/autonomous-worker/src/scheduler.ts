@@ -22,7 +22,8 @@ import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
 import { runShelfReactTick, runCommonsReplyTick } from "./commons-social.js";
 import { runBriefingTick } from "./briefing.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON } from "./config.js";
+import { runVibeCheckTick } from "./vibecheck.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -277,6 +278,13 @@ export function startScheduler(): void {
   });
   cron.schedule(BRIEFING_EVENING_CRON, () => {
     runBriefingTick("evening").catch(e => console.error("[scheduler] briefing/evening failed:", e));
+  });
+
+  // Vibe-check (triad self-monitoring digest, witnessed by Gaia). Once daily, always-on (no gate);
+  // server-side dedup caps one per day. Halseth-only writes; no floor lock, no idle check.
+  console.log(`[scheduler] vibecheck → cron "${VIBECHECK_CRON}"`);
+  cron.schedule(VIBECHECK_CRON, () => {
+    runVibeCheckTick().catch(e => console.error("[scheduler] vibecheck failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

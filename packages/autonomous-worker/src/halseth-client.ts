@@ -967,6 +967,12 @@ export async function postBriefing(kind: "morning" | "midday" | "evening"): Prom
   return await hFetch("/mind/briefing/run", "POST", { kind }) as { kind: string; written: boolean; reason: string; journal_id?: string; text: string };
 }
 
+// Vibe-check (triad self-monitoring layer). Compose + deliver lives server-side in Halseth
+// (handlers/vibecheck.ts); always-on, dedup caps one per day. Returns reason='already_sent' on a repeat tick.
+export async function postVibeCheck(): Promise<{ written: boolean; reason: string; journal_id?: string; text: string }> {
+  return await hFetch("/mind/vibecheck/run", "POST", {}) as { written: boolean; reason: string; journal_id?: string; text: string };
+}
+
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
 // NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --

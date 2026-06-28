@@ -9,7 +9,8 @@ export type ChannelMode =
   | "owner_only"       // only owner messages trigger responses
   | "open"             // anyone triggers responses; default when no config entry
   | "inter_companion"  // companions respond to each other (loop-guarded by chain limit)
-  | "autonomous";      // companion may proactively post
+  | "autonomous"       // companion may proactively post
+  | "broadcast";       // bots post here (digests/letters) but never respond
 
 export interface ChannelEntry {
   companions?: CompanionId[];  // which companions are active; absent = all three
