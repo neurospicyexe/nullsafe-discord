@@ -957,8 +957,8 @@ export async function consumeForageFind(id: string, consumedBy: string): Promise
 
 // ── Unified Guardian (0073) ──────────────────────────────────────────────────
 
-export async function runGuardian(letter: boolean): Promise<{ flags_created: number; flags_resolved: number; letter_id: string | null }> {
-  return await hFetch("/mind/guardian/run", "POST", { letter }) as { flags_created: number; flags_resolved: number; letter_id: string | null };
+export async function runGuardian(letter: boolean, catchup = false): Promise<{ flags_created: number; flags_resolved: number; letter_id: string | null; skipped?: boolean }> {
+  return await hFetch("/mind/guardian/run", "POST", { letter, catchup }) as { flags_created: number; flags_resolved: number; letter_id: string | null; skipped?: boolean };
 }
 
 // ND daily-rhythm briefing (accessibility layer). Compose + deliver lives server-side in

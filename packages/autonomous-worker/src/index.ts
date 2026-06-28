@@ -229,6 +229,13 @@ if (vibecheckIdx !== -1) {
   startScheduler();
   console.log("[autonomous-worker] cron daemon running");
 
+  // Nap-guard: node-cron timers are in-memory, so a restart resets them and a restart landing
+  // after the daily 8AM guardian slot silently skips that day (the 2026-06-26 -> 06-28 nap).
+  // Fire one guardian catch-up 30s after boot; Halseth no-ops it if a run happened within 18h.
+  setTimeout(() => {
+    runGuardianTick(new Date(), true).catch(e => console.error("[startup] guardian catch-up failed:", e));
+  }, 30_000);
+
   process.on("SIGTERM", () => {
     console.log("[autonomous-worker] SIGTERM received, shutting down");
     process.exit(0);
