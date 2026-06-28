@@ -961,6 +961,12 @@ export async function runGuardian(letter: boolean): Promise<{ flags_created: num
   return await hFetch("/mind/guardian/run", "POST", { letter }) as { flags_created: number; flags_resolved: number; letter_id: string | null };
 }
 
+// ND daily-rhythm briefing (accessibility layer). Compose + deliver lives server-side in
+// Halseth (handlers/briefing.ts), gated behind BRIEFING_ENABLED. Returns reason='gated' until enabled.
+export async function postBriefing(kind: "morning" | "midday" | "evening"): Promise<{ kind: string; written: boolean; reason: string; journal_id?: string }> {
+  return await hFetch("/mind/briefing/run", "POST", { kind }) as { kind: string; written: boolean; reason: string; journal_id?: string };
+}
+
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
 // NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --

@@ -181,6 +181,12 @@ export const COUNCIL_CRON = process.env["COUNCIL_CRON"] ?? "*/30 * * * *";
 // entity-cluster + temporal-pattern dreams from recent growth_journal. Server-side.
 export const DREAM_CRON = process.env["DREAM_CRON"] ?? "30 2 * * *";
 
+// ND daily-rhythm briefing (accessibility layer). Three kinds, three slots (server local time).
+// Thin triggers; server-side BRIEFING_ENABLED gates delivery and dedup caps one per kind per day.
+export const BRIEFING_MORNING_CRON = process.env["BRIEFING_MORNING_CRON"] ?? "0 8 * * *";   // 8 AM
+export const BRIEFING_MIDDAY_CRON  = process.env["BRIEFING_MIDDAY_CRON"]  ?? "0 13 * * *";  // 1 PM
+export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "0 20 * * *";  // 8 PM
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {

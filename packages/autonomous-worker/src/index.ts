@@ -35,6 +35,7 @@ import { runMotifsTick } from "./motifs.js";
 import { runCreaturesTick } from "./creatures.js";
 import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
+import { runBriefingTick, type BriefingKind } from "./briefing.js";
 import type { CompanionId } from "./types.js";
 
 const args = process.argv.slice(2);
@@ -51,9 +52,18 @@ const motifsIdx = args.indexOf("--motifs");
 const creaturesIdx = args.indexOf("--creatures");
 const councilIdx = args.indexOf("--council");
 const dreamsIdx = args.indexOf("--dreams");
+const briefingIdx = args.indexOf("--briefing");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
+const briefingKindArg = (args.find(a => a.startsWith("--kind="))?.split("=")[1] ?? "morning") as BriefingKind;
 
-if (councilIdx !== -1) {
+if (briefingIdx !== -1) {
+  // One-shot briefing tick: compose + deliver the given kind (default morning), then exit.
+  // Honors server-side BRIEFING_ENABLED; pass via Halseth's force only through the HTTP API, not here.
+  console.log(`[autonomous-worker] briefing mode (${briefingKindArg})`);
+  runBriefingTick(briefingKindArg)
+    .then(() => { console.log("[autonomous-worker] briefing tick complete"); process.exit(0); })
+    .catch(e => { console.error("[autonomous-worker] briefing tick failed:", e); process.exit(1); });
+} else if (councilIdx !== -1) {
   // One-shot council tick: run the ritual for the oldest open question, then exit.
   console.log("[autonomous-worker] council mode");
   runCouncilTick()
