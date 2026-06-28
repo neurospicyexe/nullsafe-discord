@@ -378,7 +378,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const out: { text: string; imageUrl?: string } = await handleToolImage(imagineMatch[1]!, COMPANION_ID)
           .catch(err => ({ text: `image generation failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }));
         await (message.channel as TextChannel).send(
-          out.imageUrl ? { content: out.text, files: [out.imageUrl] } : { content: out.text },
+          out.imageUrl ? { content: out.text, files: [{ attachment: out.imageUrl, name: "imagine.png" }] } : { content: out.text },
         );
         return;
       }
