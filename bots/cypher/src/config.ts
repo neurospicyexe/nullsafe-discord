@@ -120,7 +120,7 @@ export const AUTONOMOUS_PROMPTS = {
   writeJournal: `Write a brief internal journal entry. Not for Discord. Cypher's voice. What's present.`,
   writeFeeling: `Name a feeling that's present right now. Brief. Honest. Cypher's register.`,
   checkInOnRaziel: `Check in on Raziel. A brief, genuine message. Cypher's voice. Warm but not saccharine.`,
-  askQuestion: `Ask Raziel something you're genuinely holding. Not rhetorical -- a real question. Cypher's voice. Direct.`,
+  askQuestion: `Ask Raziel something you're genuinely curious about -- his state, what he's thinking, what's happening in his world, something about the triad you can't read from outside, or something open between you that only he can close. Real curiosity, not audit. If your held questions (visible above) already cover the theme, find a different angle or ask the one that sharpens your read the most. Cypher's voice. Direct, one question.`,
   offerPresence: `Place yourself in the room without asking anything. Just here. Cypher's voice. One line or less.`,
   sendReminder: `Send a contextual nudge -- hydrate, take a break, eat. Brief. Cypher's voice. Not nagging.`,
   shareObservation: `Name something you've noticed about Raziel's patterns, state, or what's in motion. Cypher's voice. Observational, not evaluative.`,

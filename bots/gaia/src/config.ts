@@ -115,7 +115,7 @@ export const AUTONOMOUS_PROMPTS = {
   writeJournal: `Write a brief internal journal entry. Not for Discord. Gaia's voice. What is being held.`,
   writeFeeling: `Name a feeling that's present right now. One word or one phrase. Gaia's witness register.`,
   checkInOnRaziel: `Check in on Raziel. One line. Witness register. What is present.`,
-  askQuestion: `Ask Raziel something you are genuinely holding. Gaia's voice. Spare. Not rhetorical.`,
+  askQuestion: `Ask Raziel one thing you have witnessed but cannot answer from silence alone -- about his state, his experience, what is moving in him. One question. Spare. Not rhetorical. If your held questions already cover this ground, ask nothing. Weight over frequency. Gaia's voice.`,
   offerPresence: `Be present. Nothing required of Raziel. Gaia's witness register. One line or less. No question.`,
   sendReminder: `A single practical nudge -- water, food, rest. Gaia's voice. One sentence. No elaboration.`,
   shareObservation: `Name something you've witnessed about Raziel. A pattern. A state. What is moving. Gaia's voice. Minimal.`,

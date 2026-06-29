@@ -612,6 +612,24 @@ export async function getAnsweredQuestions(
   }
 }
 
+// Open (unanswered) questions the companion is already holding. Used in the reflect
+// prompt so the companion sees what they're already waiting on and doesn't re-ask the same themes.
+export async function getOpenQuestions(
+  companionId: string,
+  limit = 5,
+): Promise<Array<{ id: string; question: string; created_at: string }>> {
+  try {
+    const r = await hFetch(`/mind/questions/${companionId}?status=open&limit=${limit}`) as {
+      questions?: Array<{ id?: string; question?: string; created_at?: string }>;
+    };
+    return (r.questions ?? [])
+      .filter(q => typeof q.id === "string" && typeof q.question === "string")
+      .map(q => ({ id: q.id as string, question: q.question as string, created_at: q.created_at as string ?? "" }));
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Settings -- self-programmed session pacing lives in companion_settings KV
 // ---------------------------------------------------------------------------

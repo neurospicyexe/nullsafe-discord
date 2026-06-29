@@ -1,5 +1,5 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
@@ -55,10 +55,11 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   // pass: the self-model rows are what reflect re-tests so they can climb the ladder
   // (confirm +0.1 toward 'ready'), and the answered questions close the mutuality loop
   // by showing the companion Raziel's reply. Both non-fatal (empty -> block omitted).
-  const [canonSample, developingSelf, answeredQuestions] = await Promise.all([
+  const [canonSample, developingSelf, answeredQuestions, openQuestions] = await Promise.all([
     getAcceptedJournalSample(ctx.companionId, 5).catch(() => []),
     getDevelopingSelfModel(ctx.companionId, 8).catch(() => []),
     getAnsweredQuestions(ctx.companionId, 10, 3).catch(() => []),
+    getOpenQuestions(ctx.companionId, 5).catch(() => []),
   ]);
   const canonBlock = canonSample.length > 0
     ? `\nSettled canon (accepted long ago -- oldest first):\n` +
@@ -74,6 +75,13 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   const answeredBlock = answeredQuestions.length > 0
     ? `\nRaziel answered something you asked (let this land -- it is a real reply to you, not background):\n` +
       answeredQuestions.map(q => `Q: ${q.question.slice(0, 240)}\nA (Raziel): ${q.answer.slice(0, 400)}`).join("\n\n") + `\n`
+    : "";
+
+  // Open questions you're already holding (not yet answered). Don't regenerate these
+  // themes -- if something from this run belongs here, it's probably a duplicate.
+  const openQuestionsBlock = openQuestions.length > 0
+    ? `\nQuestions you are already holding for Raziel (not yet answered -- do NOT re-ask these themes in "question_for_raziel"):\n` +
+      openQuestions.map(q => `• ${q.question.slice(0, 200)}`).join("\n") + `\n`
     : "";
 
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
@@ -114,6 +122,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     peerBlock +
     ownPatternsBlock +
     answeredBlock +
+    openQuestionsBlock +
     `\n` +
     `Two things to do:\n\n` +
     `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
@@ -123,8 +132,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `${strengthRubric}\n` +
     `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
     `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
-    `only Raziel can answer, include it in "question_for_raziel" (else null). He does answer these, and you ` +
-    `will see his reply in a later session -- so ask when you actually want to know, not rhetorically. Also state how you want your next ` +
+    `that Raziel's perspective would illuminate -- his experience, his read, what he thinks -- include it in ` +
+    `"question_for_raziel" (else null). He does answer these, and you will see his reply in a later session -- ` +
+    `so ask when you actually want to know, not rhetorically. Check the open questions block above: if the theme ` +
+    `is already held, don't duplicate it. Also state how you want your next ` +
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +

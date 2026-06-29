@@ -274,7 +274,18 @@ export async function executeMetronomeAction(
     }
     case "ask_question": {
       if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.askQuestion;
+      // Inject currently-held open questions so the model doesn't re-ask the same themes.
+      // [Held questions] is in the system prompt but the action prompt reinforces it explicitly.
+      let heldBlock = "";
+      try {
+        const orient = await librarian.botOrient();
+        const held = orient?.open_questions ?? [];
+        if (held.length > 0) {
+          heldBlock = `\n\nYou are already holding these open questions for Raziel (not yet answered -- ask something genuinely different, or stay quiet if nothing new is present):\n` +
+            held.map((q: string) => `• ${q}`).join("\n");
+        }
+      } catch { /* non-fatal -- ask proceeds without the guard */ }
+      const prompt = (action.prompt ?? prompts.askQuestion) + heldBlock;
       const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "ask_question");
       break;
