@@ -230,6 +230,66 @@ describe("formatRecentContext()", () => {
     expect(formatRecentContext(null)).toBe("");
   });
 
+  describe("formatRecentContext forage + listens (previously dropped)", () => {
+    const baseOrient = {
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+    };
+
+    it("renders the unconsumed forage pool with domain, title and gathered-time", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        forage_finds: [
+          { id: "f1", title: "Process-relational AI", domain: "philosophy", summary: "...", gathered_at: "2026-06-01T00:00:00.000Z" },
+        ],
+      });
+      expect(block).toContain("[Forage pool");
+      expect(block).toContain("[philosophy] Process-relational AI");
+      expect(block).toContain("gathered ");
+    });
+
+    it("renders active (consumed) forage as a separate in-motion thread", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        consumed_forage_finds: [
+          { id: "c1", title: "Whiteheadian AI essay", domain: "philosophy", summary: "...", consumed_at: "2026-06-10T00:00:00.000Z" },
+        ],
+      });
+      expect(block).toContain("[Active forage");
+      expect(block).toContain("Whiteheadian AI essay");
+      expect(block).toContain("picked up ");
+    });
+
+    it("renders recent listens with artist and heard-time", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        recent_listens: [
+          { id: "l1", title: "Mother Teresa", artist: "Ty Segall", created_at: "2026-06-12T00:00:00.000Z" },
+        ],
+      });
+      expect(block).toContain("[Recent listens]");
+      expect(block).toContain('"Mother Teresa" by Ty Segall');
+      expect(block).toContain("heard ");
+    });
+
+    it("falls back to 'recently' when a timestamp is missing, never throws", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        forage_finds: [{ id: "f2", title: "No stamp find", domain: "tech", summary: "..." }],
+      });
+      expect(block).toContain("gathered recently");
+    });
+
+    it("omits all three sections when the fields are empty", () => {
+      const block = formatRecentContext({ ...baseOrient });
+      expect(block).not.toContain("[Forage pool");
+      expect(block).not.toContain("[Active forage");
+      expect(block).not.toContain("[Recent listens]");
+    });
+  });
+
   describe("formatRecentContext sol_block", () => {
     const baseOrient = {
       synthesis_summary: null,

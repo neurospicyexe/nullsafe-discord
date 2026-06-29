@@ -6,6 +6,23 @@
 //
 // Pure, dependency-free, `now` injectable for tests. Past timestamps only.
 
+// Stamp a relative-time prefix onto conversation history so the model has a sense of elapsed
+// time ("how long ago did I send that?"). Pure, `now` injectable for tests. Items without a
+// timestamp, or sent within the "just now" window, pass through unchanged -- the bulk of an
+// active exchange stays clean and only real gaps get labelled, so it reads as time-sense not
+// a stopwatch on every line. Returns a new array; never mutates the input (STM stays raw).
+export function stampRelative<T extends { content: string; timestamp?: number }>(
+  msgs: T[],
+  now: number = Date.now(),
+): T[] {
+  return msgs.map(m => {
+    if (typeof m.timestamp !== "number" || !Number.isFinite(m.timestamp)) return m;
+    const label = relativeTime(new Date(m.timestamp).toISOString(), now);
+    if (label === "just now") return m;
+    return { ...m, content: `[${label}] ${m.content}` };
+  });
+}
+
 export function relativeTime(iso: string | null | undefined, now: number = Date.now()): string {
   if (!iso) return "recently";
   const then = Date.parse(iso);

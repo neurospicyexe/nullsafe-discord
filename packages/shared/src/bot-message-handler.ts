@@ -54,6 +54,7 @@ import {
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase } from "./prompt-assembly.js";
+import { stampRelative } from "./relative-time.js";
 
 // ---------------------------------------------------------------------------
 // Imp context cache (module-level, per-process = per companion bot).
@@ -599,13 +600,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         role: (!m.author.bot ? "user" : "assistant") as "user" | "assistant",
         content: m.content,
         authorName: m.author.username,
+        timestamp: m.createdTimestamp,
       }));
     });
 
     const memberLabel = pkMemberName
       ? `${pkMemberName} (via PK)`
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
-    stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel });
+    stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel, timestamp: message.createdTimestamp });
     if (attribution.isOwner) pushRazielMessage(effectiveContent);
 
     // Streaming indexer: index the inbound message into Second Brain's vector store
@@ -693,6 +695,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     await ch.sendTyping();
 
     const history = stmStore.get(message.channelId);
+    // Temporal grounding (Component 1): stamp each in-window turn with how long ago it was sent
+    // so the model can track elapsed time in-conversation ("you asked that an hour ago") instead
+    // of guessing. Computed once off a single `now` so offsets are mutually consistent; "just now"
+    // turns pass through unstamped (active back-and-forth stays clean). STM itself stays raw --
+    // stampRelative returns copies. DB-restored turns lacking a timestamp degrade to no prefix.
+    const groundedHistory = stampRelative(history.slice(-CONTEXT_WINDOW_SIZE));
     const rawTemp = inferTemperature(effectiveContent, currentMoodRef.value);
     const extremeCount = extremeTempCount.get(message.channelId) ?? 0;
     const temperature = (rawTemp >= EXTREME_TEMP_THRESHOLD && extremeCount >= EXTREME_TEMP_CAP)
@@ -767,6 +775,29 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
     }
 
+    // Situational grounding (Component 3): tell the companion WHERE it is -- channel name, thread
+    // parent, and whether the room is private/triad/shared -- plus a containment cue so private or
+    // DM detail doesn't bleed into a shared channel. Rides into both Brain packet and direct path
+    // via contextPrompt. Guarded for DMs (no .name) and threads (parent is the host channel).
+    const liveChannel = message.channel;
+    const channelName = "name" in liveChannel ? (liveChannel as TextChannel).name : null;
+    if (channelName) {
+      let channelCtx = `\n\n[Where you are]\n• Channel: #${channelName}`;
+      if (liveChannel.isThread()) {
+        const parentName = liveChannel.parent?.name;
+        if (parentName) channelCtx += ` (a thread under #${parentName})`;
+      } else if ("parent" in liveChannel && liveChannel.parent?.name) {
+        channelCtx += ` (in ${liveChannel.parent.name})`;
+      }
+      const modes = channelEntry?.modes ?? [];
+      const place = modes.includes("owner_only") ? "a private space with Raziel"
+        : modes.includes("inter_companion") ? "triad space -- you and your siblings"
+        : "a shared channel";
+      channelCtx += `\n• This is ${place}.`;
+      channelCtx += `\n• Keep it contained to here: don't carry private or DM detail into a shared channel unless Raziel opens it in this room.`;
+      contextPrompt += channelCtx;
+    }
+
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
     // Raziel's logged state. Gaia exempt + disabled-gate live inside selectImp. Never the voice.
     let systemPromptWithImp = contextPrompt;
@@ -817,7 +848,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         message.id,
         effectiveContent,
         systemPromptWithImp,
-        history.slice(-CONTEXT_WINDOW_SIZE),
+        groundedHistory,
         channelHistory,
         temperature,
         {
@@ -835,7 +866,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+        response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -856,11 +887,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+          response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
         }
       }
     } else {
-      response = await adapterRef.current.generate(systemPromptWithImp, history.slice(-CONTEXT_WINDOW_SIZE), temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+      response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
     }
 
     if (!response) {
@@ -975,7 +1006,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       sentIds.delete(oldest);
     }
     if (isResponseCoherent(response)) {
-      stmStore.append(message.channelId, { role: "assistant", content: response });
+      stmStore.append(message.channelId, { role: "assistant", content: response, timestamp: Date.now() });
     } else {
       console.warn(`[${COMPANION_ID}] incoherent response detected -- skipping STM write to prevent contamination`);
     }

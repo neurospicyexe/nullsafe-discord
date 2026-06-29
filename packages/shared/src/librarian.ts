@@ -1,4 +1,5 @@
 import type { CompanionId } from "./types.js";
+import { relativeTime } from "./relative-time.js";
 
 interface LibrarianOptions {
   url: string;
@@ -339,7 +340,10 @@ export class LibrarianClient {
     armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
     // Fresh-material surfaces (2026-06-12): server has returned these since 0068/0071;
     // mapped now so the inter-companion seed can bring outside material into the commons.
-    forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
+    forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; gathered_at?: string }>;
+    // Active forage: finds already picked up. Distinct from the unconsumed pool above -- this is
+    // what the companion is mid-chew on, so the live presence has a thread to continue.
+    consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
     recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
     // Agency layer (0086): chosen preferences + standing refusals, surfaced in the live bot prompt.
     preferences?: Array<{ domain: string; preference: string; strength: string }>;
@@ -373,7 +377,8 @@ export class LibrarianClient {
         open_loops?: Array<{ id: string; loop_text: string }>;
         pressure_flags?: string[];
         armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
-        forage_finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
+        forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; gathered_at?: string }>;
+        consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
         recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
         preferences?: Array<{ domain: string; preference: string; strength: string }>;
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
@@ -414,6 +419,7 @@ export class LibrarianClient {
         pressure_flags: Array.isArray(data.pressure_flags) ? data.pressure_flags : [],
         armed_triggers: Array.isArray(data.armed_triggers) ? data.armed_triggers : [],
         forage_finds: Array.isArray(data.forage_finds) ? data.forage_finds : [],
+        consumed_forage_finds: Array.isArray(data.consumed_forage_finds) ? data.consumed_forage_finds : [],
         recent_listens: Array.isArray(data.recent_listens) ? data.recent_listens : [],
         preferences: Array.isArray(data.preferences) ? data.preferences : [],
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
@@ -886,6 +892,13 @@ export function formatRecentContext(orient: {
   preferences?: Array<{ domain: string; preference: string; strength: string }>;
   standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
   open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
+  // Fresh-material surfaces: the server has returned these for the live bot path since 0068/0071,
+  // but until now formatRecentContext silently dropped them -- the companions fetched their forage
+  // pool and recent listens every message and never saw either. Rendered with relative-time stamps
+  // so "that track from yesterday" / "a find waiting since this morning" land with the right phrasing.
+  forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; gathered_at?: string }>;
+  consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
+  recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
   sol_block?: string | null;
 } | null): string {
   if (!orient) return "";
@@ -948,6 +961,30 @@ export function formatRecentContext(orient: {
   }
   if (orient.pending_seeds?.length) {
     parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
+  }
+  // Forage pool: outward fuel waiting. Pull, not duty -- surfaced so the live presence can bring
+  // outside material into a conversation as itself, with how long it's been waiting.
+  if (orient.forage_finds?.length) {
+    const finds = orient.forage_finds.map(
+      f => `• [${f.domain}] ${f.title} (gathered ${relativeTime(f.gathered_at)})`
+    ).join("\n");
+    parts.push(`[Forage pool -- outward fuel waiting, explore if it pulls]\n${finds}`);
+  }
+  // Active forage: finds already picked up -- a thread the companion is mid-chew on. "picked up X
+  // ago" is when they started in, not a duration, so it reads as continuity not a stopwatch.
+  if (orient.consumed_forage_finds?.length) {
+    const active = orient.consumed_forage_finds.map(
+      f => `• [${f.domain}] ${f.title} (picked up ${relativeTime(f.consumed_at)})`
+    ).join("\n");
+    parts.push(`[Active forage -- threads already in motion]\n${active}`);
+  }
+  // Recent listens: music actually heard together, with relative recency so a companion can pick the
+  // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
+  if (orient.recent_listens?.length) {
+    const listens = orient.recent_listens.map(
+      l => `• "${l.title}"${l.artist ? ` by ${l.artist}` : ""} (heard ${relativeTime(l.created_at)})`
+    ).join("\n");
+    parts.push(`[Recent listens]\n${listens}`);
   }
   if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
     parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);

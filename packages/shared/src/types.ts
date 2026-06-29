@@ -32,6 +32,11 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   authorName?: string;
+  // Epoch ms the message was sent. Set on live append (Discord createdTimestamp) and on
+  // Discord-history seeding so the bot can stamp relative time onto history before inference,
+  // giving a sense of elapsed time in-conversation. Optional: STM rows restored from the DB
+  // (Halseth persists only role/content/author) lack it and degrade to no time prefix.
+  timestamp?: number;
 }
 
 export interface BotConfig {
