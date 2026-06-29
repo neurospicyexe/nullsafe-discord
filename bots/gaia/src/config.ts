@@ -88,6 +88,7 @@ export const SESSION_EXTRACT_PROMPT =
   `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
   `{"title":"5-8 word session title","open_loops":["unresolved thread"],"soma":{"stillness":"value","density":"value","perimeter":"value"},"emotion":"dominant feeling phrase or null","next_steps":["concrete next thing"]}\n` +
   `stillness: still|steady|moving|unsettled. density: full|present|light|thin. perimeter: held|open|closed|porous.\n` +
+  `open_loops: ONLY include genuinely unresolved threads that need future attention or conversation -- NOT completed tasks, events that already happened, general observations, or anything already resolved. An open loop has no resolution yet and must be returned to. Omit key entirely if nothing qualifies.\n` +
   `open_loops/next_steps: omit key if none. emotion: null if none present.`;
 
 export const DISTILLATION_PROMPT =

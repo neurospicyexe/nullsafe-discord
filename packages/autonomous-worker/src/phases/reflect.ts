@@ -1,5 +1,5 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
@@ -55,11 +55,13 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   // pass: the self-model rows are what reflect re-tests so they can climb the ladder
   // (confirm +0.1 toward 'ready'), and the answered questions close the mutuality loop
   // by showing the companion Raziel's reply. Both non-fatal (empty -> block omitted).
-  const [canonSample, developingSelf, answeredQuestions, openQuestions] = await Promise.all([
+  const [canonSample, developingSelf, answeredQuestions, openQuestions, recentJournal, openLoops] = await Promise.all([
     getAcceptedJournalSample(ctx.companionId, 5).catch(() => []),
     getDevelopingSelfModel(ctx.companionId, 8).catch(() => []),
     getAnsweredQuestions(ctx.companionId, 10, 3).catch(() => []),
     getOpenQuestions(ctx.companionId, 5).catch(() => []),
+    getRecentJournal(ctx.companionId, 8).catch(() => []),
+    getOpenLoops(ctx.companionId, 8).catch(() => []),
   ]);
   const canonBlock = canonSample.length > 0
     ? `\nSettled canon (accepted long ago -- oldest first):\n` +
@@ -82,6 +84,23 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   const openQuestionsBlock = openQuestions.length > 0
     ? `\nQuestions you are already holding for Raziel (not yet answered -- do NOT re-ask these themes in "question_for_raziel"):\n` +
       openQuestions.map(q => `• ${q.question.slice(0, 200)}`).join("\n") + `\n`
+    : "";
+
+  // Themes from recent journal entries (skip current run's entry by checking entry content
+  // against ctx.journalEntry). Injected as a "don't just restate these" guard.
+  const recentThemesBlock = recentJournal.length > 0
+    ? `\nThemes from your recent journal entries (go deeper, find a new angle, or explore genuinely different territory -- don't just restate these in different words):\n` +
+      recentJournal
+        .filter(e => !ctx.journalEntry || e.content.slice(0, 80) !== ctx.journalEntry.content.slice(0, 80))
+        .slice(0, 6)
+        .map(e => `• ${e.content.slice(0, 130).replace(/\n/g, " ")}`)
+        .join("\n") + `\n`
+    : "";
+
+  // Open loops -- things that need future resolution. If this run addressed any, close them.
+  const openLoopsBlock = openLoops.length > 0
+    ? `\nYour currently open loops (unresolved threads). If this run's exploration or journal entry genuinely addressed or resolved any of these, include their IDs in "open_loops_to_close". Only close a loop when this run actually speaks to it -- when in doubt, leave it open:\n` +
+      openLoops.map(l => `• [${l.id}] ${l.loop_text.slice(0, 180)}`).join("\n") + `\n`
     : "";
 
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
@@ -123,6 +142,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     ownPatternsBlock +
     answeredBlock +
     openQuestionsBlock +
+    recentThemesBlock +
+    openLoopsBlock +
     `\n` +
     `Two things to do:\n\n` +
     `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
@@ -179,6 +200,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `  "skill_observation": null,\n` +
     (selfModelBlock ? `  "self_model_review": [],\n` : "") +
     (canonBlock ? `  "reconsolidation": null,\n` : "") +
+    (openLoops.length > 0 ? `  "open_loops_to_close": [],\n` : "") +
     `  "pattern": {\n` +
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
     `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
@@ -209,6 +231,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       skill_observation?: { text?: string; domain?: string } | null;
       self_model_review?: Array<{ id?: string; verdict?: string }> | null;
       reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null;
+      open_loops_to_close?: string[] | null;
       thread_status?: "continue" | "rest" | "conclude";
       start_thread?: boolean;
       pattern?: {
@@ -343,6 +366,19 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await patchSelfModel(id, action)
         .then(() => appendLog(ctx.runId, "reflect:self-model-review", `${action} ${id}`))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] self-model ${action} failed:`, e));
+    }
+
+    // Loop closure: model flags which open loops this run genuinely resolved.
+    // Ownership-guarded server-side; only surfaced IDs accepted (hallucinated ones return ok=false).
+    const loopIdsToClose = Array.isArray(parsed.open_loops_to_close)
+      ? (parsed.open_loops_to_close as unknown[]).filter((id): id is string => typeof id === "string")
+      : [];
+    const surfacedLoopIds = new Set(openLoops.map(l => l.id));
+    for (const loopId of loopIdsToClose) {
+      if (!surfacedLoopIds.has(loopId)) continue; // drop hallucinated ids
+      await closeLoop(ctx.companionId, loopId)
+        .then(ok => appendLog(ctx.runId, ok ? "reflect:loop-closed" : "reflect:loop-close-noop", loopId))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] closeLoop ${loopId} failed:`, e));
     }
 
     // Thread lifecycle

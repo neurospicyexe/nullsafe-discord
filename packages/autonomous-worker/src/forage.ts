@@ -10,7 +10,7 @@
 
 import { prompt } from "./deepseek.js";
 import { search } from "./search-client.js";
-import { postForageFind } from "./halseth-client.js";
+import { postForageFind, getForageFindsFor } from "./halseth-client.js";
 import { COMPANIONS, COMPANION_ANCHOR_TOPICS, FORAGE_FINDS_PER_COMPANION } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -73,7 +73,17 @@ export async function runForage(): Promise<number> {
   let gathered = 0;
   for (const companionId of COMPANIONS) {
     try {
-      const domains = pickDomains(COMPANION_ANCHOR_TOPICS[companionId], FORAGE_FINDS_PER_COMPANION);
+      // Exclude domains already present as unconsumed finds so we rotate the topic pool
+      // instead of re-searching the same ground every day.
+      const recentFinds = await getForageFindsFor(companionId, 8).catch(() => []);
+      const recentDomains = new Set(recentFinds.map(f => f.domain.toLowerCase()));
+      const freshPool = COMPANION_ANCHOR_TOPICS[companionId].filter(
+        d => !recentDomains.has(d.toLowerCase()),
+      );
+      const pool = freshPool.length >= FORAGE_FINDS_PER_COMPANION
+        ? freshPool
+        : [...COMPANION_ANCHOR_TOPICS[companionId]];
+      const domains = pickDomains(pool, FORAGE_FINDS_PER_COMPANION);
       for (const domain of domains) {
         try {
           if (await forageOne(companionId, domain)) gathered++;

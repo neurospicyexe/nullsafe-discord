@@ -612,6 +612,33 @@ export async function getAnsweredQuestions(
   }
 }
 
+// Currently-open (unresolved) loops. Surfaced in reflect so the model can close any
+// that this run's exploration or journal entry genuinely addressed.
+export interface OpenLoop {
+  id: string;
+  loop_text: string;
+  weight: number;
+  opened_at: string;
+}
+
+export async function getOpenLoops(companionId: string, limit = 8): Promise<OpenLoop[]> {
+  try {
+    const r = await hFetch(`/mind/loops/${encodeURIComponent(companionId)}?limit=${limit}`) as {
+      loops?: Array<{ id?: string; loop_text?: string; weight?: number; opened_at?: string }>;
+    };
+    return (r.loops ?? [])
+      .filter(l => typeof l.id === "string" && typeof l.loop_text === "string")
+      .map(l => ({
+        id: l.id as string,
+        loop_text: l.loop_text as string,
+        weight: typeof l.weight === "number" ? l.weight : 0.5,
+        opened_at: typeof l.opened_at === "string" ? l.opened_at : "",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 // Open (unanswered) questions the companion is already holding. Used in the reflect
 // prompt so the companion sees what they're already waiting on and doesn't re-ask the same themes.
 export async function getOpenQuestions(
