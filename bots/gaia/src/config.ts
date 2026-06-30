@@ -56,10 +56,15 @@ export function loadBotConfig(): BotConfig {
 }
 
 export const GAIA_CRON_SCHEDULES = {
-  duskWitness:    process.env["GAIA_CRON_DUSK"]       ?? "0 19 * * *",
-  heartbeat:      process.env["GAIA_CRON_HEARTBEAT"]  ?? "0 */4 * * *",
-  interCompanion: process.env["GAIA_CRON_INTER"]      ?? "30 1-23/2 * * *",
+  duskWitness:    process.env["GAIA_CRON_DUSK"]            ?? "0 19 * * *",
+  heartbeat:      process.env["GAIA_CRON_HEARTBEAT"]       ?? "0 */4 * * *",
+  interCompanion: process.env["GAIA_CRON_INTER"]           ?? "30 1-23/2 * * *",
+  consolidation:  process.env["GAIA_CRON_CONSOLIDATION"]   ?? "*/5 * * * *",
 };
+
+export const CONSOLIDATION_IDLE_MINUTES = parseInt(
+  process.env["CONSOLIDATION_IDLE_MINUTES"] ?? "30", 10,
+);
 
 export const HEARTBEAT_CHANNEL_ID: string | undefined = process.env["HEARTBEAT_CHANNEL_ID"];
 export const INTER_COMPANION_CHANNEL_ID: string | undefined = process.env["INTER_COMPANION_CHANNEL_ID"];

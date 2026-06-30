@@ -31,6 +31,7 @@ import {
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   buildThoughtPacket, isSwarmReply,
   claimFloor, releaseFloor, setLastActivity,
+  clearConsolidation,
   isResponseCoherent,
   sendLong,
   liveIngest,
@@ -201,7 +202,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (pkDedup.resolveOriginal(message.channelId, message.id).skip) return;
     }
     // Signal conversation activity so autonomous worker skips runs while humans are present
-    if (!message.author.bot && redis) setLastActivity(redis).catch(() => {});
+    if (!message.author.bot && redis) {
+      setLastActivity(redis).catch(() => {});
+      clearConsolidation(redis, COMPANION_ID).catch(() => {});
+    }
 
     if (client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
       const name = connectVoice(message.member.voice.channel);

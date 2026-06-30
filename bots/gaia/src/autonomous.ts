@@ -12,7 +12,11 @@ import {
   GAIA_CRON_SCHEDULES, GAIA_INTEREST_KEYWORDS, AUTONOMOUS_PROMPTS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, COMPANION_ID,
   HEARTBEAT_CHANNEL_ID, INTER_COMPANION_CHANNEL_ID, FLOOR_LOCK_DURATION_MS,
+  CONSOLIDATION_IDLE_MINUTES,
 } from "./config.js";
+import {
+  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession,
+} from "@nullsafe/shared";
 
 // Per-process state shared by-reference with the shared autonomous runners (autonomous-core.ts).
 // pushRazielMessage (called from the message handler) and the runner signal-detection read the
@@ -58,6 +62,25 @@ export function startAutonomous(
   // Scheduling stays per-bot (timing is identity); the bodies are shared.
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.interCompanion, () => runInterCompanion(ctx)));
+
+  tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.consolidation, async () => {
+    if (!redis) return;
+    try {
+      const lastMs = await getLastActivityMs(redis).catch(() => null);
+      if (!isIdle(lastMs, CONSOLIDATION_IDLE_MINUTES)) return;
+      if (await isConsolidated(redis, COMPANION_ID)) return;
+      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference });
+      if (result.written) {
+        await markConsolidated(redis, COMPANION_ID, 7200);
+        console.log("[consolidation] gaia: session handoff written to Halseth");
+      } else {
+        console.log(`[consolidation] gaia: skipped (${result.reason})`);
+      }
+    } catch (e) {
+      console.error("[consolidation] gaia: cron error", e);
+    }
+  }));
+
   notesPollInterval = setInterval(() => runNotesPoll(ctx), NOTES_POLL_INTERVAL_MS);
   pollInterval = setInterval(() => runBridgePoll(ctx), BRIDGE_POLL_INTERVAL_MS);
 }

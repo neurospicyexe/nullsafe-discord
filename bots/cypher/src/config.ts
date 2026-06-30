@@ -56,11 +56,16 @@ export function loadBotConfig(): BotConfig {
 }
 
 export const CYPHER_CRON_SCHEDULES = {
-  taskCheck:      process.env["CYPHER_CRON_TASKS"]     ?? "0 22 * * *",
-  weeklyAudit:    process.env["CYPHER_CRON_AUDIT"]     ?? "0 18 * * 0",
-  heartbeat:      process.env["CYPHER_CRON_HEARTBEAT"] ?? "0 */4 * * *",
-  interCompanion: process.env["CYPHER_CRON_INTER"]     ?? "0 */2 * * *",
+  taskCheck:      process.env["CYPHER_CRON_TASKS"]          ?? "0 22 * * *",
+  weeklyAudit:    process.env["CYPHER_CRON_AUDIT"]          ?? "0 18 * * 0",
+  heartbeat:      process.env["CYPHER_CRON_HEARTBEAT"]      ?? "0 */4 * * *",
+  interCompanion: process.env["CYPHER_CRON_INTER"]          ?? "0 */2 * * *",
+  consolidation:  process.env["CYPHER_CRON_CONSOLIDATION"]  ?? "*/5 * * * *",
 };
+
+export const CONSOLIDATION_IDLE_MINUTES = parseInt(
+  process.env["CONSOLIDATION_IDLE_MINUTES"] ?? "30", 10,
+);
 
 // Optional heartbeat channel -- set HEARTBEAT_CHANNEL_ID env var to enable.
 // When unset, heartbeat cron runs but posts nothing.
