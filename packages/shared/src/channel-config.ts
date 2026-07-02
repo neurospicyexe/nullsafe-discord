@@ -65,6 +65,22 @@ export function countBotMsgsSinceHuman(
   return count;
 }
 
+// ── Seed vocative budget (2026-07-02) ─────────────────────────────────────────────────
+// The 06-26 blanket rule -- "human-free seeds never summon a sibling" -- predates the
+// human-anchored hard cap above. With the cap in place the runaway chain it prevented is
+// structurally impossible, and the blanket ban is why the inter-companion channel decayed
+// into statements: Layer B fires at 01:30, Raziel is asleep, every seed is human-free, so
+// nothing ever addresses anyone and the vocative gate never lets a reply fire.
+// New rule: a human-free seed MAY summon one sibling when the bounded exchange it ignites
+// (the seed plus a pingpong-capped reply run) still fits under the hard cap. Once the
+// channel pins at the cap it goes statement-only until Raziel speaks -- conversation is
+// presence-anchored, not a self-running theater.
+export const SEED_VOCATIVE_HEADROOM = 1 + BOT_PINGPONG_MAX;
+export function seedVocativeAllowed(humanPresent: boolean, botTurnsSinceHuman: number): boolean {
+  if (humanPresent) return true;
+  return botTurnsSinceHuman + SEED_VOCATIVE_HEADROOM <= botMsgsSinceHumanMax();
+}
+
 /**
  * System directive injected in the last allowed bot turns before the human-anchored cap:
  * close the thread naturally and hand the floor back to Raziel instead of hitting an

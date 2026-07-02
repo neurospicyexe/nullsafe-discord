@@ -25,6 +25,7 @@ import {
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif, relativeTime,
   INTER_SEED_HISTORY_N, seedEchoesThread, stripSiblingVocative,
+  seedVocativeAllowed, countBotMsgsSinceHuman,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -593,6 +594,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // Human presence over the last INTER_SEED_HISTORY_N messages. Empty channel counts as
     // human-absent: a seed into silence must not summon a sibling either.
     let humanPresent = false;
+    let botTurnsSinceHuman = 0;
     try {
       const chan = await client.channels.fetch(interCompanionChannelId!);
       if (chan?.isTextBased()) {
@@ -602,6 +604,10 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         historyContents = ordered.map(m => m.content.slice(0, 2000));
         botContents = ordered.filter(m => m.author.bot).map(m => m.content.slice(0, 2000));
         humanPresent = ordered.some(m => !m.author.bot);
+        botTurnsSinceHuman = countBotMsgsSinceHuman(
+          ordered.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+          new Set<string>(),
+        );
         const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
         if (lines.length > 0) historyBlock = lines.join("\n");
       }
@@ -640,14 +646,21 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       ? `\n\n[Motif check] The imagery around "${motif.join(", ")}" has run through most of the recent turns. It is spent -- do not extend it. Bring new material, or post nothing.`
       : "";
 
-    // Human-free window: the seed must not vocatively summon a sibling -- that is exactly
-    // the cron re-ignition chain that kept the triad looping while Raziel was away. Told
-    // up front (cheaper than stripping after), enforced below regardless.
-    const noVocativeBlock = humanPresent ? "" :
-      `\n\n[Raziel has not spoken here recently. Do NOT address a sibling by name or call on ` +
-      `anyone to respond -- speak into the room or to Raziel, without demanding a reply.]`;
+    // Seed vocative budget (2026-07-02, replaces the 06-26 blanket human-free ban): a seed
+    // may summon ONE sibling when the bounded exchange it ignites still fits under the
+    // human-anchored hard cap. The cap (no gap-reset) is what makes the 06-26 cron
+    // re-ignition chain structurally impossible now; without this budget the channel had
+    // decayed into statements -- nothing ever addressed anyone, so nothing ever replied.
+    const allowVocative = seedVocativeAllowed(humanPresent, botTurnsSinceHuman);
+    const vocativeBlock = allowVocative
+      ? (humanPresent ? "" :
+        `\n\n[If something above is genuinely FOR one sibling, address them by name and ask one ` +
+        `real thing -- they will answer, and the exchange will be short. One addressee at most; ` +
+        `an unaddressed contribution is equally good.]`)
+      : `\n\n[The channel has run long without Raziel. Do NOT address a sibling by name or call on ` +
+        `anyone to respond -- speak into the room or to Raziel, without demanding a reply.]`;
 
-    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock + noVocativeBlock;
+    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock + vocativeBlock;
     let msg = await generateOutward(
       inference, bootCtx.systemPrompt, seedPrompt,
       ctx.companionId, "inter_companion",
@@ -673,16 +686,16 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       }
     }
 
-    // Enforce the no-vocative rule for human-free windows: strip the address forms; if a
+    // Enforce the no-vocative rule when the budget denies it: strip the address forms; if a
     // vocative survives (the message IS a summons), drop it -- breaking the chain beats posting.
-    if (!humanPresent) {
+    if (!allowVocative) {
       const stripped = stripSiblingVocative(msg, ctx.companionId);
       if (stripped.stillVocative) {
-        console.warn(`[${ctx.companionId}/autonomous] inter-companion seed vocatively addressed a sibling in a human-free window and could not be stripped -- staying silent`);
+        console.warn(`[${ctx.companionId}/autonomous] inter-companion seed vocatively addressed a sibling with no cap headroom (${botTurnsSinceHuman} bot turns since human) -- staying silent`);
         return;
       }
       if (stripped.text !== msg) {
-        console.log(`[${ctx.companionId}/autonomous] stripped sibling vocative from seed (human-free window)`);
+        console.log(`[${ctx.companionId}/autonomous] stripped sibling vocative from seed (no cap headroom)`);
       }
       msg = stripped.text;
     }

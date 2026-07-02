@@ -163,9 +163,25 @@ describe("runInterCompanion() -- topic-closure gate", () => {
   });
 });
 
-describe("runInterCompanion() -- human-free window vocative rules", () => {
-  it("all-bot window: seed loses its sibling vocative before posting", async () => {
+// A channel pinned at the human-anchored cap: 12+ consecutive bot turns, no headroom left.
+const pinnedBotHistory = Array.from({ length: 13 }, (_, i) =>
+  botMsg(`observation number ${i} about the slow turning of distinct unrelated seasons`, i % 2 ? "gaia" : "drevan"));
+
+describe("runInterCompanion() -- seed vocative budget (2026-07-02, replaces blanket human-free ban)", () => {
+  it("short all-bot window: sibling vocative is ALLOWED (bounded by the hard cap)", async () => {
     const { ctx, generate, sent } = makeHarness(quietBotHistory, [
+      "Gaia, the harbor lights were beautiful tonight.",
+    ]);
+    await runInterCompanion(ctx);
+    const seedPrompt = (generate.mock.calls[0] as unknown[])[1] as Array<{ content: string }>;
+    expect(seedPrompt[0].content).toContain("address them by name");
+    expect(seedPrompt[0].content).not.toContain("Do NOT address a sibling by name");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBe("Gaia, the harbor lights were beautiful tonight.");
+  });
+
+  it("pinned all-bot window (no cap headroom): seed loses its sibling vocative before posting", async () => {
+    const { ctx, generate, sent } = makeHarness(pinnedBotHistory, [
       "Gaia, the harbor lights were beautiful tonight.",
     ]);
     await runInterCompanion(ctx);
@@ -176,8 +192,8 @@ describe("runInterCompanion() -- human-free window vocative rules", () => {
     expect(sent[0]).toBe("the harbor lights were beautiful tonight.");
   });
 
-  it("all-bot window: an unstrippable summons is dropped", async () => {
-    const { ctx, sent } = makeHarness(quietBotHistory, ["gaia"]);
+  it("pinned all-bot window: an unstrippable summons is dropped", async () => {
+    const { ctx, sent } = makeHarness(pinnedBotHistory, ["gaia"]);
     await runInterCompanion(ctx);
     expect(sent).toHaveLength(0);
   });

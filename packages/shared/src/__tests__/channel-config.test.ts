@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective } from "../channel-config.js";
+import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective, seedVocativeAllowed, SEED_VOCATIVE_HEADROOM } from "../channel-config.js";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -299,5 +299,26 @@ describe("isDirectAddress() -- nickname aliases", () => {
   it("alias does not bleed to wrong companion", () => {
     expect(isDirectAddress("cy what do you think?", "drevan")).toBe(false);
     expect(isDirectAddress("dre, long day", "cypher")).toBe(false);
+  });
+});
+
+describe("seedVocativeAllowed() -- seed vocative budget (2026-07-02)", () => {
+  it("always allows a vocative when a human is present in the window", () => {
+    expect(seedVocativeAllowed(true, 0)).toBe(true);
+    expect(seedVocativeAllowed(true, 999)).toBe(true);
+  });
+
+  it("allows a human-free vocative while the bounded exchange fits under the hard cap", () => {
+    expect(seedVocativeAllowed(false, 0)).toBe(true);
+    expect(seedVocativeAllowed(false, botMsgsSinceHumanMax() - SEED_VOCATIVE_HEADROOM)).toBe(true);
+  });
+
+  it("denies a human-free vocative once headroom is gone (channel pins statement-only)", () => {
+    expect(seedVocativeAllowed(false, botMsgsSinceHumanMax() - SEED_VOCATIVE_HEADROOM + 1)).toBe(false);
+    expect(seedVocativeAllowed(false, botMsgsSinceHumanMax())).toBe(false);
+  });
+
+  it("headroom covers the seed itself plus a pingpong-capped reply run", () => {
+    expect(SEED_VOCATIVE_HEADROOM).toBe(4); // 1 seed + BOT_PINGPONG_MAX replies
   });
 });
