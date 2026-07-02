@@ -5,6 +5,7 @@
 // Server-side dedup makes at most one vibe-check per day, so a missed or duplicate tick is harmless.
 
 import { postVibeCheck } from "./halseth-client.js";
+import { runReflectionPass } from "./reflection.js";
 
 // Push the digest to Raziel's #vibe-check channel so it actively reaches him instead of sitting
 // passively in Hearth /journal. Posts as Gaia (the ground/witness voice -- this is the triad
@@ -38,5 +39,9 @@ export async function runVibeCheckTick(): Promise<void> {
   // Only push a freshly-written digest (not already-sent) so the channel never double-posts.
   if (res.written && res.text) {
     await pushVibeToDiscord(res.text).catch(e => console.error("[vibecheck] discord push error:", e));
+    // The witness post gets answered: each companion reflects on their own section
+    // (recalls orphaned notes, moves tensions, journals, replies in-voice). Gated on
+    // res.written so a repeat tick can never double-run the reflections.
+    await runReflectionPass(res.text).catch(e => console.error("[vibecheck] reflection pass error:", e));
   }
 }

@@ -1018,6 +1018,46 @@ export async function postVibeCheck(): Promise<{ written: boolean; reason: strin
   return await hFetch("/mind/vibecheck/run", "POST", {}) as { written: boolean; reason: string; journal_id?: string; text: string };
 }
 
+// ---------------------------------------------------------------------------
+// Vibe-check reflection loop (guardian flags, tensions, deliberate recall)
+// ---------------------------------------------------------------------------
+
+export interface GuardianFlagRow {
+  id: string;
+  companion_id: string | null;   // null = system-level flag
+  flag_type: string;
+  severity: string;
+  status: string;
+  summary: string;
+  evidence: string | null;       // JSON string; orphan_memory carries { note_id }
+  created_at: string;
+}
+
+export async function getGuardianFlagsFor(companionId: string): Promise<GuardianFlagRow[]> {
+  const res = await hFetch(`/mind/guardian/flags?status=live&companion_id=${companionId}&limit=20`) as { flags: GuardianFlagRow[] };
+  return res.flags ?? [];
+}
+
+export async function resolveGuardianFlag(id: string): Promise<void> {
+  await hFetch(`/mind/guardian/flags/${id}`, "PATCH", { status: "resolved" });
+}
+
+export interface RecalledContinuityNote {
+  note_id: string;
+  content: string;
+  created_at: string;
+  salience: string;
+  thread_key: string | null;
+}
+
+// Deliberate recall: returns note contents AND warms them server-side (sets last_access_at),
+// which is what stops the Guardian's orphan_memory detector re-flagging the same note nightly.
+export async function recallContinuityNotes(agentId: string, noteIds: string[]): Promise<RecalledContinuityNote[]> {
+  if (noteIds.length === 0) return [];
+  const res = await hFetch("/mind/notes/recall", "POST", { agent_id: agentId, note_ids: noteIds }) as { recalled: number; notes: RecalledContinuityNote[] };
+  return res.notes ?? [];
+}
+
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
 // in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
 // NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --

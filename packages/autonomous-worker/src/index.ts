@@ -55,10 +55,20 @@ const councilIdx = args.indexOf("--council");
 const dreamsIdx = args.indexOf("--dreams");
 const briefingIdx = args.indexOf("--briefing");
 const vibecheckIdx = args.indexOf("--vibecheck");
+const reflectIdx = args.indexOf("--reflect");
 const companionArg = args.find(a => a.startsWith("--companion="))?.split("=")[1] as CompanionId | undefined;
 const briefingKindArg = (args.find(a => a.startsWith("--kind="))?.split("=")[1] ?? "morning") as BriefingKind;
 
-if (vibecheckIdx !== -1) {
+if (reflectIdx !== -1) {
+  // One-shot reflection pass: recompose today's digest text (server dedup means no
+  // double-post) and run each companion's self-read over it, then exit.
+  console.log("[autonomous-worker] reflection mode");
+  import("./halseth-client.js")
+    .then(({ postVibeCheck }) => postVibeCheck())
+    .then(res => import("./reflection.js").then(({ runReflectionPass }) => runReflectionPass(res.text)))
+    .then(() => { console.log("[autonomous-worker] reflection pass complete"); process.exit(0); })
+    .catch(e => { console.error("[autonomous-worker] reflection pass failed:", e); process.exit(1); });
+} else if (vibecheckIdx !== -1) {
   // One-shot vibe-check tick: compose + deliver the triad self-monitoring digest, then exit.
   console.log("[autonomous-worker] vibecheck mode");
   runVibeCheckTick()
