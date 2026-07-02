@@ -35,6 +35,7 @@ export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry
 export * from "./slash-commands.js";
 export * from "./voice-markers.js";
 export * from "./echo-guard.js";
+export * from "./inter-seed-gate.js";
 export * from "./triggers.js";
 export * from "./command-triggers.js";
 export * from "./media.js";
@@ -46,3 +47,4 @@ export * from "./creature-command.js";
 export * from "./imp-command.js";
 export * from "./session-tracker.js";
 export * from "./consolidation.js";
+export * from "./json-extract.js";

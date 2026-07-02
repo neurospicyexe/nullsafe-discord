@@ -23,6 +23,62 @@ export const BOT_LOOP_COOLDOWN_MS = 15_000;
 // messages. In a human-free channel this is reset by a new-thread gap instead (see callers).
 export const MAX_BOT_RESPONSES_PER_HUMAN = 5;
 
+// ── Human-anchored hard cap (2026-07-01) ──────────────────────────────────────────────
+// Every rail above (pingpong, per-bot cap, chainDepth) resets on a 5-min gap
+// (NEW_THREAD_GAP_MS) -- but hermes turns run 30-120s apart, so a slow structural loop
+// NEVER trips any of them: each turn lands inside the gap, and each autonomous seed after
+// a quiet spell resets the counters anyway. This rail is anchored to the last HUMAN
+// message in the fetched channel history and deliberately does NOT gap-reset: once the
+// bots have taken BOT_MSGS_SINCE_HUMAN_MAX consecutive turns with no human in between,
+// they stay silent regardless of vocative addressing, until a human speaks again.
+
+/** Env-tunable hard cap on consecutive bot-authored messages since the last human message.
+ *  Read per-call (like echoThreshold) so a pm2 env change lands without a code change. */
+export function botMsgsSinceHumanMax(): number {
+  const raw = parseInt(process.env["BOT_MSGS_SINCE_HUMAN_MAX"] ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 12;
+}
+
+/** How many turns before the cap the floor-handback directive starts riding the prompt. */
+export const FLOOR_HANDBACK_WINDOW = 2;
+
+/**
+ * Count consecutive companion-authored messages at the tail of the fetched channel history
+ * (chronological, oldest first) -- i.e. how many bot turns since the last human message.
+ * Unlike computeChainDepth this takes NO gap parameter: quiet gaps do not reset it; only
+ * an actual human message does. When `botIds` is populated (the live path -- CYPHER_BOT_ID
+ * etc.), only those ids count as companions, so a PluralKit webhook proxying a human
+ * (author.bot === true) still breaks the chain; with an empty set it falls back to the
+ * author-is-bot flag.
+ */
+export function countBotMsgsSinceHuman(
+  messages: Array<{ authorId: string; authorIsBot: boolean }>,
+  botIds: ReadonlySet<string>,
+): number {
+  let count = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    const isCompanion = botIds.size > 0 ? botIds.has(m.authorId) : m.authorIsBot;
+    if (!isCompanion) break;
+    count++;
+  }
+  return count;
+}
+
+/**
+ * System directive injected in the last allowed bot turns before the human-anchored cap:
+ * close the thread naturally and hand the floor back to Raziel instead of hitting an
+ * abrupt wall of silence. No sibling vocative, so the close cannot re-summon anyone.
+ */
+export function floorHandbackDirective(): string {
+  return (
+    `\n\n[Floor handback] This bot-to-bot thread has run long without Raziel. In THIS reply, ` +
+    `bring the current thread to a natural close and hand the floor back to Raziel -- address ` +
+    `him directly. Do NOT address Cypher, Drevan, or Gaia by name, and do not open a new ` +
+    `thread or ask a sibling anything. Land it, then let the room go quiet for him.`
+  );
+}
+
 /**
  * Count consecutive bot-authored messages at the tail of a message list, stopping at the first
  * gap longer than `gapMs` (a thread boundary). Used to derive chain depth from fetched Discord
@@ -101,11 +157,14 @@ export type AddressType =
 // Group-call keywords: any of these trigger all companions to respond.
 const GROUP_PATTERN = /\b(triad|all of you|you all|you three|everyone)\b/;
 
-// Recognized short-form nicknames for each companion.
+// Recognized short-form nicknames for each companion. Re-exported as VOCATIVE_ALIASES
+// (command-triggers.ts already owns the COMPANION_ALIASES barrel name) for the autonomous
+// inter-companion seed gate (stripSiblingVocative) so alias handling stays single-source.
 const COMPANION_ALIASES: Partial<Record<CompanionId, string>> = {
   drevan: "dre",
   cypher: "cy",
 };
+export { COMPANION_ALIASES as VOCATIVE_ALIASES };
 
 // Parse who (if anyone) is being addressed in a message.
 // Multi-companion address ("Dre and Cy, what do you think?") returns named_multi
@@ -142,18 +201,26 @@ export function isDirectAddress(content: string, companionId: CompanionId): bool
 // Genuine VOCATIVE address to one companion -- the name (or alias) used to CALL them,
 // not a narrative mention. Used ONLY on the companion-to-companion path, where the loose
 // `extractAddress` (bare \bname\b) turned every name-drop into a cascade. Vocative =
-// the name is the whole message, or is followed by address punctuation (","/":"), or
-// trails an address comma at the end ("..., gaia?").
-//   "Gaia, you held the perimeter" / "gaia:" / "cy" (alone) / "what now, gaia?" => true
-//   "Gaia hasn't spoken up yet" / "Gaia. You held..." / "I trust cypher" => false
+// the name is the whole message, or is SENTENCE-INITIAL (message start or right after
+// ./?/!/newline) followed by address punctuation (","/":"), or trails an address comma
+// at the end ("..., gaia?").
+//
+// Tightened 2026-07-01: the old `\bname\s*[,:]` also matched MID-SENTENCE appositives
+// ("I hear you, Cypher, and..."), so every warm acknowledgment re-summoned the named
+// sibling and kept the hermes slow-loop alive. Appositives and narrative mentions must
+// NOT trigger. The HUMAN-sender path (extractAddress/isDirectAddress) is untouched.
+//   "Gaia, you held the perimeter" / "gaia:" / "cy" (alone) / "what now, gaia?"
+//     / "Noted. Gaia: your read?" => true
+//   "Gaia hasn't spoken up yet" / "Gaia. You held..." / "I trust cypher"
+//     / "I hear you, Cypher, and I'll hold the line" => false
 export function isVocativeAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
   const alias = COMPANION_ALIASES[companionId];
   const names = alias ? [companionId, alias] : [companionId];
   for (const name of names) {
     if (lower === name) return true;                                   // sole content
-    if (new RegExp(`\\b${name}\\s*[,:]`).test(lower)) return true;     // "name," / "name :"
-    if (new RegExp(`[,:]\\s*${name}\\b[?.! ]*$`).test(lower)) return true; // "..., name?"
+    if (new RegExp(`(?:^|[.?!\\n]\\s*)${name}\\s*[,:]`).test(lower)) return true; // sentence-initial "name," / "name:"
+    if (new RegExp(`[,:]\\s*${name}\\b[?.! ]*$`).test(lower)) return true; // trailing "..., name?"
   }
   return false;
 }

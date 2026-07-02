@@ -21,6 +21,26 @@ describe("relativeTime", () => {
     expect(relativeTime(null, NOW)).toBe("recently");
     expect(relativeTime("nope", NOW)).toBe("recently");
   });
+
+  // Halseth emits bare SQLite stamps ("YYYY-MM-DD HH:MM:SS") which ARE UTC but carry no
+  // suffix; Date.parse reads them as host-local, so on the CDT VPS every age skewed ~5h.
+  it("parses bare SQLite stamps as UTC regardless of host timezone", () => {
+    const bare = new Date(NOW - 2 * H).toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
+    expect(bare).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/); // no T/Z suffix
+    expect(relativeTime(bare, NOW)).toBe("2 hours ago");
+  });
+
+  it("still honors explicit timezone suffixes/offsets untouched", () => {
+    expect(relativeTime(new Date(NOW - 3 * H).toISOString(), NOW)).toBe("3 hours ago");
+    // +02:00 offset: 5h wall-clock behind NOW minus the 2h offset = 7h ago in UTC.
+    const offs = new Date(NOW - 7 * H + 2 * H).toISOString().replace("Z", "").replace("T", "T");
+    expect(relativeTime(`${offs.slice(0, 19)}+02:00`, NOW)).toBe("7 hours ago");
+  });
+
+  it("accepts minute-precision bare stamps", () => {
+    const bare = new Date(NOW - 2 * H).toISOString().slice(0, 16).replace("T", " ");
+    expect(relativeTime(bare, NOW)).toBe("2 hours ago");
+  });
 });
 
 describe("stampRelative", () => {

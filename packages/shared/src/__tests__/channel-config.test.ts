@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS } from "../channel-config.js";
+import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective } from "../channel-config.js";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -88,6 +88,91 @@ describe("isVocativeAddress()", () => {
     expect(isVocativeAddress("gaia. you held the line", "gaia")).toBe(false);
     expect(isVocativeAddress("i trust cypher on this", "cypher")).toBe(false);
     expect(isVocativeAddress("drevan named it right", "drevan")).toBe(false);
+  });
+
+  // 2026-07-01 tightening: `\bname\s*[,:]` matched MID-SENTENCE appositives, so every
+  // warm acknowledgment ("I hear you, Cypher, and...") re-summoned the named sibling.
+  it("mid-sentence appositives do NOT trigger (the hermes slow-loop vector)", () => {
+    expect(isVocativeAddress("i hear you, cypher, and i'll hold the line", "cypher")).toBe(false);
+    expect(isVocativeAddress("that's the shape of it, gaia, exactly as you said", "gaia")).toBe(false);
+    expect(isVocativeAddress("what you named, drevan, still holds weight here", "drevan")).toBe(false);
+    expect(isVocativeAddress("i'm with cy, honestly", "cypher")).toBe(false);
+  });
+
+  it("sentence-initial vocative (message start or after ./?/!) DOES trigger", () => {
+    expect(isVocativeAddress("cypher, take the thread", "cypher")).toBe(true);
+    expect(isVocativeAddress("noted. gaia: your read?", "gaia")).toBe(true);
+    expect(isVocativeAddress("is that so? drevan, say more", "drevan")).toBe(true);
+    expect(isVocativeAddress("done!\ncy: verify it", "cypher")).toBe(true);
+  });
+
+  it("trailing '..., name?' still triggers", () => {
+    expect(isVocativeAddress("where does that leave us, cypher?", "cypher")).toBe(true);
+    expect(isVocativeAddress("do you feel it too, dre?", "drevan")).toBe(true);
+  });
+});
+
+describe("human-anchored hard cap (2026-07-01 -- no gap reset)", () => {
+  const bot = (id = "b1") => ({ authorId: id, authorIsBot: true });
+  const human = (id = "h1") => ({ authorId: id, authorIsBot: false });
+  const botIds = new Set(["b1", "b2", "b3"]);
+
+  it("counts consecutive bot turns since the last human", () => {
+    expect(countBotMsgsSinceHuman([human(), bot(), bot("b2"), bot("b3")], botIds)).toBe(3);
+    expect(countBotMsgsSinceHuman([bot(), human(), bot()], botIds)).toBe(1);
+    expect(countBotMsgsSinceHuman([bot(), bot(), human()], botIds)).toBe(0);
+    expect(countBotMsgsSinceHuman([], botIds)).toBe(0);
+  });
+
+  it("does NOT gap-reset: 14 slow bot turns still count 14 and cross the default cap of 12", () => {
+    // computeChainDepth would reset on any 5-min gap; this rail deliberately has no
+    // time input at all -- hermes turns 30-120s apart sail through gap-reset rails.
+    const fourteenSlowTurns = Array.from({ length: 14 }, () => bot());
+    const count = countBotMsgsSinceHuman(fourteenSlowTurns, botIds);
+    expect(count).toBe(14);
+    expect(count >= botMsgsSinceHumanMax()).toBe(true);
+    // Contrast: the gap-aware chain depth WOULD have reset (thread boundary) with gaps.
+    const withGaps = fourteenSlowTurns.map((m, i) => ({ ...m, createdTimestamp: i * (NEW_THREAD_GAP_MS + 1) }));
+    expect(computeChainDepth(withGaps, botIds)).toBe(1);
+  });
+
+  it("only an actual human message resets the count -- a mid-history gap does not", () => {
+    const msgs = [bot(), bot(), human(), bot(), bot(), bot()];
+    expect(countBotMsgsSinceHuman(msgs, botIds)).toBe(3);
+  });
+
+  it("with a populated botIds set, a PK webhook (bot flag, unknown id) breaks the chain", () => {
+    const pkProxy = { authorId: "webhook-raziel", authorIsBot: true };
+    expect(countBotMsgsSinceHuman([bot(), bot(), pkProxy, bot()], botIds)).toBe(1);
+  });
+
+  it("with an empty botIds set, falls back to the author-is-bot flag", () => {
+    expect(countBotMsgsSinceHuman([human(), bot("anything"), bot("else")], new Set())).toBe(2);
+  });
+
+  it("default cap is 12; env BOT_MSGS_SINCE_HUMAN_MAX overrides", () => {
+    const prev = process.env["BOT_MSGS_SINCE_HUMAN_MAX"];
+    delete process.env["BOT_MSGS_SINCE_HUMAN_MAX"];
+    expect(botMsgsSinceHumanMax()).toBe(12);
+    process.env["BOT_MSGS_SINCE_HUMAN_MAX"] = "20";
+    expect(botMsgsSinceHumanMax()).toBe(20);
+    process.env["BOT_MSGS_SINCE_HUMAN_MAX"] = "garbage";
+    expect(botMsgsSinceHumanMax()).toBe(12);
+    if (prev === undefined) delete process.env["BOT_MSGS_SINCE_HUMAN_MAX"];
+    else process.env["BOT_MSGS_SINCE_HUMAN_MAX"] = prev;
+  });
+
+  it("handback directive fires inside the last allowed turns and hands to Raziel, no sibling vocative", () => {
+    const max = botMsgsSinceHumanMax();
+    // The handler injects when count >= max - FLOOR_HANDBACK_WINDOW and count < max.
+    expect(max - FLOOR_HANDBACK_WINDOW).toBe(10);
+    const directive = floorHandbackDirective();
+    expect(directive).toContain("Raziel");
+    expect(directive).toMatch(/close/i);
+    // The directive itself must not be a vocative summons to any companion.
+    for (const c of ["cypher", "drevan", "gaia"] as const) {
+      expect(isVocativeAddress(directive, c)).toBe(false);
+    }
   });
 });
 

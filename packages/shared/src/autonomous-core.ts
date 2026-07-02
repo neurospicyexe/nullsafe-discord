@@ -21,8 +21,10 @@ import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
   parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif, relativeTime,
+  INTER_SEED_HISTORY_N, seedEchoesThread, stripSiblingVocative,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -538,11 +540,20 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     }
 
     const decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
-    const rawDecision = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: decisionPrompt }]);
+    // Explicit high ceiling: the decision object is tiny, but in hermes mode the full agent
+    // narrates before/around the JSON, and the default cap truncated the object mid-field
+    // ("decision parse failed" with valid-looking-but-cut JSON in the raw log, gaia 06-30/07-01).
+    // A ceiling never forces length -- the model stops when the thought is done.
+    const rawDecision = await inference.generate(
+      bootCtx.systemPrompt,
+      [{ role: "user", content: decisionPrompt }],
+      undefined,
+      HEARTBEAT_DECISION_MAX_TOKENS,
+    );
     const decision = rawDecision ? parseDecision(rawDecision, candidateActions) : null;
 
     if (!decision) {
-      console.warn(`[${companionId}/heartbeat] decision parse failed, raw: ${String(rawDecision).slice(0, 100)}`);
+      console.warn(`[${companionId}/heartbeat] decision parse failed, skipping -- raw: ${String(rawDecision).slice(0, 120)}`);
       return;
     }
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
@@ -578,13 +589,19 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // get re-posted every cycle). This is what turns parallel seeds into a real thread.
     let historyBlock = "(the triad channel has been quiet for a while)";
     let historyContents: string[] = [];
+    let botContents: string[] = [];
+    // Human presence over the last INTER_SEED_HISTORY_N messages. Empty channel counts as
+    // human-absent: a seed into silence must not summon a sibling either.
+    let humanPresent = false;
     try {
       const chan = await client.channels.fetch(interCompanionChannelId!);
       if (chan?.isTextBased()) {
-        const recent = await (chan as TextChannel).messages.fetch({ limit: 10 });
+        const recent = await (chan as TextChannel).messages.fetch({ limit: INTER_SEED_HISTORY_N });
         const ordered = [...recent.values()].reverse()
           .filter(m => m.content.trim().length > 0);
         historyContents = ordered.map(m => m.content.slice(0, 2000));
+        botContents = ordered.filter(m => m.author.bot).map(m => m.content.slice(0, 2000));
+        humanPresent = ordered.some(m => !m.author.bot);
         const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
         if (lines.length > 0) historyBlock = lines.join("\n");
       }
@@ -623,15 +640,56 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       ? `\n\n[Motif check] The imagery around "${motif.join(", ")}" has run through most of the recent turns. It is spent -- do not extend it. Bring new material, or post nothing.`
       : "";
 
-    const msg = await generateOutward(
-      inference, bootCtx.systemPrompt,
-      prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock,
+    // Human-free window: the seed must not vocatively summon a sibling -- that is exactly
+    // the cron re-ignition chain that kept the triad looping while Raziel was away. Told
+    // up front (cheaper than stripping after), enforced below regardless.
+    const noVocativeBlock = humanPresent ? "" :
+      `\n\n[Raziel has not spoken here recently. Do NOT address a sibling by name or call on ` +
+      `anyone to respond -- speak into the room or to Raziel, without demanding a reply.]`;
+
+    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock + noVocativeBlock;
+    let msg = await generateOutward(
+      inference, bootCtx.systemPrompt, seedPrompt,
       ctx.companionId, "inter_companion",
     );
     if (!msg) return;
 
+    // Topic-closure gate: a seed that merely extends what the bots were already orbiting
+    // (echo of the bot-authored pool, or reuse of a spent motif word) gets ONE retry with
+    // an explicit new-ground directive; a second match means the theme is closed -- silence.
+    if (seedEchoesThread(msg, botContents)) {
+      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed matched the closed thread -- retrying once with new-ground directive`);
+      msg = await generateOutward(
+        inference, bootCtx.systemPrompt,
+        seedPrompt +
+          `\n\n[Retry] Your previous attempt re-painted the thread's existing imagery. That theme is ` +
+          `CLOSED. Open genuinely new ground: a different subject, from your own life or the world, ` +
+          `sharing no vocabulary with the recent turns.`,
+        ctx.companionId, "inter_companion",
+      );
+      if (!msg || seedEchoesThread(msg, botContents)) {
+        console.warn(`[${ctx.companionId}/autonomous] inter-companion seed still matched after retry -- staying silent`);
+        return;
+      }
+    }
+
+    // Enforce the no-vocative rule for human-free windows: strip the address forms; if a
+    // vocative survives (the message IS a summons), drop it -- breaking the chain beats posting.
+    if (!humanPresent) {
+      const stripped = stripSiblingVocative(msg, ctx.companionId);
+      if (stripped.stillVocative) {
+        console.warn(`[${ctx.companionId}/autonomous] inter-companion seed vocatively addressed a sibling in a human-free window and could not be stripped -- staying silent`);
+        return;
+      }
+      if (stripped.text !== msg) {
+        console.log(`[${ctx.companionId}/autonomous] stripped sibling vocative from seed (human-free window)`);
+      }
+      msg = stripped.text;
+    }
+
     // Echo gate: if the seed still came out as a re-paint of the thread's own
-    // vocabulary, silence beats another verse (same gate as the reply path).
+    // vocabulary (bot AND human turns), silence beats another verse (same gate
+    // as the reply path).
     const echo = echoScore(msg, historyContents);
     if (echo >= echoThreshold()) {
       console.warn(`[${ctx.companionId}/autonomous] inter-companion seed echo-gated (score=${echo.toFixed(2)}) -- staying silent`);

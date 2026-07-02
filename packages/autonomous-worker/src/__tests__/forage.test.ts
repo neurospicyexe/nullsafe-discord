@@ -11,12 +11,15 @@ vi.mock("../search-client.js", () => ({
 }));
 vi.mock("../halseth-client.js", () => ({
   postForageFind: vi.fn(async () => ({})),
+  // runForage now excludes domains already sitting unconsumed in the pool (06-29);
+  // without this export the call throws and every companion pass "fails" to 0.
+  getForageFindsFor: vi.fn(async () => []),
 }));
 
 import { runForage, pickDomains } from "../forage.js";
 import { prompt } from "../deepseek.js";
 import { search } from "../search-client.js";
-import { postForageFind } from "../halseth-client.js";
+import { postForageFind, getForageFindsFor } from "../halseth-client.js";
 import { COMPANIONS, FORAGE_FINDS_PER_COMPANION } from "../config.js";
 
 beforeEach(() => {
@@ -27,6 +30,7 @@ beforeEach(() => {
     { title: "Axelrod tournaments", url: "https://example.com/a", content: "Tit-for-tat won repeatedly." },
   ]);
   vi.mocked(postForageFind).mockReset().mockResolvedValue({});
+  vi.mocked(getForageFindsFor).mockReset().mockResolvedValue([]);
 });
 
 describe("pickDomains", () => {

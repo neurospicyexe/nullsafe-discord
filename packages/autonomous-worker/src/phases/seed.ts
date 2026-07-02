@@ -18,6 +18,21 @@ export function pickOldestForage(finds: ForageFind[]): ForageFind | null {
   return finds.reduce((oldest, f) => (f.gathered_at < oldest.gathered_at ? f : oldest));
 }
 
+/**
+ * Deterministic forage rotation (2026-07-01): the dry-queue Level 4.5 below never fired in
+ * prod because the nightly signal-audit extracts ~2 seeds/companion while a run drains 1 --
+ * the queue is NEVER dry, so the forage pool just recirculated (cypher 0/9, gaia 0/10 finds
+ * consumed). On alternating runs -- day-of-year parity from the RUN date, never Math.random,
+ * so every companion's run that day makes the same call and reruns are reproducible -- a
+ * non-empty forage pool is preferred BEFORE the Level 3/4 queue selection (claim/thread
+ * Levels 1-2 stay above). Pure -- exported for tests.
+ */
+export function isForageRotationRun(runDate: Date): boolean {
+  const startOfYear = Date.UTC(runDate.getUTCFullYear(), 0, 1);
+  const dayOfYear = Math.floor((runDate.getTime() - startOfYear) / 86_400_000) + 1;
+  return dayOfYear % 2 === 1;
+}
+
 /** Build an exploration seed from a forage find. The title is the topic (a clean,
  *  searchable phrase for the explore phase); the neutral scout summary stays in the
  *  find, not the seed, so the Tavily query stays sharp. */
@@ -66,16 +81,19 @@ export function decideSeedSource(sessionNoteCount: number, feelingCount: number)
  * Phase 2: Seed selection
  *
  * Priority waterfall -- each level only runs if the level above has nothing:
- *   1. Live claim (priority 10 seed with claim_source set) -- companion already decided
- *   2. Active thread continuation -- orient detected an open chase worth returning to
- *   3. DeepSeek decision -- queue seed exists AND live signals present; let companion choose
- *   4. Queue seed -- no live signals competing, just take the next seed
- *   5. Self-generate -- queue empty, no claims, no threads
+ *   1.   Live claim (priority 10 seed with claim_source set) -- companion already decided
+ *   2.   Active thread continuation -- orient detected an open chase worth returning to
+ *   2.5. Forage rotation -- on alternating days (day-of-year parity), a non-empty forage
+ *        pool wins over the queue so the pool actually drains (see isForageRotationRun)
+ *   3.   DeepSeek decision -- queue seed exists AND live signals present; let companion choose
+ *   4.   Queue seed -- no live signals competing, just take the next seed
+ *   4.5. Forage fuel -- dry-queue fallback (kept: off-parity days with an empty queue)
+ *   5.   Self-generate -- queue empty, no claims, no threads, no forage
  *
  * Level 3 uses the full identity text so the companion is actually in the room
  * making the call, not a blind queue-puller.
  */
-export async function runSeed(ctx: PipelineContext): Promise<void> {
+export async function runSeed(ctx: PipelineContext, runDate: Date = new Date()): Promise<void> {
   await appendLog(ctx.runId, "seed:start");
 
   const seeds = await getAvailableSeeds(ctx.companionId, 5);
@@ -122,6 +140,20 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
     await appendLog(ctx.runId, "seed:continuation",
       `thread=${openThread.thread_key} position=${ctx.threadPosition} "${openThread.title.slice(0, 80)}"`);
     return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Level 2.5: Forage rotation -- on alternating days, prefer the forage pool
+  // over queue selection so gathered fuel actually gets eaten (the dry-queue
+  // fallback at 4.5 never fires: the nightly signal-audit refills faster than
+  // runs drain). Deterministic day-of-year parity, not Math.random.
+  // ---------------------------------------------------------------------------
+  if (isForageRotationRun(runDate)) {
+    if (await takeForageSeed(ctx, "seed:forage_rotation")) {
+      console.log(`[${ctx.companionId}/seed] forage rotation day -- consumed forage fuel before queue`);
+      return;
+    }
+    console.log(`[${ctx.companionId}/seed] forage rotation day but pool empty -- falling through to queue`);
   }
 
   // ---------------------------------------------------------------------------
@@ -179,22 +211,17 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
   }
 
   // ---------------------------------------------------------------------------
-  // Level 4.5: Forage fuel -- eat gathered outward fuel before generating blind.
-  // The queue is dry (frequent: seeds drain one-per-run between weekly replenishment),
-  // so rather than self-generate a cold-start guess -- the path that kept producing
-  // inward/echo seeds -- spend a real scouted find. This drains the recirculating pool
-  // (Raziel: "circling the same forage pulls") AND feeds exploration with world-facing
-  // material. Forage is outward by construction (external domains), so no INWARD guard.
-  // Consume is global on the row, so a shared find won't be re-eaten by a sibling.
+  // Level 4.5: Forage fuel -- dry-queue fallback. In practice the queue is rarely
+  // dry (the nightly signal-audit extracts ~2 seeds/companion vs 1 drained/run),
+  // which is why the rotation at 2.5 exists; this level remains for off-parity
+  // days when the queue genuinely empties, so we spend a real scouted find rather
+  // than self-generate a cold-start guess -- the path that kept producing
+  // inward/echo seeds. Forage is outward by construction (external domains), so
+  // no INWARD guard. Consume is global on the row, so a shared find won't be
+  // re-eaten by a sibling.
   // ---------------------------------------------------------------------------
-  const fuel = pickOldestForage(await getForageFindsFor(ctx.companionId, FORAGE_FETCH_LIMIT));
-  if (fuel) {
-    ctx.seed = buildForageSeed(ctx, fuel);
-    ctx.runType = "exploration";
-    ctx.seedDecisionReason = `forage fuel from ${fuel.domain} (gathered ${fuel.gathered_at.slice(0, 10)})`;
-    const consumed = await consumeForageFind(fuel.id, ctx.companionId);
-    await appendLog(ctx.runId, "seed:forage",
-      `consumed=${consumed} ${fuel.id} "${fuel.title.slice(0, 80)}" (${fuel.domain})`);
+  if (await takeForageSeed(ctx, "seed:forage")) {
+    console.log(`[${ctx.companionId}/seed] queue dry -- consumed forage fuel (Level 4.5 fallback)`);
     return;
   }
 
@@ -211,6 +238,25 @@ export async function runSeed(ctx: PipelineContext): Promise<void> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Try to seed this run from the forage pool: pick the oldest unconsumed find, consume it,
+ * set ctx.seed. Returns false (untouched ctx) when the pool is empty. Shared by the
+ * rotation branch (Level 2.5) and the dry-queue fallback (Level 4.5); `logEvent` records
+ * which branch fired.
+ */
+async function takeForageSeed(ctx: PipelineContext, logEvent: string): Promise<boolean> {
+  const fuel = pickOldestForage(await getForageFindsFor(ctx.companionId, FORAGE_FETCH_LIMIT));
+  if (!fuel) return false;
+  ctx.seed = buildForageSeed(ctx, fuel);
+  ctx.runType = "exploration";
+  ctx.seedDecisionReason = `forage fuel from ${fuel.domain} (gathered ${fuel.gathered_at.slice(0, 10)})` +
+    (logEvent === "seed:forage_rotation" ? " [rotation day]" : " [dry queue]");
+  const consumed = await consumeForageFind(fuel.id, ctx.companionId);
+  await appendLog(ctx.runId, logEvent,
+    `consumed=${consumed} ${fuel.id} "${fuel.title.slice(0, 80)}" (${fuel.domain})`);
+  return true;
+}
 
 async function decideWithContext(
   ctx: PipelineContext,

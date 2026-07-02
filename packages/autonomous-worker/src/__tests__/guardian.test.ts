@@ -22,12 +22,19 @@ function dateOnDow(dow: number): Date {
 beforeEach(() => { mocked.mockClear(); });
 
 describe("runGuardianTick", () => {
+  // runGuardian gained a second `catchup` arg (06-29: startup catch-up never writes the
+  // letter); the scheduled-tick path always passes catchup=false.
   it("requests the weekly letter only on the configured day", async () => {
     await runGuardianTick(dateOnDow(GUARDIAN_LETTER_DOW));
-    expect(mocked).toHaveBeenLastCalledWith(true);
+    expect(mocked).toHaveBeenLastCalledWith(true, false);
 
     await runGuardianTick(dateOnDow((GUARDIAN_LETTER_DOW + 3) % 7));
-    expect(mocked).toHaveBeenLastCalledWith(false);
+    expect(mocked).toHaveBeenLastCalledWith(false, false);
+  });
+
+  it("a catch-up tick never requests the letter, even on letter day", async () => {
+    await runGuardianTick(dateOnDow(GUARDIAN_LETTER_DOW), true);
+    expect(mocked).toHaveBeenLastCalledWith(false, true);
   });
 
   it("propagates halseth failure to the caller (scheduler catches + logs)", async () => {

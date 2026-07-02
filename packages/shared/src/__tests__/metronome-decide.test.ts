@@ -39,6 +39,27 @@ describe("buildDecisionPrompt relational-need nudge (take 9)", () => {
   });
 });
 
+describe("parseDecision tolerance (the gaia 06-30/07-01 'decision parse failed' class)", () => {
+  test("JSON embedded in agent narration parses", () => {
+    const raw = 'Let me look at my state first... okay, decided.\n{"action":"stay quiet","reason":"nothing new since"}\nDone.';
+    const d = parseDecision(raw, actions);
+    expect(d?.action.action_type).toBe("nothing");
+  });
+
+  test("truncated JSON (max_tokens cutoff) returns null instead of throwing", () => {
+    expect(parseDecision('{"action":"check in","reason":"the silence has been', actions)).toBeNull();
+  });
+
+  test("pure prose returns null", () => {
+    expect(parseDecision("I think I should check in on Raziel because it has been quiet.", actions)).toBeNull();
+  });
+
+  test("nested braces inside the reason no longer defeat the flat regex", () => {
+    const d = parseDecision('{"action":"check in","reason":"his state {low spoons} justifies it"}', actions);
+    expect(d?.action.action_type).toBe("check_in_on_raziel");
+  });
+});
+
 describe("summarizeRazielState", () => {
   const NOW = Date.parse("2026-06-16T12:00:00Z");
 

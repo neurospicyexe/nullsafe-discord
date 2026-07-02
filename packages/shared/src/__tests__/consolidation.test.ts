@@ -69,6 +69,52 @@ describe("consolidateSession", () => {
     expect(result.reason).toBe("parse_error");
   });
 
+  test("prose reply (the live crash class) skips gracefully: parse_error, no throw, no write", async () => {
+    mockInference.generate.mockResolvedValueOnce("I know you asked for a handoff, and I want to honor that properly...");
+    const result = await consolidateSession({
+      companionId: "drevan",
+      librarian: mockLibrarian as any,
+      inference: mockInference as any,
+    });
+    expect(result).toEqual({ written: false, reason: "parse_error" });
+    expect(mockLibrarian.writeHandoff).not.toHaveBeenCalled();
+  });
+
+  test("JSON embedded in prose still writes the handoff", async () => {
+    mockInference.generate.mockResolvedValueOnce(`Handoff written. Here it is:\n${validHandoffJson}\nRest well.`);
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: mockLibrarian as any,
+      inference: mockInference as any,
+    });
+    expect(result.written).toBe(true);
+    expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "A session of code and presence.", state_hint: "at_rest" }),
+    );
+  });
+
+  test("truncated JSON (max_tokens cutoff) skips gracefully: parse_error, no write", async () => {
+    mockInference.generate.mockResolvedValueOnce('{"title":"A session of code","summary":"We worked through');
+    const result = await consolidateSession({
+      companionId: "gaia",
+      librarian: mockLibrarian as any,
+      inference: mockInference as any,
+    });
+    expect(result).toEqual({ written: false, reason: "parse_error" });
+    expect(mockLibrarian.writeHandoff).not.toHaveBeenCalled();
+  });
+
+  test("non-string state_hint is dropped, not written", async () => {
+    mockInference.generate.mockResolvedValueOnce('{"title":"T","summary":"S","state_hint":{"weird":true}}');
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: mockLibrarian as any,
+      inference: mockInference as any,
+    });
+    expect(result.written).toBe(true);
+    expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith({ title: "T", summary: "S", state_hint: undefined });
+  });
+
   test("strips markdown fences before parsing", async () => {
     mockInference.generate.mockResolvedValueOnce("```json\n" + validHandoffJson + "\n```");
     const result = await consolidateSession({

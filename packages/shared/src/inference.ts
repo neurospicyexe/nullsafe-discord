@@ -2,7 +2,14 @@ import type { ChatMessage } from "./types.js";
 import type { InferenceProvider } from "./models.js";
 
 export interface InferenceAdapter {
-  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number): Promise<string | null>;
+  /**
+   * `sessionId` (optional 5th arg) is a stable conversation key (`companionId:channelId`)
+   * consumed ONLY by the Hermes adapter, which forwards it as `X-Hermes-Session-Id` so the
+   * gateway keeps one agent session per channel. Without it the gateway derives session id
+   * from hash(system_prompt + first user msg) -- and our system prompt varies per message,
+   * churning a fresh gateway session nearly every reply. All other adapters ignore it.
+   */
+  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string): Promise<string | null>;
 }
 
 // ── Output length ceiling ──────────────────────────────────────────────────────
@@ -321,13 +328,19 @@ class HermesAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string): Promise<string | null> {
     try {
+      // Stable session pinning (2026-07-01): without an explicit session header the gateway
+      // derives session id from hash(system_prompt + first user msg). Our system prompt varies
+      // per message (SOMA age, tripwires, SB hits...), so every reply churned a fresh gateway
+      // session. Callers that know the conversation pass `companionId:channelId`; when the
+      // channel is unknown the header is omitted (previous behavior).
       const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}),
+          ...(sessionId ? { "X-Hermes-Session-Id": sessionId } : {}),
         },
         body: JSON.stringify({
           model: this.model || "default",

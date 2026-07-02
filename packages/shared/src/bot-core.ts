@@ -615,7 +615,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId },
       brainClient, voiceClient, redis, librarian,
-      adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, bootCtx,
+      adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup,
       guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
       botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,

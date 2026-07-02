@@ -11,6 +11,7 @@ import type { StmStore } from "./stm.js";
 import type { LibrarianClient } from "./librarian.js";
 import type { WriteQueue } from "./write-queue.js";
 import type { InferenceAdapter } from "./inference.js";
+import { extractJson, rawPreview } from "./json-extract.js";
 
 /**
  * Per-bot prompt text for end-of-session distillation. The companion's voice and SOMA schema are
@@ -84,8 +85,13 @@ export async function distillSessionOnInactive(
   // Structured extract: handoff record + SOMA update + feeling log
   const extractRaw = await inference.generate(prompts.sessionExtractPrompt, [{ role: "user", content: summaryInput }]);
   if (extractRaw) {
-    try {
-      const ext = JSON.parse(extractRaw) as SessionExtract;
+    // Tolerant extraction: the model answers in prose or wraps/embeds the JSON often enough
+    // that a raw JSON.parse threw daily on all three bots. Extract the first {...} block;
+    // on failure warn + skip the structured writes (synthesis writes above already queued).
+    const ext = extractJson(extractRaw) as SessionExtract | null;
+    if (ext === null) {
+      console.warn(`[${tag}] structured extract parse failed, skipping -- raw: ${rawPreview(extractRaw)}`);
+    } else {
       const title = ext.title ?? "Discord session";
       const stateHint = deriveStateHint(ext.soma);
       wq.fireAndForget(`handoff:${channelId}`, async () => {
@@ -101,7 +107,7 @@ export async function distillSessionOnInactive(
           await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title }));
         });
       }
-    } catch { console.warn(`[${tag}] structured extract parse failed`); }
+    }
   }
 
   stmStore.clear(channelId);
@@ -129,11 +135,13 @@ export async function runDistillation(
   const result = await inference.generate(distillationPrompt, [{ role: "user", content: conversationText }]);
   if (!result) return;
 
-  try {
-    const parsed = JSON.parse(result) as {
-      persona_blocks?: Array<{ block_type: string; content: string }>;
-      human_blocks?: Array<{ block_type: string; content: string }>;
-    };
+  // Tolerant extraction (same class as the structured-extract fix above): pull the first
+  // {...} block so prose-wrapped JSON still lands; malformed output stays acceptable loss.
+  const parsed = extractJson(result) as {
+    persona_blocks?: Array<{ block_type: string; content: string }>;
+    human_blocks?: Array<{ block_type: string; content: string }>;
+  } | null;
+  if (parsed !== null) {
     if (parsed.persona_blocks?.length) {
       wq.fireAndForget(`persona:${channelId}`, () => librarian.writePersonaBlocks(channelId, parsed.persona_blocks!));
     }
@@ -144,5 +152,5 @@ export async function runDistillation(
       const noteText = `[discord:distillation] ${parsed.human_blocks.map((b) => b.content).join(" ")}`;
       wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
     }
-  } catch { /* fail-silent -- malformed JSON from inference is acceptable loss */ }
+  } // else: fail-silent -- malformed JSON from inference is acceptable loss
 }

@@ -3,6 +3,14 @@
 // Decision layer for Metronome heartbeat cron.
 // Companion loads eligible actions + context, calls LLM once for a structured pick, then executes.
 
+import { extractJson } from "./json-extract.js";
+
+// Ceiling for the heartbeat decision call. The decision JSON itself is tiny, but the
+// default cap (1024, previously 500 in the deployed dist) truncated it in prod when the
+// hermes-mode agent narrated before/around the object ("decision parse failed" with
+// valid-looking-but-cut JSON, gaia 2026-06-30/07-01). A ceiling never forces length.
+export const HEARTBEAT_DECISION_MAX_TOKENS = 2048;
+
 export interface MetronomeAction {
   id: string;
   name: string;
@@ -253,9 +261,10 @@ export function parseDecision(
   try {
     const match = raw.match(/\{[^{}]*"action"[^{}]*"reason"[^{}]*\}/s)
                ?? raw.match(/\{[^{}]+\}/);
-    if (!match) return null;
-
-    const parsed = JSON.parse(match[0]) as { action?: unknown; reason?: unknown };
+    // Fallback: greedy first-{...}-block extraction handles nested braces inside the
+    // reason text that the flat regexes above can't. Truncated JSON still yields null.
+    const parsed = (match ? extractJson(match[0]) : null) ?? extractJson(raw);
+    if (parsed === null) return null;
     if (typeof parsed.action !== "string" || typeof parsed.reason !== "string") return null;
 
     const action = actions.find(a => a.name === parsed.action)

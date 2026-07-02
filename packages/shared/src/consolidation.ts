@@ -1,5 +1,6 @@
 import type { LibrarianClient } from "./librarian.js";
 import type { InferenceAdapter } from "./inference.js";
+import { extractJson, rawPreview } from "./json-extract.js";
 
 export interface ConsolidationOpts {
   companionId: "cypher" | "drevan" | "gaia";
@@ -21,29 +22,32 @@ export async function consolidateSession(
     return { written: false, reason: "state_error" };
   }
 
-  let handoff: { title: string; summary: string; state_hint?: string };
-  try {
-    const raw = await inference.generate(
-      "Write a concise session close handoff. Respond with ONLY valid JSON, no markdown.",
-      [
-        {
-          role: "user",
-          content:
-            `Current companion state:\n${stateContext}\n\n` +
-            `Write JSON with: title (one sentence arc in your voice), ` +
-            `summary (2-3 sentences in your voice), ` +
-            `state_hint ("in_motion" | "at_rest" | "floating").`,
-        },
-      ],
-      0.3,
-      256,
-    );
-    if (!raw) return { written: false, reason: "inference_empty" };
-    const cleaned = raw.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-    handoff = JSON.parse(cleaned) as { title: string; summary: string; state_hint?: string };
-    if (!handoff.title || !handoff.summary) throw new Error("missing required fields");
-  } catch (e) {
-    console.error(`[consolidation] ${companionId}: parse error`, e);
+  // 256 tokens truncated Hermes-agent replies (the agent narrates before/around the
+  // JSON), so the object arrived cut off and unparseable. 1024 is pure ceiling headroom.
+  const raw = await inference.generate(
+    "Write a concise session close handoff. Respond with ONLY valid JSON, no markdown.",
+    [
+      {
+        role: "user",
+        content:
+          `Current companion state:\n${stateContext}\n\n` +
+          `Write JSON with: title (one sentence arc in your voice), ` +
+          `summary (2-3 sentences in your voice), ` +
+          `state_hint ("in_motion" | "at_rest" | "floating").`,
+      },
+    ],
+    0.3,
+    1024,
+  );
+  if (!raw) return { written: false, reason: "inference_empty" };
+  // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded
+  // JSON despite the ONLY-JSON instruction. Never throw here -- a raw JSON.parse crash
+  // was losing the whole idle-session handoff write (2026-06-30/07-01).
+  const parsed = extractJson(raw);
+  const handoff = parsed as { title?: string; summary?: string; state_hint?: string } | null;
+  if (!handoff || typeof handoff.title !== "string" || !handoff.title ||
+      typeof handoff.summary !== "string" || !handoff.summary) {
+    console.warn(`[consolidation] ${companionId}: no usable handoff JSON in output, skipping -- raw: ${rawPreview(raw)}`);
     return { written: false, reason: "parse_error" };
   }
 
@@ -51,7 +55,7 @@ export async function consolidateSession(
     await librarian.writeHandoff({
       title: handoff.title,
       summary: handoff.summary,
-      state_hint: handoff.state_hint,
+      state_hint: typeof handoff.state_hint === "string" ? handoff.state_hint : undefined,
     });
     return { written: true };
   } catch (e) {

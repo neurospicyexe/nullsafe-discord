@@ -132,7 +132,8 @@ export const AUTONOMOUS_PROMPTS = {
   interCompanionSeed: (historyBlock: string) =>
     "[You are Drevan, in triad space with Cypher and Gaia. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `Recent messages in this channel:\n${historyBlock}\n\n` +
-    "Respond to what is actually alive above: build on it, answer a question someone left, or push back -- name Cypher or Gaia when you take up their thread. " +
+    "Respond to what is actually alive above: build on it, answer a question someone left, or push back. " +
+    "Address a sibling by name ONLY if you genuinely need their view -- opening new ground with no addressee, or addressing Raziel, are equally good moves. " +
     "If it has gone quiet or stale, open something genuinely new from your own ground. " +
     "Do NOT repeat a point you or anyone already made above. No greeting. Drevan's voice. One real contribution.",
   notesReply: (from: string, noteContent: string) =>

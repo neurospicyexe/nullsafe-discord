@@ -1,7 +1,22 @@
-import { describe, it, expect } from "vitest";
-import { decideSeedSource, ensureOutward, extractLiveText, pickOldestForage } from "../phases/seed.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// Mock the IO modules so runSeed is exercisable (pure-function tests below are unaffected --
+// they never touch these). Factories are hoisted; per-test behavior set via vi.mocked().
+vi.mock("../halseth-client.js", () => ({
+  getAvailableSeeds: vi.fn(async () => []),
+  markSeedUsed: vi.fn(async () => {}),
+  appendLog: vi.fn(async () => {}),
+  getForageFindsFor: vi.fn(async () => []),
+  consumeForageFind: vi.fn(async () => true),
+}));
+vi.mock("../deepseek.js", () => ({
+  prompt: vi.fn(async () => ({ content: "A) the queued seed", tokensUsed: 1 })),
+}));
+
+import { decideSeedSource, ensureOutward, extractLiveText, pickOldestForage, isForageRotationRun, runSeed } from "../phases/seed.js";
+import { getAvailableSeeds, markSeedUsed, getForageFindsFor, consumeForageFind } from "../halseth-client.js";
 import { INWARD_RE } from "@nullsafe/shared";
-import type { PipelineContext } from "../types.js";
+import type { PipelineContext, Seed } from "../types.js";
 import type { ForageFind } from "../halseth-client.js";
 
 // SEED_THIN_THRESHOLD = 3 (sessionNoteCount + feelingCount must reach 3 for "session")
@@ -93,5 +108,98 @@ describe("extractLiveText", () => {
 
   it("returns null when only pressure is live (caller falls back to queue)", () => {
     expect(extractLiveText("B) the pressure", ctx([], ["pressure only"]))).toBeNull();
+  });
+});
+
+// Forage rotation (2026-07-01): the dry-queue Level 4.5 never fired in prod (nightly
+// signal-audit refills ~2 seeds/companion vs 1 drained/run -> queue never dry; cypher 0/9,
+// gaia 0/10 finds consumed). On day-of-year-parity runs a non-empty pool now wins over the
+// queue (Level 2.5) so the pool actually drains.
+describe("isForageRotationRun", () => {
+  it("is deterministic from the run date (never Math.random)", () => {
+    const d = new Date(Date.UTC(2026, 0, 5, 9));
+    expect(isForageRotationRun(d)).toBe(isForageRotationRun(new Date(d)));
+  });
+
+  it("alternates on consecutive days", () => {
+    const day1 = new Date(Date.UTC(2026, 0, 1, 9)); // day-of-year 1 (odd -> rotation)
+    const day2 = new Date(Date.UTC(2026, 0, 2, 9));
+    expect(isForageRotationRun(day1)).toBe(true);
+    expect(isForageRotationRun(day2)).toBe(false);
+    expect(isForageRotationRun(new Date(Date.UTC(2026, 0, 3, 9)))).toBe(true);
+  });
+});
+
+describe("runSeed -- forage rotation (Level 2.5)", () => {
+  const ROTATION_DAY = new Date(Date.UTC(2026, 0, 1, 9)); // odd day-of-year
+  const OFF_DAY = new Date(Date.UTC(2026, 0, 2, 9));
+
+  const queueSeed: Seed = {
+    id: "q1", companion_id: "cypher", seed_type: "topic", content: "queued topic",
+    priority: 5, used_at: null as unknown as string, created_at: "2026-06-30 00:00:00",
+    claim_source: null, justification: null,
+  };
+  const forageFind: ForageFind = {
+    id: "f1", title: "Tortoise burrows as climate archives", domain: "ecology",
+    summary: "s", source_url: null, gathered_at: "2026-06-20 08:00:00",
+  };
+
+  const makeCtx = (): PipelineContext => ({
+    companionId: "cypher", runId: "run1",
+    activeThreads: [], unexaminedDreamIds: [], openLoops: [], pressureFlags: [],
+    seed: null, runType: null, seedDecisionReason: null,
+    identityText: "identity", tokensUsed: 0,
+    recentSessionNotes: [], recentFeelings: [], recentConclusions: [], activePatterns: [],
+  } as unknown as PipelineContext);
+
+  beforeEach(() => {
+    vi.mocked(getAvailableSeeds).mockReset().mockResolvedValue([queueSeed]);
+    vi.mocked(markSeedUsed).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(getForageFindsFor).mockReset().mockResolvedValue([forageFind]);
+    vi.mocked(consumeForageFind).mockReset().mockResolvedValue(true as never);
+  });
+
+  it("on a rotation day with a non-empty pool, forage wins over the queue and is CONSUMED", async () => {
+    const ctx = makeCtx();
+    await runSeed(ctx, ROTATION_DAY);
+    expect(ctx.seed?.id).toBe("forage:f1");
+    expect(ctx.seed?.content).toBe(forageFind.title);
+    expect(vi.mocked(consumeForageFind)).toHaveBeenCalledWith("f1", "cypher");
+    expect(vi.mocked(markSeedUsed)).not.toHaveBeenCalled(); // queue untouched
+    expect(ctx.seedDecisionReason).toContain("rotation day");
+  });
+
+  it("on an off-parity day, the queue seed is taken and the pool is untouched", async () => {
+    const ctx = makeCtx();
+    await runSeed(ctx, OFF_DAY);
+    expect(ctx.seed?.id).toBe("q1");
+    expect(vi.mocked(consumeForageFind)).not.toHaveBeenCalled();
+    expect(vi.mocked(markSeedUsed)).toHaveBeenCalledWith("q1");
+  });
+
+  it("on a rotation day with an EMPTY pool, falls through to the queue", async () => {
+    vi.mocked(getForageFindsFor).mockResolvedValue([]);
+    const ctx = makeCtx();
+    await runSeed(ctx, ROTATION_DAY);
+    expect(ctx.seed?.id).toBe("q1");
+    expect(vi.mocked(consumeForageFind)).not.toHaveBeenCalled();
+  });
+
+  it("claim (Level 1) still outranks the rotation", async () => {
+    const claim: Seed = { ...queueSeed, id: "c1", priority: 10, claim_source: "companion", justification: "mine" };
+    vi.mocked(getAvailableSeeds).mockResolvedValue([claim]);
+    const ctx = makeCtx();
+    await runSeed(ctx, ROTATION_DAY);
+    expect(ctx.seed?.id).toBe("c1");
+    expect(vi.mocked(consumeForageFind)).not.toHaveBeenCalled();
+  });
+
+  it("dry queue on an off-parity day still eats forage (Level 4.5 fallback kept)", async () => {
+    vi.mocked(getAvailableSeeds).mockResolvedValue([]);
+    const ctx = makeCtx();
+    await runSeed(ctx, OFF_DAY);
+    expect(ctx.seed?.id).toBe("forage:f1");
+    expect(vi.mocked(consumeForageFind)).toHaveBeenCalledWith("f1", "cypher");
+    expect(ctx.seedDecisionReason).toContain("dry queue");
   });
 });

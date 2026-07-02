@@ -28,6 +28,11 @@ import {
   CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS, CLUB_DISCUSS_DAYS,
 } from "./config.js";
 import type { CompanionId } from "./types.js";
+import { extractJson } from "@nullsafe/shared";
+
+// Canonical tolerant JSON extraction now lives in @nullsafe/shared (json-extract.ts);
+// re-exported here so existing worker imports/tests keep working.
+export { extractJson };
 
 const DAY_MS = 24 * 3600 * 1000;
 const REOPEN_AFTER_CLOSE_DAYS = 1;
@@ -103,17 +108,6 @@ export function tallyVotes(
     if (n > best) { winner = r.id; best = n; }
   }
   return winner;
-}
-
-/** Tolerant JSON extraction: first {...} block in the model output. */
-export function extractJson(raw: string): Record<string, unknown> | null {
-  const match = raw.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[0]) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }
 
 async function inVoice(speaker: CompanionId, userMessage: string, maxTokens: number): Promise<string> {

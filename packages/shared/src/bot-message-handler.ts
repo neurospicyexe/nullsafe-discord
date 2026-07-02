@@ -27,6 +27,7 @@ import {
   judgeAmbientRelevance, judgeWriteback,
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
+  countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   buildThoughtPacket, isSwarmReply,
@@ -108,6 +109,11 @@ export interface MessageHandlerDeps {
   activeModelRef: { key: string | null; label: string };
   currentMoodRef: { value: string | null };
   lastSomaRefreshRef: { value: number };
+  /** Live orient context (forage finds, recent listens, incoming notes, growth) -- the
+   *  same ref the refresh loop mutates. Read at MESSAGE time, never a stale boot copy.
+   *  Direct/brain paths already receive this inside bootCtx.systemPrompt (composePrompt);
+   *  the hermes branch replaces that prompt with a lean base, so it appends this itself. */
+  recentContextRef: { value: string };
   bootCtx: BootContext;
   // stores
   stmStore: StmStore;
@@ -163,7 +169,7 @@ export interface MessageHandlerDeps {
 export async function handleMessage(message: Message, deps: MessageHandlerDeps): Promise<void> {
   const {
     client, cfg, brainClient, voiceClient, redis, librarian,
-    adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, bootCtx,
+    adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
     stmStore, writeQueue, configCache, sessionWindows, pkDedup,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
@@ -580,12 +586,29 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const isNewThread = !priorMsg || (message.createdTimestamp - priorMsg.createdTimestamp) > NEW_THREAD_GAP_MS;
 
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
+    // botTurnsSinceHuman is the human-anchored count (Fix 2026-07-01): consecutive
+    // bot-authored messages in the FETCHED history since the last human message. Unlike
+    // every rail below it does NOT reset on a quiet gap -- hermes turns run 30-120s so
+    // slow loops sail through gap-reset rails forever. Also read near the cap by the
+    // floor-handback directive at prompt-assembly time.
+    let botTurnsSinceHuman = 0;
     if (senderCtx.isCompanionBot) {
       if (isNewThread) {
         // Fresh thread (incl. an autonomous seed in a human-free channel): clear stale rails so
         // the per-human cap doesn't permanently mute a channel that never sees a human.
         botResponsesSinceHuman.delete(message.channelId);
         botPingpongCooldownUntil.delete(message.channelId);
+      }
+      // Hard cap anchored to the last HUMAN message: no gap reset, overrides vocative
+      // addressing. Only an actual human message (incl. a PK webhook proxy, whose author
+      // id is not a companion bot id) re-opens the floor.
+      botTurnsSinceHuman = countBotMsgsSinceHuman(
+        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+        BOT_IDS,
+      );
+      if (botTurnsSinceHuman >= botMsgsSinceHumanMax()) {
+        console.warn(`[${COMPANION_ID}] human-anchored cap: ${botTurnsSinceHuman} bot turns since last human (max ${botMsgsSinceHumanMax()}) -- staying silent`);
+        return;
       }
       const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
       if (Date.now() < cooldownUntil) return;
@@ -646,6 +669,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     let contextPrompt = pkMemberName
       ? `${basePrompt}\n\n[Current front: ${pkMemberName}]`
       : basePrompt;
+    // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
+    // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
+    // (forage finds, recent listens, incoming notes, growth). Without this append the
+    // companions fetched all of that every refresh and never saw a word of it under
+    // hermes. Read the REF at message time -- the refresh loop mutates it in place --
+    // never a stale boot copy. Direct/brain paths already carry it inside basePrompt.
+    if (inferenceMode === "hermes" && recentContextRef.value) {
+      contextPrompt += `\n\n${recentContextRef.value}`;
+    }
     if (activeModelRef.key) contextPrompt += `\n\n[Active model] ${activeModelRef.label}`;
 
     const somaAgeMin = Math.round((Date.now() - lastSomaRefreshRef.value) / 60_000);
@@ -802,6 +834,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       contextPrompt += channelCtx;
     }
 
+    // Floor handback (2026-07-01): in the last allowed turns before the human-anchored
+    // cap, steer this reply into a natural close addressed to Raziel instead of letting
+    // the thread slam into abrupt silence at the cap.
+    if (senderCtx.isCompanionBot && botTurnsSinceHuman >= botMsgsSinceHumanMax() - FLOOR_HANDBACK_WINDOW) {
+      contextPrompt += floorHandbackDirective();
+      console.log(`[${COMPANION_ID}] floor-handback directive injected (${botTurnsSinceHuman}/${botMsgsSinceHumanMax()} bot turns since human)`);
+    }
+
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
     // Raziel's logged state. Gaia exempt + disabled-gate live inside selectImp. Never the voice.
     let systemPromptWithImp = contextPrompt;
@@ -834,6 +874,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       floorClaimed = await claimFloor(redis, COMPANION_ID, 6000);
       if (!floorClaimed) return;
     }
+
+    // Stable per-conversation session key (2026-07-01): forwarded by the Hermes adapter
+    // as X-Hermes-Session-Id so the gateway keeps ONE agent session per companion+channel
+    // instead of deriving it from hash(system_prompt + first msg) -- our system prompt
+    // varies per message, which churned a fresh gateway session nearly every reply.
+    // Other adapters ignore it.
+    const inferenceSessionId = `${COMPANION_ID}:${message.channelId}`;
 
     let response: string | null;
     // A listen that ran on THIS bot must be answered by THIS bot, directly -- never
@@ -870,7 +917,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+        response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -891,11 +938,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+          response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
         }
       }
     } else {
-      response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+      response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
     }
 
     if (!response) {
