@@ -1029,7 +1029,7 @@ export interface GuardianFlagRow {
   severity: string;
   status: string;
   summary: string;
-  evidence: string | null;       // JSON string; orphan_memory carries { note_id }
+  evidence_json: string | null;  // JSON string; orphan_memory carries { note_id }
   created_at: string;
 }
 

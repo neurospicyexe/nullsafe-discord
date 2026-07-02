@@ -189,7 +189,7 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   const flagByNote = new Map<string, GuardianFlagRow[]>();
   for (const f of orphanFlags) {
     try {
-      const ev = JSON.parse(f.evidence ?? "{}") as { note_id?: string };
+      const ev = JSON.parse(f.evidence_json ?? "{}") as { note_id?: string };
       if (ev.note_id) {
         noteIds.push(ev.note_id);
         const list = flagByNote.get(ev.note_id) ?? [];
