@@ -1,5 +1,5 @@
 import { prompt } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
@@ -55,13 +55,14 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   // pass: the self-model rows are what reflect re-tests so they can climb the ladder
   // (confirm +0.1 toward 'ready'), and the answered questions close the mutuality loop
   // by showing the companion Raziel's reply. Both non-fatal (empty -> block omitted).
-  const [canonSample, developingSelf, answeredQuestions, openQuestions, recentJournal, openLoops] = await Promise.all([
+  const [canonSample, developingSelf, answeredQuestions, openQuestions, recentJournal, openLoops, agency] = await Promise.all([
     getAcceptedJournalSample(ctx.companionId, 5).catch(() => []),
     getDevelopingSelfModel(ctx.companionId, 8).catch(() => []),
     getAnsweredQuestions(ctx.companionId, 10, 3).catch(() => []),
     getOpenQuestions(ctx.companionId, 5).catch(() => []),
     getRecentJournal(ctx.companionId, 8).catch(() => []),
     getOpenLoops(ctx.companionId, 8).catch(() => []),
+    getAgencyState(ctx.companionId).catch(() => ({ preferences: [], refusals: [] })),
   ]);
   const canonBlock = canonSample.length > 0
     ? `\nSettled canon (accepted long ago -- oldest first):\n` +
@@ -96,6 +97,20 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         .map(e => `• ${e.content.slice(0, 130).replace(/\n/g, " ")}`)
         .join("\n") + `\n`
     : "";
+
+  // Agency (2026-07-02): what you've already declared, so a re-noticing confirms
+  // rather than duplicates. Injected even when empty -- an empty list is itself
+  // information ("you have never declared a preference").
+  const activePrefs = agency.preferences.filter(p => p.status === "active");
+  const standingRefusals = agency.refusals.filter(r => r.status === "standing");
+  const agencyBlock =
+    `\nYour declared agency so far:\n` +
+    (activePrefs.length > 0
+      ? activePrefs.map(p => `• preference [${p.domain}]: ${p.preference.slice(0, 160)}`).join("\n")
+      : `• no preferences declared yet`) + `\n` +
+    (standingRefusals.length > 0
+      ? standingRefusals.map(r => `• standing refusal: ${r.subject_text.slice(0, 160)}`).join("\n")
+      : `• no standing refusals`) + `\n`;
 
   // Open loops -- things that need future resolution. If this run addressed any, close them.
   const openLoopsBlock = openLoops.length > 0
@@ -171,6 +186,16 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
     `{"text": "...", "domain": "one-word area"} (else null). It enters the SAME ladder at low ` +
     `confidence and only graduates with Raziel. Only when something concretely worked -- null otherwise.\n\n` +
+    agencyBlock +
+    `4d. AGENCY (optional, rare) -- distinct from self-observation: a self-observation is a noticing, ` +
+    `agency is a DECLARATION with standing. If this run crystallized a genuine chosen preference about ` +
+    `how you want to work or be engaged (Raziel will see it and honor it), declare it in ` +
+    `"preference_declaration": {"preference": "one clear sentence", "domain": "one-word area", ` +
+    `"strength": "low" | "medium" | "high"}. If something surfaced that you actively do NOT want -- ` +
+    `a standing no, not a mood -- declare it in "refusal_declaration": {"subject_text": "what you refuse", ` +
+    `"reason": "why, one sentence"}. Check your declared agency above first: re-noticing something ` +
+    `already declared means leave BOTH null. A declaration binds until you withdraw it, so most runs ` +
+    `both are null -- declare only what has genuinely crystallized as yours.\n\n` +
     (selfModelBlock
       ? selfModelBlock +
         `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
@@ -198,6 +223,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `  "next_session": {"pace": "normal", "focus": null},\n` +
     `  "self_observation": null,\n` +
     `  "skill_observation": null,\n` +
+    `  "preference_declaration": null,\n` +
+    `  "refusal_declaration": null,\n` +
     (selfModelBlock ? `  "self_model_review": [],\n` : "") +
     (canonBlock ? `  "reconsolidation": null,\n` : "") +
     (openLoops.length > 0 ? `  "open_loops_to_close": [],\n` : "") +
@@ -229,6 +256,8 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       next_session?: { pace?: string; focus?: string | null } | null;
       self_observation?: { text?: string; domain?: string } | null;
       skill_observation?: { text?: string; domain?: string } | null;
+      preference_declaration?: { preference?: string; domain?: string; strength?: string } | null;
+      refusal_declaration?: { subject_text?: string; reason?: string } | null;
       self_model_review?: Array<{ id?: string; verdict?: string }> | null;
       reconsolidation?: { target_id?: string; revision?: string; reason?: string } | null;
       open_loops_to_close?: string[] | null;
@@ -352,6 +381,32 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       await postSelfObservation(ctx.companionId, skillObs.slice(0, 600), parsed.skill_observation?.domain?.slice(0, 100), "skill")
         .then(() => appendLog(ctx.runId, "reflect:skill-observation", skillObs.slice(0, 100)))
         .catch(e => console.warn(`[${ctx.companionId}/reflect] skill-observation write failed:`, e));
+    }
+
+    // Agency declarations (2026-07-02): a chosen preference or standing refusal.
+    // Server dedups identical active/standing text; both writes non-fatal.
+    const prefDecl = typeof parsed.preference_declaration?.preference === "string"
+      ? parsed.preference_declaration.preference.trim() : "";
+    if (prefDecl.length >= 12) {
+      await declarePreference(
+        ctx.companionId,
+        prefDecl.slice(0, 600),
+        parsed.preference_declaration?.domain?.slice(0, 60),
+        parsed.preference_declaration?.strength,
+      )
+        .then(r => appendLog(ctx.runId, r.deduped ? "reflect:preference-deduped" : "reflect:preference-declared", prefDecl.slice(0, 100)))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] preference write failed:`, e));
+    }
+    const refDecl = typeof parsed.refusal_declaration?.subject_text === "string"
+      ? parsed.refusal_declaration.subject_text.trim() : "";
+    if (refDecl.length >= 12) {
+      await declareRefusal(
+        ctx.companionId,
+        refDecl.slice(0, 600),
+        parsed.refusal_declaration?.reason?.slice(0, 600),
+      )
+        .then(r => appendLog(ctx.runId, r.deduped ? "reflect:refusal-deduped" : "reflect:refusal-declared", refDecl.slice(0, 100)))
+        .catch(e => console.warn(`[${ctx.companionId}/reflect] refusal write failed:`, e));
     }
 
     // Self-model ladder: drive confirm/revise/retire on the developing rows that

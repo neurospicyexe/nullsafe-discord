@@ -1111,3 +1111,63 @@ export async function recordSolAppearance(creatureId: string, note: string): Pro
     note,
   });
 }
+
+// ── Agency (2026-07-02): autonomous declaration of preferences + refusals ────
+// Until POST /agency/* existed on Halseth, agency was Librarian-only and the
+// worker literally could not declare it -- drevan/gaia had zero rows ever.
+
+export interface AgencyState {
+  preferences: Array<{ id: string; domain: string; preference: string; status: string }>;
+  refusals: Array<{ id: string; subject_text: string; status: string }>;
+}
+
+export async function getAgencyState(companionId: string): Promise<AgencyState> {
+  const [p, r] = await Promise.all([
+    hFetch(`/agency/preferences/${encodeURIComponent(companionId)}`).catch(() => []),
+    hFetch(`/agency/refusals/${encodeURIComponent(companionId)}?status=standing`).catch(() => []),
+  ]);
+  return {
+    preferences: Array.isArray(p) ? p as AgencyState["preferences"] : [],
+    refusals: Array.isArray(r) ? r as AgencyState["refusals"] : [],
+  };
+}
+
+export async function declarePreference(
+  companionId: string,
+  preference: string,
+  domain?: string,
+  strength?: string,
+): Promise<{ id: string; deduped?: boolean }> {
+  return await hFetch("/agency/preferences", "POST", {
+    companion_id: companionId,
+    preference,
+    ...(domain ? { domain } : {}),
+    ...(strength ? { strength } : {}),
+  }) as { id: string; deduped?: boolean };
+}
+
+export async function declareRefusal(
+  companionId: string,
+  subjectText: string,
+  reason?: string,
+): Promise<{ id: string; deduped?: boolean }> {
+  return await hFetch("/agency/refusals", "POST", {
+    companion_id: companionId,
+    subject_text: subjectText,
+    ...(reason ? { reason } : {}),
+  }) as { id: string; deduped?: boolean };
+}
+
+// ── Thread hygiene (2026-07-02) ──────────────────────────────────────────────
+// The conclude path rarely fires (seed queue is never dry, threads rarely get
+// continued to run 5), so auto:* threads accumulated ~220 open per companion.
+// Sweep once per run: anything machine-opened and untouched for 14 days is done.
+
+export async function sweepStaleThreads(companionId: string): Promise<number> {
+  const r = await hFetch("/mind/threads/sweep", "POST", {
+    agent_id: companionId,
+    older_than_days: 14,
+    prefix: "auto:",
+  }) as { swept?: number };
+  return r.swept ?? 0;
+}

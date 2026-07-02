@@ -1,4 +1,4 @@
-import { createRun, updateRun, appendLog, setHomePresence } from "./halseth-client.js";
+import { createRun, updateRun, appendLog, setHomePresence, sweepStaleThreads } from "./halseth-client.js";
 import { runOrient } from "./phases/orient.js";
 import { runSeed } from "./phases/seed.js";
 import { runExplore } from "./phases/explore.js";
@@ -98,6 +98,13 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
 
     // Phase 7: SOMA state update (non-fatal) -- close the read/write gap
     await runSomaUpdate(ctx);
+
+    // Thread hygiene (2026-07-02, non-fatal): resolve machine-opened auto:*
+    // threads untouched for 14 days. The conclude path alone never kept up --
+    // ~220 open per companion had accumulated by the time this landed.
+    await sweepStaleThreads(companionId)
+      .then(n => { if (n > 0) return appendLog(runId, "pipeline:thread-sweep", `resolved ${n} stale auto threads`); })
+      .catch(e => console.warn(`[${companionId}/pipeline] thread sweep failed (non-fatal):`, e));
 
     // Mark run complete
     await updateRun(runId, {
