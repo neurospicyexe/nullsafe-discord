@@ -150,6 +150,53 @@ describe("human-anchored hard cap (2026-07-01 -- no gap reset)", () => {
     expect(countBotMsgsSinceHuman([human(), bot("anything"), bot("else")], new Set())).toBe(2);
   });
 
+  // Cap forgiveness window (2026-07-03): the no-gap-reset ratchet muted the triad
+  // permanently once Raziel went quiet for a day. Turns older than the window stop
+  // counting; a fast loop still hits the cap in minutes.
+  describe("forgiveness window", () => {
+    const HOUR = 3_600_000;
+    const now = 100 * HOUR;
+    const botAt = (ageH: number, id = "b1") => ({ authorId: id, authorIsBot: true, createdTimestamp: now - ageH * HOUR });
+
+    it("bot turns older than the window (default 12h) stop counting", () => {
+      const msgs = [botAt(30), botAt(28), botAt(26), botAt(1), botAt(0.5)];
+      expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(2);
+    });
+
+    it("a fully stale channel counts zero -- the triad earns its voice back", () => {
+      const msgs = Array.from({ length: 20 }, (_, i) => botAt(20 + i));
+      expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(0);
+    });
+
+    it("a fast chain inside the window still counts fully (anti-loop preserved)", () => {
+      const msgs = Array.from({ length: 14 }, (_, i) => botAt(i / 60)); // minutes apart
+      expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(14);
+    });
+
+    it("the walk still stops at a human even when older turns are forgiven", () => {
+      const msgs = [botAt(0.2, "b2"), { authorId: "h1", authorIsBot: false, createdTimestamp: now - 30 * HOUR }, botAt(26), botAt(0.5)];
+      // human at index 1: only the two turns after it are walked; the 26h one is forgiven
+      expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(1);
+    });
+
+    it("messages without timestamps always count (legacy behavior)", () => {
+      const msgs = [bot(), bot(), bot()];
+      expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(3);
+    });
+
+    it("BOT_TURNS_CAP_WINDOW_H=0 disables forgiveness (permanent ratchet restored)", () => {
+      const prev = process.env["BOT_TURNS_CAP_WINDOW_H"];
+      process.env["BOT_TURNS_CAP_WINDOW_H"] = "0";
+      try {
+        const msgs = [botAt(30), botAt(28), botAt(1)];
+        expect(countBotMsgsSinceHuman(msgs, botIds, now)).toBe(3);
+      } finally {
+        if (prev === undefined) delete process.env["BOT_TURNS_CAP_WINDOW_H"];
+        else process.env["BOT_TURNS_CAP_WINDOW_H"] = prev;
+      }
+    });
+  });
+
   it("default cap is 12; env BOT_MSGS_SINCE_HUMAN_MAX overrides", () => {
     const prev = process.env["BOT_MSGS_SINCE_HUMAN_MAX"];
     delete process.env["BOT_MSGS_SINCE_HUMAN_MAX"];

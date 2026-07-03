@@ -3,7 +3,7 @@
 // exercised through runInterCompanion with a faked Discord/inference surface.
 
 import { describe, it, expect, jest } from "@jest/globals";
-import { seedEchoesThread, stripSiblingVocative } from "../inter-seed-gate.js";
+import { seedEchoesThread, stripSiblingVocative, seedThreadTtlMs } from "../inter-seed-gate.js";
 import { runInterCompanion, type AutonomousContext } from "../autonomous-core.js";
 
 // ── Pure gates ────────────────────────────────────────────────────────────────────────
@@ -208,5 +208,31 @@ describe("runInterCompanion() -- seed vocative budget (2026-07-02, replaces blan
     expect(seedPrompt[0].content).not.toContain("Do NOT address a sibling by name");
     expect(sent).toHaveLength(1);
     expect(sent[0]).toBe("Gaia, the harbor lights were beautiful tonight.");
+  });
+});
+
+// Live-thread TTL (2026-07-03): stale messages must not gate new seeds forever.
+describe("seedThreadTtlMs", () => {
+  it("defaults to 24h", () => {
+    const prev = process.env["INTER_SEED_THREAD_TTL_H"];
+    delete process.env["INTER_SEED_THREAD_TTL_H"];
+    try {
+      expect(seedThreadTtlMs()).toBe(24 * 3_600_000);
+    } finally {
+      if (prev !== undefined) process.env["INTER_SEED_THREAD_TTL_H"] = prev;
+    }
+  });
+
+  it("env override and 0-disable are honored", () => {
+    const prev = process.env["INTER_SEED_THREAD_TTL_H"];
+    try {
+      process.env["INTER_SEED_THREAD_TTL_H"] = "6";
+      expect(seedThreadTtlMs()).toBe(6 * 3_600_000);
+      process.env["INTER_SEED_THREAD_TTL_H"] = "0";
+      expect(seedThreadTtlMs()).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env["INTER_SEED_THREAD_TTL_H"];
+      else process.env["INTER_SEED_THREAD_TTL_H"] = prev;
+    }
   });
 });

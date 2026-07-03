@@ -24,7 +24,7 @@ import {
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   echoScore, echoThreshold, detectMotif, relativeTime,
-  INTER_SEED_HISTORY_N, seedEchoesThread, stripSiblingVocative,
+  INTER_SEED_HISTORY_N, seedEchoesThread, stripSiblingVocative, seedThreadTtlMs,
   seedVocativeAllowed, countBotMsgsSinceHuman,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
@@ -601,11 +601,20 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         const recent = await (chan as TextChannel).messages.fetch({ limit: INTER_SEED_HISTORY_N });
         const ordered = [...recent.values()].reverse()
           .filter(m => m.content.trim().length > 0);
-        historyContents = ordered.map(m => m.content.slice(0, 2000));
-        botContents = ordered.filter(m => m.author.bot).map(m => m.content.slice(0, 2000));
+        // Live-thread scoping (2026-07-03): only messages younger than the thread TTL count
+        // as "the thread" for the closure/echo/motif gates. Without this, a channel quiet
+        // for days kept its last 15 messages as a permanent topic fence -- every seed from
+        // every bot "matched the closed thread" and the commons starved (07-02/03 logs).
+        // Stale turns stay in historyBlock for narrative context; they just can't gate.
+        const ttlMs = seedThreadTtlMs();
+        const live = ttlMs > 0
+          ? ordered.filter(m => typeof m.createdTimestamp !== "number" || Date.now() - m.createdTimestamp <= ttlMs)
+          : ordered;
+        historyContents = live.map(m => m.content.slice(0, 2000));
+        botContents = live.filter(m => m.author.bot).map(m => m.content.slice(0, 2000));
         humanPresent = ordered.some(m => !m.author.bot);
         botTurnsSinceHuman = countBotMsgsSinceHuman(
-          ordered.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+          ordered.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
           new Set<string>(),
         );
         const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);

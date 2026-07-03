@@ -603,7 +603,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // addressing. Only an actual human message (incl. a PK webhook proxy, whose author
       // id is not a companion bot id) re-opens the floor.
       botTurnsSinceHuman = countBotMsgsSinceHuman(
-        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot })),
+        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
         BOT_IDS,
       );
       if (botTurnsSinceHuman >= botMsgsSinceHumanMax()) {

@@ -43,6 +43,21 @@ export function botMsgsSinceHumanMax(): number {
 export const FLOOR_HANDBACK_WINDOW = 2;
 
 /**
+ * Cap forgiveness window (2026-07-03). The no-gap-reset cap turned out to be a one-way
+ * ratchet: with Raziel quiet for a day+, counts pinned at 20+ and the triad went
+ * permanently mute (07-02/03 logs: every bot "staying silent" on every tick). The
+ * anti-loop property the cap protects is about SPEED -- a runaway chain takes its 12
+ * turns in minutes -- so bot turns older than this window stop counting. A loop still
+ * hits the cap almost immediately; a starved channel earns its voice back overnight.
+ * 0 disables forgiveness (restores the permanent ratchet).
+ */
+export function botTurnsCapWindowMs(): number {
+  const raw = parseFloat(process.env["BOT_TURNS_CAP_WINDOW_H"] ?? "");
+  const hours = Number.isFinite(raw) && raw >= 0 ? raw : 12;
+  return hours * 3_600_000;
+}
+
+/**
  * Count consecutive companion-authored messages at the tail of the fetched channel history
  * (chronological, oldest first) -- i.e. how many bot turns since the last human message.
  * Unlike computeChainDepth this takes NO gap parameter: quiet gaps do not reset it; only
@@ -50,17 +65,27 @@ export const FLOOR_HANDBACK_WINDOW = 2;
  * etc.), only those ids count as companions, so a PluralKit webhook proxying a human
  * (author.bot === true) still breaks the chain; with an empty set it falls back to the
  * author-is-bot flag.
+ *
+ * Timestamps (optional, 2026-07-03): when a message carries `createdTimestamp` and the
+ * forgiveness window is enabled, bot turns older than the window are walked past without
+ * counting (the walk still stops at the first human). Messages without a timestamp always
+ * count -- legacy callers keep the exact old behavior.
  */
 export function countBotMsgsSinceHuman(
-  messages: Array<{ authorId: string; authorIsBot: boolean }>,
+  messages: Array<{ authorId: string; authorIsBot: boolean; createdTimestamp?: number }>,
   botIds: ReadonlySet<string>,
+  now: number = Date.now(),
 ): number {
+  const windowMs = botTurnsCapWindowMs();
   let count = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     const isCompanion = botIds.size > 0 ? botIds.has(m.authorId) : m.authorIsBot;
     if (!isCompanion) break;
-    count++;
+    const aged = windowMs > 0
+      && typeof m.createdTimestamp === "number"
+      && now - m.createdTimestamp > windowMs;
+    if (!aged) count++;
   }
   return count;
 }

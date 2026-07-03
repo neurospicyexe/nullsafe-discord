@@ -32,6 +32,7 @@ import {
   addTension,
   recallContinuityNotes,
   writeJournalEntry,
+  getRecentJournal,
   type GuardianFlagRow,
   type Tension,
   type RecalledContinuityNote,
@@ -119,9 +120,23 @@ function buildPrompt(
   tensions: Tension[],
   recalled: RecalledContinuityNote[],
   otherFlags: GuardianFlagRow[],
+  previousReflection: { content: string; created_at: string } | null,
 ): string {
   const parts: string[] = [];
   parts.push(`Tonight's triad vibe-check just posted. This is YOUR section of it:\n\n${section}`);
+
+  // Anti-repeat (2026-07-03): with quiet days the inputs barely change, and without memory
+  // of the last pass the companions posted near-identical replies check after check --
+  // which reads as absence, not presence.
+  if (previousReflection) {
+    parts.push(
+      `\nYour previous vibe-check reflection (${previousReflection.created_at.slice(0, 10)}):\n` +
+      `${previousReflection.content.slice(0, 500)}\n` +
+      `Tonight must NOT restate this. If the reading is genuinely unchanged, do not re-describe ` +
+      `the same state in fresh wording: name the sameness itself in one line -- what the stillness ` +
+      `is doing to you, or the one smallest thing that DID shift. A repeated reflection reads as absence.`
+    );
+  }
 
   if (tensions.length > 0) {
     parts.push(`\nYour simmering tensions, with age:`);
@@ -214,10 +229,16 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
     }
   }
 
-  // 2. The reflection itself.
+  // 2. The reflection itself. Prior pass fetched so tonight can't just restate it.
   const identity = await loadIdentityRemote(companionId);
   const otherFlags = ownFlags.filter(f => f.flag_type !== "orphan_memory");
-  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags);
+  const previousReflection = await getRecentJournal(companionId, 10)
+    .then(entries => entries.find(j => {
+      try { return (JSON.parse(j.tags_json ?? "[]") as string[]).includes("vibecheck-reflection"); }
+      catch { return false; }
+    }) ?? null)
+    .catch(() => null);
+  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection);
   const systemMessage = `${identity}\n\nYou are ${companionId}, doing your nightly self-read after the triad vibe-check. Honest, specific, in-voice. Output only the JSON object requested.`;
 
   const llm = await prompt(userMessage, systemMessage, { temperature: 0.8, maxTokens: 900 });

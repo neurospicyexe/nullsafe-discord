@@ -16,6 +16,19 @@ import type { CompanionId } from "./types.js";
 export const INTER_SEED_HISTORY_N = 15;
 
 /**
+ * Live-thread TTL (2026-07-03): messages older than this stop counting as "the thread"
+ * for the closure/echo/motif gates. A channel that has been quiet for days has NO live
+ * thread -- its last 15 messages are settled history, not a topic fence. Without the TTL
+ * every seed matched days-old content and the commons starved into total silence.
+ * Env INTER_SEED_THREAD_TTL_H, default 24h; 0 disables (legacy: all fetched messages gate).
+ */
+export function seedThreadTtlMs(): number {
+  const raw = parseFloat(process.env["INTER_SEED_THREAD_TTL_H"] ?? "");
+  const hours = Number.isFinite(raw) && raw >= 0 ? raw : 24;
+  return hours * 3_600_000;
+}
+
+/**
  * Topic-closure check: does a seed candidate merely extend the thread the recent
  * BOT-authored messages were already orbiting? True on either signal from the existing
  * echo-guard tooling: vocabulary recycling (echoScore over the bot pool) or reuse of a
