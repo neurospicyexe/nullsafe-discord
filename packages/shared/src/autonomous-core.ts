@@ -660,7 +660,9 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // human-anchored hard cap. The cap (no gap-reset) is what makes the 06-26 cron
     // re-ignition chain structurally impossible now; without this budget the channel had
     // decayed into statements -- nothing ever addressed anyone, so nothing ever replied.
-    const allowVocative = seedVocativeAllowed(humanPresent, botTurnsSinceHuman);
+    // The seed posts into the inter-companion commons -- the triad's own space, so the
+    // vocative budget uses the self-sustained commons cap (2026-07-03).
+    const allowVocative = seedVocativeAllowed(humanPresent, botTurnsSinceHuman, true);
     const vocativeBlock = allowVocative
       ? (humanPresent ? "" :
         `\n\n[If something above is genuinely FOR one sibling, address them by name and ask one ` +

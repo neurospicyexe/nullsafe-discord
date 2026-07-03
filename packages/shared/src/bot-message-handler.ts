@@ -27,7 +27,7 @@ import {
   judgeAmbientRelevance, judgeWriteback,
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
-  countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
+  countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   buildThoughtPacket, isSwarmReply,
@@ -606,8 +606,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
         BOT_IDS,
       );
-      if (botTurnsSinceHuman >= botMsgsSinceHumanMax()) {
-        console.warn(`[${COMPANION_ID}] human-anchored cap: ${botTurnsSinceHuman} bot turns since last human (max ${botMsgsSinceHumanMax()}) -- staying silent`);
+      // Triad commons (autonomous + inter_companion modes) is the companions' own space:
+      // the cap there is a rolling budget (commons max + 12h forgiveness), not a wait-for-Raziel.
+      const capMax = botMsgsSinceHumanMax(isTriadCommons(channelEntry));
+      if (botTurnsSinceHuman >= capMax) {
+        console.warn(`[${COMPANION_ID}] human-anchored cap: ${botTurnsSinceHuman} bot turns since last human (max ${capMax}) -- staying silent`);
         return;
       }
       const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
@@ -837,9 +840,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Floor handback (2026-07-01): in the last allowed turns before the human-anchored
     // cap, steer this reply into a natural close addressed to Raziel instead of letting
     // the thread slam into abrupt silence at the cap.
-    if (senderCtx.isCompanionBot && botTurnsSinceHuman >= botMsgsSinceHumanMax() - FLOOR_HANDBACK_WINDOW) {
+    if (senderCtx.isCompanionBot && botTurnsSinceHuman >= botMsgsSinceHumanMax(isTriadCommons(channelEntry)) - FLOOR_HANDBACK_WINDOW) {
       contextPrompt += floorHandbackDirective();
-      console.log(`[${COMPANION_ID}] floor-handback directive injected (${botTurnsSinceHuman}/${botMsgsSinceHumanMax()} bot turns since human)`);
+      console.log(`[${COMPANION_ID}] floor-handback directive injected (${botTurnsSinceHuman}/${botMsgsSinceHumanMax(isTriadCommons(channelEntry))} bot turns since human)`);
     }
 
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on

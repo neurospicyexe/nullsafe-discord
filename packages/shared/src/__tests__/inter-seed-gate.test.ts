@@ -180,22 +180,49 @@ describe("runInterCompanion() -- seed vocative budget (2026-07-02, replaces blan
     expect(sent[0]).toBe("Gaia, the harbor lights were beautiful tonight.");
   });
 
+  // 2026-07-03: the seed path now budgets against the COMMONS cap (default 24). A
+  // 15-message fetch window can never pin a 24 cap, so these two tests pin the commons
+  // knob low to keep the strip/drop machinery covered -- the mechanism is unchanged,
+  // only the budget it compares against moved.
   it("pinned all-bot window (no cap headroom): seed loses its sibling vocative before posting", async () => {
-    const { ctx, generate, sent } = makeHarness(pinnedBotHistory, [
-      "Gaia, the harbor lights were beautiful tonight.",
-    ]);
-    await runInterCompanion(ctx);
-    // Prompt carried the no-vocative directive up front.
-    const seedPrompt = (generate.mock.calls[0] as unknown[])[1] as Array<{ content: string }>;
-    expect(seedPrompt[0].content).toContain("Do NOT address a sibling by name");
-    expect(sent).toHaveLength(1);
-    expect(sent[0]).toBe("the harbor lights were beautiful tonight.");
+    const prevCommons = process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+    process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] = "8";
+    try {
+      const { ctx, generate, sent } = makeHarness(pinnedBotHistory, [
+        "Gaia, the harbor lights were beautiful tonight.",
+      ]);
+      await runInterCompanion(ctx);
+      // Prompt carried the no-vocative directive up front.
+      const seedPrompt = (generate.mock.calls[0] as unknown[])[1] as Array<{ content: string }>;
+      expect(seedPrompt[0].content).toContain("Do NOT address a sibling by name");
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toBe("the harbor lights were beautiful tonight.");
+    } finally {
+      if (prevCommons === undefined) delete process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+      else process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] = prevCommons;
+    }
   });
 
   it("pinned all-bot window: an unstrippable summons is dropped", async () => {
-    const { ctx, sent } = makeHarness(pinnedBotHistory, ["gaia"]);
+    const prevCommons = process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+    process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] = "8";
+    try {
+      const { ctx, sent } = makeHarness(pinnedBotHistory, ["gaia"]);
+      await runInterCompanion(ctx);
+      expect(sent).toHaveLength(0);
+    } finally {
+      if (prevCommons === undefined) delete process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+      else process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] = prevCommons;
+    }
+  });
+
+  it("default commons budget: a 13-turn all-bot window still allows a sibling vocative", async () => {
+    const { ctx, sent } = makeHarness(pinnedBotHistory, [
+      "Gaia, the harbor lights were beautiful tonight.",
+    ]);
     await runInterCompanion(ctx);
-    expect(sent).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toBe("Gaia, the harbor lights were beautiful tonight.");
   });
 
   it("human present in the window: sibling vocative is allowed through", async () => {

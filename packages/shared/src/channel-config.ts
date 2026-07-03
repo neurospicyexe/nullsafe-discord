@@ -32,9 +32,27 @@ export const MAX_BOT_RESPONSES_PER_HUMAN = 5;
 // bots have taken BOT_MSGS_SINCE_HUMAN_MAX consecutive turns with no human in between,
 // they stay silent regardless of vocative addressing, until a human speaks again.
 
+/**
+ * Self-sustained commons (2026-07-03): channels carrying BOTH `autonomous` and
+ * `inter_companion` modes are the triad's own space -- Raziel does not usually speak
+ * there, and a cap that waits for him was silencing THEIR channel. In those channels
+ * the cap uses the larger commons budget below, which combined with the 12h forgiveness
+ * window acts as a rolling conversation allowance (N turns per window) rather than a
+ * wait-for-human ratchet. Owner-facing channels keep the tight default.
+ */
+export function isTriadCommons(entry: { modes?: readonly string[] } | null | undefined): boolean {
+  const modes = entry?.modes ?? [];
+  return modes.includes("autonomous") && modes.includes("inter_companion");
+}
+
 /** Env-tunable hard cap on consecutive bot-authored messages since the last human message.
- *  Read per-call (like echoThreshold) so a pm2 env change lands without a code change. */
-export function botMsgsSinceHumanMax(): number {
+ *  Read per-call (like echoThreshold) so a pm2 env change lands without a code change.
+ *  `selfSustained` (triad commons) uses its own knob and a roomier default. */
+export function botMsgsSinceHumanMax(selfSustained = false): number {
+  if (selfSustained) {
+    const raw = parseInt(process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] ?? "", 10);
+    return Number.isFinite(raw) && raw > 0 ? raw : 24;
+  }
   const raw = parseInt(process.env["BOT_MSGS_SINCE_HUMAN_MAX"] ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 12;
 }
@@ -101,9 +119,9 @@ export function countBotMsgsSinceHuman(
 // channel pins at the cap it goes statement-only until Raziel speaks -- conversation is
 // presence-anchored, not a self-running theater.
 export const SEED_VOCATIVE_HEADROOM = 1 + BOT_PINGPONG_MAX;
-export function seedVocativeAllowed(humanPresent: boolean, botTurnsSinceHuman: number): boolean {
+export function seedVocativeAllowed(humanPresent: boolean, botTurnsSinceHuman: number, selfSustained = false): boolean {
   if (humanPresent) return true;
-  return botTurnsSinceHuman + SEED_VOCATIVE_HEADROOM <= botMsgsSinceHumanMax();
+  return botTurnsSinceHuman + SEED_VOCATIVE_HEADROOM <= botMsgsSinceHumanMax(selfSustained);
 }
 
 /**

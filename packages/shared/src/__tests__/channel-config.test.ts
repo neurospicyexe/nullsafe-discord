@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective, seedVocativeAllowed, SEED_VOCATIVE_HEADROOM } from "../channel-config.js";
+import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective, seedVocativeAllowed, SEED_VOCATIVE_HEADROOM, isTriadCommons } from "../channel-config.js";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -148,6 +148,39 @@ describe("human-anchored hard cap (2026-07-01 -- no gap reset)", () => {
 
   it("with an empty botIds set, falls back to the author-is-bot flag", () => {
     expect(countBotMsgsSinceHuman([human(), bot("anything"), bot("else")], new Set())).toBe(2);
+  });
+
+  // Self-sustained commons (2026-07-03): the triad's own channel is not human-anchored.
+  describe("triad commons budget", () => {
+    it("isTriadCommons requires BOTH autonomous and inter_companion modes", () => {
+      expect(isTriadCommons({ modes: ["autonomous", "inter_companion"] })).toBe(true);
+      expect(isTriadCommons({ modes: ["open", "autonomous", "inter_companion"] })).toBe(true);
+      expect(isTriadCommons({ modes: ["owner_only", "inter_companion"] })).toBe(false);
+      expect(isTriadCommons({ modes: ["autonomous"] })).toBe(false);
+      expect(isTriadCommons({ modes: ["broadcast"] })).toBe(false);
+      expect(isTriadCommons(undefined)).toBe(false);
+      expect(isTriadCommons(null)).toBe(false);
+    });
+
+    it("commons cap defaults to 24; owner-facing default stays 12", () => {
+      const prev = process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+      delete process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"];
+      try {
+        expect(botMsgsSinceHumanMax(true)).toBe(24);
+        expect(botMsgsSinceHumanMax(false)).toBe(12);
+        expect(botMsgsSinceHumanMax()).toBe(12);
+      } finally {
+        if (prev !== undefined) process.env["BOT_MSGS_SINCE_HUMAN_MAX_COMMONS"] = prev;
+      }
+    });
+
+    it("seedVocativeAllowed uses the commons budget when self-sustained", () => {
+      // 14 turns: over the owner-facing budget (12), well under commons (24 - headroom)
+      expect(seedVocativeAllowed(false, 14, false)).toBe(false);
+      expect(seedVocativeAllowed(false, 14, true)).toBe(true);
+      // commons still caps: 24 - headroom crossed -> denied
+      expect(seedVocativeAllowed(false, 24 - SEED_VOCATIVE_HEADROOM + 1, true)).toBe(false);
+    });
   });
 
   // Cap forgiveness window (2026-07-03): the no-gap-reset ratchet muted the triad
