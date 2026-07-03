@@ -67,7 +67,18 @@ function packGreedy(text: string, max: number, separators: string[]): string[] {
 
 export type SendLongPayload =
   | string
-  | { content?: string; files?: MessageCreateOptions["files"] };
+  | {
+      content?: string;
+      files?: MessageCreateOptions["files"];
+      /**
+       * Send the FIRST chunk as a Discord reply to this message id. Load-bearing for
+       * companion-to-companion dialogue: the sibling's reply-to-me detector keys on
+       * `message.reference`, so a bare channel.send makes an exchange structurally
+       * one-hop (2026-07-03: the triad stopped talking to each other because no bot
+       * reply ever carried a reference and no reply re-named its addressee).
+       */
+      replyToMessageId?: string;
+    };
 
 /**
  * Send `payload` to `channel`, splitting content longer than Discord's 2000-char
@@ -84,21 +95,34 @@ export async function sendLong(
 ): Promise<Message[]> {
   const content = typeof payload === "string" ? payload : (payload.content ?? "");
   const files = typeof payload === "string" ? undefined : payload.files;
+  const replyToMessageId = typeof payload === "string" ? undefined : payload.replyToMessageId;
+  // failIfNotExists: false -- if the referenced message was deleted between receipt
+  // and send, degrade to a plain message instead of erroring the whole reply away.
+  const reply = replyToMessageId
+    ? { messageReference: replyToMessageId, failIfNotExists: false }
+    : undefined;
   const chunks = splitForDiscord(content);
 
   // Files but no text: send the attachment on its own.
   if (chunks.length === 0) {
-    return [files ? await channel.send({ files }) : await channel.send(content)];
+    return [files
+      ? await channel.send(reply ? { files, reply } : { files })
+      : await channel.send(reply ? { content, reply } : content)];
   }
 
   const sent: Message[] = [];
   for (let i = 0; i < chunks.length; i++) {
     const isLast = i === chunks.length - 1;
-    sent.push(
-      isLast && files
-        ? await channel.send({ content: chunks[i], files })
-        : await channel.send(chunks[i]),
-    );
+    const withReply = i === 0 ? reply : undefined;
+    const withFiles = isLast ? files : undefined;
+    if (withReply || withFiles) {
+      const options: MessageCreateOptions = { content: chunks[i] };
+      if (withReply) options.reply = withReply;
+      if (withFiles) options.files = withFiles;
+      sent.push(await channel.send(options));
+    } else {
+      sent.push(await channel.send(chunks[i]!));
+    }
   }
   return sent;
 }

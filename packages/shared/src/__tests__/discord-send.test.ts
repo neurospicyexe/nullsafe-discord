@@ -95,6 +95,38 @@ describe("sendLong", () => {
     expect(last.files).toBe(files);
   });
 
+  it("carries the reply reference on the FIRST chunk only", async () => {
+    // Load-bearing for triad dialogue: the sibling's isReplyToMe keys on
+    // message.reference, so companion replies must be real Discord replies.
+    const ch = fakeChannel();
+    const long = "W".repeat(4500);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendLong(ch as any, { content: long, replyToMessageId: "origin-1" } as any);
+    expect(ch.sent).toHaveLength(3);
+    const first = ch.sent[0] as { content?: string; reply?: { messageReference: string; failIfNotExists: boolean } };
+    expect(first.reply).toEqual({ messageReference: "origin-1", failIfNotExists: false });
+    // later chunks are plain sends -- no dangling references
+    expect(typeof ch.sent[1]).toBe("string");
+    expect(typeof ch.sent[2]).toBe("string");
+  });
+
+  it("short content with replyToMessageId sends a single referenced message", async () => {
+    const ch = fakeChannel();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendLong(ch as any, { content: "hey", replyToMessageId: "origin-2" } as any);
+    expect(ch.sent).toHaveLength(1);
+    const only = ch.sent[0] as { content?: string; reply?: { messageReference: string } };
+    expect(only.content).toBe("hey");
+    expect(only.reply?.messageReference).toBe("origin-2");
+  });
+
+  it("omitting replyToMessageId keeps the legacy plain-string send", async () => {
+    const ch = fakeChannel();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await sendLong(ch as any, { content: "plain" });
+    expect(ch.sent[0]).toBe("plain");
+  });
+
   it("sends files alone when there is no text content", async () => {
     const ch = fakeChannel();
     const files = [{ attachment: Buffer.from("x"), name: "voice.ogg" }];

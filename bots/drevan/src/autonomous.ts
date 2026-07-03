@@ -45,6 +45,7 @@ export function startAutonomous(
   bootCtx: BootContext,
   sessionWindows: SessionWindowManager,
   redis: Redis | null,
+  registerSentId?: (id: string) => void,
 ): void {
   const ctx: AutonomousContext = {
     companionId: COMPANION_ID,
@@ -56,7 +57,7 @@ export function startAutonomous(
     defaultInterTarget: "cypher",
     prompts: AUTONOMOUS_PROMPTS,
     librarian, inference, client, configCache, bootCtx, sessionWindows, redis,
-    cooldown, messageBuffer, cycleGuard,
+    cooldown, messageBuffer, cycleGuard, registerSentId,
   };
 
   // Scheduling stays per-bot (timing is identity); the bodies are shared.

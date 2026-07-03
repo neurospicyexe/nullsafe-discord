@@ -80,6 +80,13 @@ export interface AutonomousContext {
   cooldown: Map<string, number>;
   messageBuffer: Array<{ content: string; ts: number }>;
   cycleGuard: CycleGuard;
+  /**
+   * Register an autonomously-sent message id with the bot's reply-to-me detector
+   * (the handler's sentIds set). Without this a sibling's Discord reply to a SEED
+   * is invisible to the seeder -- isReplyToMe keys on sentIds, so the vocative
+   * exchange a seed ignites could never come back to it (2026-07-03).
+   */
+  registerSentId?: (id: string) => void;
 }
 
 export function isOnCooldown(ctx: AutonomousContext, channelId: string): boolean {
@@ -135,6 +142,7 @@ export async function sendAutonomousMessage(
     const channel = await ctx.client.channels.fetch(channelId);
     if (channel?.isTextBased()) {
       const sent = await sendLong(channel as TextChannel, content);
+      for (const m of sent) ctx.registerSentId?.(m.id);
       markCooldown(ctx, channelId);
       ctx.librarian.ask(
         "continuity note",

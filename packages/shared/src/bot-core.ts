@@ -264,7 +264,7 @@ export interface RunBotConfig {
   mistralTtsModel: string | undefined;
   mistralSttModel: string | undefined;
   autonomous: {
-    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null) => void;
+    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null, registerSentId?: (id: string) => void) => void;
     stop: () => void;
     resetCycleGuard: () => void;
     pushRazielMessage: (content: string) => void;
@@ -470,7 +470,16 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[${companionId}] ready as ${c.user.tag}`);
-    autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis);
+    // registerSentId: autonomous seeds land in the same reply-to-me detector as handler
+    // replies, so a sibling's Discord reply to a seed reaches the seeder (2026-07-03).
+    autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis, (id: string) => {
+      sentIds.add(id);
+      while (sentIds.size > SENT_IDS_CAP) {
+        const oldest = sentIds.values().next().value;
+        if (oldest === undefined) break;
+        sentIds.delete(oldest);
+      }
+    });
     registerGuildCommands(client, buildCompanionCommands(companionLabel))
       .then((n) => console.log(`[${companionId}] slash commands registered on ${n} guild(s)`))
       .catch((e) => console.warn(`[${companionId}] slash registration failed:`, e));

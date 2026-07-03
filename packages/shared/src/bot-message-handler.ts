@@ -1046,6 +1046,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const MAX_TTS = 2000;
     let sent: Message[];
 
+    // Companion-to-companion replies carry a Discord reply reference. The sibling's
+    // reply-to-me detector (isReplyToMe) keys on message.reference, and shouldRespond
+    // requires a vocative otherwise -- without the reference every exchange died after
+    // one hop (2026-07-03: seed summons sibling, sibling answers without re-naming,
+    // everyone's gate goes silent). The reference lets the bounded pingpong the rails
+    // were built for (BOT_PINGPONG_MAX + human-anchored cap) actually happen.
+    const replyToMessageId = senderCtx.isCompanionBot ? message.id : undefined;
+
     if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
@@ -1060,21 +1068,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           // VC active -- stream audio there, send text in channel
           const resource = createAudioResource(Readable.from(audioBuffer));
           vcState.player.play(resource);
-          sent = await sendLong(ch, response);
+          sent = await sendLong(ch, { content: response, replyToMessageId });
         } else {
           // No live VC -- attach audio to text channel message. Buffer is MP3
           // (synthesize requests response_format "mp3"); the name must match or
           // some Discord clients refuse to play it.
           const content =
             response.length > MAX_TTS ? `${response}\n\n*[voice: first ${MAX_TTS} chars]*` : response;
-          sent = await sendLong(ch, { content, files: [{ attachment: audioBuffer, name: "voice.mp3" }] });
+          sent = await sendLong(ch, { content, files: [{ attachment: audioBuffer, name: "voice.mp3" }], replyToMessageId });
         }
       } catch (err) {
         console.error(`[${COMPANION_ID}] TTS failed, falling back to text:`, err);
-        sent = await sendLong(ch, response);
+        sent = await sendLong(ch, { content: response, replyToMessageId });
       }
     } else {
-      sent = await sendLong(ch, response);
+      sent = await sendLong(ch, { content: response, replyToMessageId });
     }
 
     for (const m of sent) sentIds.add(m.id);
