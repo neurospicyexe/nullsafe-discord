@@ -61,15 +61,35 @@ export function formatImageReply(prompt: string, result: ImageResult): { text: s
   return result.url ? { text, imageUrl: result.url } : { text };
 }
 
-/** Handle `search <query>`. Returns the exact message the bot sends. */
-export async function handleToolSearch(query: string, companionId: string): Promise<string> {
+/**
+ * Read-in block (2026-07-03): the searching companion must actually READ what it found.
+ * Raziel: "I didn't put it there to have an over-glorified search engine" -- a search is
+ * "bring this into the conversation", not a link dump. This block (titles + snippets)
+ * is fed back to the model for an in-voice weave after the deterministic ack.
+ */
+export function formatSearchReadIn(query: string, results: SearchResult[]): string {
+  const lines = [`You just ran a web search for "${query}" because Raziel asked for it in the live conversation. What you found:`];
+  for (const r of results.slice(0, SEARCH_LIST_CAP)) {
+    lines.push(`• ${r.title}\n  ${r.snippet.slice(0, 400)}`);
+  }
+  lines.push(
+    `Now bring it INTO the conversation: say what you actually found and what matters in it, ` +
+    `connected to the live thread, in your own voice. 2-6 sentences. No link lists, no "here are ` +
+    `the results" framing -- the links are already posted. If the results are thin or off-target, say that honestly.`,
+  );
+  return lines.join("\n");
+}
+
+/** Handle `search <query>`. Returns the deterministic ack plus the raw results so the
+ *  caller can feed them back to the model (read-in) and into STM. */
+export async function handleToolSearch(query: string, companionId: string): Promise<{ reply: string; results: SearchResult[] }> {
   const q = query.trim();
-  if (!q) return "give me something to search for.";
+  if (!q) return { reply: "give me something to search for.", results: [] };
   const res = await toolsFetch("/mind/tools/search", { companion_id: companionId, query: q });
-  if (res.status === 403) return "web search isn't enabled for you yet (Raziel can flip the tools_enabled gate).";
-  if (!res.ok) return `search failed: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`;
+  if (res.status === 403) return { reply: "web search isn't enabled for you yet (Raziel can flip the tools_enabled gate).", results: [] };
+  if (!res.ok) return { reply: `search failed: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`, results: [] };
   const results = Array.isArray(res.json["results"]) ? (res.json["results"] as SearchResult[]) : [];
-  return formatSearchReply(q, results);
+  return { reply: formatSearchReply(q, results), results };
 }
 
 /**

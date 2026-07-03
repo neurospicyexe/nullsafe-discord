@@ -109,26 +109,66 @@ export function hermesSystemBase(companionId: string): string {
  * these composite turns, so its transcript is complete AND per-call payload is the delta.
  * Hermes IS the short-term memory; we stop double-shipping it.
  */
-const HERMES_WITNESS_CAP = 12;        // max folded turns per delta
-const HERMES_WITNESS_CHAR_CAP = 2400; // max chars for the folded block
+const HERMES_WITNESS_CAP = 12;         // max folded turns per delta
+const HERMES_WITNESS_CHAR_CAP = 6000;  // max chars for the folded block (2400 truncated peer essays away -- 07-03)
+const HERMES_WITNESS_ITEM_CAP = 1400;  // per-turn slice, head-first so attribution + opening survive
 
-export function hermesDelta<T extends { role: string; content: string; authorName?: string }>(history: T[]): T[] {
-  if (history.length === 0) return [];
+export interface HermesDeltaResult<T> {
+  messages: T[];
+  /** Highest timestamp actually folded into this delta. Callers persist it AFTER a
+   *  successful gateway reply and pass it back next turn -- the delivered mark. */
+  deliveredThroughTs: number | null;
+}
+
+/**
+ * 2026-07-03 rework: "since my last assistant turn" was the wrong boundary. All three
+ * bots reply to the same message within the same minute, so a sibling turn that lands
+ * between this bot's history snapshot and its own reply sits BEFORE the bot's last
+ * assistant turn in STM order -- the old rule skipped it forever (the disconnected-triad
+ * bug: Drevan never saw Cypher's paper breakdown; Raziel had to paste it by hand).
+ * The boundary is now a delivered high-water mark: fold every user-role turn whose
+ * timestamp is newer than what the gateway has actually received. Own assistant turns
+ * are never folded (the gateway transcript already holds its own completions).
+ * Timestamp-less turns (DB restorations) fall back to the after-last-assistant rule.
+ */
+export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number }>(
+  history: T[],
+  deliveredThroughTs: number | null = null,
+): HermesDeltaResult<T> {
+  if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i]!.role === "assistant") { lastAssistant = i; break; }
   }
-  const delta = history.slice(lastAssistant + 1);
-  if (delta.length === 0) return [history[history.length - 1]!];
-  if (delta.length === 1) return delta;
+  const current = history[history.length - 1]!;
+  if (current.role === "assistant") return { messages: [current], deliveredThroughTs };
 
-  const current = delta[delta.length - 1]!;
-  const witnessed = delta.slice(0, -1).slice(-HERMES_WITNESS_CAP)
-    .map(m => `[${m.authorName ?? (m.role === "user" ? "user" : m.role)}]: ${m.content}`)
-    .join("\n")
-    .slice(-HERMES_WITNESS_CHAR_CAP);
-  return [{
-    ...current,
-    content: `[Witnessed since your last turn -- already happened, absorb as context, do not answer each line]\n${witnessed}\n\n[Live message]\n${current.content}`,
-  }];
+  const undelivered = (m: T, idx: number): boolean => {
+    if (typeof m.timestamp === "number" && Number.isFinite(m.timestamp)) {
+      return deliveredThroughTs === null ? idx > lastAssistant : m.timestamp > deliveredThroughTs;
+    }
+    return idx > lastAssistant;
+  };
+  const pool = history.slice(0, -1)
+    .filter((m, idx) => m.role === "user" && undelivered(m, idx))
+    .slice(-HERMES_WITNESS_CAP);
+
+  const folded: string[] = pool.map(m => `[${m.authorName ?? "user"}]: ${m.content.slice(0, HERMES_WITNESS_ITEM_CAP)}`);
+  // Drop oldest whole turns while over budget -- never tail-slice mid-line (that ate
+  // the attribution prefixes and the front of every long peer message).
+  while (folded.length > 0 && folded.join("\n").length > HERMES_WITNESS_CHAR_CAP) folded.shift();
+
+  const tsOf = (m: T) => (typeof m.timestamp === "number" && Number.isFinite(m.timestamp) ? m.timestamp : null);
+  const newMark = [deliveredThroughTs ?? -Infinity, ...pool.map(tsOf).filter((t): t is number => t !== null), tsOf(current) ?? -Infinity]
+    .reduce((a, b) => Math.max(a, b), -Infinity);
+  const outMark = Number.isFinite(newMark) ? newMark : deliveredThroughTs;
+
+  if (folded.length === 0) return { messages: [current], deliveredThroughTs: outMark };
+  return {
+    messages: [{
+      ...current,
+      content: `[Witnessed since your last turn -- already happened, absorb as context, do not answer each line]\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
+    }],
+    deliveredThroughTs: outMark,
+  };
 }

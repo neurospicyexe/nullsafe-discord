@@ -46,7 +46,7 @@ import {
   handleClubCommand,
   handleLogCommand,
   handleIntoCommand,
-  handleToolSearch, handleToolImage, handleCouncilConvene,
+  handleToolSearch, formatSearchReadIn, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
   ALL_MODELS,
@@ -69,6 +69,11 @@ interface ImpContextCache {
 }
 const IMP_CONTEXT_TTL_MS = 5 * 60 * 1_000;
 let _impContextCache: ImpContextCache | null = null;
+
+// Hermes delivered mark (2026-07-03): per-channel high-water timestamp of turns actually
+// delivered to the gateway session. Module-level = per-process = per companion bot.
+// Advanced ONLY after a successful gateway reply, so a failed call re-sends its delta.
+const hermesDeliveredMark = new Map<string, number>();
 
 async function getImpContext(
   librarian: LibrarianClient,
@@ -376,9 +381,34 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && SEARCH_TRIGGER) {
       const searchMatch = effectiveContent.match(SEARCH_TRIGGER);
       if (searchMatch) {
-        const reply = await handleToolSearch(searchMatch[1]!, COMPANION_ID)
-          .catch(err => `search failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
-        await sendLong(message.channel as TextChannel, reply);
+        const search = await handleToolSearch(searchMatch[1]!, COMPANION_ID)
+          .catch(err => ({ reply: `search failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`, results: [] }));
+        await sendLong(message.channel as TextChannel, search.reply);
+        // Read-in (2026-07-03): a search is "bring this into the conversation", not a link
+        // dump. Feed the snippets back to the model for an in-voice weave, and land BOTH
+        // turns in STM -- before this, the searching bot never saw its own results (its own
+        // messageCreate is skipped), so it literally could not discuss what it just found.
+        stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
+        stmStore.append(message.channelId, { role: "assistant", content: search.reply, timestamp: Date.now() });
+        if (search.results.length > 0) {
+          try {
+            await (message.channel as TextChannel).sendTyping();
+            const readInPrompt = formatSearchReadIn(searchMatch[1]!, search.results);
+            const woven = await adapterRef.current.generate(
+              bootCtx.systemPrompt,
+              [...stmStore.get(message.channelId).slice(-CONTEXT_WINDOW_SIZE), { role: "user", content: readInPrompt }],
+              0.7,
+              replyMaxTokensFor(COMPANION_ID, inferenceMode),
+              `${COMPANION_ID}:${message.channelId}`,
+            );
+            if (woven) {
+              await sendLong(message.channel as TextChannel, woven);
+              stmStore.append(message.channelId, { role: "assistant", content: woven, timestamp: Date.now() });
+            }
+          } catch (e) {
+            console.warn(`[${COMPANION_ID}] search read-in failed (links already posted):`, e instanceof Error ? e.message : String(e));
+          }
+        }
         return;
       }
     }
@@ -885,14 +915,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Other adapters ignore it.
     const inferenceSessionId = `${COMPANION_ID}:${message.channelId}`;
 
-    // Hermes delta turn (2026-07-02): with the session pinned, the gateway loads history
-    // from state.db and discards the request-body history -- so sending the full STM
-    // window wasted payload AND silently dropped every turn this bot didn't reply to
-    // (the witness gap). Send one composite delta turn instead; other adapters keep the
-    // full grounded window. Brain relay path is unchanged (it does its own assembly).
-    const inferenceHistory = inferenceMode === "hermes"
-      ? hermesDelta(groundedHistory)
-      : groundedHistory;
+    // Hermes delta turn (2026-07-02, reworked 07-03): with the session pinned, the gateway
+    // loads history from state.db and discards the request-body history -- so sending the
+    // full STM window wasted payload AND silently dropped every turn this bot didn't reply
+    // to (the witness gap). Send one composite delta turn against the delivered high-water
+    // mark; other adapters keep the full grounded window. Brain relay path is unchanged.
+    const hermesOut = inferenceMode === "hermes"
+      ? hermesDelta(groundedHistory, hermesDeliveredMark.get(message.channelId) ?? null)
+      : null;
+    const inferenceHistory = hermesOut ? hermesOut.messages : groundedHistory;
 
     let response: string | null;
     // A listen that ran on THIS bot must be answered by THIS bot, directly -- never
@@ -960,6 +991,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (!response) {
       await sendLong(ch, IN_CHARACTER_FALLBACK);
       return;
+    }
+
+    // Advance the hermes delivered mark only now that the gateway actually answered --
+    // a failed call leaves the mark alone so its delta re-sends next turn.
+    if (hermesOut && hermesOut.deliveredThroughTs !== null) {
+      hermesDeliveredMark.set(message.channelId, hermesOut.deliveredThroughTs);
     }
 
     // Self-switch: companion can emit [model:<key>] to request a model change.
