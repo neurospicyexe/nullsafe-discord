@@ -341,6 +341,10 @@ class HermesAdapter implements InferenceAdapter {
           "Content-Type": "application/json",
           ...(this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}),
           ...(sessionId ? { "X-Hermes-Session-Id": sessionId } : {}),
+          // Session KEY scopes the gateway's long-term memory (e.g. Honcho) across
+          // transcripts; the ID names this transcript. Pinning both to the stable
+          // companion:channel key means gateway LTM survives any future /new rotation.
+          ...(sessionId ? { "X-Hermes-Session-Key": sessionId } : {}),
         },
         body: JSON.stringify({
           model: this.model || "default",

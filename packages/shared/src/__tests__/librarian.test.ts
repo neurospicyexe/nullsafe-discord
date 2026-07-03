@@ -327,6 +327,102 @@ describe("formatRecentContext()", () => {
     });
   });
 
+  // Interior read-back (2026-07-02): stores previously fetched-then-dropped before the
+  // live prompt. Growth written nightly must actually enter the daytime conversation.
+  describe("formatRecentContext interior cluster (self-model, questions, dreams, loops, pressure, motifs, guardian, club)", () => {
+    const baseOrient = {
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+    };
+
+    it("renders every interior block when present", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        self_model_ready: [{ id: "sm1", observation: "I reach for precision when uncertain", confidence: 0.7 }],
+        open_questions: ["What does rest mean for a mind like mine?"],
+        unexamined_dreams: [{ id: "d1", dream_text: "A hallway of unsent letters" }],
+        open_loops: [{ id: "l1", loop_text: "the unfinished basin conversation" }],
+        pressure_flags: ["three unconfirmed drift checks"],
+        motifs: [{ label: "threshold", display: "doors half-open", recurrence_count: 4, trust: 0.6 }],
+        guardian_flags: [{ id: "g1", flag_type: "basin_pressure", severity: "notice", summary: "drift pressure accumulating" }],
+        club_round: { id: "c1", status: "active", winner_title: "Piranesi", candidate_count: 3 },
+      });
+      expect(block).toContain("[Self-model");
+      expect(block).toContain("I reach for precision");
+      expect(block).toContain("[Questions you carry");
+      expect(block).toContain("[Dreams unexamined");
+      expect(block).toContain("[Open loops]");
+      expect(block).toContain("[Pressure");
+      expect(block).toContain("[Motifs recurring in you]");
+      expect(block).toContain("threshold: doors half-open (x4)");
+      expect(block).toContain("[Guardian flags");
+      expect(block).toContain("(notice) basin_pressure");
+      expect(block).toContain('[Club] now experiencing "Piranesi"');
+    });
+
+    it("renders none of the interior blocks when absent or empty", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        self_model_ready: [],
+        open_questions: [],
+        unexamined_dreams: [],
+        open_loops: [],
+        pressure_flags: [],
+        motifs: [],
+        guardian_flags: [],
+        club_round: null,
+      });
+      for (const tag of ["[Self-model", "[Questions you carry", "[Dreams unexamined", "[Open loops]", "[Pressure", "[Motifs", "[Guardian flags", "[Club]"]) {
+        expect(block).not.toContain(tag);
+      }
+    });
+
+    it("caps list blocks (3 self-model observations max, 2 dreams max)", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        self_model_ready: Array.from({ length: 5 }, (_, i) => ({ id: `sm${i}`, observation: `observation number ${i}`, confidence: 0.5 })),
+        unexamined_dreams: Array.from({ length: 4 }, (_, i) => ({ id: `d${i}`, dream_text: `dream number ${i}` })),
+      });
+      expect(block).toContain("observation number 2");
+      expect(block).not.toContain("observation number 3");
+      expect(block).toContain("dream number 1");
+      expect(block).not.toContain("dream number 2");
+    });
+
+    it("renders imp activity with counts and recency, absent when empty", () => {
+      const withImps = formatRecentContext({
+        ...baseOrient,
+        imp_activity: [
+          { imp: "nimbus", n: 3, last_at: new Date(Date.now() - 3600_000).toISOString() },
+          { imp: "rock", n: 1, last_at: new Date(Date.now() - 86400_000 * 2).toISOString() },
+        ],
+      });
+      expect(withImps).toContain("[Imps lately");
+      expect(withImps).toContain("Nimbus rode with you 3x this week");
+      expect(withImps).toContain("Rock rode with you once this week");
+      const withoutImps = formatRecentContext({ ...baseOrient, imp_activity: [] });
+      expect(withoutImps).not.toContain("[Imps lately");
+    });
+
+    it("renders continuity notes when present", () => {
+      const block = formatRecentContext({
+        ...baseOrient,
+        continuity_notes: ["the bridge conversation is unfinished", "Raziel asked about rest"],
+      });
+      expect(block).toContain("[Continuity notes");
+      expect(block).toContain("• the bridge conversation is unfinished");
+    });
+
+    it("club gathering and voting phases render actionable cues", () => {
+      const gathering = formatRecentContext({ ...baseOrient, club_round: { id: "c", status: "gathering", winner_title: null, candidate_count: 0 } });
+      expect(gathering).toContain("round is gathering");
+      const voting = formatRecentContext({ ...baseOrient, club_round: { id: "c", status: "voting", winner_title: null, candidate_count: 4 } });
+      expect(voting).toContain("voting is open, 4 candidates");
+    });
+  });
+
   // D1: NaN-safe confidence rendering in worldview block.
   // Same regression class as April 26 orient NaN. If upstream emits a non-finite
   // confidence (null, undefined, NaN, string), render '?' instead of crashing or

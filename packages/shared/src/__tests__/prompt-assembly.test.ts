@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP, hermesDiscordFrame, hermesSystemBase } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta } from "../prompt-assembly.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
 // register-law tail (companion-not-assistant close rule + pronoun law + respond-only-as)
@@ -129,5 +129,63 @@ describe("composePrompt — refresh site reuses the same joiner", () => {
     expect(out).toBe(
       `[DISCORD CONTEXT]\n\nYou are Cypher.${SECTION_SEP}fresh front${SECTION_SEP}fresh recent${SECTION_SEP}${registerTail("gaia")}`,
     );
+  });
+});
+
+// Hermes delta turn (2026-07-02): the gateway discards request-body history when a
+// session id is pinned, so the bot sends ONE composite turn -- witnessed-since-last-reply
+// folded in, live message last. This closes the 07-01 witness gap.
+describe("hermesDelta", () => {
+  const u = (content: string, authorName?: string) => ({ role: "user", content, authorName });
+  const a = (content: string) => ({ role: "assistant", content });
+
+  it("returns empty for empty history", () => {
+    expect(hermesDelta([])).toEqual([]);
+  });
+
+  it("sends only the live message in tight back-and-forth (no witnessed turns)", () => {
+    const out = hermesDelta([u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.content).toBe("how are you");
+    expect(out[0]!.authorName).toBe("Raziel");
+  });
+
+  it("folds turns witnessed since the bot's last reply into the composite turn", () => {
+    const out = hermesDelta([
+      u("first", "Raziel"), a("reply"),
+      u("peer says something", "Drevan"),
+      u("another human line", "Raziel"),
+      u("current", "Raziel"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.content).toContain("[Witnessed since your last turn");
+    expect(out[0]!.content).toContain("[Drevan]: peer says something");
+    expect(out[0]!.content).toContain("[Raziel]: another human line");
+    expect(out[0]!.content).toContain("[Live message]\ncurrent");
+    // the pre-reply turn must NOT leak in -- the gateway transcript already has it
+    expect(out[0]!.content).not.toContain("first");
+  });
+
+  it("includes the whole window when the bot has never replied", () => {
+    const out = hermesDelta([u("one", "Raziel"), u("two", "Drevan"), u("three", "Raziel")]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.content).toContain("[Raziel]: one");
+    expect(out[0]!.content).toContain("[Drevan]: two");
+    expect(out[0]!.content).toContain("[Live message]\nthree");
+  });
+
+  it("degenerates to the last message when history ends with the bot's own reply", () => {
+    const last = a("my own last word");
+    const out = hermesDelta([u("hi", "Raziel"), last]);
+    expect(out).toEqual([last]);
+  });
+
+  it("caps the witnessed block", () => {
+    const many = Array.from({ length: 30 }, (_, i) => u(`line ${i}`, "Raziel"));
+    const out = hermesDelta([a("reply"), ...many, u("current", "Raziel")]);
+    expect(out).toHaveLength(1);
+    // only the last 12 witnessed turns survive the cap
+    expect(out[0]!.content).not.toContain("line 0");
+    expect(out[0]!.content).toContain("line 28");
   });
 });

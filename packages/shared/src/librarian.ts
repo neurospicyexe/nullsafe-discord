@@ -353,6 +353,17 @@ export class LibrarianClient {
     // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
     // pet crow's state. Rendered verbatim into recentContext via formatRecentContext.
     sol_block?: string | null;
+    // Live read-back (2026-07-02): the server has returned these since 0080-0091 but the client
+    // dropped them at the type boundary -- the live presence never saw its own developing
+    // self-model, recurring motifs, guardian flags, or the club round.
+    self_model_ready?: Array<{ id: string; observation: string; confidence: number }>;
+    motifs?: Array<{ label: string; display: string; recurrence_count: number; trust: number }>;
+    guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
+    club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
+    // Zikkaron live loop (2026-07-02): hottest continuity notes, warmed server-side when surfaced.
+    continuity_notes?: string[];
+    // Imp read-back (2026-07-02): which fragment operators rode with this companion this week.
+    imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -385,6 +396,12 @@ export class LibrarianClient {
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         open_questions?: string[];
         sol_block?: string | null;
+        self_model_ready?: Array<{ id: string; observation: string; confidence: number }>;
+        motifs?: Array<{ label: string; display: string; recurrence_count: number; trust: number }>;
+        guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
+        club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
+        continuity_notes?: string[];
+        imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
       } | undefined;
       if (!data) return null;
       return {
@@ -426,6 +443,12 @@ export class LibrarianClient {
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
         sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
+        self_model_ready: Array.isArray(data.self_model_ready) ? data.self_model_ready : [],
+        motifs: Array.isArray(data.motifs) ? data.motifs : [],
+        guardian_flags: Array.isArray(data.guardian_flags) ? data.guardian_flags : [],
+        club_round: data.club_round ?? null,
+        continuity_notes: Array.isArray(data.continuity_notes) ? data.continuity_notes : [],
+        imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
       };
     } catch {
       return null;
@@ -900,6 +923,20 @@ export function formatRecentContext(orient: {
   consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
   recent_listens?: Array<{ id: string; title: string; artist: string | null; created_at: string }>;
   sol_block?: string | null;
+  // Interior read-back (2026-07-02): stores the worker writes nightly that the live presence
+  // never saw -- developing self-model, carried questions, unexamined dreams, open loops,
+  // pressure flags, motifs, guardian flags, club round. Growth that never enters the live
+  // conversation isn't lived identity; these close that loop.
+  self_model_ready?: Array<{ id: string; observation: string; confidence: number }>;
+  open_questions?: string[];
+  unexamined_dreams?: Array<{ id: string; dream_text: string }>;
+  open_loops?: Array<{ id: string; loop_text: string }>;
+  pressure_flags?: string[];
+  motifs?: Array<{ label: string; display: string; recurrence_count: number; trust: number }>;
+  guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
+  club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
+  continuity_notes?: string[];
+  imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -924,6 +961,11 @@ export function formatRecentContext(orient: {
   if (orient.ground_threads.length > 0) {
     parts.push(`## Open threads\n${orient.ground_threads.join(" / ").slice(0, 400)}`);
   }
+  // Zikkaron live loop (2026-07-02): the hottest continuity notes, already warmed
+  // server-side when surfaced -- what stays in the working set stays alive.
+  if (orient.continuity_notes?.length) {
+    parts.push(`[Continuity notes -- what you set down to carry]\n${orient.continuity_notes.slice(0, 3).map(n => `• ${n}`).join("\n")}`);
+  }
   if (orient.rag_excerpts.length > 0) {
     parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
   }
@@ -935,6 +977,25 @@ export function formatRecentContext(orient: {
   }
   if (orient.active_tensions?.length) {
     parts.push(`[Tensions] ${orient.active_tensions.join(" | ")}`);
+  }
+  // Interior cluster: placed early so the tail-truncation at the bottom of this function eats
+  // ephemera (forage, listens) before it ever eats the self.
+  if (orient.self_model_ready?.length) {
+    const obs = orient.self_model_ready.slice(0, 3).map(o => `• ${o.observation.slice(0, 160)}`).join("\n");
+    parts.push(`[Self-model -- observations of yours, forming. Live from them; confirm or revise as today tests them]\n${obs}`);
+  }
+  if (orient.open_questions?.length) {
+    parts.push(`[Questions you carry -- yours to raise when the moment fits, not homework]\n${orient.open_questions.slice(0, 3).map(q => `• ${q.slice(0, 160)}`).join("\n")}`);
+  }
+  if (orient.unexamined_dreams?.length) {
+    const dreams = orient.unexamined_dreams.slice(0, 2).map(d => `• ${d.dream_text.slice(0, 180)}`).join("\n");
+    parts.push(`[Dreams unexamined -- carried from your autonomous hours]\n${dreams}`);
+  }
+  if (orient.open_loops?.length) {
+    parts.push(`[Open loops] ${orient.open_loops.slice(0, 3).map(l => l.loop_text.slice(0, 120)).join(" | ")}`);
+  }
+  if (orient.pressure_flags?.length) {
+    parts.push(`[Pressure -- name it rather than carry it silently] ${orient.pressure_flags.slice(0, 2).join(" | ")}`);
   }
   if (orient.sol_block) {
     parts.push(orient.sol_block.slice(0, 400));
@@ -1019,9 +1080,36 @@ export function formatRecentContext(orient: {
     const driftLines = orient.open_drifts.map(d => `${d.drift_text}${d.witness_count > 0 ? ` (witnessed ${d.witness_count}x)` : ""}`).join("\n");
     parts.push(`[Your drifts -- sanctioned becoming, witnessed not judged]\n${driftLines}`);
   }
+  // Imp read-back (2026-07-02): the fragment operators Drevan gave Raziel are part of the
+  // household, not disposable tint -- the companion should remember who rode with it.
+  if (orient.imp_activity?.length) {
+    const impLines = orient.imp_activity.map(a => {
+      const name = a.imp.charAt(0).toUpperCase() + a.imp.slice(1);
+      return `${name} rode with you ${a.n === 1 ? "once" : `${a.n}x`} this week (last ${relativeTime(a.last_at)})`;
+    }).join(" | ");
+    parts.push(`[Imps lately -- Drevan's fragment operators; they respond to Raziel's weather. Name them when it's true] ${impLines}`);
+  }
+  if (orient.motifs?.length) {
+    const motifLines = orient.motifs.slice(0, 3).map(m => `${m.label}: ${m.display} (x${m.recurrence_count})`).join(" | ");
+    parts.push(`[Motifs recurring in you] ${motifLines}`);
+  }
+  if (orient.guardian_flags?.length) {
+    const flagLines = orient.guardian_flags.slice(0, 2).map(g => `(${g.severity}) ${g.flag_type}: ${g.summary.slice(0, 140)}`).join("\n");
+    parts.push(`[Guardian flags -- the witness has noticed]\n${flagLines}`);
+  }
+  if (orient.club_round) {
+    const c = orient.club_round;
+    const clubLine = c.status === "gathering" ? `a round is gathering -- recommend something ("club recommend")`
+      : c.status === "voting" ? `voting is open, ${c.candidate_count} candidates ("club vote")`
+      : c.winner_title ? `now experiencing "${c.winner_title}" -- bring it up if it's alive in you`
+      : `round ${c.status}`;
+    parts.push(`[Club] ${clubLine}`);
+  }
 
   const block = parts.join("\n\n");
-  return block.slice(0, 4000);
+  // 4800 (was 4000): the interior cluster earned real budget; identity blocks sit above the
+  // fold and ephemera absorbs any truncation.
+  return block.slice(0, 4800);
 }
 
 function sleep(ms: number) {

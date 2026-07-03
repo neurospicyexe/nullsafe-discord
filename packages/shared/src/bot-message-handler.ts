@@ -55,7 +55,7 @@ import {
   type ChatMessage, type BootContext, type CompanionId,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
-import { hermesSystemBase } from "./prompt-assembly.js";
+import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { stampRelative } from "./relative-time.js";
 
 // ---------------------------------------------------------------------------
@@ -882,6 +882,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Other adapters ignore it.
     const inferenceSessionId = `${COMPANION_ID}:${message.channelId}`;
 
+    // Hermes delta turn (2026-07-02): with the session pinned, the gateway loads history
+    // from state.db and discards the request-body history -- so sending the full STM
+    // window wasted payload AND silently dropped every turn this bot didn't reply to
+    // (the witness gap). Send one composite delta turn instead; other adapters keep the
+    // full grounded window. Brain relay path is unchanged (it does its own assembly).
+    const inferenceHistory = inferenceMode === "hermes"
+      ? hermesDelta(groundedHistory)
+      : groundedHistory;
+
     let response: string | null;
     // A listen that ran on THIS bot must be answered by THIS bot, directly -- never
     // via the swarm. The [HEARD] packet arrives ~15s late (pipeline latency) and
@@ -917,7 +926,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+        response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -938,11 +947,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+          response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
         }
       }
     } else {
-      response = await adapterRef.current.generate(systemPromptWithImp, groundedHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+      response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
     }
 
     if (!response) {

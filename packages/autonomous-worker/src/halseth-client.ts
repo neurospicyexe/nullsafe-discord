@@ -1144,6 +1144,21 @@ export async function getCreatures(): Promise<CreatureRow[]> {
   return Array.isArray(r) ? r : ((r as { creatures?: CreatureRow[] }).creatures ?? []);
 }
 
+// Autonomous tending (2026-07-02): a companion tends Sol without being asked.
+// Server validates actor/action and applies the trust bump atomically.
+export async function tendCreatureAs(
+  creatureId: string,
+  actor: "cypher" | "drevan" | "gaia",
+  action: "feed" | "play" | "talk",
+  note: string,
+): Promise<void> {
+  await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
+    actor,
+    action,
+    note,
+  });
+}
+
 export async function recordSolAppearance(creatureId: string, note: string): Promise<void> {
   await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
     actor: "sol",
