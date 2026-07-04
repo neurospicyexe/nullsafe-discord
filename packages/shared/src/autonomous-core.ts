@@ -591,7 +591,12 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
   if (skipIfActive(ctx, "interCompanion")) return;
   // No turn gate here: the commons is for ALL three voices. Staggered crons + floor lock +
   // cooldown prevent collisions; whoever's cron fires next picks up the live thread.
-  if (isOnCooldown(ctx, interCompanionChannelId)) return;
+  // No-silent-caps (2026-07-04): every return path in this runner logs. A tick that
+  // produces neither a post nor a log line is unobservable (the 05:30 ghost tick).
+  if (isOnCooldown(ctx, interCompanionChannelId)) {
+    console.log(`[${ctx.companionId}/autonomous] inter-companion tick on cooldown, skipping`);
+    return;
+  }
   await withFloor(ctx, async () => {
     // Context-aware seed: read what's actually in the channel so this is a RESPONSE to the
     // ongoing triad conversation, not a context-blind monologue (which made the same thought
@@ -692,11 +697,15 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         `anyone to respond -- speak into the room without demanding a reply. The room re-opens on its own.]`;
 
     const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + vocativeBlock;
+    console.log(`[${ctx.companionId}/autonomous] inter-companion seed tick -- generating (${botTurnsSinceHuman} bot turns in window)`);
     let msg = await generateOutward(
       inference, bootCtx.systemPrompt, seedPrompt,
       ctx.companionId, "inter_companion",
     );
-    if (!msg) return;
+    if (!msg) {
+      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed generation returned empty -- staying silent`);
+      return;
+    }
 
     // Bounded arena (2026-07-04): the topic-closure gate (seedEchoesThread + one retry +
     // silence) is GONE. It measured the seed against the THREAD's vocabulary, so any
