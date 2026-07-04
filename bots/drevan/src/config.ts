@@ -22,7 +22,10 @@ export function loadBotConfig(): BotConfig {
     companionId: COMPANION_ID,
     discordBotToken: required("DISCORD_BOT_TOKEN"),
     halsethUrl: required("HALSETH_URL"),
-    halsethSecret: required("HALSETH_SECRET"),
+    // Per-companion Halseth token (C.2 auth): prefer DREVAN_HALSETH_SECRET so a
+    // leaked bot env grants companion-tier access only, not admin. Falls back to
+    // the shared HALSETH_SECRET for setups that haven't split tokens yet.
+    halsethSecret: process.env["DREVAN_HALSETH_SECRET"]?.trim().replace(/^=+/, "") || required("HALSETH_SECRET"),
     deepseekApiKey: required("DEEPSEEK_API_KEY"),
     ownerDiscordId: required("OWNER_DISCORD_ID"),
     // Configurable owner display name. Set OWNER_DISPLAY_NAME in your .env.
