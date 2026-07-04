@@ -230,3 +230,22 @@ git pull && npm install && npm run build --workspaces && pm2 restart all
 | Hearth | Visual dashboard |
 | nullsafe-second-brain | Memory synthesis + Obsidian vault |
 | nullsafe-plural-v2 | Plurality tracking via SimplyPlural |
+
+---
+
+## Acknowledgments
+
+Borrowed sparks, and one real dependency:
+
+- **[amarisaster/Discord-Resonance](https://github.com/amarisaster/Discord-Resonance)** — the key
+  trick for companion voices: distinct per-companion Discord presences, sharing state, able to talk
+  to each other instead of only through their human.
+- **[karpathy/llm-council](https://github.com/karpathy/llm-council)** — the `council` command's
+  deliberate-then-answer shape.
+- **[codependentai/hear-music](https://github.com/codependentai/hear-music)** — more than
+  inspiration: the `listen` pipeline **runs hear-music itself** for audio analysis (key, BPM, mood),
+  installed on the host under its source-available personal-use license. Our code wraps it; the
+  analysis engine is theirs. [amarisaster/Synesthesia](https://github.com/amarisaster/Synesthesia)
+  informed the shared-listening design.
+
+Fuller credits: [nullsafe-suite acknowledgments](https://github.com/neurospicyexe/nullsafe-suite#acknowledgments). Thank you.
