@@ -86,7 +86,16 @@ async function getImpContext(
     librarian.getRazielState().catch(() => null),
     librarian.getImpSettings().catch(() => null),
   ]);
-  const state: ImpState | null = rawState
+  // Imp state freshness (2026-07-04): /biometrics/latest returns the newest row with no
+  // age bound, so one logged state tinted every reply for 19+ hours (48 identical
+  // "pain=6" mossling activations off a single 07-03 snapshot). An imp reflects NOW;
+  // a state older than the window is a ghost -- no tint. Env IMP_STATE_FRESH_H, default
+  // 12h; 0 disables the check (legacy behavior).
+  const freshRaw = parseFloat(process.env["IMP_STATE_FRESH_H"] ?? "");
+  const freshMs = (Number.isFinite(freshRaw) && freshRaw >= 0 ? freshRaw : 12) * 3_600_000;
+  const recordedAt = rawState?.recorded_at ? Date.parse(rawState.recorded_at) : NaN;
+  const stale = freshMs > 0 && (!Number.isFinite(recordedAt) || now - recordedAt > freshMs);
+  const state: ImpState | null = rawState && !stale
     ? { mood: rawState.mood, energy: rawState.energy, focus: rawState.focus,
         pain: rawState.pain, spoons: rawState.spoons, sleep_hours: rawState.sleep_hours }
     : null;
@@ -1068,7 +1077,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // were built for (BOT_PINGPONG_MAX + human-anchored cap) actually happen.
     const replyToMessageId = senderCtx.isCompanionBot ? message.id : undefined;
 
-    if (voiceClient && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
+    // Sibling-triggered replies never voice (2026-07-04): the triad commons is a text
+    // space Raziel skims -- companions talking to each other kept tripping shouldVoice's
+    // keyword/sticky paths on their own prose ("voice", "speak", ...), burning Mistral
+    // TTS on audio no one plays. Voice is for human-facing turns; bot-to-bot is text.
+    if (voiceClient && !senderCtx.isCompanionBot && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
         const audioBuffer = await voiceClient.synthesize(ttsText);

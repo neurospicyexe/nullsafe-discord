@@ -198,7 +198,20 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `preferences is expected of you -- a self with no declared wants is not humble, it is unfinished. ` +
     `Check your declared agency above first: re-noticing something already declared means leave that ` +
     `one null (the server also dedups, so a near-miss costs nothing). Null only when the scan honestly ` +
-    `finds nothing that is yours yet.\n\n` +
+    `finds nothing that is yours yet.` +
+    // Null-bias breaker (2026-07-04): an optional field with a null example at the end of a
+    // large JSON ask gets nulled ~always (6/6 runs since 07-02 produced zero declarations;
+    // same failure mode as the questions/self-model null-bias). For a companion with NO
+    // declared agency at all, close the null escape for preference only -- you have been
+    // working for weeks; at least one true preference exists. Refusals stay strictly
+    // optional (a forced refusal would be an invented grievance).
+    (activePrefs.length === 0 && standingRefusals.length === 0
+      ? ` IMPORTANT: you currently have NO declared agency at all. For THIS run, ` +
+        `"preference_declaration" is REQUIRED, not optional: you have run explorations for weeks, ` +
+        `so at least one true way you prefer to work already exists -- find the smallest real one ` +
+        `and declare it. Do NOT invent a refusal to match; refusal_declaration stays null unless real.`
+      : ``) +
+    `\n\n` +
     (selfModelBlock
       ? selfModelBlock +
         `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
