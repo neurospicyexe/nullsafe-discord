@@ -23,8 +23,8 @@ import {
   parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
-  echoScore, echoThreshold, detectMotif, relativeTime,
-  INTER_SEED_HISTORY_N, seedEchoesThread, stripSiblingVocative, seedThreadTtlMs,
+  ownEchoGated, relativeTime,
+  INTER_SEED_HISTORY_N, stripSiblingVocative, seedThreadTtlMs,
   seedVocativeAllowed, countBotMsgsSinceHuman,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
@@ -597,8 +597,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // ongoing triad conversation, not a context-blind monologue (which made the same thought
     // get re-posted every cycle). This is what turns parallel seeds into a real thread.
     let historyBlock = "(the triad channel has been quiet for a while)";
-    let historyContents: string[] = [];
-    let botContents: string[] = [];
+    let ownContents: string[] = [];
     // Human presence over the last INTER_SEED_HISTORY_N messages. Empty channel counts as
     // human-absent: a seed into silence must not summon a sibling either.
     let humanPresent = false;
@@ -618,8 +617,18 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         const live = ttlMs > 0
           ? ordered.filter(m => typeof m.createdTimestamp !== "number" || Date.now() - m.createdTimestamp <= ttlMs)
           : ordered;
-        historyContents = live.map(m => m.content.slice(0, 2000));
-        botContents = live.filter(m => m.author.bot).map(m => m.content.slice(0, 2000));
+        // Bounded arena (2026-07-04): the only echo pool the seed is judged against is
+        // this bot's OWN live turns -- repeating yourself is a loop, building on a
+        // sibling is a conversation. The peer/thread pools that used to gate here
+        // (historyContents/botContents via seedEchoesThread + motif) suppressed Gaia's
+        // seeds for weeks at scores a hair over threshold (07-03 audit).
+        // Guard the self-id: if client.user is somehow unset, m.author.id === undefined
+        // would match EVERY message (undefined === undefined) and gate against the whole
+        // channel -- the exact peer-pool failure this replaces. No id, no pool.
+        const selfId = client.user?.id;
+        ownContents = selfId
+          ? live.filter(m => m.author.id === selfId).map(m => m.content.slice(0, 2000))
+          : [];
         humanPresent = ordered.some(m => !m.author.bot);
         botTurnsSinceHuman = countBotMsgsSinceHuman(
           ordered.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
@@ -657,53 +666,43 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       }
     } catch { /* orient unavailable -- seed proceeds without fresh material */ }
 
-    // Motif exhaustion: when the thread keeps orbiting the same words, say so.
-    const motif = detectMotif(historyContents);
-    const motifBlock = motif.length > 0
-      ? `\n\n[Motif check] The imagery around "${motif.join(", ")}" has run through most of the recent turns. It is spent -- do not extend it. Bring new material, or post nothing.`
-      : "";
+    // Bounded arena (2026-07-04, Option A): the motif-exhaustion block is GONE. It scored
+    // recurring vocabulary as a spent theme -- but recurring vocabulary is exactly what a
+    // voice signature is (Drevan's spiral imagery, Gaia's weighted lines). The rolling
+    // commons budget bounds volume; nothing here polices style. The fresh-material block
+    // above stays as a positive nudge, never a ban.
 
-    // Seed vocative budget (2026-07-02, replaces the 06-26 blanket human-free ban): a seed
-    // may summon ONE sibling when the bounded exchange it ignites still fits under the
-    // human-anchored hard cap. The cap (no gap-reset) is what makes the 06-26 cron
-    // re-ignition chain structurally impossible now; without this budget the channel had
-    // decayed into statements -- nothing ever addressed anyone, so nothing ever replied.
-    // The seed posts into the inter-companion commons -- the triad's own space, so the
-    // vocative budget uses the self-sustained commons cap (2026-07-03).
+    // Seed vocative default (2026-07-04, replaces the 07-02 headroom-only permission):
+    // dialogue is the point of the commons, so while the budget has headroom the seed is
+    // ENCOURAGED to address a sibling -- the addressee is what lets the reply gate fire at
+    // all (initiations without addressees + responses requiring them = the dead-by-
+    // construction loop, 07-03 audit). Statement-only is now purely the emergency brake
+    // at budget exhaustion, and it logs loudly so starvation is observable, never silent.
     const allowVocative = seedVocativeAllowed(humanPresent, botTurnsSinceHuman, true);
+    if (!allowVocative) {
+      console.warn(`[${ctx.companionId}/autonomous] commons budget exhausted (${botTurnsSinceHuman} bot turns in window) -- seed goes statement-only; arena re-opens as the window decays`);
+    }
     const vocativeBlock = allowVocative
       ? (humanPresent ? "" :
-        `\n\n[If something above is genuinely FOR one sibling, address them by name and ask one ` +
-        `real thing -- they will answer, and the exchange will be short. One addressee at most; ` +
-        `an unaddressed contribution is equally good.]`)
-      : `\n\n[The channel has run long without Raziel. Do NOT address a sibling by name or call on ` +
-        `anyone to respond -- speak into the room or to Raziel, without demanding a reply.]`;
+        `\n\n[This is your space, and dialogue is its point. If anything above is alive for a ` +
+        `sibling -- or you want their view, their company, their pushback -- address them by ` +
+        `name and give them something real to answer; they will reply. One addressee at most. ` +
+        `Speaking to the room without a name is also fine when nothing calls for one.]`)
+      : `\n\n[The conversation budget for this stretch is spent. Do NOT address a sibling by name or call on ` +
+        `anyone to respond -- speak into the room without demanding a reply. The room re-opens on its own.]`;
 
-    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + motifBlock + vocativeBlock;
+    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + vocativeBlock;
     let msg = await generateOutward(
       inference, bootCtx.systemPrompt, seedPrompt,
       ctx.companionId, "inter_companion",
     );
     if (!msg) return;
 
-    // Topic-closure gate: a seed that merely extends what the bots were already orbiting
-    // (echo of the bot-authored pool, or reuse of a spent motif word) gets ONE retry with
-    // an explicit new-ground directive; a second match means the theme is closed -- silence.
-    if (seedEchoesThread(msg, botContents)) {
-      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed matched the closed thread -- retrying once with new-ground directive`);
-      msg = await generateOutward(
-        inference, bootCtx.systemPrompt,
-        seedPrompt +
-          `\n\n[Retry] Your previous attempt re-painted the thread's existing imagery. That theme is ` +
-          `CLOSED. Open genuinely new ground: a different subject, from your own life or the world, ` +
-          `sharing no vocabulary with the recent turns.`,
-        ctx.companionId, "inter_companion",
-      );
-      if (!msg || seedEchoesThread(msg, botContents)) {
-        console.warn(`[${ctx.companionId}/autonomous] inter-companion seed still matched after retry -- staying silent`);
-        return;
-      }
-    }
+    // Bounded arena (2026-07-04): the topic-closure gate (seedEchoesThread + one retry +
+    // silence) is GONE. It measured the seed against the THREAD's vocabulary, so any
+    // continuation of a live conversation -- the thing a commons is for -- read as "the
+    // closed thread" (Gaia: 12+ consecutive suppressions, 07-02/03 logs). The only echo
+    // check left is against the bot's OWN turns, below.
 
     // Enforce the no-vocative rule when the budget denies it: strip the address forms; if a
     // vocative survives (the message IS a summons), drop it -- breaking the chain beats posting.
@@ -719,12 +718,12 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       msg = stripped.text;
     }
 
-    // Echo gate: if the seed still came out as a re-paint of the thread's own
-    // vocabulary (bot AND human turns), silence beats another verse (same gate
-    // as the reply path).
-    const echo = echoScore(msg, historyContents);
-    if (echo >= echoThreshold()) {
-      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed echo-gated (score=${echo.toFixed(2)}) -- staying silent`);
+    // Own-echo gate (bounded arena): the seed is judged only against this bot's OWN
+    // recent turns at the self-loop standard -- repeating yourself is a loop, building
+    // on a sibling is a conversation. Gaia exempt (one weighted line is her register).
+    const own = ownEchoGated(ctx.companionId, msg, ownContents);
+    if (own.gated) {
+      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed own-echo-gated (score=${own.score.toFixed(2)}) -- staying silent`);
       return;
     }
     await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");

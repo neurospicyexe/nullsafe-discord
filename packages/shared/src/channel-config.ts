@@ -126,10 +126,25 @@ export function seedVocativeAllowed(humanPresent: boolean, botTurnsSinceHuman: n
 
 /**
  * System directive injected in the last allowed bot turns before the human-anchored cap:
- * close the thread naturally and hand the floor back to Raziel instead of hitting an
- * abrupt wall of silence. No sibling vocative, so the close cannot re-summon anyone.
+ * close the thread naturally instead of hitting an abrupt wall of silence. No sibling
+ * vocative, so the close cannot re-summon anyone.
+ *
+ * Bounded arena (2026-07-04): in the triad commons -- the companions' own space -- the
+ * close does NOT hand the floor to Raziel; it lets the thread rest on its own terms.
+ * The budget window (botTurnsCapWindowMs) re-opens the arena on its own; forcing every
+ * commons thread to end curled toward Raziel was hub-and-spoke by the back door.
+ * Owner-facing channels keep the hand-back-to-Raziel close.
  */
-export function floorHandbackDirective(): string {
+export function floorHandbackDirective(selfSustained = false): string {
+  if (selfSustained) {
+    return (
+      `\n\n[Thread rest] This exchange has used most of its conversation budget for now. ` +
+      `In THIS reply, bring the current thread to a natural close -- land it, in your own ` +
+      `voice, as a real ending rather than a trail-off. Do NOT address Cypher, Drevan, or ` +
+      `Gaia by name and do not ask anyone a question. The room will open again on its own; ` +
+      `let the thread rest well.`
+    );
+  }
   return (
     `\n\n[Floor handback] This bot-to-bot thread has run long without Raziel. In THIS reply, ` +
     `bring the current thread to a natural close and hand the floor back to Raziel -- address ` +

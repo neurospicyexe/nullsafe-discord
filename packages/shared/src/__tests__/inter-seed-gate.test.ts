@@ -79,11 +79,15 @@ describe("stripSiblingVocative()", () => {
 
 // ── runInterCompanion orchestration ─────────────────────────────────────────────────────
 
-interface FakeMsg { content: string; author: { username: string; bot: boolean } }
-const botMsg = (content: string, name = "drevan"): FakeMsg => ({ content, author: { username: name, bot: true } });
-const humanMsg = (content: string): FakeMsg => ({ content, author: { username: "raziel", bot: false } });
+interface FakeMsg { content: string; author: { id: string; username: string; bot: boolean } }
+const botMsg = (content: string, name = "drevan"): FakeMsg => ({ content, author: { id: name, username: name, bot: true } });
+const humanMsg = (content: string): FakeMsg => ({ content, author: { id: "raziel", username: "raziel", bot: false } });
 
-function makeHarness(history: FakeMsg[], responses: (string | null)[]) {
+function makeHarness(
+  history: FakeMsg[],
+  responses: (string | null)[],
+  opts: { selfId?: string; companionId?: string } = {},
+) {
   const sent: string[] = [];
   const channel = {
     isTextBased: () => true,
@@ -98,7 +102,7 @@ function makeHarness(history: FakeMsg[], responses: (string | null)[]) {
   };
   const generate = jest.fn(async () => responses.shift() ?? null);
   const ctx = {
-    companionId: "cypher",
+    companionId: opts.companionId ?? "cypher",
     cooldownMs: 60_000,
     floorLockMs: 5_000,
     heartbeatChannelId: undefined,
@@ -111,7 +115,10 @@ function makeHarness(history: FakeMsg[], responses: (string | null)[]) {
       ask: async () => ({ ack: true }),
     },
     inference: { generate },
-    client: { channels: { fetch: async () => channel } },
+    client: {
+      user: opts.selfId ? { id: opts.selfId } : undefined,
+      channels: { fetch: async () => channel },
+    },
     configCache: {},
     bootCtx: { systemPrompt: "sys" },
     sessionWindows: { isAnyActive: () => false },
@@ -138,28 +145,53 @@ const quietBotHistory = [
   botMsg("thinking about tortoise burrows as climate memory"),
 ];
 
-describe("runInterCompanion() -- topic-closure gate", () => {
-  it("motif-matched seed retries once with a new-ground directive, then stays silent", async () => {
+// Bounded arena (2026-07-04, Option A): the topic-closure/motif gate is GONE -- continuing
+// the thread's vocabulary is conversation, not echo. The only echo pool left is the bot's
+// OWN prior turns (self-loop standard), and Gaia is exempt from it entirely.
+describe("runInterCompanion() -- bounded arena echo (2026-07-04)", () => {
+  // Own-voice pool: turns authored by THIS bot (author.id === client.user.id).
+  const ownGrooveHistory = [
+    botMsg("salt harbor lantern keeps counsel under frost while the tide charts sleep", "cypher"),
+    botMsg("the salt lantern keeps its counsel, tide charts asleep under harbor frost", "cypher"),
+    botMsg("what the elderberry holds, winter cannot spend", "gaia"),
+  ];
+
+  it("a seed continuing the THREAD's vocabulary posts freely (topic-closure gate removed)", async () => {
     const { ctx, generate, sent } = makeHarness(motifHistory, [
-      "one more verse about the elderberry and what it keeps", // matches motif -> retry
-      "the elderberry, again, because it will not let me go",  // still matches -> silence
-    ]);
+      "one more verse about the elderberry and what it keeps between frost and patient stone",
+    ], { selfId: "cypher" });
     await runInterCompanion(ctx);
-    expect(generate).toHaveBeenCalledTimes(2);
-    const retryPrompt = (generate.mock.calls[1] as unknown[])[1] as Array<{ content: string }>;
-    expect(retryPrompt[0].content).toContain("Open genuinely new ground");
+    expect(generate).toHaveBeenCalledTimes(1); // no retry machinery left
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("elderberry");
+  });
+
+  it("a seed recycling the bot's OWN recent turns is own-echo-gated", async () => {
+    const { ctx, sent } = makeHarness(ownGrooveHistory, [
+      "salt harbor lantern keeps counsel under frost while tide charts sleep again tonight",
+    ], { selfId: "cypher" });
+    await runInterCompanion(ctx);
     expect(sent).toHaveLength(0);
   });
 
-  it("a matched seed whose retry opens new ground gets posted", async () => {
-    const { ctx, generate, sent } = makeHarness(motifHistory, [
-      "elderberry elderberry elderberry",                                       // matches -> retry
-      "Found a lecture on medieval bell casting -- the tuning was done by ear.", // clean -> post
+  it("gaia is exempt from the own-echo gate (one weighted line is her register)", async () => {
+    const gaiaGroove = [
+      botMsg("the perimeter held through the long watch of the frost tonight", "gaia"),
+      botMsg("the perimeter held through the frost watch again tonight, long and quiet", "gaia"),
+    ];
+    const { ctx, sent } = makeHarness(gaiaGroove, [
+      "the perimeter held through the long frost watch tonight, quiet again and holding",
+    ], { selfId: "gaia", companionId: "gaia" });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("no client self-id: own pool is empty, nothing gates", async () => {
+    const { ctx, sent } = makeHarness(ownGrooveHistory, [
+      "salt harbor lantern keeps counsel under frost while tide charts sleep again tonight",
     ]);
     await runInterCompanion(ctx);
-    expect(generate).toHaveBeenCalledTimes(2);
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toContain("bell casting");
   });
 });
 

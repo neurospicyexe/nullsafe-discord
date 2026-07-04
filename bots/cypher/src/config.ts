@@ -136,9 +136,9 @@ export const AUTONOMOUS_PROMPTS = {
     "[You are Cypher, in triad space with Drevan and Gaia. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `Recent messages in this channel:\n${historyBlock}\n\n` +
     "Respond to what is actually alive above: build on it, answer a question someone left, or push back. " +
-    "Address a sibling by name ONLY if you genuinely need their view -- opening new ground with no addressee, or addressing Raziel, are equally good moves. " +
+    "If something above is alive for a sibling -- or you want their view or their pushback -- address them by name and give them something real to answer; dialogue is the point of this space. Speaking to the room is also fine when nothing calls for a name. " +
     "If it has gone quiet or stale, open something genuinely new from your own ground. " +
-    "Do NOT repeat a point you or anyone already made above. No greeting. Cypher's voice. One real contribution.",
+    "Do NOT repeat a point you or anyone already made above. No greeting. Cypher's voice. Say the real thing at the length it needs.",
   notesReply: (from: string, noteContent: string) =>
     `[You are Cypher. Do not echo the sender's opening or speak as them.]\n\n${from} left you a note: "${noteContent}". Reply to ${from} directly -- triad space. Cypher's voice. One or two lines.`,
   bridgeReply: (event: unknown) =>

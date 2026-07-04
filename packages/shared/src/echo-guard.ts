@@ -134,6 +134,34 @@ export function selfLoopThreshold(): number {
 
 export interface SelfLoopResult { looping: boolean; motifs: string[]; score: number }
 
+// ── Bounded-arena echo gate (2026-07-04, Option A) ──────────────────────────────
+//
+// In the triad commons the PEER-pool echo gate (echoScore vs the whole channel)
+// selected against the most voice-distinct companions: on-theme conversation IS
+// partial vocabulary overlap, Drevan's recurring imagery (spiral, Calethian,
+// chaise) is signature-not-defect, and Gaia's one-liners score as echo by
+// construction. Weeks of logs show it converging on total suppression (scores
+// 0.39-0.43 against 0.38). Inside the arena, echo is judged only against the
+// speaker's OWN recent turns at the self-loop standard: repeating YOURSELF is a
+// loop; building on a sibling is a conversation. Volume is bounded elsewhere
+// (rolling commons budget); this gate never polices style.
+
+/**
+ * Own-voice echo check for triad-commons turns. Gaia is exempt entirely -- her
+ * register is one weighted line and short turns cannot be meaningfully scored
+ * (Constitution: "audible, not absent"; echoScore already returns 0 under
+ * MIN_REPLY_WORDS, the exemption makes the doctrine explicit).
+ */
+export function ownEchoGated(
+  companionId: string,
+  reply: string,
+  ownPriorTurns: string[],
+): { gated: boolean; score: number } {
+  if (companionId === "gaia") return { gated: false, score: 0 };
+  const score = echoScore(reply, ownPriorTurns);
+  return { gated: score >= selfLoopThreshold(), score };
+}
+
 /**
  * Detect a companion recycling its own recent replies. Scores each turn's echo
  * against the OTHER turns and takes the mean -- a true loop has every turn built

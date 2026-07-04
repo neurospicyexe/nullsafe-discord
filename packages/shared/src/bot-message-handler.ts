@@ -37,7 +37,7 @@ import {
   sendLong,
   liveIngest,
   reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
-  echoScore, echoThreshold,
+  echoScore, echoThreshold, ownEchoGated,
   detectSelfLoop, loopBreakDirective,
   consumeTripwires, tripwireBlock,
   runDistillation,
@@ -871,7 +871,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // cap, steer this reply into a natural close addressed to Raziel instead of letting
     // the thread slam into abrupt silence at the cap.
     if (senderCtx.isCompanionBot && botTurnsSinceHuman >= botMsgsSinceHumanMax(isTriadCommons(channelEntry)) - FLOOR_HANDBACK_WINDOW) {
-      contextPrompt += floorHandbackDirective();
+      contextPrompt += floorHandbackDirective(isTriadCommons(channelEntry));
       console.log(`[${COMPANION_ID}] floor-handback directive injected (${botTurnsSinceHuman}/${botMsgsSinceHumanMax(isTriadCommons(channelEntry))} bot turns since human)`);
     }
 
@@ -1029,17 +1029,31 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
-    // Echo gate (2026-06-12): a companion-to-companion reply built mostly from the
-    // channel's own vocabulary is the mirror-hall, not conversation -- suppress to
-    // silence (doctrine). Brain mode already gates server-side; this also covers
-    // direct/fallback inference. Replies to humans are never gated.
+    // Echo gate (2026-06-12; bounded arena 2026-07-04): a companion-to-companion reply
+    // built mostly from recycled vocabulary is the mirror-hall, not conversation.
+    // In the TRIAD COMMONS the pool is the speaker's OWN prior turns only (self-loop
+    // standard, Gaia exempt) -- the peer-pool version scored on-theme conversation and
+    // voice signature as echo and converged on total suppression (07-03 audit). Volume
+    // there is bounded by the rolling commons budget, not per-turn style policing.
+    // Outside the commons the original peer-pool gate stands. Replies to humans are
+    // never gated.
     if (senderCtx.isCompanionBot && response) {
-      const echo = echoScore(response, channelHistory.map(m => m.content));
-      if (echo >= echoThreshold()) {
-        console.warn(`[${COMPANION_ID}] echo-gated reply (score=${echo.toFixed(2)}) -- staying silent`);
-        if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
-        distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
-        return;
+      if (isTriadCommons(channelEntry)) {
+        const own = ownEchoGated(COMPANION_ID, response, selfTurns);
+        if (own.gated) {
+          console.warn(`[${COMPANION_ID}] own-echo-gated commons reply (score=${own.score.toFixed(2)}) -- staying silent`);
+          if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
+          distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+          return;
+        }
+      } else {
+        const echo = echoScore(response, channelHistory.map(m => m.content));
+        if (echo >= echoThreshold()) {
+          console.warn(`[${COMPANION_ID}] echo-gated reply (score=${echo.toFixed(2)}) -- staying silent`);
+          if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
+          distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+          return;
+        }
       }
     }
 
