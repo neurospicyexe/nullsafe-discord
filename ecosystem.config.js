@@ -35,6 +35,12 @@ const shared = {
   NODE_OPTIONS:          "--dns-result-order=ipv4first",
   HALSETH_URL:           process.env.HALSETH_URL,
   HALSETH_SECRET:        process.env.HALSETH_SECRET,
+  // Per-companion Halseth tokens (C.2 auth). Each bot prefers its own token
+  // over HALSETH_SECRET (see bots/*/src/config.ts); forwarding all three is
+  // harmless since each bot only reads the one matching its name.
+  CYPHER_HALSETH_SECRET: process.env.CYPHER_HALSETH_SECRET,
+  DREVAN_HALSETH_SECRET: process.env.DREVAN_HALSETH_SECRET,
+  GAIA_HALSETH_SECRET:   process.env.GAIA_HALSETH_SECRET,
   REDIS_URL:             process.env.REDIS_URL,
   DEEPSEEK_API_KEY:      process.env.DEEPSEEK_API_KEY,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
