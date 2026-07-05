@@ -147,7 +147,7 @@ export async function sendAutonomousMessage(
       ctx.librarian.ask(
         "continuity note",
         JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
-      ).catch(() => {});
+      ).catch(onWriteError(ctx.companionId, "metronome continuity note (siblings/orient will not see this)"));
       // Substrate parity (2026-06-12): autonomous posts were invisible to the SB
       // live index and voice telemetry -- only handler-path replies got indexed.
       // Same fire-and-forget contract as the message handler.
@@ -567,7 +567,10 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     }
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
 
-    const runId = await librarian.writeAutonomyRun("continuation").catch(() => null);
+    const runId = await librarian.writeAutonomyRun("continuation").catch(e => {
+      onWriteError(companionId, "continuation run record lost")(e);
+      return null;
+    });
     // runHeartbeat is fired fire-and-forget from a cron callback; an uncaught throw here would
     // surface as an unhandled rejection (and, with the process-level handler, can exit the bot).
     // Catch it: mark the run failed and log loudly rather than leak it. (2026-06-16 sweep.)

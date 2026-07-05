@@ -67,8 +67,9 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   const seedTopic = ctx.seed?.content ?? "unknown";
   const threadTag = ctx.threadId ? ` [thread:pos${ctx.threadPosition ?? 1}]` : "";
   const noteContent = `[${ctx.companionId}:autonomous:${ctx.runType}${threadTag}] "${seedTopic}" — ${ctx.journalEntry.content.slice(0, 700)}`;
-  await writeWmNote(ctx.companionId, noteContent, ctx.threadId ?? undefined);
-  await appendLog(ctx.runId, "write:wm-note-attempted");
+  const wmNoteOk = await writeWmNote(ctx.companionId, noteContent, ctx.threadId ?? undefined);
+  await appendLog(ctx.runId, wmNoteOk ? "write:wm-note-ok" : "write:wm-note-FAILED",
+    wmNoteOk ? undefined : "exploration will not surface at orient -- wm_continuity_notes write failed");
 
   // Ingest to second-brain CouchDB corpus (non-fatal, requires SECOND_BRAIN_URL).
   // Makes this exploration retrievable in future Librarian semantic searches.

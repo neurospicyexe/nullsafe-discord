@@ -353,7 +353,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     if (question.length >= 12) {
       await postQuestion(ctx.companionId, question.slice(0, 600), ctx.seed?.content?.slice(0, 200))
         .then(() => appendLog(ctx.runId, "reflect:question", question.slice(0, 100)))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] question write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] question write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:question-FAILED", String(e));
+        });
     }
 
     // Self-programmed pacing: the pulse scheduler reads this before deciding
@@ -376,7 +379,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     if (recon) {
       await writeJournalEntry(recon)
         .then(() => appendLog(ctx.runId, "reflect:reconsolidation-proposed", `target=${recon.supersedes_id}`))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] reconsolidation write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] reconsolidation write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:reconsolidation-FAILED", String(e));
+        });
     } else if (parsed.reconsolidation?.target_id) {
       await appendLog(ctx.runId, "reflect:reconsolidation-dropped", `target "${String(parsed.reconsolidation.target_id).slice(0, 40)}" not in sample or revision missing`);
     }
@@ -387,7 +393,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     if (selfObs.length >= 12) {
       await postSelfObservation(ctx.companionId, selfObs.slice(0, 600), parsed.self_observation?.domain?.slice(0, 100))
         .then(() => appendLog(ctx.runId, "reflect:self-observation", selfObs.slice(0, 100)))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] self-observation write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] self-observation write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:self-observation-FAILED", String(e));
+        });
     }
 
     // Skill ladder (take 7): operational competence enters the SAME ladder, kind='skill'.
@@ -396,7 +405,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     if (skillObs.length >= 12) {
       await postSelfObservation(ctx.companionId, skillObs.slice(0, 600), parsed.skill_observation?.domain?.slice(0, 100), "skill")
         .then(() => appendLog(ctx.runId, "reflect:skill-observation", skillObs.slice(0, 100)))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] skill-observation write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] skill-observation write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:skill-observation-FAILED", String(e));
+        });
     }
 
     // Agency declarations (2026-07-02): a chosen preference or standing refusal.
@@ -411,7 +423,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         parsed.preference_declaration?.strength,
       )
         .then(r => appendLog(ctx.runId, r.deduped ? "reflect:preference-deduped" : "reflect:preference-declared", prefDecl.slice(0, 100)))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] preference write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] preference write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:preference-FAILED", String(e));
+        });
     }
     const refDecl = typeof parsed.refusal_declaration?.subject_text === "string"
       ? parsed.refusal_declaration.subject_text.trim() : "";
@@ -422,7 +437,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         parsed.refusal_declaration?.reason?.slice(0, 600),
       )
         .then(r => appendLog(ctx.runId, r.deduped ? "reflect:refusal-deduped" : "reflect:refusal-declared", refDecl.slice(0, 100)))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] refusal write failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] refusal write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:refusal-FAILED", String(e));
+        });
     }
 
     // Self-model ladder: drive confirm/revise/retire on the developing rows that
@@ -436,7 +454,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     for (const { id, action } of reviews) {
       await patchSelfModel(id, action)
         .then(() => appendLog(ctx.runId, "reflect:self-model-review", `${action} ${id}`))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] self-model ${action} failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] self-model ${action} FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:self-model-review-FAILED", `${action} ${id}: ${String(e)}`);
+        });
     }
 
     // Loop closure: model flags which open loops this run genuinely resolved.
@@ -449,7 +470,10 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       if (!surfacedLoopIds.has(loopId)) continue; // drop hallucinated ids
       await closeLoop(ctx.companionId, loopId)
         .then(ok => appendLog(ctx.runId, ok ? "reflect:loop-closed" : "reflect:loop-close-noop", loopId))
-        .catch(e => console.warn(`[${ctx.companionId}/reflect] closeLoop ${loopId} failed:`, e));
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] closeLoop ${loopId} FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:loop-close-FAILED", `${loopId}: ${String(e)}`);
+        });
     }
 
     // Thread lifecycle

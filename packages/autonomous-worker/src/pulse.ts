@@ -97,7 +97,7 @@ export async function pulseCheck(
     console.log(`[pulse/${companionId}] resting (self-programmed); resetting pace to normal`);
     await setSetting(companionId, "autonomous_program", JSON.stringify({
       pace: "normal", focus: program?.focus ?? null, set_at: new Date().toISOString(),
-    } satisfies AutonomousProgram)).catch(() => {});
+    } satisfies AutonomousProgram)).catch(e => console.error(`[pulse/${companionId}] autonomous_program write FAILED (rest-clear; pace may stick):`, e));
     return;
   }
 
@@ -134,12 +134,12 @@ export async function pulseCheck(
       .catch(e => console.warn(`[pulse/${companionId}] focus seed write failed:`, e));
     await setSetting(companionId, "autonomous_program", JSON.stringify({
       pace: pace === "eager" ? "normal" : pace, focus: null, set_at: new Date().toISOString(),
-    } satisfies AutonomousProgram)).catch(() => {});
+    } satisfies AutonomousProgram)).catch(e => console.error(`[pulse/${companionId}] autonomous_program write FAILED (focus-clear; pace may stick):`, e));
   } else if (pace === "eager") {
     // Eager is also honored once -- otherwise it fires every pulse window.
     await setSetting(companionId, "autonomous_program", JSON.stringify({
       pace: "normal", focus: null, set_at: new Date().toISOString(),
-    } satisfies AutonomousProgram)).catch(() => {});
+    } satisfies AutonomousProgram)).catch(e => console.error(`[pulse/${companionId}] autonomous_program write FAILED (eager-clear; pace may stick):`, e));
   }
 
   await fire(companionId);

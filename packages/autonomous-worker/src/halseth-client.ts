@@ -317,9 +317,12 @@ export async function examineDream(
 
 /**
  * Write a high-salience continuity note so Claude.ai session orient picks it up.
- * Non-fatal -- autonomous exploration completes even if this write fails.
+ * Non-fatal for the run, but NOT silent: returns false on failure so the caller
+ * can log it accurately -- this is the only channel orient reads autonomous
+ * explorations from, so a swallowed failure here means the whole exploration
+ * silently never reaches the companion.
  */
-export async function writeWmNote(companionId: string, content: string, threadKey?: string): Promise<void> {
+export async function writeWmNote(companionId: string, content: string, threadKey?: string): Promise<boolean> {
   try {
     await hFetch("/mind/note", "POST", {
       agent_id: companionId,
@@ -329,8 +332,10 @@ export async function writeWmNote(companionId: string, content: string, threadKe
       source: "autonomous",
       ...(threadKey ? { thread_key: threadKey } : {}),
     });
+    return true;
   } catch (e) {
-    console.warn(`[${companionId}/halseth] writeWmNote failed:`, e);
+    console.error(`[${companionId}/halseth] writeWmNote FAILED (exploration will not reach orient):`, e);
+    return false;
   }
 }
 
