@@ -217,7 +217,7 @@ export function startScheduler(): void {
   });
 
   // Drift-lane activation -- Gaia witnesses open drifts + the safety floor pauses dissolution.
-  // Halseth-only writes; no floor lock. Server-side in Halseth; no-ops without ANTHROPIC_API_KEY.
+  // Halseth-only writes; no floor lock. Server-side in Halseth; LIVE in prod (ANTHROPIC_API_KEY is set on the Worker; would no-op only if unset).
   console.log(`[scheduler] drift-pass → cron "${DRIFT_PASS_CRON}"`);
   cron.schedule(DRIFT_PASS_CRON, () => {
     runDriftPassTick().catch(e => console.error("[scheduler] drift-pass failed:", e));

@@ -296,12 +296,18 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const brainClient = env.inferenceMode === "brain" && env.brainUrl
     ? new BrainClient(env.brainUrl)
     : null;
+  // Dormancy is announced, not implied: "mode: hermes" alone doesn't tell a
+  // reader that the Brain swarm evaluator + progress brake AND the whole
+  // multi-provider fallback chain are dead code for this process. Say it.
   if (brainClient) {
     console.log(`[${companionId}] inference mode: brain (${env.brainUrl})`);
+    console.log(`[${companionId}] DORMANT: provider fallback chain (Brain owns inference)`);
   } else if (env.inferenceMode === "hermes" && env.hermesUrl) {
     console.log(`[${companionId}] inference mode: hermes (${env.hermesUrl})`);
+    console.log(`[${companionId}] DORMANT: Brain swarm + progress brake (bot-side gates active); provider fallback chain bypassed (forceHermes)`);
   } else {
     console.log(`[${companionId}] inference mode: direct`);
+    console.log(`[${companionId}] DORMANT: Brain swarm + progress brake (bot-side gates active)`);
   }
 
   const redis = redisUrl ? createRedisClient(redisUrl) : null;

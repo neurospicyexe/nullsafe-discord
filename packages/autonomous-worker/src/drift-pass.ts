@@ -1,6 +1,6 @@
 // Drift-lane activation tick (Track 0e activation, 2026-06-18) -- thin trigger; the work runs
 // server-side in Halseth (handlers/drift.ts): Gaia witnesses open drifts and the safety floor pauses
-// any reading as dissolution. Halseth-only writes; no floor lock. No-ops gracefully without ANTHROPIC_API_KEY.
+// any reading as dissolution. Halseth-only writes; no floor lock. LIVE in prod (ANTHROPIC_API_KEY set on Halseth; no-ops only if unset).
 
 import { runDriftPass } from "./halseth-client.js";
 

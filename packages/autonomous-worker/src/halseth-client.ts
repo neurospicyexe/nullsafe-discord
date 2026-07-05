@@ -1064,12 +1064,12 @@ export async function recallContinuityNotes(agentId: string, noteIds: string[]):
 }
 
 // Weekly clearing pass (Goal B) -- thin trigger; the high-substrate triage runs server-side
-// in Halseth (handlers/clearing.ts). No-ops gracefully when ANTHROPIC_API_KEY is unset.
+// in Halseth (handlers/clearing.ts). LIVE in prod (ANTHROPIC_API_KEY set on Halseth; no-ops only if unset).
 // NOT via hFetch: the server makes two Claude calls, so it needs a long client timeout --
 // the 15s hFetch default aborts mid-pass and the disconnect cancels the server request.
 
 // Drift-lane activation pass (0087): Gaia witnesses open drifts + the safety floor pauses any reading
-// as dissolution. Server-side in Halseth (handlers/drift.ts); no-ops without ANTHROPIC_API_KEY. Long
+// as dissolution. Server-side in Halseth (handlers/drift.ts); LIVE in prod (key set on Halseth). Long
 // timeout for the same reason as the clearing pass.
 export async function runDriftPass(): Promise<{ skipped?: string; open: number; witnessed: number; paused: number; letter_id: string | null }> {
   const res = await fetch(`${HALSETH_URL}/mind/drift/run`, {

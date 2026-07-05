@@ -1,7 +1,7 @@
 // Weekly clearing-pass tick (Goal B, 2026-06-14) -- thin trigger; the high-substrate
 // triage of the ratification backlog runs server-side in Halseth (handlers/clearing.ts),
 // where the growth_journal is local D1 and the model key is a Cloudflare secret.
-// Halseth-only writes; no floor lock. No-ops gracefully when ANTHROPIC_API_KEY is unset.
+// Halseth-only writes; no floor lock. LIVE in prod (ANTHROPIC_API_KEY set on Halseth; no-ops only if unset).
 
 import { runClearing } from "./halseth-client.js";
 
