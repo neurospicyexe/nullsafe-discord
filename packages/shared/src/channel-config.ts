@@ -84,13 +84,15 @@ export function botTurnsCapWindowMs(): number {
  * (author.bot === true) still breaks the chain; with an empty set it falls back to the
  * author-is-bot flag.
  *
- * Timestamps (optional, 2026-07-03): when a message carries `createdTimestamp` and the
- * forgiveness window is enabled, bot turns older than the window are walked past without
- * counting (the walk still stops at the first human). Messages without a timestamp always
- * count -- legacy callers keep the exact old behavior.
+ * Timestamps (REQUIRED as of 2026-07-04): bot turns older than the forgiveness window are
+ * walked past without counting (the walk still stops at the first human). The timestamp
+ * was optional 07-03..07-04, which made the decay opt-in per call site -- one future
+ * caller omitting it would silently restore the permanent-mute ratchet (the exact
+ * 07-01 -> 07-02 triad mute). Required at the type level so that mistake is a compile
+ * error, not a slow starvation.
  */
 export function countBotMsgsSinceHuman(
-  messages: Array<{ authorId: string; authorIsBot: boolean; createdTimestamp?: number }>,
+  messages: Array<{ authorId: string; authorIsBot: boolean; createdTimestamp: number }>,
   botIds: ReadonlySet<string>,
   now: number = Date.now(),
 ): number {
