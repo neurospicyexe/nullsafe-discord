@@ -25,7 +25,7 @@ import {
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   ownEchoGated, relativeTime,
   INTER_SEED_HISTORY_N, stripSiblingVocative, seedThreadTtlMs,
-  seedVocativeAllowed, countBotMsgsSinceHuman,
+  seedVocativeAllowed, countBotMsgsSinceHuman, assertWriteAck,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -147,7 +147,8 @@ export async function sendAutonomousMessage(
       ctx.librarian.ask(
         "continuity note",
         JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
-      ).catch(onWriteError(ctx.companionId, "metronome continuity note (siblings/orient will not see this)"));
+      ).then((res) => { assertWriteAck(res, "metronome continuity note"); })
+        .catch(onWriteError(ctx.companionId, "metronome continuity note (siblings/orient will not see this)"));
       // Substrate parity (2026-06-12): autonomous posts were invisible to the SB
       // live index and voice telemetry -- only handler-path replies got indexed.
       // Same fire-and-forget contract as the message handler.
@@ -207,11 +208,10 @@ export async function librarianWriteChecked(
   context?: string,
 ): Promise<boolean> {
   try {
-    const res = await librarian.ask(request, context);
-    if (!res || (!("ack" in res) && !("id" in res))) {
-      console.warn(`[${companionId}/heartbeat] ${label}: write returned no ack (silent reject) -- ${JSON.stringify(res).slice(0, 200)}`);
-      return false;
-    }
+    // assertWriteAck is the shared envelope contract (librarian.ts): throws on { error },
+    // witness-only declines, ack:false, and misroutes -- strictly tighter than the old
+    // "ack or id present" check, which let { ack: false } through.
+    assertWriteAck(await librarian.ask(request, context), label);
     return true;
   } catch (e) {
     onWriteError(companionId, label)(e);

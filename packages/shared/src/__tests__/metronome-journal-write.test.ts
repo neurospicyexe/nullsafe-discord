@@ -51,7 +51,8 @@ describe("writeMetronomeJournal", () => {
     const ask = jest.fn<Ask>(async () => ({ error: "companion_note_add_failed", reason: "no note_text" }));
     await writeMetronomeJournal(fakeLibrarian(ask), "gaia", "journal entry", "a real thought", ["metronome"]);
     expect(ask).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no ack"));
+    // assertWriteAck (2026-07-05) surfaces the executor's error+reason instead of a bare "no ack".
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("companion_note_add_failed"));
   });
 
   it("routes a thrown HTTP error through onWriteError without rejecting", async () => {

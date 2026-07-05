@@ -9,6 +9,7 @@
 
 import type { StmStore } from "./stm.js";
 import type { LibrarianClient } from "./librarian.js";
+import { assertWriteAck } from "./librarian.js";
 import type { WriteQueue } from "./write-queue.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
@@ -99,12 +100,12 @@ export async function distillSessionOnInactive(
       });
       if (hasSomaValue(ext.soma)) {
         wq.fireAndForget(`somaUpdate:${channelId}`, async () => {
-          await librarian.ask("update my state", JSON.stringify(ext.soma));
+          assertWriteAck(await librarian.ask("update my state", JSON.stringify(ext.soma)), "soma update");
         });
       }
       if (ext.emotion) {
         wq.fireAndForget(`feeling:${channelId}`, async () => {
-          await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title }));
+          assertWriteAck(await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title })), "feeling log");
         });
       }
     }

@@ -8,6 +8,31 @@ interface LibrarianOptions {
   fetch?: typeof globalThis.fetch;
 }
 
+/**
+ * Assert that a Librarian envelope is a real write ack.
+ * The Librarian returns HTTP 200 for application-level declines -- { error, reason },
+ * witness-only rejects ({ response_key: "witness", witness }), ack:false (execLiveThreadClose
+ * returns ack: r.ok), and misroutes (a read envelope returned for a write verb, the 07-04
+ * journal→get_tasks class). ask() resolves on all of these, so WriteQueue.fireAndForget saw
+ * success and never retried. Write wrappers route through this so a decline THROWS and the
+ * queue buffers the write for retry. Success contract: { ack: true } or an id-bearing envelope.
+ */
+export function assertWriteAck(res: Record<string, unknown> | null | undefined, label: string): Record<string, unknown> {
+  if (!res || typeof res !== "object") {
+    throw new Error(`librarian ${label}: empty response`);
+  }
+  if ("error" in res) {
+    const reason = typeof res["reason"] === "string" ? ` -- ${res["reason"]}` : "";
+    throw new Error(`librarian ${label} declined: ${String(res["error"])}${reason}`);
+  }
+  if (res["ack"] === false) {
+    throw new Error(`librarian ${label}: write not applied (ack=false)`);
+  }
+  if (res["ack"] === true || "id" in res) return res;
+  const detail = typeof res["witness"] === "string" ? res["witness"] : JSON.stringify(res).slice(0, 200);
+  throw new Error(`librarian ${label}: no ack (silent reject/misroute) -- ${detail}`);
+}
+
 export class LibrarianClient {
   private url: string;
   private secret: string;
@@ -86,6 +111,20 @@ export class LibrarianClient {
     throw new Error("Librarian unreachable");
   }
 
+  /**
+   * ask() for WRITE verbs: awaits the envelope and throws on application-level declines
+   * so fire-and-forget callers (WriteQueue) actually buffer and retry. Read verbs keep
+   * using ask() directly -- their envelopes have no ack and must not throw.
+   */
+  private async askWrite(
+    label: string,
+    request: string,
+    context?: string,
+    sessionType?: "checkin" | "hangout" | "work" | "ritual",
+  ): Promise<Record<string, unknown>> {
+    return assertWriteAck(await this.ask(request, context, sessionType), label);
+  }
+
   async sessionOpen(sessionType: "work" | "checkin" | "hangout" | "ritual" = "work") {
     return this.ask("open my session", undefined, sessionType);
   }
@@ -99,7 +138,7 @@ export class LibrarianClient {
     // Serialize with snake_case keys to match execSessionClose field names.
     // emotion_prompted: true bypasses the soft emotion prompt -- bot shutdowns
     // have no SOMA state to provide, and the prompt would silently block the close.
-    return this.ask("close session", JSON.stringify({
+    return this.askWrite("session close", "close session", JSON.stringify({
       session_id: params.sessionId,
       spine: params.spine,
       last_real_thing: params.lastRealThing,
@@ -113,19 +152,19 @@ export class LibrarianClient {
   }
 
   async updatePromptContext(text: string) {
-    return this.ask("update my state", JSON.stringify({ prompt_context: text }));
+    return this.askWrite("state update", "update my state", JSON.stringify({ prompt_context: text }));
   }
 
   async addCompanionNote(note: string, _channel?: string) {
-    return this.ask("add companion note", note);
+    return this.askWrite("companion note", "add companion note", note);
   }
 
   async witnessLog(entry: string, channel?: string) {
-    return this.ask("witness log", JSON.stringify({ entry, channel }));
+    return this.askWrite("witness log", "witness log", JSON.stringify({ entry, channel }));
   }
 
   async synthesizeSession(summary: string, channel?: string) {
-    return this.ask("synthesize session", JSON.stringify({ summary, channel }));
+    return this.askWrite("synthesize session", "synthesize session", JSON.stringify({ summary, channel }));
   }
 
   /**
@@ -225,7 +264,7 @@ export class LibrarianClient {
     next_steps?: string[];
   }): Promise<void> {
     try {
-      await this.ask("session handoff", JSON.stringify(params));
+      await this.askWrite("session handoff", "session handoff", JSON.stringify(params));
     } catch (e) {
       console.warn("[librarian] writeHandoff failed:", String(e));
     }
@@ -462,19 +501,19 @@ export class LibrarianClient {
   }
 
   async addLiveThread(params: { name: string; flavor?: string; charge?: string; notes?: string }) {
-    return this.ask("add live thread", JSON.stringify(params));
+    return this.askWrite("live thread add", "add live thread", JSON.stringify(params));
   }
 
   async closeLiveThread(threadId: string) {
-    return this.ask("close live thread", JSON.stringify({ id: threadId }));
+    return this.askWrite("live thread close", "close live thread", JSON.stringify({ id: threadId }));
   }
 
   async vetoProposedThread(threadId: string) {
-    return this.ask("veto thread", JSON.stringify({ id: threadId }));
+    return this.askWrite("live thread veto", "veto thread", JSON.stringify({ id: threadId }));
   }
 
   async setAnticipation(params: { active: boolean; target?: string; intensity?: number }) {
-    return this.ask("set anticipation", JSON.stringify(params));
+    return this.askWrite("anticipation set", "set anticipation", JSON.stringify(params));
   }
 
   // ── Distillation blocks (direct HTTP -- fire-and-forget write path) ────────

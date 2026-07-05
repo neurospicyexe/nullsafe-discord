@@ -12,11 +12,12 @@
  * Rejection handler for a fire-and-forget write that is NOT routed through WriteQueue.
  * Logs the failure, attributed to the companion, instead of swallowing it silently.
  *
- * IMPORTANT: `librarian.ask(...)` does NOT reject when an executor rejects the payload --
+ * IMPORTANT: raw `librarian.ask(...)` does NOT reject when an executor rejects the payload --
  * it resolves with an HTTP 200 `{ error }`/`{ witness }` envelope, so a bare `.catch` is
- * blind to silent rejects. For Librarian writes prefer `librarianWriteChecked` (autonomous-core),
- * which awaits and inspects the envelope. Use this handler only for direct-HTTP writes that
- * truly throw on failure (stmWrite, persona/human blocks, setSetting, etc.).
+ * blind to silent rejects. The ask-based WRITE wrappers (addCompanionNote, witnessLog,
+ * synthesizeSession, live-thread ops, ...) inspect the envelope via `assertWriteAck` and THROW
+ * on declines (2026-07-05), so WriteQueue retry works for them. For any remaining raw ask()
+ * write, pipe the result through `assertWriteAck` or use `librarianWriteChecked` (autonomous-core).
  *
  * Use: `librarian.stmWrite(...).catch(onWriteError(COMPANION_ID, "stm write"))`
  */
