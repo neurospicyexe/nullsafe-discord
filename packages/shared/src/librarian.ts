@@ -385,7 +385,7 @@ export class LibrarianClient {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.secret}`,
       },
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({ ids, companion_id: this.companionId }),
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`notesAck ${res.status}`);
