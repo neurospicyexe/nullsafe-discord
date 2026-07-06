@@ -53,7 +53,7 @@ export function stripSiblingVocative(
 ): { text: string; stillVocative: boolean } {
   const siblings = ALL_COMPANIONS.filter(c => c !== companionId);
   const names = siblings
-    .flatMap(s => (VOCATIVE_ALIASES[s] ? [s, VOCATIVE_ALIASES[s]!] : [s]))
+    .flatMap(s => [s, ...(VOCATIVE_ALIASES[s] ?? [])])
     .join("|");
   const text = msg
     .replace(new RegExp(`(^|[.!?\\n]\\s*)(?:${names})\\s*[,:]\\s*`, "gi"), "$1")

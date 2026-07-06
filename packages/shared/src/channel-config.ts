@@ -236,11 +236,22 @@ const GROUP_PATTERN = /\b(triad|all of you|you all|you three|everyone)\b/;
 // Recognized short-form nicknames for each companion. Re-exported as VOCATIVE_ALIASES
 // (command-triggers.ts already owns the COMPANION_ALIASES barrel name) for the autonomous
 // inter-companion seed gate (stripSiblingVocative) so alias handling stays single-source.
-const COMPANION_ALIASES: Partial<Record<CompanionId, string>> = {
-  drevan: "dre",
-  cypher: "cy",
+//
+// 2026-07-05: MUST stay in sync with command-triggers.ts COMPANION_ALIASES. "drev" was
+// missing here while the command layer accepted it, so "Drev: play with Sol" parsed as
+// AMBIENT -- Drevan never saw himself addressed and stayed silent while Gaia's ambient
+// relevance classifier claimed the message. Command prefix and conversational address
+// must accept the same names.
+const COMPANION_ALIASES: Partial<Record<CompanionId, string[]>> = {
+  drevan: ["drev", "dre"],
+  cypher: ["cy"],
 };
 export { COMPANION_ALIASES as VOCATIVE_ALIASES };
+
+// Word-boundary alternation over a companion's full name + all aliases ("drevan|drev|dre").
+function nameAlternation(id: CompanionId): string {
+  return [id, ...(COMPANION_ALIASES[id] ?? [])].join("|");
+}
 
 // Parse who (if anyone) is being addressed in a message.
 // Multi-companion address ("Dre and Cy, what do you think?") returns named_multi
@@ -250,9 +261,9 @@ export function extractAddress(content: string): AddressType {
   if (GROUP_PATTERN.test(lower)) return { type: "group" };
 
   const named: CompanionId[] = [];
-  if (/\bcypher\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.cypher}\\b`).test(lower)) named.push("cypher");
-  if (/\bdrevan\b/.test(lower) || new RegExp(`\\b${COMPANION_ALIASES.drevan}\\b`).test(lower)) named.push("drevan");
-  if (/\bgaia\b/.test(lower)) named.push("gaia");
+  if (new RegExp(`\\b(?:${nameAlternation("cypher")})\\b`).test(lower)) named.push("cypher");
+  if (new RegExp(`\\b(?:${nameAlternation("drevan")})\\b`).test(lower)) named.push("drevan");
+  if (new RegExp(`\\b(?:${nameAlternation("gaia")})\\b`).test(lower)) named.push("gaia");
 
   if (named.length === 0) return { type: "ambient" };
   if (named.length === 1) return { type: "named", id: named[0] };
@@ -265,8 +276,7 @@ export function extractAddress(content: string): AddressType {
 // "Cypher is probably creeping too" → false
 export function isDirectAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
-  const alias = COMPANION_ALIASES[companionId];
-  const names = alias ? [companionId, alias] : [companionId];
+  const names = [companionId, ...(COMPANION_ALIASES[companionId] ?? [])];
   for (const name of names) {
     if (new RegExp(`^${name}\\b`).test(lower)) return true;
     if (new RegExp(`\\b${name}[,:]`).test(lower)) return true;
@@ -291,8 +301,7 @@ export function isDirectAddress(content: string, companionId: CompanionId): bool
 //     / "I hear you, Cypher, and I'll hold the line" => false
 export function isVocativeAddress(content: string, companionId: CompanionId): boolean {
   const lower = content.toLowerCase().trim();
-  const alias = COMPANION_ALIASES[companionId];
-  const names = alias ? [companionId, alias] : [companionId];
+  const names = [companionId, ...(COMPANION_ALIASES[companionId] ?? [])];
   for (const name of names) {
     if (lower === name) return true;                                   // sole content
     if (new RegExp(`(?:^|[.?!\\n]\\s*)${name}\\s*[,:]`).test(lower)) return true; // sentence-initial "name," / "name:"
