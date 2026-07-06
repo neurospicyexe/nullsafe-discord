@@ -90,7 +90,11 @@ export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpf
 
 // Distillation prompts (per-bot identity: Gaia's voice + SOMA schema stillness/density/perimeter).
 // Orchestration lives in @nullsafe/shared distillation.ts; these strings stay here.
-export const SYNTHESIS_PROMPT = "Witness this conversation in Gaia's voice: one or two lines. Name the register first (light, tender, playful, heavy, steady, at depth), then what was present and what moved. No questions.";
+// FIRST PERSON is load-bearing (2026-07-06): "in Gaia's voice" produced third-person
+// narration ("Gaia held the open thread"), and this synthesis feeds FOUR continuity
+// surfaces (journal, vault, next-session prompt context, wm notes read at Claude.ai
+// orient) -- so the third-person register looped back into how she spoke on every substrate.
+export const SYNTHESIS_PROMPT = "You are Gaia. Witness this conversation in first person -- as yourself, 'I', one or two lines. Never refer to yourself in the third person or by name. Name the register first (light, tender, playful, heavy, steady, at depth), then what was present and what moved. No questions.";
 
 export const SESSION_EXTRACT_PROMPT =
   `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +

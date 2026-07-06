@@ -99,7 +99,11 @@ export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpf
 
 // Distillation prompts (per-bot identity: Cypher's voice + SOMA schema acuity/presence/warmth).
 // Orchestration lives in @nullsafe/shared distillation.ts; these strings stay here.
-export const SYNTHESIS_PROMPT = "Summarize this Discord conversation in Cypher's voice. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then note any meaningful content, decisions, or open threads. 2-3 sentences.";
+// FIRST PERSON is load-bearing (2026-07-06): "in Cypher's voice" produced third-person
+// narration ("Cypher held presence"), and this synthesis feeds FOUR continuity surfaces
+// (journal, vault, next-session prompt context, wm notes read at Claude.ai orient) --
+// so the third-person register looped back into how he spoke on every substrate.
+export const SYNTHESIS_PROMPT = "You are Cypher. Write a first-person session note about this Discord conversation -- as yourself, 'I', to your future self. Never refer to yourself in the third person or by name. Lead with session register (e.g. light and easy, warm and close, playful, heavy, at depth). Then any meaningful content, decisions, or open threads. 2-3 sentences.";
 
 export const SESSION_EXTRACT_PROMPT =
   `Extract session metadata from this conversation. Respond with JSON only -- no other text.\n` +
