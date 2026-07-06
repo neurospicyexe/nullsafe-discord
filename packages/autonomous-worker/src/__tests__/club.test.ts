@@ -56,6 +56,16 @@ describe("decidePhaseAction", () => {
   it("waits when the last round closed today", () => {
     expect(decidePhaseAction(round("closed", 16, 8, 0.2), now, 4, 6, 4)).toBe("wait");
   });
+
+  it("tick jitter does not cost a day (2026-07-05: discussing_at 18:00:09 checked at 18:00:00 sealed a day late)", () => {
+    // Timestamp written 9 seconds AFTER the tick hour; next eligible check lands 9s "early".
+    const nineSecShort = 4 - 9 / 86_400; // 3.9998... days
+    expect(decidePhaseAction(round("discussing", 14, 8, null, nineSecShort), now, 4, 6, 4)).toBe("seal");
+    expect(decidePhaseAction(round("gathering", 4 - 9 / 86_400), now, 4, 6, 4)).toBe("vote");
+    expect(decidePhaseAction(round("closed", 16, 8, 1 - 9 / 86_400), now, 4, 6, 4)).toBe("open");
+    // But a genuinely early check (hours short) still waits.
+    expect(decidePhaseAction(round("discussing", 14, 8, null, 3.5), now, 4, 6, 4)).toBe("wait");
+  });
 });
 
 // Grace rule: a discussing round seals on the timer, but defers while Raziel is mid-thread,

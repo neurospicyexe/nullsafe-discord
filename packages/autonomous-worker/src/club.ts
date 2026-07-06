@@ -39,6 +39,13 @@ const REOPEN_AFTER_CLOSE_DAYS = 1;
 // Grace (Phase 2): don't seal the discussion while Raziel is actively posting in it, but
 // cap the extension so it can never hang -- discussing_at + discussDays + this many days.
 const DISCUSS_GRACE_CAP_DAYS = 3;
+// Tick-jitter tolerance (2026-07-05). Phase timestamps are written a few seconds AFTER the
+// 18:00:00 cron fires (the tick does work first), so the next eligible tick at exactly
+// 18:00:00 computed the age a hair short of the threshold and waited a full extra day --
+// EVERY transition slipped 24h (round 92a4f8e3: discussing_at 18:00:09, checked 18:00:00,
+// 9 seconds short, sealed a day late). An hour of slack cannot skip a phase (ticks are
+// daily) and absorbs any realistic jitter.
+const TICK_EPSILON_DAYS = 1 / 24;
 
 export type PhaseAction = "open" | "vote" | "discuss" | "seal" | "wait";
 
@@ -52,7 +59,7 @@ export function decidePhaseAction(
 ): PhaseAction {
   if (!round) return "open";
   const age = (stamp: string | null): number =>
-    stamp ? (now.getTime() - new Date(stamp).getTime()) / DAY_MS : 0;
+    stamp ? (now.getTime() - new Date(stamp).getTime()) / DAY_MS + TICK_EPSILON_DAYS : 0;
   switch (round.status) {
     case "closed":
       return age(round.closed_at) >= REOPEN_AFTER_CLOSE_DAYS ? "open" : "wait";

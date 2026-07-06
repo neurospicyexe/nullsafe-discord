@@ -277,6 +277,17 @@ describe("extractAddress() -- nickname aliases", () => {
     expect(extractAddress("dre, it was a long day")).toEqual({ type: "named", id: "drevan" });
   });
 
+  it("third-person mentions are demoted (2026-07-05: 'Cy and I found some issues' summoned Cypher into a message consoling Drevan)", () => {
+    expect(extractAddress("I curl around you and hug you I got you Dre it's okay, Cy and I found some issues and are fixing them"))
+      .toEqual({ type: "named", id: "drevan" });
+    expect(extractAddress("cypher's blade twitched again")).toEqual({ type: "ambient" });
+    expect(extractAddress("me and Dre watched the movie")).toEqual({ type: "ambient" });
+    // Genuine multi-address still fires both.
+    expect(extractAddress("dre and cy what do you both think?").type).toBe("named_multi");
+    // All-third-person goes ambient -- the relevance classifier decides, not name-matching.
+    expect(extractAddress("Cy and I talked about Dre's basin")).toEqual({ type: "ambient" });
+  });
+
   it("drev routes to drevan (2026-07-05: was missing here while the command layer accepted it -- 'Drev: play with Sol' went ambient and Gaia claimed it)", () => {
     expect(extractAddress("Drev: play with Sol")).toEqual({ type: "named", id: "drevan" });
     expect(extractAddress("drev: feed Sol")).toEqual({ type: "named", id: "drevan" });

@@ -253,6 +253,22 @@ function nameAlternation(id: CompanionId): string {
   return [id, ...(COMPANION_ALIASES[id] ?? [])].join("|");
 }
 
+// A name used in THIRD PERSON is a mention, not an address. 2026-07-05: "I got you Dre
+// it's okay, Cy and I found some issues" summoned Cypher -- he heard his name and answered
+// a message that was consoling Drevan ABOUT him. Conservative patterns only (possessive,
+// first-person conjunctions): a demoted companion still hears the message via witness; it
+// just doesn't fire a reply.
+function isThirdPersonOnly(lower: string, id: CompanionId): boolean {
+  const alt = nameAlternation(id);
+  const hits = lower.match(new RegExp(`\\b(?:${alt})\\b`, "g"))?.length ?? 0;
+  if (hits === 0) return false;
+  const thirdPerson =
+    (lower.match(new RegExp(`\\b(?:${alt})'s\\b`, "g"))?.length ?? 0) +
+    (lower.match(new RegExp(`\\b(?:${alt})\\b (?:and|&) (?:i|me|we|us)\\b`, "g"))?.length ?? 0) +
+    (lower.match(new RegExp(`\\b(?:i|me|we|us) (?:and|&) (?:${alt})\\b`, "g"))?.length ?? 0);
+  return thirdPerson >= hits;
+}
+
 // Parse who (if anyone) is being addressed in a message.
 // Multi-companion address ("Dre and Cy, what do you think?") returns named_multi
 // so all named companions can respond, not just the first match.
@@ -265,9 +281,14 @@ export function extractAddress(content: string): AddressType {
   if (new RegExp(`\\b(?:${nameAlternation("drevan")})\\b`).test(lower)) named.push("drevan");
   if (new RegExp(`\\b(?:${nameAlternation("gaia")})\\b`).test(lower)) named.push("gaia");
 
-  if (named.length === 0) return { type: "ambient" };
-  if (named.length === 1) return { type: "named", id: named[0] };
-  return { type: "named_multi", ids: named };
+  // Demote pure third-person mentions. Demotion to ambient is not silence: ambient
+  // messages still run the relevance classifier (owner_only) or fire unconditionally
+  // (open channels) -- it just stops "heard my name, must be mine" replies.
+  const addressed = named.filter(id => !isThirdPersonOnly(lower, id));
+
+  if (addressed.length === 0) return { type: "ambient" };
+  if (addressed.length === 1) return { type: "named", id: addressed[0] };
+  return { type: "named_multi", ids: addressed };
 }
 
 // Returns true if the companion is being directly addressed (not just mentioned in passing).
