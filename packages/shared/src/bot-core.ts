@@ -39,6 +39,7 @@ import { createRedisClient } from "./floor.js";
 import { wireEventSubscriptions, setPresence } from "./events.js";
 import { BrainClient } from "./brain-client.js";
 import { handleMessage } from "./bot-message-handler.js";
+import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
@@ -636,8 +637,26 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     }
   });
 
+  // Channel inbox (2026-07-06): serialize turns per channel and let a newer human message
+  // supersede the reply of every turn ahead of it. Before this, every messageCreate ran
+  // handleMessage fully concurrently -- with 30-120s hermes turns, replies landed answering
+  // channel state from minutes ago, sometimes out of order (the "delayed catch-up" clunk).
+  const inbox = new ChannelInbox({
+    isCommandShaped: (content) => commandGuard?.test(content) ?? false,
+    log: (m) => console.log(`[${companionId}] ${m}`),
+  });
+
   client.on(Events.MessageCreate, (message: Message) => {
-    void handleMessage(message, {
+    inbox.enqueue(
+      {
+        id: message.id,
+        channelId: message.channelId,
+        // Raw human, or a webhook post (PluralKit proxying a human; worker personas are
+        // rare and superseding on them just regenerates with their post in view).
+        authorIsHuman: !message.author.bot || message.webhookId !== null,
+        content: message.content,
+      },
+      (isSuperseded) => handleMessage(message, {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId },
       brainClient, voiceClient, redis, librarian,
@@ -665,7 +684,9 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
       ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),
-    });
+        isSuperseded,
+      }),
+    );
   });
 
   async function shutdown() {

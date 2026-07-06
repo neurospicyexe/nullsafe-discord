@@ -104,6 +104,20 @@ async function getImpContext(
   return { state, settings };
 }
 
+// Typing keepalive (2026-07-06): Discord's typing indicator expires after ~10s, but a
+// hermes/direct inference turn runs 30-120s. The Brain relay path always had a 4s
+// keepalive interval; the direct path sent ONE sendTyping and then went dark for the
+// rest of the turn -- the bot looked frozen, then a reply popped in late. Wrap every
+// direct generate call so the channel shows a live typing state for the whole turn.
+async function withTyping<T>(ch: TextChannel, fn: () => Promise<T>): Promise<T> {
+  const keepalive = setInterval(() => { ch.sendTyping().catch(() => {}); }, 8_000);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(keepalive);
+  }
+}
+
 /** Minimal shape of the per-bot `loadBotConfig()` result the handler reads. */
 export interface MessageHandlerCfg {
   ownerDiscordId: string;
@@ -145,6 +159,12 @@ export interface MessageHandlerDeps {
   extremeTempCount: Map<string, number>;
   apiKeys: AdapterKeys;
   apiUrls: AdapterUrls;
+  /** Channel-inbox supersede probe (2026-07-06): true once a newer human conversational
+   *  message is queued behind this turn. Checked before the expensive reply work (skip)
+   *  and again after inference (drop) -- the superseding turn answers with this message
+   *  already absorbed into STM. Absent (e.g. tests calling handleMessage directly) =
+   *  never superseded. */
+  isSuperseded?: () => boolean;
   // bot-local closures (voice wiring + autonomous loop guards)
   connectVoice: (vc: VoiceBasedChannel) => string;
   leaveVoice: (guildId: string | null) => string | null;
@@ -187,7 +207,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     stmStore, writeQueue, configCache, sessionWindows, pkDedup,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
-    apiKeys, apiUrls,
+    apiKeys, apiUrls, isSuperseded,
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
@@ -702,6 +722,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
 
+    // Supersede check A (channel inbox, 2026-07-06): a newer human conversational message
+    // is already waiting behind this turn. Everything this message needed for continuity
+    // has happened (STM append, live ingest, session touch, deterministic commands ran
+    // above) -- skip the reply entirely; the newest turn answers with this one in context.
+    // Placed BEFORE tripwire consumption so a matched tripwire fires on a turn that
+    // actually surfaces it.
+    if (isSuperseded?.()) {
+      console.log(`[${COMPANION_ID}] turn superseded pre-reply (newer human message queued) -- absorbing ${message.id}`);
+      distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+      return;
+    }
+
     // Double-identity dedup: under the Hermes relay the agent already prepends the full SOUL.md
     // and runs its own orient, so sending the bot's assembled identity too is a redundant second
     // copy. Use a lean Discord frame as the base (register-law tail preserved); every per-message
@@ -972,7 +1004,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
       if (brainResult === null) {
         console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+        response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
       } else if (isSwarmReply(brainResult)) {
         const slotReply = brainResult.responses[COMPANION_ID];
         if (slotReply === null || slotReply === undefined) {
@@ -993,11 +1025,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           response = brainResult.reply_text;
         } else {
           console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+          response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
         }
       }
     } else {
-      response = await adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId);
+      response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
     }
 
     if (!response) {
@@ -1009,6 +1041,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // a failed call leaves the mark alone so its delta re-sends next turn.
     if (hermesOut && hermesOut.deliveredThroughTs !== null) {
       hermesDeliveredMark.set(message.channelId, hermesOut.deliveredThroughTs);
+    }
+
+    // Supersede check B (channel inbox, 2026-07-06): a newer human message arrived WHILE
+    // this reply was generating. Posting it now would answer a state the channel has
+    // visibly moved past -- drop it; the superseding turn regenerates with everything in
+    // STM. The hermes delivered mark above stays advanced (the gateway DID receive the
+    // delta); the reply is not appended to STM and not sent.
+    if (isSuperseded?.()) {
+      console.log(`[${COMPANION_ID}] reply superseded mid-inference (newer human message queued) -- dropping reply to ${message.id}`);
+      if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
+      distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+      return;
     }
 
     // Self-switch: companion can emit [model:<key>] to request a model change.

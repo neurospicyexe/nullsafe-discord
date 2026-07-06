@@ -25,6 +25,7 @@ export * from "./distillation.js";
 export * from "./day-distillation.js";
 export * from "./bot-core.js";
 export * from "./bot-message-handler.js";
+export * from "./channel-inbox.js";
 export * from "./discord-send.js";
 export * from "./autonomous-core.js";
 export * from "./response-quality.js";
