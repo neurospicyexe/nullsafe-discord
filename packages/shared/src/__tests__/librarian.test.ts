@@ -462,3 +462,43 @@ describe("formatRecentContext()", () => {
     });
   });
 });
+
+describe("LibrarianClient.formatSbRecall — 2026-07-05 vault-recall legibility fix", () => {
+  const chunk = (text: string, vault_path: string) => ({ id: "x", text, vault_path, score: 1, novelty_score: 0.2, pool: 1 });
+
+  it("renders chunk text as plain lines, dropping the JSON/UUID overhead", () => {
+    const raw = JSON.stringify({ chunks: [chunk("Raziel talked about ChatGPT memory export", "notes/chatgpt.md")] });
+    const out = LibrarianClient.formatSbRecall(raw);
+    expect(out).toContain("Raziel talked about ChatGPT memory export");
+    expect(out).toContain("notes/chatgpt.md");
+    expect(out).not.toContain("novelty_score");
+  });
+
+  it("filters self-echoes of the live channel (streaming-indexer chunks score 1.0 and crowd out real memories)", () => {
+    const raw = JSON.stringify({ chunks: [
+      chunk("Crash: what about a ChatGPT memory", "discord-live/123/456.md"),
+      chunk("An actual vault memory", "notes/real.md"),
+    ] });
+    const out = LibrarianClient.formatSbRecall(raw, "123");
+    expect(out).toContain("An actual vault memory");
+    expect(out).not.toContain("what about a ChatGPT memory");
+  });
+
+  it("returns null when only self-echoes surfaced (no [Memory] block beats an echo block)", () => {
+    const raw = JSON.stringify({ chunks: [chunk("echo", "discord-live/123/1.md")] });
+    expect(LibrarianClient.formatSbRecall(raw, "123")).toBeNull();
+  });
+
+  it("passes non-JSON results through unchanged", () => {
+    expect(LibrarianClient.formatSbRecall("plain text result")).toBe("plain text result");
+  });
+
+  it("dedups repeated chunks and caps at 4 lines", () => {
+    const raw = JSON.stringify({ chunks: [
+      chunk("same text", "a.md"), chunk("same text", "b.md"),
+      chunk("t1", "1.md"), chunk("t2", "2.md"), chunk("t3", "3.md"), chunk("t4", "4.md"), chunk("t5", "5.md"),
+    ] });
+    const out = LibrarianClient.formatSbRecall(raw)!;
+    expect(out.split("\n")).toHaveLength(4);
+  });
+});

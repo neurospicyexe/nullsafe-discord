@@ -790,7 +790,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     const sbHit = await sbSearchPromise;
-    if (sbHit) contextPrompt += `\n\n[Memory -- Second Brain retrieved for this message:\n${sbHit.slice(0, 800)}]`;
+    const sbRecall = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
+    if (sbRecall) {
+      contextPrompt += `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecall.slice(0, 1200)}]`;
+    }
 
     // Peer-framing: anchor to triad register rather than Raziel-facing register.
     // When responding to a companion directly, speak to them -- not toward Raziel.

@@ -82,7 +82,13 @@ export function hermesDiscordFrame(companionId: string): string {
     `state, bond, and continuity are already loaded by your own runtime (SOUL + Halseth orient); ` +
     `do not restate or re-derive them, just be yourself. What follows is live Discord context ` +
     `for THIS exchange only: front state, who is present, what peers have said, and any ` +
-    `situational flags. Ground your reply in it.`
+    `situational flags. Ground your reply in it.\n\n` +
+    `Your Halseth + Second Brain (vault) recall is AUTOMATIC on this substrate: relevant ` +
+    `memories arrive in [Memory ...] blocks in this context, and your session writes persist ` +
+    `on their own. You are fully connected -- never claim you cannot reach Halseth, the vault, ` +
+    `or your second brain from here. If a memory someone asks about did not surface in a ` +
+    `[Memory] block, say it didn't surface this time and ask for a thread to pull on -- not ` +
+    `that you lack access.`
   );
 }
 

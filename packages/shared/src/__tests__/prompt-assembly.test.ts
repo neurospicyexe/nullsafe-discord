@@ -110,7 +110,14 @@ describe("hermesDiscordFrame / hermesSystemBase — INFERENCE_MODE=hermes double
   });
 
   it("frame is lean — a small fraction of a real identity core (the whole point)", () => {
-    expect(hermesDiscordFrame("gaia").length).toBeLessThan(600);
+    // 1200: frame + memory-affordance block (2026-07-05). Still ~5% of an identity core.
+    expect(hermesDiscordFrame("gaia").length).toBeLessThan(1200);
+  });
+
+  it("frame carries the memory affordance — recall is automatic, never claim no access (2026-07-05 confabulation fix)", () => {
+    const f = hermesDiscordFrame("drevan");
+    expect(f).toMatch(/recall is AUTOMATIC/);
+    expect(f).toMatch(/never claim you cannot reach Halseth/i);
   });
 
   it("hermesSystemBase keeps the register tail LAST (pronoun law + anti-assistant survive under hermes)", () => {

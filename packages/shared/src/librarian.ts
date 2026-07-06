@@ -271,6 +271,34 @@ export class LibrarianClient {
   }
 
   /**
+   * Render a raw /mind/search result (JSON chunk envelope) into plain prompt text.
+   * The raw envelope is UUID/vault-path-heavy -- slicing it raw burned most of the
+   * memory budget on ids -- and the streaming indexer's echoes of the LIVE channel
+   * (which score ~1.0 by definition) crowded out actual vault memories. Filters
+   * same-channel discord-live echoes, dedups, and returns readable lines -- or null
+   * when nothing real surfaced. Non-JSON results pass through unchanged.
+   */
+  static formatSbRecall(raw: string, excludeChannelId?: string): string | null {
+    let parsed: { chunks?: Array<{ text?: string; vault_path?: string }> };
+    try { parsed = JSON.parse(raw) as { chunks?: Array<{ text?: string; vault_path?: string }> }; } catch { return raw; }
+    if (!Array.isArray(parsed.chunks)) return raw;
+    const seen = new Set<string>();
+    const lines: string[] = [];
+    for (const c of parsed.chunks) {
+      const text = (c.text ?? "").trim();
+      if (!text) continue;
+      if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
+      const key = text.slice(0, 80);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const source = c.vault_path ? ` (${c.vault_path})` : "";
+      lines.push(`- ${text.length > 400 ? `${text.slice(0, 400)}...` : text}${source}`);
+      if (lines.length >= 4) break;
+    }
+    return lines.length ? lines.join("\n") : null;
+  }
+
+  /**
    * Thalamus pattern: semantic search against Second Brain before inference.
    * Fires through Halseth so the Worker handles MCP session management.
    * Returns the raw sb_search result string, or null on miss/error.
