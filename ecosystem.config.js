@@ -182,6 +182,13 @@ module.exports = {
         CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
         DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,
         GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
+        // Club phase knobs (2026-07-06). This env block is an ALLOWLIST -- the .env values
+        // never reached the worker before these lines, so the documented CLUB_* overrides
+        // were silently dead and the code defaults always won.
+        CLUB_CRON:             process.env.CLUB_CRON,
+        CLUB_GATHER_DAYS:      process.env.CLUB_GATHER_DAYS,
+        CLUB_ACTIVE_DAYS:      process.env.CLUB_ACTIVE_DAYS,
+        CLUB_DISCUSS_DAYS:     process.env.CLUB_DISCUSS_DAYS,
       },
     },
   ],
