@@ -173,7 +173,7 @@ export class LibrarianClient {
    * session orient -- bridging Discord activity into Claude.ai companions at next boot.
    * Non-throwing; failures are logged but never bubble up.
    */
-  async writeWmNote(content: string, threadKey?: string): Promise<void> {
+  async writeWmNote(content: string, threadKey?: string, noteType = "discord_session"): Promise<void> {
     try {
       const res = await this._fetch(`${this.url}/mind/note`, {
         method: "POST",
@@ -185,7 +185,7 @@ export class LibrarianClient {
           agent_id: this.companionId,
           content,
           salience: "high",
-          note_type: "discord_session",
+          note_type: noteType,
           source: "discord",
           ...(threadKey ? { thread_key: threadKey } : {}),
         }),
@@ -199,14 +199,17 @@ export class LibrarianClient {
 
   /**
    * Read recent wm_continuity_notes from all companions (cross-companion feed).
-   * Used by heartbeat cron to inject peer speech into generation prompt.
+   * Used by heartbeat cron to inject peer speech into generation prompt, and (agentId +
+   * noteType filtered) by the nightly day-distillation to gather its own day fragments.
    * Non-throwing; returns [] on error.
    */
-  async getRecentNotes(opts?: { sinceHours?: number; limit?: number }): Promise<Array<{ note_id: string; agent_id: string; content: string; created_at: string }>> {
+  async getRecentNotes(opts?: { sinceHours?: number; limit?: number; agentId?: string; noteType?: string }): Promise<Array<{ note_id: string; agent_id: string; content: string; created_at: string }>> {
     try {
       const url = new URL(`${this.url}/mind/notes/recent`);
       if (opts?.sinceHours) url.searchParams.set("since_hours", String(opts.sinceHours));
       if (opts?.limit) url.searchParams.set("limit", String(opts.limit));
+      if (opts?.agentId) url.searchParams.set("agent_id", opts.agentId);
+      if (opts?.noteType) url.searchParams.set("note_type", opts.noteType);
       const res = await this._fetch(url.toString(), {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(8_000),
@@ -217,6 +220,32 @@ export class LibrarianClient {
     } catch (e) {
       console.warn("[librarian] getRecentNotes failed:", String(e));
       return [];
+    }
+  }
+
+  /**
+   * Demote this companion's high-salience notes of one type to normal (day-distillation:
+   * the digest replaces the fragments in orient's diet; fragments stay readable elsewhere).
+   * Returns the demoted count, or null on failure (caller logs and moves on -- a failed
+   * demotion just means one noisier orient, never lost data).
+   */
+  async demoteNotes(noteType: string, before?: string): Promise<number | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/notes/demote`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ agent_id: this.companionId, note_type: noteType, ...(before ? { before } : {}) }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) { console.warn(`[librarian] demoteNotes ${res.status}`); return null; }
+      const data = await res.json() as { demoted?: number };
+      return data.demoted ?? 0;
+    } catch (e) {
+      console.warn("[librarian] demoteNotes failed:", String(e));
+      return null;
     }
   }
 

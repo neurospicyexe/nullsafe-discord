@@ -22,6 +22,7 @@ export {
 export * from "./shared-context.js";
 export * from "./prompt-assembly.js";
 export * from "./distillation.js";
+export * from "./day-distillation.js";
 export * from "./bot-core.js";
 export * from "./bot-message-handler.js";
 export * from "./discord-send.js";

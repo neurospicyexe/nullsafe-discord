@@ -15,6 +15,7 @@ import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { setArmedTriggers } from "./triggers.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
+import { scheduleDayDistillation } from "./day-distillation.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
@@ -465,6 +466,16 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     });
   }, somaRefreshIntervalMs);
 
+  // Nightly day-distillation (2026-07-06): fold the day's session-fragment wm notes into
+  // ONE first-person day note (salience=high) and demote the fragments -- orient boots on
+  // the arc, not the shards. DAY_DISTILL_UTC_HOUR overrides the default 06:00 UTC (01:00
+  // CDT: after evening closures flush, before Layer B autonomous time at 01:30).
+  const dayDistillHour = parseInt(process.env["DAY_DISTILL_UTC_HOUR"] ?? "6", 10);
+  const dayDistillInterval = scheduleDayDistillation(
+    { companionId, librarian, adapter: () => adapterRef.current },
+    Number.isFinite(dayDistillHour) ? dayDistillHour : 6,
+  );
+
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -667,6 +678,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     }
     writeQueue.stop();
     if (presenceInterval) clearInterval(presenceInterval);
+    clearInterval(dayDistillInterval);
     if (cleanupEventSubs) await cleanupEventSubs();
     // No session_close on shutdown: a placeholder spine here would overwrite real
     // session activity in the canonical record. Sessions age out via synthesis worker.
