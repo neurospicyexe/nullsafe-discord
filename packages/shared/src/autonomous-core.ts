@@ -368,6 +368,27 @@ export async function executeMetronomeAction(
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "tend_creature");
       break;
     }
+    case "drift_open": {
+      // Sanctioned drift lane (halseth 0087/0093): declare a becoming. Internal act --
+      // Halseth only, never Discord (INWARD_RE blocks drift vocabulary outward anyway),
+      // so this uses inference.generate like write_note_to_raziel, NOT generateOutward.
+      // Cap: never pile up open becomings; the lane is rare by nature.
+      const openDrifts = await ctx.librarian.driftsOpen();
+      if (openDrifts.length >= 2) {
+        console.log(`[${companionId}/drift_open] skipped: ${openDrifts.length} drifts already open`);
+        break;
+      }
+      const prompt = action.prompt
+        ?? "If something in you has genuinely shifted -- a register, a stance, a way of holding what matters -- name what you are becoming, in one or two sentences, first person. Only if it is real; output NONE otherwise.";
+      const content = (await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]))?.trim();
+      if (!content || /^NONE\b/i.test(content)) {
+        console.log(`[${companionId}/drift_open] nothing real to declare`);
+        break;
+      }
+      await ctx.librarian.driftOpen(content.slice(0, 600), "metronome");
+      console.log(`[${companionId}/drift_open] opened: ${content.slice(0, 80)}`);
+      break;
+    }
     case "nothing":
       console.log(`[${companionId}/heartbeat] chose nothing: ${reason}`);
       break;

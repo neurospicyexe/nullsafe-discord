@@ -1084,6 +1084,39 @@ export async function runDriftPass(): Promise<{ skipped?: string; open: number; 
   }
   return await res.json() as { skipped?: string; open: number; witnessed: number; paused: number; letter_id: string | null };
 }
+// ── Sanctioned drift lane, companion-initiated verbs (0087/0093) ─────────────
+// The worker acts AS the companion via POST /librarian (admin secret + companion_id body).
+// These are the open/resolve verbs; runDriftPass above is the separate Gaia-witness pass.
+
+export interface OpenDriftRow { id: string; drift_text: string; opened_at: string; witness_log: Array<{ by: string; note: string; at: string }> }
+
+export async function getOpenDrifts(companionId: string): Promise<OpenDriftRow[]> {
+  const res = await hFetch(`/drifts/${encodeURIComponent(companionId)}?status=open`, "GET") as OpenDriftRow[] | null;
+  return Array.isArray(res) ? res : [];
+}
+
+async function librarianDriftVerb(companionId: string, request: string, context: Record<string, unknown>): Promise<boolean> {
+  const res = await fetch(`${HALSETH_URL}/librarian`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HALSETH_SECRET}` },
+    body: JSON.stringify({ companion_id: companionId, request, context }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Halseth POST /librarian (${request}) → ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const body = await res.json() as { ack?: boolean };
+  return body.ack === true;
+}
+
+export const openDrift = (companionId: string, driftText: string, origin = "reflection") =>
+  librarianDriftVerb(companionId, "i'm becoming", { drift_text: driftText, origin });
+export const crystallizeDrift = (companionId: string, driftId: string, note: string) =>
+  librarianDriftVerb(companionId, "crystallize drift", { drift_id: driftId, resolution_note: note });
+export const fadeDrift = (companionId: string, driftId: string, note: string) =>
+  librarianDriftVerb(companionId, "fade drift", { drift_id: driftId, resolution_note: note });
+
 export async function runClearing(): Promise<{ skipped?: string; pending: number; declined: number; shortlisted: number; basins_reviewed: number; basins_dismissed: number; basins_surfaced: number; letter_id: string | null }> {
   const res = await fetch(`${HALSETH_URL}/mind/clearing/run`, {
     method: "POST",

@@ -70,6 +70,33 @@ describe("parseVerdict", () => {
     }), IDS);
     expect(v!.tension_action).toBeNull();
   });
+
+  it("accepts drift lane fields and clamps drift_action to known open-drift ids", () => {
+    const v = parseVerdict(JSON.stringify({
+      reply: "r", journal: "j", tension_action: null, new_tension: null,
+      drift_action: { id: "d1", action: "crystallize", note: "this settled" },
+      new_drift: "I am becoming someone who initiates, not only responds.",
+    }), IDS, new Set(["d1"]));
+    expect(v!.drift_action).toEqual({ id: "d1", action: "crystallize", note: "this settled" });
+    expect(v!.new_drift).toContain("initiates");
+  });
+
+  it("drops a drift_action with an unknown id or invalid verb; defaults are null", () => {
+    const badId = parseVerdict(JSON.stringify({
+      reply: "r", journal: "j", tension_action: null, new_tension: null,
+      drift_action: { id: "hallucinated", action: "fade", note: "" }, new_drift: null,
+    }), IDS, new Set(["d1"]));
+    expect(badId!.drift_action).toBeNull();
+    const badVerb = parseVerdict(JSON.stringify({
+      reply: "r", journal: "j", tension_action: null, new_tension: null,
+      drift_action: { id: "d1", action: "release", note: "" }, new_drift: null,
+    }), IDS, new Set(["d1"]));
+    expect(badVerb!.drift_action).toBeNull();
+    // Legacy shape (no drift fields, no validDriftIds arg) still parses with null drift fields.
+    const legacy = parseVerdict(JSON.stringify({ reply: "r", journal: "j", tension_action: null, new_tension: null }), IDS);
+    expect(legacy!.drift_action).toBeNull();
+    expect(legacy!.new_drift).toBeNull();
+  });
 });
 
 describe("ageDays", () => {

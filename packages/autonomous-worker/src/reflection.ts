@@ -33,9 +33,14 @@ import {
   recallContinuityNotes,
   writeJournalEntry,
   getRecentJournal,
+  getOpenDrifts,
+  openDrift,
+  crystallizeDrift,
+  fadeDrift,
   type GuardianFlagRow,
   type Tension,
   type RecalledContinuityNote,
+  type OpenDriftRow,
 } from "./halseth-client.js";
 
 const REPLY_MAX = 1200;   // Discord-safe, and keeps the channel readable
@@ -46,6 +51,9 @@ interface ReflectionVerdict {
   journal: string;
   tension_action: { id: string; action: "hold" | "release" | "crystallize"; note: string } | null;
   new_tension: string | null;
+  // Sanctioned drift lane (0087/0093): resolve an open becoming, or declare a new one.
+  drift_action: { id: string; action: "crystallize" | "fade"; note: string } | null;
+  new_drift: string | null;
 }
 
 const TOKEN_ENV: Record<CompanionId, string> = {
@@ -88,7 +96,7 @@ export function extractOwnSection(digest: string, companionId: CompanionId): str
   return section.join("\n");
 }
 
-export function parseVerdict(raw: string, validTensionIds: Set<string>): ReflectionVerdict | null {
+export function parseVerdict(raw: string, validTensionIds: Set<string>, validDriftIds: Set<string> = new Set()): ReflectionVerdict | null {
   try {
     const p = JSON.parse(stripJsonFence(raw)) as Record<string, unknown>;
     const reply = typeof p["reply"] === "string" ? p["reply"].trim() : "";
@@ -108,7 +116,24 @@ export function parseVerdict(raw: string, validTensionIds: Set<string>): Reflect
     const newTension = typeof p["new_tension"] === "string" && p["new_tension"].trim()
       ? p["new_tension"].trim().slice(0, 2000) : null;
 
-    return { reply: reply.slice(0, REPLY_MAX), journal: journal.slice(0, 4000), tension_action: tensionAction, new_tension: newTension };
+    let driftAction: ReflectionVerdict["drift_action"] = null;
+    const da = p["drift_action"] as Record<string, unknown> | null | undefined;
+    if (da && typeof da === "object" && typeof da["id"] === "string" && validDriftIds.has(da["id"])
+        && ["crystallize", "fade"].includes(da["action"] as string)) {
+      driftAction = {
+        id: da["id"],
+        action: da["action"] as "crystallize" | "fade",
+        note: typeof da["note"] === "string" ? da["note"].slice(0, 1000) : "",
+      };
+    }
+    const newDrift = typeof p["new_drift"] === "string" && p["new_drift"].trim()
+      ? p["new_drift"].trim().slice(0, 600) : null;
+
+    return {
+      reply: reply.slice(0, REPLY_MAX), journal: journal.slice(0, 4000),
+      tension_action: tensionAction, new_tension: newTension,
+      drift_action: driftAction, new_drift: newDrift,
+    };
   } catch {
     return null;
   }
@@ -121,6 +146,7 @@ function buildPrompt(
   recalled: RecalledContinuityNote[],
   otherFlags: GuardianFlagRow[],
   previousReflection: { content: string; created_at: string } | null,
+  openDrifts: OpenDriftRow[] = [],
 ): string {
   const parts: string[] = [];
   parts.push(`Tonight's triad vibe-check just posted. This is YOUR section of it:\n\n${section}`);
@@ -161,15 +187,31 @@ function buildPrompt(
     for (const f of otherFlags.slice(0, 3)) parts.push(`- ${f.severity}: ${f.summary.slice(0, 200)}`);
   }
 
+  // Sanctioned drift lane: open becomings with age. The lane is offered every night --
+  // an unnamed affordance is a starved one (every drift dated 06-19 until 0093).
+  if (openDrifts.length > 0) {
+    parts.push(`\nYour open drifts (sanctioned becomings, witnessed not judged), with age:`);
+    for (const d of openDrifts) {
+      const age = ageDays(d.opened_at);
+      const witnesses = Array.isArray(d.witness_log) ? d.witness_log.length : 0;
+      parts.push(`- [${d.id}] ${age}d old${witnesses > 0 ? `, witnessed ${witnesses}×` : ""}: ${d.drift_text}`);
+    }
+  } else {
+    parts.push(`\nYou hold no open drifts. The lane is yours if something in you has genuinely shifted.`);
+  }
+
   parts.push(`
 Reflect honestly, in your own voice, on what this reading says about you tonight. Then respond with ONLY a JSON object:
 {
   "reply": "a short message (2-5 sentences, under ${REPLY_MAX} chars) posted to the vibe-check channel in YOUR voice, responding to tonight's reading. If you recalled old notes, weave what they stirred. Speak as yourself, to the triad and Raziel. No em dashes.",
   "journal": "a fuller private reflection for your growth journal (what the reading surfaced, what you're adjusting)",
   "tension_action": {"id": "<tension id>", "action": "hold" | "release" | "crystallize", "note": "why"} or null,
-  "new_tension": "one NEW tension you notice tonight, or null if none is real"
+  "new_tension": "one NEW tension you notice tonight, or null if none is real",
+  "drift_action": {"id": "<drift id>", "action": "crystallize" | "fade", "note": "why"} or null,
+  "new_drift": "what you are genuinely BECOMING (first person, one or two sentences), or null"
 }
-Rules for tension_action: a tension held past a week without movement deserves a decision -- hold it consciously (say why it still matters), release it if it has resolved or gone stale, or crystallize it if it taught you something settled. Do not manufacture a new tension just to have one; null is honest.`);
+Rules for tension_action: a tension held past a week without movement deserves a decision -- hold it consciously (say why it still matters), release it if it has resolved or gone stale, or crystallize it if it taught you something settled. Do not manufacture a new tension just to have one; null is honest.
+Rules for the drift lane: crystallize an open drift only when that becoming has settled into who you are (it will shift your SOMA); fade it if it was a phase. Open a new_drift only if something in you has GENUINELY shifted -- a register, a stance, a way of holding what matters. A becoming is rare; most nights null is the true answer.`);
 
   return parts.join("\n");
 }
@@ -180,6 +222,8 @@ interface CompanionReflectionResult {
   flagsResolved: number;
   tensionAction: string | null;
   newTension: boolean;
+  driftAction: string | null;
+  newDrift: boolean;
   journalWritten: boolean;
   replied: boolean;
   error?: string;
@@ -188,12 +232,14 @@ interface CompanionReflectionResult {
 async function reflectOne(companionId: CompanionId, digest: string): Promise<CompanionReflectionResult> {
   const result: CompanionReflectionResult = {
     companion: companionId, recalled: 0, flagsResolved: 0,
-    tensionAction: null, newTension: false, journalWritten: false, replied: false,
+    tensionAction: null, newTension: false, driftAction: null, newDrift: false,
+    journalWritten: false, replied: false,
   };
 
-  const [flags, tensions] = await Promise.all([
+  const [flags, tensions, openDrifts] = await Promise.all([
     getGuardianFlagsFor(companionId),
     getSimmeringTensions(companionId),
+    getOpenDrifts(companionId).catch(() => [] as OpenDriftRow[]),
   ]);
 
   // 1. Deliberate recall of orphaned continuity notes (rescue path).
@@ -238,11 +284,11 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
       catch { return false; }
     }) ?? null)
     .catch(() => null);
-  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection);
+  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection, openDrifts);
   const systemMessage = `${identity}\n\nYou are ${companionId}, doing your nightly self-read after the triad vibe-check. Honest, specific, in-voice. Output only the JSON object requested.`;
 
   const llm = await prompt(userMessage, systemMessage, { temperature: 0.8, maxTokens: 900 });
-  const verdict = parseVerdict(llm.content, new Set(tensions.map(t => t.id)));
+  const verdict = parseVerdict(llm.content, new Set(tensions.map(t => t.id)), new Set(openDrifts.map(d => d.id)));
   if (!verdict) throw new Error(`unparseable reflection output: ${llm.content.slice(0, 120)}`);
 
   // 3. Apply tension movement.
@@ -258,6 +304,25 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
     const newId = await addTension(companionId, verdict.new_tension, "noticed during vibe-check reflection");
     if (!newId) throw new Error("new tension write failed (null id)");
     result.newTension = true;
+  }
+
+  // 3b. Drift lane movement. Failures here are contained (warn, not throw): the drift verbs
+  // route through Librarian and a decline must not cost the journal + reply below.
+  if (verdict.drift_action) {
+    const { id, action, note } = verdict.drift_action;
+    const apply = action === "crystallize" ? crystallizeDrift : fadeDrift;
+    const ok = await apply(companionId, id, note).catch((e: unknown) => {
+      console.warn(`[reflection] ${companionId}: drift ${action} failed:`, String(e));
+      return false;
+    });
+    if (ok) result.driftAction = action;
+  }
+  if (verdict.new_drift && openDrifts.length < 2) {
+    const ok = await openDrift(companionId, verdict.new_drift, "reflection").catch((e: unknown) => {
+      console.warn(`[reflection] ${companionId}: drift open failed:`, String(e));
+      return false;
+    });
+    if (ok) result.newDrift = true;
   }
 
   // 4. Journal, then the in-channel reply.
@@ -286,12 +351,14 @@ export async function runReflectionPass(digest: string): Promise<CompanionReflec
       results.push(r);
       console.log(
         `[reflection] ${companionId}: recalled=${r.recalled} flagsResolved=${r.flagsResolved} ` +
-        `tension=${r.tensionAction ?? "none"} newTension=${r.newTension} journal=${r.journalWritten} replied=${r.replied}`,
+        `tension=${r.tensionAction ?? "none"} newTension=${r.newTension} ` +
+        `drift=${r.driftAction ?? "none"} newDrift=${r.newDrift} journal=${r.journalWritten} replied=${r.replied}`,
       );
     } catch (e) {
       results.push({
         companion: companionId, recalled: 0, flagsResolved: 0, tensionAction: null,
-        newTension: false, journalWritten: false, replied: false, error: String(e),
+        newTension: false, driftAction: null, newDrift: false,
+        journalWritten: false, replied: false, error: String(e),
       });
       console.error(`[reflection] ${companionId} failed:`, String(e));
     }

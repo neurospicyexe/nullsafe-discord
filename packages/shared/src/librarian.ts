@@ -163,6 +163,28 @@ export class LibrarianClient {
     return this.askWrite("witness log", "witness log", JSON.stringify({ entry, channel }));
   }
 
+  // ── Sanctioned drift lane (halseth mig 0087/0093) ─────────────────────────
+  // "i'm becoming" is the Librarian fast-path trigger for drift_open; the executor
+  // reads drift_text from context. Opening is owner-only server-side.
+  async driftOpen(driftText: string, origin = "metronome") {
+    return this.askWrite("drift open", "i'm becoming", JSON.stringify({ drift_text: driftText, origin }));
+  }
+
+  /** This companion's OPEN drifts (raw REST; admin/owner auth). [] on any error. */
+  async driftsOpen(): Promise<Array<{ id: string; drift_text: string; opened_at: string }>> {
+    try {
+      const res = await this._fetch(`${this.url}/drifts/${encodeURIComponent(this.companionId)}?status=open`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as unknown;
+      return Array.isArray(data) ? data as Array<{ id: string; drift_text: string; opened_at: string }> : [];
+    } catch {
+      return [];
+    }
+  }
+
   async synthesizeSession(summary: string, channel?: string) {
     return this.askWrite("synthesize session", "synthesize session", JSON.stringify({ summary, channel }));
   }
