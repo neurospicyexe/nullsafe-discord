@@ -198,11 +198,22 @@ export class LibrarianClient {
         }),
         signal: AbortSignal.timeout(8_000),
       });
-      // Throw on failure so writeQueue buffers + retries: this is continuity-critical, and the
-      // external_id makes the retry safe. A .catch()-only path would lose the words silently --
-      // which is precisely how the swarm journal died unnoticed.
-      if (!res.ok) throw new Error(`journalSpeech ${res.status}`);
+      if (res.ok) return;
+      // Transient (5xx, 429, network): THROW so writeQueue buffers and retries. This write is
+      // continuity-critical, and external_id makes the retry safe. A .catch()-only path would
+      // lose the words silently -- precisely how the swarm journal died unnoticed.
+      //
+      // Permanent (4xx): log loudly and DO NOT throw. Retrying a rejected body is a poison pill
+      // that occupies the queue until MAX_AGE_MS evicts it, delaying healthy writes behind it.
+      if (res.status >= 500 || res.status === 429) {
+        throw new Error(`journalSpeech transient ${res.status}`);
+      }
+      console.error(
+        `[librarian] journalSpeech REJECTED ${res.status} -- this reply will not be journaled: ` +
+        `${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
     } catch (e) {
+      // Network/timeout errors land here with no response: transient by definition, so rethrow.
       console.warn("[librarian] journalSpeech failed:", String(e));
       throw e;
     }
