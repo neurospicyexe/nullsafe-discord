@@ -155,6 +155,9 @@ async function main() {
   const stats = { seen: 0, matched: 0, written: 0, skipped: 0, failed: 0 };
 
   for (const channelId of args.channels) {
+    // Per-channel deltas: printing the cumulative object per channel reads as if every channel
+    // saw every message. Snapshot before, diff after.
+    const before = { ...stats };
     for await (const m of channelMessages(channelId, token, sinceMs)) {
       stats.seen++;
       const companion = BOT_USER_TO_COMPANION[m.author?.id];
@@ -181,7 +184,8 @@ async function main() {
         console.warn(`[backfill] ${companion} msg ${m.id} failed: ${String(e).slice(0, 140)}`);
       }
     }
-    console.log(`[backfill] channel ${channelId} done -- ${JSON.stringify(stats)}`);
+    const delta = Object.fromEntries(Object.entries(stats).map(([k, v]) => [k, v - before[k]]));
+    console.log(`[backfill] channel ${channelId} done -- ${JSON.stringify(delta)}`);
   }
 
   console.log(`[backfill] COMPLETE ${JSON.stringify(stats)}`);
