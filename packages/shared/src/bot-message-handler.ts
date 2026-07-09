@@ -1178,8 +1178,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // speech. The write now hangs off the act of speaking, so it survives whatever
       // computes the words. Lands in the CHATTER lane: embedded + searchable, but barred
       // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
+      // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
       writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
-        librarian.journalSpeech(response, message.channelId));
+        librarian.journalSpeech(response, message.channelId, sent[0]!.id));
       // Shared-experience: this reply IS the companion's reaction to the track.
       if (pendingMediaId) {
         const mediaId = pendingMediaId;

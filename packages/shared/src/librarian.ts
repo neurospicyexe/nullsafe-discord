@@ -173,8 +173,13 @@ export class LibrarianClient {
    * 3 recency slots and the motif miner with transcript. That is the exact bug this repairs.
    *
    * Transport metadata goes in `tags`, NEVER in note_text (halseth webmind/journal-lanes.ts).
+   *
+   * `messageId` is the Discord id of the sent reply and becomes the idempotency key
+   * (`external_id`, halseth mig 0098). This matters: writeQueue.fireAndForget BUFFERS FAILED
+   * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
+   * reply. The same key lets the 06-25 speech backfill be re-run safely.
    */
-  async journalSpeech(replyText: string, channelId: string): Promise<void> {
+  async journalSpeech(replyText: string, channelId: string, messageId: string): Promise<void> {
     const text = replyText.trim();
     if (!text) return;
     try {
@@ -189,12 +194,17 @@ export class LibrarianClient {
           note_text: text.slice(0, 4000),   // endpoint hard-rejects >4000
           tags: ["discord", "speech", `channel:${channelId}`],
           source: "discord_speech",
+          external_id: `discord:${messageId}`,
         }),
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) console.warn(`[librarian] journalSpeech ${res.status}`);
+      // Throw on failure so writeQueue buffers + retries: this is continuity-critical, and the
+      // external_id makes the retry safe. A .catch()-only path would lose the words silently --
+      // which is precisely how the swarm journal died unnoticed.
+      if (!res.ok) throw new Error(`journalSpeech ${res.status}`);
     } catch (e) {
       console.warn("[librarian] journalSpeech failed:", String(e));
+      throw e;
     }
   }
 
