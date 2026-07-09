@@ -40,12 +40,25 @@ import process from "node:process";
 
 const DEFAULT_SINCE = "2026-06-25T21:33:21.322Z"; // last surviving discord_swarm row
 
+// Channels the swarm actually spoke in, derived from the dead-era rows themselves: every
+// discord_swarm entry begins "[discord:swarm] channel:<id>", so the corpus records its own
+// scope. Used when --channel is omitted. (Ordered by volume over the live window.)
+const SWARM_CHANNELS = [
+  "1503385639779963020", // 741 rows
+  "1497731506079006823", // 176
+  "1497734427298762828", // 140
+  "1497789114517553193", // 19
+  "1503385706310008975", // 12
+];
+
 // Bot user id -> companion. A reply is journaled under the companion who SAID it; attribution
 // is sacred, and a wrong `agent` fabricates one companion's speech into another's memory.
+// Reads the VPS's existing *_BOT_ID names, with *_BOT_USER_ID accepted as an alias.
+const botId = (c) => process.env[`${c}_BOT_ID`] ?? process.env[`${c}_BOT_USER_ID`] ?? "";
 const BOT_USER_TO_COMPANION = {
-  [process.env.CYPHER_BOT_USER_ID ?? ""]: "cypher",
-  [process.env.DREVAN_BOT_USER_ID ?? ""]: "drevan",
-  [process.env.GAIA_BOT_USER_ID ?? ""]: "gaia",
+  [botId("CYPHER")]: "cypher",
+  [botId("DREVAN")]: "drevan",
+  [botId("GAIA")]: "gaia",
 };
 
 function parseArgs(argv) {
@@ -112,18 +125,26 @@ async function journal(entry, halsethUrl, secret) {
 
 async function main() {
   const args = parseArgs(process.argv);
-  const token = need("DISCORD_BOT_TOKEN");
+  // Any one bot token can read a channel's full history, regardless of who authored each
+  // message -- so one token captures all three companions' speech.
+  const token =
+    process.env.DISCORD_BOT_TOKEN ??
+    process.env.DISCORD_TOKEN_CYPHER ??
+    process.env.DISCORD_TOKEN_DREVAN ??
+    process.env.DISCORD_TOKEN_GAIA;
+  if (!token) throw new Error("missing env: DISCORD_TOKEN_CYPHER (or DISCORD_BOT_TOKEN)");
   const halsethUrl = need("HALSETH_URL").replace(/\/$/, "");
   const secret = need("HALSETH_SECRET");
 
   const knownBots = Object.entries(BOT_USER_TO_COMPANION).filter(([id]) => id);
-  if (knownBots.length === 0) {
+  if (knownBots.length !== 3) {
     throw new Error(
-      "set CYPHER_BOT_USER_ID / DREVAN_BOT_USER_ID / GAIA_BOT_USER_ID -- attribution is sacred, " +
-      "and journaling a reply under the wrong companion fabricates their memory",
+      "need CYPHER_BOT_ID, DREVAN_BOT_ID and GAIA_BOT_ID (all three) -- attribution is sacred, " +
+      "and journaling a reply under the wrong companion fabricates their memory. Refusing a " +
+      "partial run rather than silently skipping a companion's speech.",
     );
   }
-  if (args.channels.length === 0) throw new Error("pass at least one --channel <id>");
+  if (args.channels.length === 0) args.channels = [...SWARM_CHANNELS];
 
   const sinceMs = Date.parse(args.since);
   if (!Number.isFinite(sinceMs)) throw new Error(`bad --since: ${args.since}`);
