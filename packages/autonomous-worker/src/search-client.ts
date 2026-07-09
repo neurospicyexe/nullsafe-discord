@@ -14,6 +14,16 @@ interface TavilySearchOptions {
   purpose?: SearchPurpose;
 }
 
+/**
+ * The reserve can never exceed half the budget. A deployment that pins TAVILY_MAX_PER_DAY low
+ * (it defaulted to 5 for a long time, and .env may still set it) would otherwise make
+ * `remaining <= reserve` true on the very first call and starve exploration completely --
+ * trading one starved lane for the other.
+ */
+export function effectiveForageReserve(cap = TAVILY_MAX_PER_DAY, reserve = TAVILY_FORAGE_RESERVE): number {
+  return Math.max(0, Math.min(reserve, Math.floor(cap / 2)));
+}
+
 /** Daily usage counter -- resets when the calendar date changes. */
 export const dailyCounter = {
   date: "",
@@ -26,7 +36,7 @@ export const dailyCounter = {
     const remaining = TAVILY_MAX_PER_DAY - this.count;
     if (remaining <= 0) return false;
     // Hold the tail of the budget for foraging.
-    if (purpose !== "forage" && remaining <= TAVILY_FORAGE_RESERVE) return false;
+    if (purpose !== "forage" && remaining <= effectiveForageReserve()) return false;
     this.count++;
     return true;
   },
