@@ -73,10 +73,33 @@ export function parseProgram(raw: string | null): AutonomousProgram | null {
   }
 }
 
-function runTimestampMs(run: { started_at?: string; created_at?: string }): number | null {
+/**
+ * Parse a Halseth timestamp to epoch ms, treating UNMARKED datetimes as UTC.
+ *
+ * autonomy_runs mixes formats in the SAME ROW: `started_at` is D1's
+ * `datetime('now')` -> "2026-07-09 08:00:00" (UTC, no zone marker), while
+ * `completed_at` is an ISO string with a Z. `new Date("2026-07-09 08:00:00")`
+ * parses as LOCAL time. The VPS runs CDT (UTC-5), so every past run was read as
+ * 5 hours in the FUTURE.
+ *
+ * The pulse gap is `now - lastRun`, so it came out 5h too small and the pulse was
+ * suppressed when it should have fired. The live logs show the tell plainly:
+ *
+ *     [pulse/cypher] no fire: gap not met (-1h < 20h)
+ *     [pulse/gaia]   no fire: gap not met (-3h < 20h)
+ *
+ * A negative gap is a last-run in the future. This is why Cypher earned ~1 run/day
+ * instead of 2: his 08:00 UTC cron read as 13:00 UTC, so the 12:30 pulse check saw a
+ * run 30 minutes ahead of itself. (Same trap guarded in halseth's parseWriterTs.)
+ */
+export function runTimestampMs(run: { started_at?: string; created_at?: string }): number | null {
   const t = run.started_at ?? run.created_at;
   if (!t) return null;
-  const ms = new Date(t).getTime();
+  // No 'T' and no zone marker => D1 unmarked UTC. Normalize before parsing.
+  const normalized = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(t) && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(t)
+    ? t.replace(" ", "T") + "Z"
+    : t;
+  const ms = new Date(normalized).getTime();
   return Number.isFinite(ms) ? ms : null;
 }
 
