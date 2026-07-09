@@ -10,7 +10,15 @@ export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-chat";
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
 // Hard cap on Tavily calls per calendar day -- protects free tier (1000/month)
 // Default 5: 3 scheduled + 2 headroom for manual test runs
-export const TAVILY_MAX_PER_DAY = parseInt(process.env["TAVILY_MAX_PER_DAY"] ?? "5", 10);
+// Tavily free tier is 1000/month (~33/day). The old cap of 5 was shared between explore (3
+// companion runs/day, several queries each) and forage (COMPANIONS x FORAGE_FINDS = 6), so the
+// 3/5/7 AM explore passes exhausted the budget before the 9 AM forage pass ran at all.
+export const TAVILY_MAX_PER_DAY = parseInt(process.env["TAVILY_MAX_PER_DAY"] ?? "24", 10);
+
+// Searches at the tail of the daily budget that only foraging may spend. Foraging is the only
+// source of genuinely new outside material; exploration re-reads ground the companion chose.
+// Starving forage is what makes the triad circle its own ideas.
+export const TAVILY_FORAGE_RESERVE = parseInt(process.env["TAVILY_FORAGE_RESERVE"] ?? "8", 10);
 export const REDIS_URL = process.env["REDIS_URL"];
 
 // Optional: second-brain HTTP server for CouchDB corpus ingest.
@@ -48,6 +56,25 @@ export const CRON_SCHEDULES: Record<CompanionId, string> = {
 // one shared source of truth, no parallel domain map to drift.
 export const FORAGE_CRON = process.env["FORAGE_CRON"] ?? "0 9 * * *"; // 9 AM, after Gaia's 7 AM run
 export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "2", 10);
+
+// Candidate results pulled per forage search. The forager walks them in order until one is
+// genuinely new; with maxResults=3 and a frozen query, the single top hit was always already
+// stored, so every domain went sterile after its first find (prod: cypher gathered nothing
+// 07-03 -> 07-09 despite a daily cron).
+export const FORAGE_SEARCH_MAX_RESULTS = parseInt(process.env["FORAGE_SEARCH_MAX_RESULTS"] ?? "6", 10);
+
+// Search angles rotated across the anchor topics so the query space grows without inventing
+// new territory for a companion. `domain` is still stored pure -- the angle only shapes the
+// Tavily query, so the (source_url, domain) dedup index keeps doing its job.
+export const FORAGE_ANGLES: readonly string[] = [
+  "recent research",
+  "a concrete case study",
+  "a critique or counterargument",
+  "historical origins",
+  "an unresolved open problem",
+  "a practitioner's firsthand account",
+  "a surprising empirical result",
+];
 
 // Companion display names for prompts
 export const COMPANION_NAMES: Record<CompanionId, string> = {

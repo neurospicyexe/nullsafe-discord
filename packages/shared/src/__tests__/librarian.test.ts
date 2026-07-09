@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { LibrarianClient, formatRecentContext } from "../librarian.js";
+import { LibrarianClient, formatRecentContext, RECENT_CONTEXT_BUDGET } from "../librarian.js";
 
 describe("LibrarianClient.ask()", () => {
   it("returns data on 200 response", async () => {
@@ -125,6 +125,24 @@ describe("LibrarianClient.botOrient()", () => {
     });
     expect(block).toContain("[Worldview]");
     expect(block).toContain("audit is a gear");
+  });
+
+  it("keeps the forage block even when the interior cluster overflows the budget", () => {
+    // Pre-fix this was `parts.join().slice(0, 4800)` -- a blind tail cut that dropped forage,
+    // the only block carrying material from outside the companion's own corpus.
+    const fat = "x".repeat(9000);
+    const block = formatRecentContext({
+      synthesis_summary: fat,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      active_conclusions: [],
+      flagged_beliefs: [],
+      forage_finds: [{ id: "f1", title: "Axelrod tournaments", domain: "logic problems", summary: "s", gathered_at: "2026-07-08T09:00:00Z" }],
+    });
+    expect(block).toContain("[Forage pool");
+    expect(block).toContain("Axelrod tournaments");
+    expect(block.length).toBeLessThanOrEqual(RECENT_CONTEXT_BUDGET);
   });
 
   it("returns null on missing data field", async () => {

@@ -68,7 +68,11 @@ export async function distillSessionOnInactive(
   if (history.length === 0) return;
   console.log(`[${tag}] onChannelInactive: channel=${channelId} msgs=${history.length}`);
 
-  const summaryInput = history.map((m) => `${m.role}: ${m.content}`).join("\n");
+  // authorName, not role: every inbound message is stored role:"user", so a sibling's turn in an
+  // inter_companion channel reduced to "user:" and the synthesis read it as Raziel speaking. The
+  // output feeds witnessLog + synthesizeSession + writeHandoff + writeWmNote, so the fabrication
+  // reached the handoff and every Claude.ai orient. runDistillation (below) already does this.
+  const summaryInput = history.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
   const synthResult = await inference.generate(prompts.synthesisPrompt, [{ role: "user", content: summaryInput }]);
   if (!synthResult) {
     console.warn(`[${tag}] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
@@ -126,12 +130,19 @@ export async function runDistillation(
   wq: WriteQueue,
   distillationPrompt: string,
   distillationInterval: number,
+  ownerDisplayName?: string,
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length < distillationInterval) return;
 
   const window = history.slice(-distillationInterval);
   const conversationText = window.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
+
+  // The prompt always asks for human_blocks ("observations about the primary user"). In an
+  // inter_companion window the owner never spoke, so any human block the model returns is
+  // invented from a sibling's words. Only persist them when the owner is actually in the window.
+  const ownerSpoke = !ownerDisplayName
+    || window.some((m) => m.authorName === ownerDisplayName || m.authorName?.startsWith(`${ownerDisplayName} `));
 
   const result = await inference.generate(distillationPrompt, [{ role: "user", content: conversationText }]);
   if (!result) return;
@@ -146,12 +157,14 @@ export async function runDistillation(
     if (parsed.persona_blocks?.length) {
       wq.fireAndForget(`persona:${channelId}`, () => librarian.writePersonaBlocks(channelId, parsed.persona_blocks!));
     }
-    if (parsed.human_blocks?.length) {
+    if (parsed.human_blocks?.length && ownerSpoke) {
       wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
       // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
       // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
       const noteText = `[discord:distillation] ${parsed.human_blocks.map((b) => b.content).join(" ")}`;
       wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
+    } else if (parsed.human_blocks?.length) {
+      console.warn(`[${channelId}] distillation: dropped ${parsed.human_blocks.length} human block(s) -- owner absent from window`);
     }
   } // else: fail-silent -- malformed JSON from inference is acceptable loss
 }

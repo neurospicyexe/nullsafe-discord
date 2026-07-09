@@ -1207,7 +1207,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai
@@ -1223,7 +1223,16 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         librarian.writeWmNote(`[discord:pulse] Recent exchange:\n${recentTurns}`, message.channelId));
     }
 
-    judgeWriteback(effectiveContent, response, adapterRef.current, COMPANION_ID).then((wb) => {
+    // Attribution comes from the message, never a default: in inter_companion channels the
+    // triggering message is a sibling's, and labeling it "Raziel" fabricated human speech into
+    // companion_journal + wm_continuity_notes (and from there into every orient).
+    const peerId = BOT_ID_COMPANION[message.author.id];
+    const writebackSpeaker = {
+      name: peerId ? peerId.charAt(0).toUpperCase() + peerId.slice(1) : memberLabel,
+      isOwner: attribution.isOwner,
+      ownerName: cfg.ownerDisplayName,
+    };
+    judgeWriteback(effectiveContent, response, adapterRef.current, COMPANION_ID, writebackSpeaker).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
         if (wb.type === "companion_note") {

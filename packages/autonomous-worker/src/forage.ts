@@ -11,7 +11,10 @@
 import { prompt } from "./deepseek.js";
 import { search } from "./search-client.js";
 import { postForageFind, getForageFindsFor } from "./halseth-client.js";
-import { COMPANIONS, COMPANION_ANCHOR_TOPICS, FORAGE_FINDS_PER_COMPANION } from "./config.js";
+import {
+  COMPANIONS, COMPANION_ANCHOR_TOPICS, FORAGE_FINDS_PER_COMPANION,
+  FORAGE_ANGLES, FORAGE_SEARCH_MAX_RESULTS,
+} from "./config.js";
 import type { CompanionId } from "./types.js";
 
 const SCOUT_SYSTEM =
@@ -29,38 +32,76 @@ export function pickDomains(arr: readonly string[], n: number): string[] {
   return pool.slice(0, Math.max(0, n));
 }
 
-async function forageOne(companionId: CompanionId, domain: string): Promise<boolean> {
-  const results = await search(domain, { maxResults: 3, searchDepth: "basic" });
-  const r = results.find(x => x.title && x.content);
-  if (!r) {
-    console.log(`[${companionId}/forage] no usable result for domain "${domain}"`);
-    return false;
-  }
+/** 1-based day of year, used to rotate angles so consecutive days ask different questions. */
+export function dayOfYear(d: Date): number {
+  const startOfYear = Date.UTC(d.getUTCFullYear(), 0, 0);
+  return Math.floor((d.getTime() - startOfYear) / 86_400_000);
+}
 
-  const summaryResult = await prompt(
-    `${r.title}\n${r.url}\n${r.content.slice(0, 1500)}`,
-    SCOUT_SYSTEM,
-    { temperature: 0.3, maxTokens: 250 },
-  );
-  const summary = summaryResult.content.trim();
-  if (!summary) {
-    console.warn(`[${companionId}/forage] empty summary for "${r.title}" -- skipping`);
-    return false;
-  }
+/**
+ * Deterministic angle for (domain, day). Offsetting by the domain's index keeps two domains
+ * foraged on the same day from asking the same question.
+ */
+export function angleForRun(anchorIndex: number, runDate: Date): string {
+  const i = (dayOfYear(runDate) + anchorIndex) % FORAGE_ANGLES.length;
+  return FORAGE_ANGLES[i]!;
+}
 
-  const res = await postForageFind({
-    companion_id: companionId,
-    domain,
-    title: r.title,
-    source_url: r.url,
-    summary,
+/** The Tavily query. `domain` alone was a frozen string that returned the same top hit forever. */
+export function buildForageQuery(domain: string, angle: string): string {
+  return `${domain}: ${angle}`;
+}
+
+async function forageOne(
+  companionId: CompanionId,
+  domain: string,
+  angle: string,
+  knownUrls: ReadonlySet<string>,
+): Promise<boolean> {
+  const query = buildForageQuery(domain, angle);
+  const results = await search(query, {
+    maxResults: FORAGE_SEARCH_MAX_RESULTS,
+    searchDepth: "basic",
+    purpose: "forage",
   });
-  if (res.deduped) {
-    console.log(`[${companionId}/forage] deduped: ${r.title.slice(0, 60)}`);
+
+  const candidates = results.filter(x => x.title && x.content && !knownUrls.has(x.url));
+  if (candidates.length === 0) {
+    console.log(`[${companionId}/forage] no new result for "${query}"`);
     return false;
   }
-  console.log(`[${companionId}/forage] gathered [${domain}] ${r.title.slice(0, 60)}`);
-  return true;
+
+  // Walk candidates until one is genuinely new. Taking only results[0] meant a domain whose top
+  // hit was already stored could never yield another find, however long the pool sat unconsumed.
+  for (const r of candidates) {
+    const summaryResult = await prompt(
+      `${r.title}\n${r.url}\n${r.content.slice(0, 1500)}`,
+      SCOUT_SYSTEM,
+      { temperature: 0.3, maxTokens: 250 },
+    );
+    const summary = summaryResult.content.trim();
+    if (!summary) {
+      console.warn(`[${companionId}/forage] empty summary for "${r.title}" -- next candidate`);
+      continue;
+    }
+
+    const res = await postForageFind({
+      companion_id: companionId,
+      domain,
+      title: r.title,
+      source_url: r.url,
+      summary,
+    });
+    if (res.deduped) {
+      console.log(`[${companionId}/forage] deduped: ${r.title.slice(0, 60)} -- next candidate`);
+      continue;
+    }
+    console.log(`[${companionId}/forage] gathered [${domain} | ${angle}] ${r.title.slice(0, 60)}`);
+    return true;
+  }
+
+  console.log(`[${companionId}/forage] all ${candidates.length} candidate(s) exhausted for "${query}"`);
+  return false;
 }
 
 /**
@@ -69,24 +110,24 @@ async function forageOne(companionId: CompanionId, domain: string): Promise<bool
  * contained -- one companion's error never stops the others. Tavily's daily cap is
  * enforced inside search() (returns [] past the cap), so a long pass degrades quietly.
  */
-export async function runForage(): Promise<number> {
+export async function runForage(runDate: Date = new Date()): Promise<number> {
   let gathered = 0;
   for (const companionId of COMPANIONS) {
     try {
       // Exclude domains already present as unconsumed finds so we rotate the topic pool
       // instead of re-searching the same ground every day.
-      const recentFinds = await getForageFindsFor(companionId, 8).catch(() => []);
+      const recentFinds = await getForageFindsFor(companionId, 25).catch(() => []);
       const recentDomains = new Set(recentFinds.map(f => f.domain.toLowerCase()));
-      const freshPool = COMPANION_ANCHOR_TOPICS[companionId].filter(
-        d => !recentDomains.has(d.toLowerCase()),
-      );
-      const pool = freshPool.length >= FORAGE_FINDS_PER_COMPANION
-        ? freshPool
-        : [...COMPANION_ANCHOR_TOPICS[companionId]];
+      // Skip URLs we already hold before spending a summarization call on them.
+      const knownUrls = new Set(recentFinds.map(f => f.source_url).filter((u): u is string => !!u));
+      const anchors = COMPANION_ANCHOR_TOPICS[companionId];
+      const freshPool = anchors.filter(d => !recentDomains.has(d.toLowerCase()));
+      const pool = freshPool.length >= FORAGE_FINDS_PER_COMPANION ? freshPool : [...anchors];
       const domains = pickDomains(pool, FORAGE_FINDS_PER_COMPANION);
       for (const domain of domains) {
         try {
-          if (await forageOne(companionId, domain)) gathered++;
+          const angle = angleForRun(anchors.indexOf(domain), runDate);
+          if (await forageOne(companionId, domain, angle, knownUrls)) gathered++;
         } catch (e) {
           console.warn(`[${companionId}/forage] domain "${domain}" failed:`, e);
         }

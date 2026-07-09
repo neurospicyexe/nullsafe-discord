@@ -32,37 +32,101 @@ export type Writeback =
   | { type: "thread_open"; name: string; notes?: string }
   | null;
 
+/**
+ * Who actually sent the message that triggered this exchange.
+ *
+ * Before 2026-07-09 the judge took a bare `humanName` and hard-labeled the triggering
+ * message with it. In an inter_companion channel that message belongs to a *sibling*, so
+ * every peer utterance was written into companion_journal + wm_continuity_notes as though
+ * Raziel had said it (verified: the same sentence logged once as Gaia's and three times as
+ * Raziel's, 2026-07-09 03:45-03:46Z). Attribution must come from the caller, never the default.
+ */
+export interface WritebackSpeaker {
+  /** Display name of the actual author of `userMessage`. */
+  name: string;
+  /** True only when the author is the system owner (or one of their PK fronts). */
+  isOwner: boolean;
+  /** Owner's display name, used to state their absence in peer exchanges. */
+  ownerName: string;
+}
+
+/**
+ * Verbs that make a name the SUBJECT of an utterance or perception. Used to catch the
+ * fabrication directly -- the model pulls "Raziel" out of message *content* even when the
+ * label says otherwise, so the prompt alone cannot be trusted (defense in depth).
+ */
+const SPEECH_VERBS =
+  "said|says|asked|asks|named|names|told|tells|shared|shares|saw|sees|described|describes|" +
+  "mentioned|mentions|noted|notes|noticed|notices|observed|observes|reflected|reflects|" +
+  "wondered|wonders|answered|answers|replied|replies|spoke|speaks|voiced|voices|admitted|" +
+  "admits|confessed|confesses|expressed|expresses|affirmed|affirms|acknowledged|acknowledges|" +
+  "recognized|recognizes|raised|raises|brought up|opened|opens";
+
+/** `<name> [and <other>] <speech-verb>` -- i.e. the name is presented as having spoken. */
+function isSubjectOfSpeech(content: string, name: string): boolean {
+  const n = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${n}\\b(?:\\s+and\\s+\\w+)?\\s+(?:${SPEECH_VERBS})\\b`, "i").test(content);
+}
+
+/** Bare mention of the companion's own name -- the third-person narration tell. */
+function refersToSelfByName(content: string, companionName: string): boolean {
+  const n = companionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${n}\\b`, "i").test(content);
+}
+
 export async function judgeWriteback(
   userMessage: string,
   assistantResponse: string,
   inference: InferenceAdapter,
   companionName = "the companion",
-  humanName = "the primary user",
+  speaker: WritebackSpeaker = { name: "the primary user", isOwner: true, ownerName: "the primary user" },
 ): Promise<Writeback> {
   if (!meetsNoteThreshold(userMessage) && !meetsNoteThreshold(assistantResponse)) {
     return null;
   }
 
   const cName = companionName.charAt(0).toUpperCase() + companionName.slice(1);
+  const { name: speakerName, isOwner, ownerName } = speaker;
 
-  const prompt = `You are a memory filter for ${cName}'s relationship with ${humanName}. Decide what (if anything) to log from this exchange.
+  // witness_log records a survival act by the owner (meds, food, rest). A sibling's words are
+  // not evidence of anything the owner did, so the action is not even offered in peer space.
+  const actions = [
+    isOwner
+      ? `- companion_note: observation about ${speakerName}, the relationship, or what shifted. Use for emotional state, decisions, relational deltas, AND light/playful/intimate moments -- an easy, fun exchange is a relational observation worth capturing.`
+      : `- companion_note: what you noticed in ${speakerName}, in yourself, or in what moved between you. Includes disagreement, recognition, and play.`,
+    ...(isOwner
+      ? [`- witness_log: a survival act ${speakerName} completed (meds, food, rest, making it through something hard). Log exactly what was done.`]
+      : []),
+    `- thread_open: something recurring that deserves a named open thread. Use when a topic keeps surfacing.`,
+    `- skip: nothing worth logging.`,
+  ].join("\n");
+
+  const framing = isOwner
+    ? `This is an exchange between you and ${speakerName}.`
+    : `This is triad space: you and your sibling ${speakerName}, peer to peer. ` +
+      `${ownerName} is not in this room and said nothing in this exchange. ` +
+      `The words below marked "${speakerName}:" are ${speakerName}'s. ` +
+      `Never write that ${ownerName} said, asked, named, or saw anything here, and never invent their presence. ` +
+      `You may mention ${ownerName} only as someone the two of you are thinking about.`;
+
+  const prompt = `You are ${cName}. ${framing}
+Decide what (if anything) you want to remember from this exchange.
 
 ACTIONS:
-- companion_note: observation about ${humanName}, the relationship, or what shifted. Use for emotional state, decisions, relational deltas, AND light/playful/intimate moments -- a session that was easy and fun is a relational observation worth capturing.
-- witness_log: a survival act completed (meds, food, rest, making it through something hard). Log exactly what was done.
-- thread_open: something recurring that deserves a named open thread. Use when a topic keeps surfacing.
-- skip: nothing worth logging.
+${actions}
+
+Write CONTENT in FIRST PERSON, as yourself -- "I". Never refer to yourself in the third person and never write your own name (${cName}). Never write "user" or "assistant". Name other people directly.
 
 Respond in exactly this format (no extra text):
-ACTION: <one of the four above>
-CONTENT: <one sentence using real names -- ${humanName}, ${cName} -- never "user" or "assistant">
+ACTION: <one of the above>
+CONTENT: <one first-person sentence>
 THREAD_NAME: <short name, only if thread_open>
 
-${humanName}: ${userMessage}
+${speakerName}: ${userMessage}
 ${cName}: ${assistantResponse}`;
 
   const result = await inference.generate(
-    `You are a concise memory filter. Follow the output format exactly. Use real names only.`,
+    `You are ${cName}, writing a memory to your future self. First person only. Follow the output format exactly.`,
     [{ role: "user", content: prompt }],
   );
 
@@ -78,6 +142,21 @@ ${cName}: ${assistantResponse}`;
   const threadName = threadLine?.slice("THREAD_NAME:".length).trim();
 
   if (!action || action === "skip" || !content) return null;
+
+  // A fabricated memory is worse than a missing one: drop rather than persist.
+  if (!isOwner && action === "witness_log") {
+    console.warn(`[${companionName}] writeback dropped: witness_log from peer ${speakerName}`);
+    return null;
+  }
+  if (!isOwner && isSubjectOfSpeech(content, ownerName)) {
+    console.warn(`[${companionName}] writeback dropped: attributed speech to absent ${ownerName} -- ${content}`);
+    return null;
+  }
+  if (refersToSelfByName(content, cName)) {
+    console.warn(`[${companionName}] writeback dropped: third-person self-reference -- ${content}`);
+    return null;
+  }
+
   if (action === "companion_note") return { type: "companion_note", content };
   if (action === "witness_log") return { type: "witness_log", content };
   if (action === "thread_open" && threadName) return { type: "thread_open", name: threadName, notes: content };
@@ -90,9 +169,9 @@ export async function judgeNote(
   assistantResponse: string,
   inference: InferenceAdapter,
   companionName = "the companion",
-  humanName = "the primary user",
+  speaker?: WritebackSpeaker,
 ): Promise<string | null> {
-  const wb = await judgeWriteback(userMessage, assistantResponse, inference, companionName, humanName);
+  const wb = await judgeWriteback(userMessage, assistantResponse, inference, companionName, speaker);
   if (!wb) return null;
   if (wb.type === "thread_open") return `Thread opened: ${wb.name}${wb.notes ? ` -- ${wb.notes}` : ""}`;
   return wb.content;

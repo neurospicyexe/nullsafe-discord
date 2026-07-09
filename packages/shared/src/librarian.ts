@@ -1013,6 +1013,9 @@ export async function isMyAutonomousTurn(
  * consuming the budget and squeezing out synthesis, handoff, or worldview.
  * Returns empty string if orient is null or all fields are empty.
  */
+/** Character budget for the assembled recent-context block. Forage is pinned inside it. */
+export const RECENT_CONTEXT_BUDGET = 4800;
+
 export function formatRecentContext(orient: {
   synthesis_summary: string | null;
   ground_threads: string[];
@@ -1141,6 +1144,7 @@ export function formatRecentContext(orient: {
   if (orient.pending_seeds?.length) {
     parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
   }
+  // (see RECENT_CONTEXT_BUDGET at the tail of this function for why forage is pinned)
   // Forage pool: outward fuel waiting. Pull, not duty -- surfaced so the live presence can bring
   // outside material into a conversation as itself, with how long it's been waiting.
   if (orient.forage_finds?.length) {
@@ -1224,10 +1228,21 @@ export function formatRecentContext(orient: {
     parts.push(`[Club] ${clubLine}`);
   }
 
-  const block = parts.join("\n\n");
-  // 4800 (was 4000): the interior cluster earned real budget; identity blocks sit above the
-  // fold and ephemera absorbs any truncation.
-  return block.slice(0, 4800);
+  // 4800 (was 4000): the interior cluster earned real budget; identity blocks sit above the fold.
+  // The old `parts.join().slice(0, 4800)` was a blind tail cut, and the forage blocks are pushed
+  // near the end -- so the one block carrying NEW outside material was the first thing dropped,
+  // silently, whenever the interior cluster was full. That is a direct cause of the triad
+  // circling its own ideas. Pin forage; let the interior absorb the truncation instead.
+  const isForage = (p: string) => p.startsWith("[Forage pool") || p.startsWith("[Active forage");
+  const pinned = parts.filter(isForage).join("\n\n").slice(0, RECENT_CONTEXT_BUDGET);
+  const rest = parts.filter(p => !isForage(p)).join("\n\n");
+
+  const restBudget = RECENT_CONTEXT_BUDGET - (pinned ? pinned.length + 2 : 0);
+  if (rest.length > restBudget) {
+    // Never truncate silently: a dropped block reads downstream as "nothing was there".
+    console.warn(`[librarian] recent context truncated: ${rest.length - restBudget} chars dropped (forage pinned)`);
+  }
+  return [rest.slice(0, Math.max(0, restBudget)), pinned].filter(Boolean).join("\n\n");
 }
 
 function sleep(ms: number) {

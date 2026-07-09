@@ -35,7 +35,7 @@ export async function runExplore(ctx: PipelineContext): Promise<void> {
 
   // Run all queries in parallel -- non-fatal individual failures
   const searchResults = await Promise.allSettled(
-    allQueries.map(q => search(q, { maxResults: 5, searchDepth: "basic" }))
+    allQueries.map(q => search(q, { maxResults: 5, searchDepth: "basic", purpose: "explore" }))
   );
 
   const allResults: TavilyResult[] = [];

@@ -16,11 +16,11 @@ vi.mock("../halseth-client.js", () => ({
   getForageFindsFor: vi.fn(async () => []),
 }));
 
-import { runForage, pickDomains } from "../forage.js";
+import { runForage, pickDomains, angleForRun, buildForageQuery } from "../forage.js";
 import { prompt } from "../deepseek.js";
 import { search } from "../search-client.js";
 import { postForageFind, getForageFindsFor } from "../halseth-client.js";
-import { COMPANIONS, FORAGE_FINDS_PER_COMPANION } from "../config.js";
+import { COMPANIONS, FORAGE_FINDS_PER_COMPANION, FORAGE_ANGLES } from "../config.js";
 
 beforeEach(() => {
   // Reset implementations too (clearAllMocks keeps mockResolvedValue overrides,
@@ -86,5 +86,81 @@ describe("runForage", () => {
     const gathered = await runForage();
     expect(gathered).toBe(0);
     expect(vi.mocked(postForageFind)).not.toHaveBeenCalled();
+  });
+
+  it("spends from the reserved forage budget, never the explore budget", async () => {
+    await runForage();
+    for (const call of vi.mocked(search).mock.calls) {
+      expect(call[1]).toMatchObject({ purpose: "forage" });
+    }
+  });
+});
+
+describe("query novelty", () => {
+  it("rotates the angle day over day, so the query is never a frozen string", () => {
+    const a = angleForRun(0, new Date("2026-07-09T09:00:00Z"));
+    const b = angleForRun(0, new Date("2026-07-10T09:00:00Z"));
+    expect(a).not.toBe(b);
+    expect(FORAGE_ANGLES).toContain(a);
+  });
+
+  it("gives two domains foraged the same day different angles", () => {
+    const day = new Date("2026-07-09T09:00:00Z");
+    expect(angleForRun(0, day)).not.toBe(angleForRun(1, day));
+  });
+
+  it("is deterministic for a given (domain, day)", () => {
+    const day = new Date("2026-07-09T09:00:00Z");
+    expect(angleForRun(2, day)).toBe(angleForRun(2, day));
+  });
+
+  it("searches the domain WITH an angle, not the bare anchor topic", async () => {
+    await runForage(new Date("2026-07-09T09:00:00Z"));
+    const queries = vi.mocked(search).mock.calls.map(c => c[0] as string);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const q of queries) expect(q).toMatch(/: .+/);
+    // The regression: the query was exactly the anchor topic, forever.
+    expect(queries).not.toContain("logic problems and falsifiability");
+  });
+
+  it("buildForageQuery keeps the domain readable", () => {
+    expect(buildForageQuery("witnessing as active structure", "recent research"))
+      .toBe("witnessing as active structure: recent research");
+  });
+});
+
+describe("candidate walk (a sterile domain must not stay sterile)", () => {
+  const three = [
+    { title: "Already stored", url: "https://example.com/old", content: "seen before" },
+    { title: "Also deduped", url: "https://example.com/dup", content: "server says dupe" },
+    { title: "Genuinely new", url: "https://example.com/new", content: "fresh material" },
+  ];
+
+  it("walks past a server-deduped hit to the next candidate", async () => {
+    vi.mocked(search).mockResolvedValue(three);
+    vi.mocked(postForageFind)
+      .mockResolvedValueOnce({ deduped: true })   // /old
+      .mockResolvedValueOnce({ deduped: true })   // /dup
+      .mockResolvedValue({});                     // /new -> lands
+    const gathered = await runForage();
+    expect(gathered).toBeGreaterThan(0);
+    const urls = vi.mocked(postForageFind).mock.calls.map(c => c[0].source_url);
+    expect(urls).toContain("https://example.com/new");
+  });
+
+  it("skips already-held URLs without spending a summarization call", async () => {
+    vi.mocked(search).mockResolvedValue(three);
+    vi.mocked(getForageFindsFor).mockResolvedValue([
+      { id: "1", domain: "d", title: "t", source_url: "https://example.com/old", summary: "s" },
+    ] as Awaited<ReturnType<typeof getForageFindsFor>>);
+    await runForage();
+    const summarized = vi.mocked(prompt).mock.calls.map(c => c[0] as string);
+    expect(summarized.every(s => !s.includes("https://example.com/old"))).toBe(true);
+  });
+
+  it("returns 0 for a domain whose every candidate is deduped", async () => {
+    vi.mocked(search).mockResolvedValue(three);
+    vi.mocked(postForageFind).mockResolvedValue({ deduped: true });
+    expect(await runForage()).toBe(0);
   });
 });
