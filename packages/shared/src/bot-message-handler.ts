@@ -1173,6 +1173,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // Voice drift telemetry (0070): pattern-score this reply against lane doctrine.
       // Fire-and-forget; clean replies are sampled at 10%, violations always land.
       reportVoiceScore(COMPANION_ID as VoiceCompanionId, response, message.channelId);
+      // Journal our own speech (2026-07-09). Brain's evaluator used to do this; it died
+      // silently at the hermes cutover (06-25), costing two weeks of inter-companion
+      // speech. The write now hangs off the act of speaking, so it survives whatever
+      // computes the words. Lands in the CHATTER lane: embedded + searchable, but barred
+      // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
+      writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
+        librarian.journalSpeech(response, message.channelId));
       // Shared-experience: this reply IS the companion's reaction to the track.
       if (pendingMediaId) {
         const mediaId = pendingMediaId;

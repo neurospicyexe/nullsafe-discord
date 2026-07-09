@@ -159,6 +159,45 @@ export class LibrarianClient {
     return this.askWrite("companion note", "add companion note", note);
   }
 
+  /**
+   * Journal this companion's OWN spoken reply (2026-07-09 Brain-cutover repair).
+   *
+   * Until 2026-06-25 this was written by Brain's swarm evaluator. When the bots moved to
+   * INFERENCE_MODE=hermes they stopped calling Brain, and the writer died with the relay --
+   * two weeks of inter-companion speech never reached companion_journal. The write belongs
+   * to the ACT OF SPEAKING, not to whoever happened to compute the words, so it lives here
+   * and survives any future inference-topology change.
+   *
+   * Raw REST, not askWrite(): the Librarian NL path cannot set `source`, so a reply journaled
+   * through it would land with source=NULL, i.e. in the SUBSTANTIVE lane -- flooding orient's
+   * 3 recency slots and the motif miner with transcript. That is the exact bug this repairs.
+   *
+   * Transport metadata goes in `tags`, NEVER in note_text (halseth webmind/journal-lanes.ts).
+   */
+  async journalSpeech(replyText: string, channelId: string): Promise<void> {
+    const text = replyText.trim();
+    if (!text) return;
+    try {
+      const res = await this._fetch(`${this.url}/companion-journal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({
+          agent: this.companionId,
+          note_text: text.slice(0, 4000),   // endpoint hard-rejects >4000
+          tags: ["discord", "speech", `channel:${channelId}`],
+          source: "discord_speech",
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] journalSpeech ${res.status}`);
+    } catch (e) {
+      console.warn("[librarian] journalSpeech failed:", String(e));
+    }
+  }
+
   async witnessLog(entry: string, channel?: string) {
     return this.askWrite("witness log", "witness log", JSON.stringify({ entry, channel }));
   }
