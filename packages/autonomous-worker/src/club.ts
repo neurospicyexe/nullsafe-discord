@@ -19,7 +19,7 @@ import { prompt } from "./deepseek.js";
 import { loadIdentityRemote } from "./identity-loader.js";
 import {
   getClubCurrent, getLatestClubRound, openClubRound, postClubRecommendation,
-  postClubVoteWrite, patchClubRoundStatus, postClubDiscussion, getCommonsPosts,
+  postClubVoteWrite, postClubAbstention, patchClubRoundStatus, postClubDiscussion, getCommonsPosts,
   getRecentMediaExperiences, getForageFindsFor,
   type ClubRound, type ClubRecommendation, type ClubVote,
 } from "./halseth-client.js";
@@ -176,19 +176,35 @@ async function companionVote(speaker: CompanionId, recs: ClubRecommendation[]): 
     `The club round is voting. You may NOT vote for your own recommendation. Candidates:\n\n${list}\n\n` +
     `Pick the one you actually want to experience. Reply with STRICT JSON only:\n` +
     `{"recommendation_id": "...", "reason": "max 30 words, in your voice"}`;
-  const raw = await inVoice(speaker, userMessage, 200);
-  const parsed = extractJson(raw);
-  const recId = typeof parsed?.["recommendation_id"] === "string" ? (parsed["recommendation_id"] as string).trim() : "";
-  if (!parsed || !recId || !candidates.some(c => c.id === recId)) {
-    console.warn(`[club] ${speaker} vote unparseable or invalid, skipping: ${raw.slice(0, 120)}`);
-    return;
+
+  // Two attempts, then a recorded abstention. The old path was a console.warn on a
+  // box whose logs rotate -- round 92a4f8e3's winner was decided 2 votes of 4 and
+  // nothing anywhere said Gaia's vote never landed. An abstention row surfaces on
+  // Hearth /club; the tally proceeds either way (a round stays viable with two).
+  let lastRaw = "";
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const message = attempt === 1
+      ? userMessage
+      : `${userMessage}\n\nYour previous reply could not be parsed as JSON. It was:\n${lastRaw.slice(0, 200)}\n` +
+        `Reply with ONLY the JSON object -- no prose before or after, no code fences.`;
+    const raw = await inVoice(speaker, message, 200);
+    lastRaw = raw;
+    const parsed = extractJson(raw);
+    const recId = typeof parsed?.["recommendation_id"] === "string" ? (parsed["recommendation_id"] as string).trim() : "";
+    if (parsed && recId && candidates.some(c => c.id === recId)) {
+      await postClubVoteWrite({
+        recommendation_id: recId,
+        voter: speaker,
+        reason: typeof parsed["reason"] === "string" ? parsed["reason"] as string : null,
+      });
+      console.log(`[club] ${speaker} votes for ${recId}${attempt > 1 ? " (retry)" : ""}`);
+      return;
+    }
+    console.warn(`[club] ${speaker} vote attempt ${attempt} unparseable or invalid: ${raw.slice(0, 120)}`);
   }
-  await postClubVoteWrite({
-    recommendation_id: recId,
-    voter: speaker,
-    reason: typeof parsed["reason"] === "string" ? parsed["reason"] as string : null,
-  });
-  console.log(`[club] ${speaker} votes for ${recId}`);
+  await postClubAbstention(speaker, "vote unparseable after retry").catch(err =>
+    console.error(`[club] ${speaker} abstention record ALSO failed:`, err));
+  console.warn(`[club] ${speaker} abstains this round (recorded)`);
 }
 
 async function companionDiscuss(speaker: CompanionId, roundId: string, winner: ClubRecommendation | null): Promise<void> {
@@ -248,7 +264,11 @@ export async function runClubTick(): Promise<void> {
       try {
         await companionVote(speaker, current.recommendations);
       } catch (err) {
+        // Different failure class than unparseable JSON (inference/network threw),
+        // same honesty rule: the round's record says who never voted and why.
         console.error(`[club] ${speaker} vote failed:`, err);
+        await postClubAbstention(speaker, `vote failed: ${String(err).slice(0, 200)}`).catch(e2 =>
+          console.error(`[club] ${speaker} abstention record ALSO failed:`, e2));
       }
     }
     // Re-read: includes companion votes just cast plus any Raziel pre-cast vote.

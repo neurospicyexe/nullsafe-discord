@@ -948,6 +948,12 @@ export async function postClubVoteWrite(input: {
   await hFetch("/mind/club/vote", "POST", input);
 }
 
+/** Record that a vote could not land (unparseable after retry, write failure).
+ *  The honest alternative to a silent console.warn -- surfaces on Hearth /club. */
+export async function postClubAbstention(voter: string, reason: string): Promise<void> {
+  await hFetch("/mind/club/abstain", "POST", { voter, reason: reason.slice(0, 300) });
+}
+
 export async function patchClubRoundStatus(
   roundId: string,
   status: string,
