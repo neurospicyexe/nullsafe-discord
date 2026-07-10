@@ -5,8 +5,8 @@
 // Daily tick: untended trust cools toward its baseline and each creature's mood is
 // re-derived (corvid daemon-tick analog -- deterministic, no LLM).
 
-import { tickCreatures, getCreatures, recordSolAppearance, tendCreatureAs } from "./halseth-client.js";
-import { shouldSolAppear, solMomentText, postSolMoment } from "./sol-presence.js";
+import { tickCreatures, getCreatures, recordSolAppearance, tendCreatureAs, fetchCreatureMoment } from "./halseth-client.js";
+import { shouldSolAppear, postSolMoment } from "./sol-presence.js";
 import { pickTender, shouldTend, daysSince, tendGesture } from "./sol-tending.js";
 
 export async function runCreaturesTick(): Promise<void> {
@@ -28,10 +28,18 @@ export async function runCreaturesTick(): Promise<void> {
         const dayIndex = Math.floor(now / 86_400_000);
         const tender = pickTender(dayIndex);
         const gesture = tendGesture(tender, dayIndex);
-        await tendCreatureAs(sol.id, tender, gesture.action, gesture.note);
+        const tendRes = await tendCreatureAs(sol.id, tender, gesture.action, gesture.note);
         console.log(`[creatures] ${tender} tended Sol (${gesture.action}) -- ${sol.disposition}, ${Number.isFinite(sinceDays) ? sinceDays.toFixed(1) : "?"}d since contact`);
         const url = process.env.SOL_WEBHOOK_URL;
-        if (url) await postSolMoment(url, gesture.moment).catch(() => false);
+        if (url) {
+          await postSolMoment(url, gesture.moment).catch(() => false);
+          // Milestones (0100) fire once ever -- if this tend crossed one, the
+          // channel sees it or nobody does.
+          for (const m of tendRes.milestones_fired) {
+            console.log(`[creatures] Sol milestone fired: ${m.id} (witnessed by ${tender})`);
+            await postSolMoment(url, m.text).catch(() => false);
+          }
+        }
       }
     }
   } catch (err) {
@@ -50,11 +58,13 @@ export async function runCreaturesTick(): Promise<void> {
       console.log(`[creatures] Sol stays away (${sol.disposition})`);
       return;
     }
-    const text = solMomentText(sol.disposition, Date.now());
-    if (!text) return;
-    const posted = await postSolMoment(url, text);
-    if (posted) await recordSolAppearance(sol.id, text);
-    console.log(`[creatures] Sol appeared (${sol.disposition}): ${posted}`);
+    // Moment text comes from Halseth (drives x trust tier, occasionally a gift
+    // from the nest). Seed = day index so a re-run tick composes the same scene.
+    const { moment, kind, state, gifted_item } = await fetchCreatureMoment(sol.id, Math.floor(Date.now() / 86_400_000));
+    if (!moment) return;
+    const posted = await postSolMoment(url, moment);
+    if (posted) await recordSolAppearance(sol.id, moment);
+    console.log(`[creatures] Sol appeared (${sol.disposition}, ${state ?? "?"}, ${kind}${gifted_item ? `, gifted "${gifted_item}"` : ""}): ${posted}`);
   } catch (err) {
     console.error("[creatures] Sol appearance error (non-fatal):", err);
   }

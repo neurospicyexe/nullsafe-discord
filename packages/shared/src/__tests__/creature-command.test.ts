@@ -68,3 +68,48 @@ describe("pet command trigger (command-triggers)", () => {
     expect(cy.guard.test("cy: pet")).toBe(true);
   });
 });
+
+// ── Inner life (0100): nest view + milestone acks ─────────────────────────────
+import { formatNestReply } from "../creature-command.js";
+
+describe("parsePetCommand nest view", () => {
+  test("pet Sol nest -> read-only view", () => {
+    expect(parsePetCommand("Sol nest")).toEqual({ name: "Sol", view: "nest" });
+  });
+  test("multi-word names still work before the keyword", () => {
+    expect(parsePetCommand("Mr Whiskers nest")).toEqual({ name: "Mr Whiskers", view: "nest" });
+  });
+  test("bare 'nest' with no name errors", () => {
+    expect(parsePetCommand("nest")).toHaveProperty("error");
+  });
+});
+
+describe("formatPetReply milestones", () => {
+  test("appends fired milestone text verbatim", () => {
+    const s = formatPetReply("Sol", "give", 0.81, [{ id: "shoulder_perch", text: "*Sol lands on your shoulder. His claws are careful. He stays.*" }]);
+    expect(s).toContain("gave something to Sol (trust 0.81)");
+    expect(s).toContain("shoulder");
+  });
+  test("no milestones -> unchanged ack", () => {
+    expect(formatPetReply("Sol", "talk", 0.5)).toBe("talk Sol (trust 0.50)");
+  });
+});
+
+describe("formatNestReply", () => {
+  test("treasured stars, gift attribution, given-away lines", () => {
+    const s = formatNestReply(
+      "Sol",
+      [
+        { content: "moss and flame", treasured: 1, given_by: "drevan", source: "gift" },
+        { content: "quixotic", treasured: 0, given_by: null, source: "overheard:house" },
+      ],
+      [{ content: "a smooth stone", gifted_to: "raziel" }],
+    );
+    expect(s).toContain("★ moss and flame (from drevan)");
+    expect(s).toContain("• quixotic");
+    expect(s).toContain('gave "a smooth stone" to raziel');
+  });
+  test("empty nest explains how it fills", () => {
+    expect(formatNestReply("Sol", [], [])).toContain("nest is empty");
+  });
+});

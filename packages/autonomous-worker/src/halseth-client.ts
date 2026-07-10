@@ -1189,18 +1189,32 @@ export async function getCreatures(): Promise<CreatureRow[]> {
 }
 
 // Autonomous tending (2026-07-02): a companion tends Sol without being asked.
-// Server validates actor/action and applies the trust bump atomically.
+// Server validates actor/action and applies the trust bump atomically. Since
+// 0100 the response carries any trust milestones this tend fired (one-time
+// events; the caller posts them in-voice -- they never repeat).
 export async function tendCreatureAs(
   creatureId: string,
   actor: "cypher" | "drevan" | "gaia",
   action: "feed" | "play" | "talk",
   note: string,
-): Promise<void> {
-  await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
+): Promise<{ milestones_fired: Array<{ id: string; text: string }> }> {
+  const r = await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
     actor,
     action,
     note,
-  });
+  }) as { milestones_fired?: Array<{ id: string; text: string }> };
+  return { milestones_fired: Array.isArray(r?.milestones_fired) ? r.milestones_fired : [] };
+}
+
+// Inner life (0100): Halseth composes the appearance from live drives x trust
+// tier (and may turn it into a gift from the nest). The worker just posts it --
+// the old client-side palette mirror is gone, so the texts can't drift.
+export async function fetchCreatureMoment(
+  creatureId: string,
+  seed: number,
+): Promise<{ moment: string | null; kind: string; state?: string; gifted_item?: string }> {
+  return await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/moment`, "POST", { seed }) as
+    { moment: string | null; kind: string; state?: string; gifted_item?: string };
 }
 
 export async function recordSolAppearance(creatureId: string, note: string): Promise<void> {
