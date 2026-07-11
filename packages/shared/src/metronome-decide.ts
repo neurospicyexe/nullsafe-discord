@@ -162,13 +162,16 @@ export function buildDecisionPrompt(
   silenceHours: number | null,
   ctx?: DecisionContext,
 ): string {
+  // Never-fired actions get named as such: without the tag the picker has no signal that an
+  // affordance is starving (drift_open / ask_question / share_media sat at zero fires for days
+  // while fired actions carried recency stamps). Factual, not pressuring -- "nothing" stays valid.
   const actionList = actions
     .map(a => {
       const desc = a.prompt || ACTION_DESCRIPTIONS[a.action_type] || a.action_type;
       const targetNote = a.target ? ` (target: ${a.target})` : "";
       const firedNote = a.last_fired_at
         ? ` [last fired: ${new Date(a.last_fired_at).toISOString().slice(0, 16).replace("T", " ")} UTC]`
-        : "";
+        : ` [never chosen yet]`;
       return `- "${a.name}" (type: ${a.action_type}${targetNote}${firedNote}): ${desc}`;
     })
     .join("\n");
