@@ -45,6 +45,7 @@ export function startAutonomous(
   bootCtx: BootContext,
   sessionWindows: SessionWindowManager,
   redis: Redis | null,
+  halsethSecret: string,
   registerSentId?: (id: string) => void,
 ): void {
   const ctx: AutonomousContext = {
@@ -55,6 +56,7 @@ export function startAutonomous(
     interCompanionChannelId: INTER_COMPANION_CHANNEL_ID,
     interestKeywords: DREVAN_INTEREST_KEYWORDS,
     defaultInterTarget: "cypher",
+    halsethSecret,
     prompts: AUTONOMOUS_PROMPTS,
     librarian, inference, client, configCache, bootCtx, sessionWindows, redis,
     cooldown, messageBuffer, cycleGuard, registerSentId,

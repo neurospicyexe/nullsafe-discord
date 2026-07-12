@@ -67,6 +67,7 @@ export interface AutonomousContext {
   interCompanionChannelId: string | undefined;
   interestKeywords: readonly string[];
   defaultInterTarget: string;
+  halsethSecret: string;
   prompts: AutonomousPrompts;
   // runtime (snapshot taken at startAutonomous, matching prior behavior)
   librarian: LibrarianClient;
@@ -160,7 +161,7 @@ export async function sendAutonomousMessage(
           channel_id: channelId,
           message_id: sent[0]!.id,
         });
-        reportVoiceScore(ctx.companionId as VoiceCompanionId, content, channelId);
+        reportVoiceScore(ctx.companionId as VoiceCompanionId, content, channelId, ctx.halsethSecret);
       }
     }
   } catch (e) {

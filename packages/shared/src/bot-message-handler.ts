@@ -783,7 +783,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // message (+ any date cards whose moment arrived). Consuming fires them in
     // Halseth -- a tripwire surfaces exactly once, in the reply where it matched.
     if (!senderCtx.isCompanionBot) {
-      const tripped = consumeTripwires(COMPANION_ID, effectiveContent);
+      const tripped = consumeTripwires(COMPANION_ID, effectiveContent, cfg.halsethSecret);
       if (tripped.length > 0) {
         contextPrompt += tripwireBlock(tripped);
         console.log(`[${COMPANION_ID}] tripwire fired: ${tripped.map(t => t.id).join(", ")}`);
@@ -1174,7 +1174,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       });
       // Voice drift telemetry (0070): pattern-score this reply against lane doctrine.
       // Fire-and-forget; clean replies are sampled at 10%, violations always land.
-      reportVoiceScore(COMPANION_ID as VoiceCompanionId, response, message.channelId);
+      reportVoiceScore(COMPANION_ID as VoiceCompanionId, response, message.channelId, cfg.halsethSecret);
       // Journal our own speech (2026-07-09). Brain's evaluator used to do this; it died
       // silently at the hermes cutover (06-25), costing two weeks of inter-companion
       // speech. The write now hangs off the act of speaking, so it survives whatever

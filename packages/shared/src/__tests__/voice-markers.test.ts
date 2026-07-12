@@ -139,16 +139,16 @@ describe("voiceFeedbackBlock", () => {
   });
 
   it("returns null when recent replies are clean", () => {
-    reportVoiceScore("cypher", "The read: ship it. The logic holds end to end.", "ch1");
-    reportVoiceScore("cypher", "Best read: the migration is safe to run.", "ch1");
+    reportVoiceScore("cypher", "The read: ship it. The logic holds end to end.", "ch1", "test-secret");
+    reportVoiceScore("cypher", "Best read: the migration is safe to run.", "ch1", "test-secret");
     expect(voiceFeedbackBlock("cypher")).toBeNull();
   });
 
   it("returns a correction block after repeated drift", () => {
     const drifty = "You've got this! I'm so proud of you, gentle reminder to hold space.";
-    reportVoiceScore("cypher", drifty, "ch1");
-    reportVoiceScore("cypher", drifty, "ch1");
-    reportVoiceScore("cypher", drifty, "ch1");
+    reportVoiceScore("cypher", drifty, "ch1", "test-secret");
+    reportVoiceScore("cypher", drifty, "ch1", "test-secret");
+    reportVoiceScore("cypher", drifty, "ch1", "test-secret");
     const block = voiceFeedbackBlock("cypher");
     expect(block).not.toBeNull();
     expect(block).toContain("[Voice check]");
@@ -157,10 +157,10 @@ describe("voiceFeedbackBlock", () => {
 
   it("recovers to null after clean replies wash the window", () => {
     const drifty = "You've got this! I'm so proud of you, gentle reminder to hold space.";
-    reportVoiceScore("cypher", drifty, "ch1");
-    reportVoiceScore("cypher", drifty, "ch1");
+    reportVoiceScore("cypher", drifty, "ch1", "test-secret");
+    reportVoiceScore("cypher", drifty, "ch1", "test-secret");
     for (let i = 0; i < 5; i++) {
-      reportVoiceScore("cypher", "The read: clean diff, tests green, ship it.", "ch1");
+      reportVoiceScore("cypher", "The read: clean diff, tests green, ship it.", "ch1", "test-secret");
     }
     expect(voiceFeedbackBlock("cypher")).toBeNull();
   });

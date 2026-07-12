@@ -59,7 +59,7 @@ export function setArmedTriggers(companionId: string, triggers: ArmedTrigger[]):
  * whose moment arrived. Matched triggers are removed from the local store and fired
  * in Halseth (fire-and-forget) -- a tripwire surfaces exactly once.
  */
-export function consumeTripwires(companionId: string, messageText: string): ArmedTrigger[] {
+export function consumeTripwires(companionId: string, messageText: string, secret: string): ArmedTrigger[] {
   const armed = armedStore.get(companionId) ?? [];
   if (armed.length === 0) return [];
 
@@ -73,15 +73,14 @@ export function consumeTripwires(companionId: string, messageText: string): Arme
   const matchedIds = new Set(unique.map(t => t.id));
   armedStore.set(companionId, armed.filter(t => !matchedIds.has(t.id)));
   for (const t of unique) {
-    fireTrigger(t.id, `matched (${t.condition_type}) in message: "${messageText.slice(0, 120)}"`);
+    fireTrigger(t.id, `matched (${t.condition_type}) in message: "${messageText.slice(0, 120)}"`, secret);
   }
   return unique;
 }
 
 /** Fire a trigger in Halseth. Fire-and-forget; never blocks the reply path. */
-export function fireTrigger(id: string, note: string): void {
+export function fireTrigger(id: string, note: string, secret: string): void {
   const halsethUrl = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"] ?? "";
   if (!halsethUrl) return;
   fetch(`${halsethUrl}/mind/triggers/${id}`, {
     method: "PATCH",

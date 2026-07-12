@@ -266,7 +266,7 @@ export interface RunBotConfig {
   mistralTtsModel: string | undefined;
   mistralSttModel: string | undefined;
   autonomous: {
-    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null, registerSentId?: (id: string) => void) => void;
+    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null, halsethSecret: string, registerSentId?: (id: string) => void) => void;
     stop: () => void;
     resetCycleGuard: () => void;
     pushRazielMessage: (content: string) => void;
@@ -490,7 +490,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     console.log(`[${companionId}] ready as ${c.user.tag}`);
     // registerSentId: autonomous seeds land in the same reply-to-me detector as handler
     // replies, so a sibling's Discord reply to a seed reaches the seeder (2026-07-03).
-    autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis, (id: string) => {
+    autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis, env.halsethSecret, (id: string) => {
       sentIds.add(id);
       while (sentIds.size > SENT_IDS_CAP) {
         const oldest = sentIds.values().next().value;

@@ -192,10 +192,10 @@ export function reportVoiceScore(
   companionId: VoiceCompanionId,
   text: string,
   channelId: string,
+  secret: string,
 ): void {
   if (process.env["VOICE_SCORING"] === "false") return;
   const halsethUrl = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"] ?? "";
 
   const tracked = scoreReply(companionId, text);
   trackScore(tracked);
