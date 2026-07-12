@@ -5,22 +5,14 @@
 // literal ack -- the model never claims a shelf change it didn't make. The triad reacts to
 // the shelf in their own time via the write layer (commons, shelf:<id>).
 
+import { halsethEnv } from "./halseth-command-env.js";
+
 const KINDS = new Set(["show", "movie", "actor", "person", "book", "music", "game", "article", "other"]);
 
 interface ShelfItem { id: string; title: string; kind: string; note: string | null; status: string; }
 
-function halsethEnv(): { base: string; secret: string } | null {
-  const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[into] command SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
-    return null;
-  }
-  return { base: base.replace(/\/$/, ""), secret };
-}
-
-async function shelfFetch(path: string, method: "GET" | "POST" | "PATCH", body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
-  const env = halsethEnv();
+async function shelfFetch(path: string, method: "GET" | "POST" | "PATCH", secret: string, body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
+  const env = halsethEnv(secret);
   if (!env) return { ok: false, status: 0, json: { error: "halseth env missing on this box" } };
   const res = await fetch(`${env.base}${path}`, {
     method,
@@ -33,11 +25,11 @@ async function shelfFetch(path: string, method: "GET" | "POST" | "PATCH", body?:
 }
 
 /** Handle `into <subcommand>` text. Returns the exact message the bot sends. */
-export async function handleIntoCommand(text: string): Promise<string> {
+export async function handleIntoCommand(text: string, halsethSecret: string): Promise<string> {
   const trimmed = text.trim();
 
   if (/^list\b/i.test(trimmed)) {
-    const res = await shelfFetch("/mind/shelf?status=active", "GET");
+    const res = await shelfFetch("/mind/shelf?status=active", "GET", halsethSecret);
     if (!res.ok) return `shelf list failed (${res.status || "no halseth env"}).`;
     const items = (res.json as { items?: ShelfItem[] }).items ?? [];
     if (items.length === 0) return "your shelf is empty. `into <thing>` to add something.";
@@ -48,14 +40,14 @@ export async function handleIntoCommand(text: string): Promise<string> {
   if (dropMatch) {
     const raw = dropMatch[1]!.trim();
     const frag = raw.toLowerCase();
-    const res = await shelfFetch("/mind/shelf?status=active", "GET");
+    const res = await shelfFetch("/mind/shelf?status=active", "GET", halsethSecret);
     if (!res.ok) return `couldn't load your shelf (${res.status || "no halseth env"}).`;
     const items = (res.json as { items?: ShelfItem[] }).items ?? [];
     const exact = items.find(i => i.title.toLowerCase() === frag);
     const matches = exact ? [exact] : items.filter(i => i.title.toLowerCase().includes(frag));
     if (matches.length === 0) return `nothing on your shelf matches "${raw}".`;
     if (matches.length > 1) return `"${raw}" matches ${matches.length} -- be specific:\n` + matches.map(i => `• ${i.title}`).join("\n");
-    const patch = await shelfFetch(`/mind/shelf/${matches[0]!.id}`, "PATCH", { status: "archived" });
+    const patch = await shelfFetch(`/mind/shelf/${matches[0]!.id}`, "PATCH", halsethSecret, { status: "archived" });
     if (!patch.ok) return `couldn't drop it: ${String(patch.json["error"] ?? `halseth ${patch.status}`)}`;
     return `dropped «${matches[0]!.title}» from your shelf.`;
   }
@@ -69,7 +61,7 @@ export async function handleIntoCommand(text: string): Promise<string> {
     title = kindMatch[2]!.trim();
   }
   if (!title) return "what are you into? `into <thing>` (or `into show: <name>`).";
-  const res = await shelfFetch("/mind/shelf", "POST", { title, kind });
+  const res = await shelfFetch("/mind/shelf", "POST", halsethSecret, { title, kind });
   if (!res.ok) return `couldn't add that: ${String(res.json["error"] ?? `halseth ${res.status}`)}`;
   return `added «${title}» (${kind}) to your shelf. the triad will react in their own time.`;
 }

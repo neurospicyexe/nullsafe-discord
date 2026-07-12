@@ -5,6 +5,8 @@
 // acks deterministically -- the model never gets to narrate a feeding it didn't do (the
 // 2026-06-11 deterministic-ack doctrine). The actor is "raziel" (this is Raziel's command).
 
+import { halsethEnv } from "./halseth-command-env.js";
+
 const VALID_ACTIONS = ["feed", "play", "talk", "give"] as const;
 type Action = typeof VALID_ACTIONS[number];
 // "nest" is a view, not a tend: `pet Sol nest` shows the hoard without touching trust.
@@ -20,16 +22,6 @@ interface CreatureRow {
   name: string;
   species: string | null;
   trust: number;
-}
-
-function halsethEnv(): { base: string; secret: string } | null {
-  const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[creatures] command SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
-    return null;
-  }
-  return { base: base.replace(/\/$/, ""), secret };
 }
 
 /**
@@ -98,8 +90,8 @@ export function formatNestReply(
   return [`${creatureName}'s nest:`, ...lines, ...given].join("\n");
 }
 
-async function creaturesGet(): Promise<CreatureRow[]> {
-  const env = halsethEnv();
+async function creaturesGet(secret: string): Promise<CreatureRow[]> {
+  const env = halsethEnv(secret);
   if (!env) return [];
   const res = await fetch(`${env.base}/mind/creatures`, {
     headers: { "Authorization": `Bearer ${env.secret}` },
@@ -125,14 +117,14 @@ export function resolveCreature(
 }
 
 /** Handle `pet <name> <action|nest> [note]`. Returns the exact message the bot sends. */
-export async function handlePetCommand(arg: string, actor = "raziel"): Promise<string> {
+export async function handlePetCommand(arg: string, halsethSecret: string, actor = "raziel"): Promise<string> {
   const parsed = parsePetCommand(arg);
   if ("error" in parsed) return parsed.error;
 
-  const env = halsethEnv();
+  const env = halsethEnv(halsethSecret);
   if (!env) return "creatures aren't reachable from here (halseth env missing).";
 
-  const creatures = await creaturesGet();
+  const creatures = await creaturesGet(halsethSecret);
   const resolved = resolveCreature(creatures, parsed.name);
   if ("error" in resolved) return resolved.error;
 

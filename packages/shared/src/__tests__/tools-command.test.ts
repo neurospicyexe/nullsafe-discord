@@ -57,7 +57,7 @@ describe("handleCouncilConvene wake publishing", () => {
   test("publishes a council wake when convene succeeds and redis is provided", async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }) as unknown as typeof fetch;
     const redis = fakeRedis();
-    const reply = await handleCouncilConvene("should we ship?", redis as never);
+    const reply = await handleCouncilConvene("should we ship?", "secret", redis as never);
     expect(reply).toContain("council convened on");
     expect(redis.publish).toHaveBeenCalledTimes(1);
     expect(redis.publish).toHaveBeenCalledWith(CHANNEL.wake, expect.stringContaining("\"kind\":\"council\""));
@@ -66,20 +66,20 @@ describe("handleCouncilConvene wake publishing", () => {
   test("does NOT publish when the convene call fails", async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "boom" }) }) as unknown as typeof fetch;
     const redis = fakeRedis();
-    const reply = await handleCouncilConvene("q", redis as never);
+    const reply = await handleCouncilConvene("q", "secret", redis as never);
     expect(reply).toContain("couldn't convene the council");
     expect(redis.publish).not.toHaveBeenCalled();
   });
 
   test("does not throw and still acks when redis is absent", async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) }) as unknown as typeof fetch;
-    const reply = await handleCouncilConvene("q", null);
+    const reply = await handleCouncilConvene("q", "secret", null);
     expect(reply).toContain("council convened on");
   });
 
   test("rejects an empty question before any network or publish", async () => {
     const redis = fakeRedis();
-    const reply = await handleCouncilConvene("   ", redis as never);
+    const reply = await handleCouncilConvene("   ", "secret", redis as never);
     expect(reply).toContain("give the council a question");
     expect(redis.publish).not.toHaveBeenCalled();
   });

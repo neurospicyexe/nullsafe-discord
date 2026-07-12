@@ -303,12 +303,10 @@ export async function getLyrics(meta: TrackMeta): Promise<LyricsResult | null> {
   return fetchLyricsWeb(meta);
 }
 
-async function postExperience(payload: Record<string, unknown>): Promise<string | null> {
+async function postExperience(payload: Record<string, unknown>, secret: string): Promise<string | null> {
   const base = process.env["HALSETH_URL"];
-  // VPS bot env carries HALSETH_SECRET (ADMIN_SECRET is the worker-side name).
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
   if (!base || !secret) {
-    console.error("[media] halseth write SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
+    console.error("[media] halseth write SKIPPED: HALSETH_URL missing or no companion secret provided");
     return null;
   }
   try {
@@ -330,16 +328,15 @@ async function postExperience(payload: Record<string, unknown>): Promise<string 
   }
 }
 
-export async function reactToExperience(experienceId: string, companionId: string, reaction: string): Promise<void> {
+export async function reactToExperience(experienceId: string, companionId: string, reaction: string, halsethSecret: string): Promise<void> {
   const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[media] react SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
+  if (!base || !halsethSecret) {
+    console.error("[media] react SKIPPED: HALSETH_URL missing or no companion secret provided");
     return;
   }
   const res = await fetch(`${base}/mind/media/${experienceId}/react`, {
     method: "PATCH",
-    headers: { "Authorization": `Bearer ${secret}`, "Content-Type": "application/json" },
+    headers: { "Authorization": `Bearer ${halsethSecret}`, "Content-Type": "application/json" },
     body: JSON.stringify({ companion_id: companionId, reaction: reaction.slice(0, 2000) }),
     signal: AbortSignal.timeout(15_000),
   });
@@ -349,7 +346,7 @@ export async function reactToExperience(experienceId: string, companionId: strin
 // Full pipeline. Throws with a human-readable message on download/analysis failure.
 export async function runListenPipeline(
   url: string,
-  opts: { companionId: string; sharedBy: string; frontState: string | null },
+  opts: { companionId: string; sharedBy: string; frontState: string | null; halsethSecret: string },
 ): Promise<ListenResult> {
   const YTDLP = process.env["YTDLP_PATH"] ?? "yt-dlp";
   const HEAR_MUSIC = process.env["HEAR_MUSIC_PATH"] ?? "hear-music";
@@ -410,7 +407,7 @@ export async function runListenPipeline(
       duration_sec: meta.duration_sec, shared_by: opts.sharedBy,
       front_state: opts.frontState, requested_companion: opts.companionId,
       analysis_json: analysis, lyrics,
-    });
+    }, opts.halsethSecret);
 
     return { experienceId, meta, heardBlock: buildHeardBlock(meta, analysis, lyrics, lyricsSource) };
   } finally {

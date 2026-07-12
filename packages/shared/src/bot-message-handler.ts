@@ -123,6 +123,7 @@ export interface MessageHandlerCfg {
   ownerDiscordId: string;
   blueDiscordId?: string;
   ownerDisplayName: string;
+  halsethSecret: string;
 }
 
 export interface MessageHandlerDeps {
@@ -396,7 +397,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner) {
       const clubMatch = effectiveContent.match(CLUB_TRIGGER);
       if (clubMatch) {
-        const reply = await handleClubCommand(clubMatch[1]!, "raziel")
+        const reply = await handleClubCommand(clubMatch[1]!, "raziel", cfg.halsethSecret)
           .catch(err => `club command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
@@ -410,7 +411,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && SEARCH_TRIGGER) {
       const searchMatch = effectiveContent.match(SEARCH_TRIGGER);
       if (searchMatch) {
-        const search = await handleToolSearch(searchMatch[1]!, COMPANION_ID)
+        const search = await handleToolSearch(searchMatch[1]!, COMPANION_ID, cfg.halsethSecret)
           .catch(err => ({ reply: `search failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`, results: [] }));
         await sendLong(message.channel as TextChannel, search.reply);
         // Read-in (2026-07-03): a search is "bring this into the conversation", not a link
@@ -445,7 +446,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const imagineMatch = effectiveContent.match(IMAGINE_TRIGGER);
       if (imagineMatch) {
         await (message.channel as TextChannel).send("\u{1F3A8} imagining...");
-        const out: { text: string; imageUrl?: string } = await handleToolImage(imagineMatch[1]!, COMPANION_ID)
+        const out: { text: string; imageUrl?: string } = await handleToolImage(imagineMatch[1]!, COMPANION_ID, cfg.halsethSecret)
           .catch(err => ({ text: `image generation failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}` }));
         await (message.channel as TextChannel).send(
           out.imageUrl ? { content: out.text, files: [{ attachment: out.imageUrl, name: "imagine.png" }] } : { content: out.text },
@@ -460,7 +461,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && PET_TRIGGER) {
       const petMatch = effectiveContent.match(PET_TRIGGER);
       if (petMatch) {
-        const reply = await handlePetCommand(petMatch[1]!, "raziel")
+        const reply = await handlePetCommand(petMatch[1]!, cfg.halsethSecret, "raziel")
           .catch(err => `pet command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
@@ -484,7 +485,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && COUNCIL_TRIGGER) {
       const councilMatch = effectiveContent.match(COUNCIL_TRIGGER);
       if (councilMatch) {
-        const reply = await handleCouncilConvene(councilMatch[1]!, redis)
+        const reply = await handleCouncilConvene(councilMatch[1]!, cfg.halsethSecret, redis)
           .catch(err => `council command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
@@ -498,7 +499,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && LOG_TRIGGER) {
       const logMatch = effectiveContent.match(LOG_TRIGGER);
       if (logMatch) {
-        const reply = await handleLogCommand(logMatch[1]!)
+        const reply = await handleLogCommand(logMatch[1]!, cfg.halsethSecret)
           .catch(err => `log command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
@@ -510,7 +511,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && INTO_TRIGGER) {
       const intoMatch = effectiveContent.match(INTO_TRIGGER);
       if (intoMatch) {
-        const reply = await handleIntoCommand(intoMatch[1]!)
+        const reply = await handleIntoCommand(intoMatch[1]!, cfg.halsethSecret)
           .catch(err => `into command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
         return;
@@ -553,6 +554,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             companionId: COMPANION_ID,
             sharedBy: author,
             frontState: pkMemberName ?? null,
+            halsethSecret: cfg.halsethSecret,
           });
           pendingMediaId = listen.experienceId;
           effectiveContent = `${effectiveContent.trim()}\n\n[HEARD -- the track was downloaded and analyzed; you actually listened to it. Respond to the music itself.]\n${listen.heardBlock}`;
@@ -1185,7 +1187,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (pendingMediaId) {
         const mediaId = pendingMediaId;
         writeQueue.fireAndForget(`media:react:${COMPANION_ID}:${mediaId}`, () =>
-          reactToExperience(mediaId, COMPANION_ID, response));
+          reactToExperience(mediaId, COMPANION_ID, response, cfg.halsethSecret));
       }
     }
 

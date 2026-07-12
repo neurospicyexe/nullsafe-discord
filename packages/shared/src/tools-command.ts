@@ -8,6 +8,7 @@
 
 import type { Redis } from "ioredis";
 import { publishWake } from "./events.js";
+import { halsethEnv } from "./halseth-command-env.js";
 
 const SEARCH_LIST_CAP = 5;
 
@@ -23,18 +24,8 @@ interface ImageResult {
   key: string;
 }
 
-function halsethEnv(): { base: string; secret: string } | null {
-  const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[tools] command SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
-    return null;
-  }
-  return { base: base.replace(/\/$/, ""), secret };
-}
-
-async function toolsFetch(path: string, body: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
-  const env = halsethEnv();
+async function toolsFetch(path: string, body: unknown, secret: string): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
+  const env = halsethEnv(secret);
   if (!env) return { ok: false, status: 0, json: { error: "halseth env missing on this box" } };
   const res = await fetch(`${env.base}${path}`, {
     method: "POST",
@@ -82,10 +73,10 @@ export function formatSearchReadIn(query: string, results: SearchResult[]): stri
 
 /** Handle `search <query>`. Returns the deterministic ack plus the raw results so the
  *  caller can feed them back to the model (read-in) and into STM. */
-export async function handleToolSearch(query: string, companionId: string): Promise<{ reply: string; results: SearchResult[] }> {
+export async function handleToolSearch(query: string, companionId: string, halsethSecret: string): Promise<{ reply: string; results: SearchResult[] }> {
   const q = query.trim();
   if (!q) return { reply: "give me something to search for.", results: [] };
-  const res = await toolsFetch("/mind/tools/search", { companion_id: companionId, query: q });
+  const res = await toolsFetch("/mind/tools/search", { companion_id: companionId, query: q }, halsethSecret);
   if (res.status === 403) return { reply: "web search isn't enabled for you yet (Raziel can flip the tools_enabled gate).", results: [] };
   if (!res.ok) return { reply: `search failed: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`, results: [] };
   const results = Array.isArray(res.json["results"]) ? (res.json["results"] as SearchResult[]) : [];
@@ -99,10 +90,10 @@ export async function handleToolSearch(query: string, companionId: string): Prom
  * instead of waiting for its next council cron tick (up to 30 min). The wake is fire-and-forget:
  * if it fails or redis is absent, the cron fallback still runs the ritual.
  */
-export async function handleCouncilConvene(question: string, redis: Redis | null = null): Promise<string> {
+export async function handleCouncilConvene(question: string, halsethSecret: string, redis: Redis | null = null): Promise<string> {
   const q = question.trim();
   if (!q) return "give the council a question.";
-  const res = await toolsFetch("/mind/council/convene", { question: q, asked_by: "raziel" });
+  const res = await toolsFetch("/mind/council/convene", { question: q, asked_by: "raziel" }, halsethSecret);
   if (!res.ok) return `couldn't convene the council: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}`;
   if (redis) {
     await publishWake(redis, { kind: "council", reason: "convene", requestedBy: "raziel", at: new Date().toISOString() });
@@ -111,10 +102,10 @@ export async function handleCouncilConvene(question: string, redis: Redis | null
 }
 
 /** Handle `imagine <prompt>`. Returns ack text + an optional image url to attach. */
-export async function handleToolImage(prompt: string, companionId: string): Promise<{ text: string; imageUrl?: string }> {
+export async function handleToolImage(prompt: string, companionId: string, halsethSecret: string): Promise<{ text: string; imageUrl?: string }> {
   const p = prompt.trim();
   if (!p) return { text: "tell me what to imagine." };
-  const res = await toolsFetch("/mind/tools/image", { companion_id: companionId, prompt: p });
+  const res = await toolsFetch("/mind/tools/image", { companion_id: companionId, prompt: p }, halsethSecret);
   if (res.status === 403) return { text: "image generation isn't enabled for you yet (Raziel can flip the tools_enabled gate)." };
   if (!res.ok) return { text: `image generation failed: ${String(res.json["error"] ?? `halseth ${res.status || "no env"}`)}` };
   return formatImageReply(p, { url: String(res.json["url"] ?? ""), key: String(res.json["key"] ?? "") });

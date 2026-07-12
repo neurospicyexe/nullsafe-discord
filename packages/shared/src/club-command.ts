@@ -8,6 +8,8 @@
 // Votes cast through this path are RAZIEL's (voter='raziel'): the companions
 // vote in-voice during the worker's voting tick; the owner pre-casts here.
 
+import { halsethEnv } from "./halseth-command-env.js";
+
 interface ClubRound {
   id: string;
   status: "gathering" | "voting" | "active" | "closed";
@@ -26,18 +28,8 @@ interface ClubCurrent {
   votes: Array<{ recommendation_id: string; voter: string }>;
 }
 
-function halsethEnv(): { base: string; secret: string } | null {
-  const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[club] command SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
-    return null;
-  }
-  return { base: base.replace(/\/$/, ""), secret };
-}
-
-async function clubFetch(path: string, method: "GET" | "POST", body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
-  const env = halsethEnv();
+async function clubFetch(path: string, method: "GET" | "POST", secret: string, body?: unknown): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
+  const env = halsethEnv(secret);
   if (!env) return { ok: false, status: 0, json: { error: "halseth env missing on this box" } };
   const res = await fetch(`${env.base}${path}`, {
     method,
@@ -65,11 +57,11 @@ export function matchRecommendation(fragment: string, recs: ClubRecommendation[]
 }
 
 /** Handle `club <subcommand>` text. Returns the exact message the bot sends. */
-export async function handleClubCommand(text: string, voter: string): Promise<string> {
+export async function handleClubCommand(text: string, voter: string, halsethSecret: string): Promise<string> {
   const trimmed = text.trim();
 
   if (/^status\b/i.test(trimmed)) {
-    const res = await clubFetch("/mind/club/current", "GET");
+    const res = await clubFetch("/mind/club/current", "GET", halsethSecret);
     if (!res.ok) return `club status failed (${res.status || "no halseth env"}).`;
     const cur = res.json as unknown as ClubCurrent;
     if (!cur.round) return "no club round is open right now.";
@@ -91,7 +83,7 @@ export async function handleClubCommand(text: string, voter: string): Promise<st
       fragment = fragment.slice(0, becauseIdx).trim();
     }
 
-    const cur = await clubFetch("/mind/club/current", "GET");
+    const cur = await clubFetch("/mind/club/current", "GET", halsethSecret);
     if (!cur.ok) return `couldn't load the current round (${cur.status || "no halseth env"}).`;
     const current = cur.json as unknown as ClubCurrent;
     if (!current.round || (current.round.status !== "gathering" && current.round.status !== "voting")) {
@@ -101,7 +93,7 @@ export async function handleClubCommand(text: string, voter: string): Promise<st
     const rec = matchRecommendation(fragment, current.recommendations);
     if ("error" in rec) return rec.error;
 
-    const res = await clubFetch("/mind/club/vote", "POST", {
+    const res = await clubFetch("/mind/club/vote", "POST", halsethSecret, {
       recommendation_id: rec.id, voter, reason,
     });
     if (!res.ok) return `vote NOT cast: ${String(res.json["error"] ?? `halseth ${res.status}`)}`;
@@ -114,11 +106,11 @@ export async function handleClubCommand(text: string, voter: string): Promise<st
   if (sayMatch) {
     const text = sayMatch[1]!.trim();
     if (!text) return "give me something to say: `club say <text>`.";
-    const cur = await clubFetch("/mind/club/current", "GET");
+    const cur = await clubFetch("/mind/club/current", "GET", halsethSecret);
     if (!cur.ok) return `couldn't load the current round (${cur.status || "no halseth env"}).`;
     const current = cur.json as unknown as ClubCurrent;
     if (!current.round) return "no club round is open to discuss right now.";
-    const res = await clubFetch("/mind/commons", "POST", {
+    const res = await clubFetch("/mind/commons", "POST", halsethSecret, {
       author: voter, context: `club:${current.round.id}`, body: text,
     });
     if (!res.ok) return `couldn't post that: ${String(res.json["error"] ?? `halseth ${res.status}`)}`;

@@ -658,7 +658,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       },
       (isSuperseded) => handleMessage(message, {
       client,
-      cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId },
+      cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       brainClient, voiceClient, redis, librarian,
       adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup,

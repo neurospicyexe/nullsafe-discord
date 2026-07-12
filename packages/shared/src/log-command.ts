@@ -5,22 +5,14 @@
 // didn't make (2026-06-11 doctrine). This is a DROP, not a ping -- no reply is expected;
 // the thought lands on Hearth /log and companions may answer in their own time.
 
-function halsethEnv(): { base: string; secret: string } | null {
-  const base = process.env["HALSETH_URL"];
-  const secret = process.env["HALSETH_SECRET"] ?? process.env["ADMIN_SECRET"];
-  if (!base || !secret) {
-    console.error("[log] command SKIPPED: HALSETH_URL/HALSETH_SECRET missing from env");
-    return null;
-  }
-  return { base: base.replace(/\/$/, ""), secret };
-}
+import { halsethEnv } from "./halseth-command-env.js";
 
 /** Handle `log <thought>` text. Returns the exact message the bot sends. */
-export async function handleLogCommand(text: string): Promise<string> {
+export async function handleLogCommand(text: string, halsethSecret: string): Promise<string> {
   const body = text.trim();
   if (!body) return "give me something to log: `log <thought>`.";
 
-  const env = halsethEnv();
+  const env = halsethEnv(halsethSecret);
   if (!env) return "couldn't log that -- halseth env missing on this box.";
 
   const res = await fetch(`${env.base}/mind/commons`, {
