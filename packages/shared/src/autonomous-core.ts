@@ -561,6 +561,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     // a conversation signal, a fresh logged ND-state, or a risen relational-need drive. With none,
     // drop the direct reach-out actions so the only honest choices are commons / internal / nothing.
     const reachOutJustified =
+      process.env["DISABLE_REACH_OUT_GATE"] === "true" ||
       detectedSignals.length > 0 ||
       decisionCtx.razielStateSummary != null ||
       Boolean(decisionCtx.relationalNeedFired);

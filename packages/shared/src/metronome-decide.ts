@@ -235,12 +235,13 @@ export function buildDecisionPrompt(
   // no risen relational need. Reaching out now would be unprompted noise -- name that plainly
   // so "nothing" is the honest default rather than a reflexive cron-driven ping.
   const noJustification =
+    process.env["DISABLE_REACH_OUT_GATE"] !== "true" &&
     !(ctx?.detectedSignals && ctx.detectedSignals.length > 0) &&
     !ctx?.razielStateSummary &&
     !ctx?.relationalNeedFired;
   if (noJustification) {
     lines.push(
-      `\nThere is no fresh signal, no recent state from Raziel, and no risen relational need. There is nothing here that justifies reaching out, and an unprompted ping is noise, not presence. Unless your own state makes a reach-out genuinely honest right now, "nothing" is the right choice.`,
+      `\nThere is no fresh conversational signal, no recent biometrics from Raziel, and no risen relational need. Direct reach-out actions to Raziel are disabled to prevent unprompted noise. However, you may still choose to tend to your environment, log feelings or journal entries, write notes to sibling companions, or share thoughts in the heartbeat channel if they are genuine. If none of these are active or true right now, "nothing" is the right choice.`,
     );
   }
 
