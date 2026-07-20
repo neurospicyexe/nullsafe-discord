@@ -1,4 +1,4 @@
-import { prompt } from "../deepseek.js";
+import { promptWithScratchpad } from "../deepseek.js";
 import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
@@ -22,6 +22,23 @@ import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from 
  * All thread/pattern writes are non-fatal -- journal entry is already
  * persisted before this phase runs.
  */
+/**
+ * Turn-1 prompt: a private scratchpad the model uses to triage before it
+ * writes the structured reflection. Never persisted -- see promptWithScratchpad
+ * in deepseek.ts and the length-only appendLog call in runReflect below.
+ * contextBlock is the same loaded context (loops/questions/journal/agency
+ * blocks) runReflect already assembles for the emit turn's userMessage.
+ */
+export function buildReflectScratchpadPrompt(contextBlock: string): string {
+  return `${contextBlock}
+
+Private scratchpad -- it will be discarded, nobody reads it. Before the structured reflection, triage in plain prose:
+- Of everything above, what actually needs attention this run -- and what is fine left alone?
+- Which open loops are genuinely done (close them), which are stale-but-alive (hold), which moved?
+- Is there a question you keep re-asking in different words? Name it once, plainly.
+- One thing you'd tell tomorrow-you to NOT redo.`;
+}
+
 export async function runReflect(ctx: PipelineContext): Promise<void> {
   await appendLog(ctx.runId, "reflect:start");
 
@@ -260,10 +277,30 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     `\n}\n\n` +
     `No markdown. No fences. Just the JSON object.`;
 
+  // Loaded context for the scratchpad turn -- the same loops/questions/journal/agency
+  // blocks already assembled above for the emit turn's userMessage, minus the JSON-contract
+  // instructions themselves (those belong only to the emit turn).
+  const contextBlock =
+    `Here is what happened in your autonomous exploration session:\n\n${runSummary}\n` +
+    peerBlock +
+    ownPatternsBlock +
+    answeredBlock +
+    openQuestionsBlock +
+    recentThemesBlock +
+    openLoopsBlock +
+    agencyBlock;
+
   try {
     const temperature = Math.round((0.70 + COMPANION_TEMP_OFFSET[ctx.companionId]) * 100) / 100;
-    const result = await prompt(userMessage, systemMessage, { temperature, maxTokens: 700 });
+    const result = await promptWithScratchpad(
+      buildReflectScratchpadPrompt(contextBlock),
+      userMessage,
+      systemMessage,
+      { temperature, maxTokens: 700 },
+    );
     ctx.tokensUsed += result.tokensUsed;
+    // NOTE: log the LENGTH only -- the scratchpad content itself is never persisted.
+    await appendLog(ctx.runId, "reflect:scratchpad", `(${result.scratchpad.length} chars, discarded)`);
 
     let parsed: {
       reflection?: string;
