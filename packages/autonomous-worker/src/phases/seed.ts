@@ -265,7 +265,7 @@ async function decideWithContext(
   const name = COMPANION_NAMES[ctx.companionId];
 
   const liveItems = [
-    ...ctx.openLoops.map(l => `Open loop: ${l.text}`),
+    ...ctx.openLoops.map(l => `Open loop: ${l.loop_text}`),
     // Pressure flags are shown so the companion knows what state it is carrying, but they are
     // a state to HOLD, not a topic to research (a basin reading is the loom, not the world).
     ...ctx.pressureFlags.map(p => `Holding pressure (a state, not a research topic): ${p}`),
@@ -313,11 +313,11 @@ async function decideWithContext(
  *     the caller falls back to the queued seed.
  */
 export function extractLiveText(decisionText: string, ctx: PipelineContext): string | null {
-  const candidates = ctx.openLoops.map(l => l.text);
+  const candidates = ctx.openLoops.map(l => l.loop_text);
   for (const item of candidates) {
     if (decisionText.toLowerCase().includes(item.toLowerCase().slice(0, 30))) return item;
   }
-  return ctx.openLoops[0]?.text ?? null;
+  return ctx.openLoops[0]?.loop_text ?? null;
 }
 
 function buildLiveSeed(ctx: PipelineContext, liveText: string): Seed {

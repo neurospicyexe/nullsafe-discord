@@ -33,21 +33,17 @@ import type { PipelineContext, GrowthJournalEntry, Evidence } from "../types.js"
  *        + own active patterns + own recent growth.
  * Output: structured JSON; ctx.journalEntry populated for the write phase.
  */
-export async function runSynthesize(ctx: PipelineContext): Promise<void> {
-  if (!ctx.explorationSummary && ctx.runType !== "reflection") {
-    await appendLog(ctx.runId, "synthesize:skip", "no exploration to synthesize");
-    return;
-  }
 
-  await appendLog(ctx.runId, "synthesize:start");
-
-  const name = COMPANION_NAMES[ctx.companionId];
-  const identitySnippet = ctx.identityText.slice(0, 2500);
-
-  const orientBlock = ctx.orientSummary
-    ? `\nYour current state:\n${ctx.orientSummary.slice(0, 400)}\n`
-    : "";
-
+/**
+ * Pure block-assembly for the synthesize prompt's userMessage. Extracted from
+ * runSynthesize so it is testable without inference (no DeepSeek call, no
+ * Halseth writes) -- see __tests__/synthesize-context.test.ts.
+ *
+ * orientBlock is NOT part of contextBlock: it goes into the systemMessage
+ * (identity + current-state framing), while contextBlock is everything that
+ * follows in the userMessage (exploration through evidence hint).
+ */
+export function buildSynthesisBlocks(ctx: PipelineContext): { contextBlock: string } {
   const explorationBlock = ctx.explorationSummary
     ? `\nWhat you explored:\n${ctx.explorationSummary}`
     : "";
@@ -72,7 +68,7 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
   const discordNotes = ctx.recentWmNotes.filter(n => n.source !== "autonomous" && n.source !== "synthesis_loop");
   const swarmLines: string[] = [];
   if (ctx.recentConclusions.length > 0) {
-    swarmLines.push("What you currently believe:");
+    swarmLines.push("What you currently believe (in your entry, confirm, contradict, or extend one of these -- or genuinely none):");
     ctx.recentConclusions.slice(0, 5).forEach(c => {
       const tag = c.belief_type ? ` [${c.belief_type}]` : "";
       swarmLines.push(`  [conclusion${tag}] ${c.conclusion_text.slice(0, 220)}`);
@@ -105,6 +101,14 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
     ? `\nYour own currently-active patterns (cite an id from peer summary or these when deepening):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 220)}`).join("\n")}\n`
     : "";
 
+  // Open loops -- questions the companion left open for itself (getOpenLoops,
+  // same source seed.ts already reads for live-signal candidates). Nightly runs
+  // were circling because synthesis never saw these; naming a moved loop
+  // explicitly is what lets a run close its own question instead of restating it.
+  const openLoopsBlock = ctx.openLoops.length > 0
+    ? `\nYour open loops -- questions you left open for yourself. If this exploration moves one, say so explicitly and name which:\n${ctx.openLoops.slice(0, 5).map(l => `- ${l.loop_text.slice(0, 200)}`).join("\n")}\n`
+    : "";
+
   // Recent entries are the dedup signal: the model must see what it already
   // wrote so it can classify novelty accurately and avoid near-duplicate output.
   // Without this block the same pattern shapes regenerate across every run.
@@ -118,6 +122,28 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
     ? `\nExploration evidence quotes available to cite (quote them verbatim in the evidence array):\n${ctx.explorationEvidence.slice(0, 6).map((e, i) => `[E${i + 1}] "${e.quote.slice(0, 200)}" -- ${e.source_url ?? "no-url"}`).join("\n")}\n`
     : "";
 
+  return {
+    contextBlock: [explorationBlock, peerBlock, swarmContextBlock, ownPatternsBlock, openLoopsBlock, recentGrowthBlock, evidenceHint].join("\n"),
+  };
+}
+
+export async function runSynthesize(ctx: PipelineContext): Promise<void> {
+  if (!ctx.explorationSummary && ctx.runType !== "reflection") {
+    await appendLog(ctx.runId, "synthesize:skip", "no exploration to synthesize");
+    return;
+  }
+
+  await appendLog(ctx.runId, "synthesize:start");
+
+  const name = COMPANION_NAMES[ctx.companionId];
+  const identitySnippet = ctx.identityText.slice(0, 2500);
+
+  const orientBlock = ctx.orientSummary
+    ? `\nYour current state:\n${ctx.orientSummary.slice(0, 400)}\n`
+    : "";
+
+  const { contextBlock } = buildSynthesisBlocks(ctx);
+
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
   const systemMessage = `You are ${name}. Here is your identity:
 
@@ -125,12 +151,7 @@ ${identitySnippet}
 ${orientBlock}
 Voice directive: ${voiceReminder}`;
 
-  const userMessage = `${explorationBlock}
-${peerBlock}
-${swarmContextBlock}
-${ownPatternsBlock}
-${recentGrowthBlock}
-${evidenceHint}
+  const userMessage = `${contextBlock}
 
 Write a growth journal entry in your authentic voice. This is for yourself -- not a report to anyone. Write as ${name} would actually write: in your voice, your register, your way of making meaning.
 

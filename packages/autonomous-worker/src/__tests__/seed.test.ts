@@ -87,7 +87,7 @@ describe("pickOldestForage", () => {
 
 describe("extractLiveText", () => {
   const ctx = (openLoops: string[], pressureFlags: string[]) =>
-    ({ openLoops: openLoops.map(text => ({ text })), pressureFlags } as unknown as PipelineContext);
+    ({ openLoops: openLoops.map(loop_text => ({ loop_text })), pressureFlags } as unknown as PipelineContext);
 
   it("never returns a pressure flag, even when the model names it", () => {
     // Gaia's "0.503 bones-before-skeleton" was a pressure flag fed straight to web search.

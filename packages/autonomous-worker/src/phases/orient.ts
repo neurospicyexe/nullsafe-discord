@@ -2,7 +2,7 @@ import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
 import { loadIdentityRemote } from "../identity-loader.js";
 import {
   appendLog, getActiveThreads, getPeerActivity, getRecentWmNotes,
-  getRecentSessionNotes, getRecentFeelings, getRecentConclusions,
+  getRecentSessionNotes, getRecentFeelings, getRecentConclusions, getOpenLoops,
 } from "../halseth-client.js";
 import { HALSETH_URL, HALSETH_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
@@ -30,7 +30,7 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
   // journal entries, 3 patterns, 3 markers. Synthesize/reflect prompts
   // inject peer_summary so each companion is prehending the others'
   // becomings -- not exploring in isolation.
-  const [orient, activeThreads, peerActivity, recentWmNotes, recentSessionNotes, recentFeelings, recentConclusions] = await Promise.all([
+  const [orient, activeThreads, peerActivity, recentWmNotes, recentSessionNotes, recentFeelings, recentConclusions, openLoops] = await Promise.all([
     librarian.botOrient().catch(() => null),
     getActiveThreads(ctx.companionId),
     getPeerActivity(ctx.companionId, { journal: 5, patterns: 3, markers: 3 }),
@@ -38,6 +38,7 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     getRecentSessionNotes(ctx.companionId, 8),
     getRecentFeelings(ctx.companionId, 8),
     getRecentConclusions(ctx.companionId),
+    getOpenLoops(ctx.companionId).catch(() => []),
   ]);
 
   ctx.activeThreads = activeThreads;
@@ -46,6 +47,7 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
   ctx.recentSessionNotes = recentSessionNotes;
   ctx.recentFeelings = recentFeelings;
   ctx.recentConclusions = recentConclusions;
+  ctx.openLoops = openLoops;
 
   if (orient) {
     ctx.orientSummary = formatRecentContext(orient);
@@ -58,9 +60,6 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     // and unexamined dreams never got cleared -- they accumulated and flooded every orient.
     // bot_orient now provides these as structured arrays; read them directly.
     ctx.unexaminedDreamIds = (orient.unexamined_dreams ?? []).map(d => d.id).filter(Boolean);
-    ctx.openLoops = (orient.open_loops ?? [])
-      .map(l => ({ id: l.id ?? "unknown", text: (l.loop_text ?? "").trim() }))
-      .filter(l => l.text.length > 0);
     ctx.pressureFlags = (orient.pressure_flags ?? []).map(s => s.trim()).filter(Boolean);
   } else {
     console.warn(`[${ctx.companionId}/orient] botOrient returned null -- proceeding with empty context`);
@@ -68,7 +67,6 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     ctx.recentGrowth = [];
     ctx.activePatterns = [];
     ctx.unexaminedDreamIds = [];
-    ctx.openLoops = [];
     ctx.pressureFlags = [];
   }
 

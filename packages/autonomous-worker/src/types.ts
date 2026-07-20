@@ -1,3 +1,5 @@
+import type { OpenLoop } from "./halseth-client.js";
+
 export type CompanionId = "cypher" | "drevan" | "gaia";
 export type RunType = "exploration" | "reflection" | "synthesis" | "continuation" | "signal_audit";
 
@@ -106,7 +108,8 @@ export interface PipelineContext {
   recentGrowth: Array<{ type: string; content: string }>;
   activePatterns: string[];
   unexaminedDreamIds: string[];
-  openLoops: Array<{ id: string; text: string }>;
+  /** Currently-open loops from getOpenLoops (unified: Phase 2/seed candidate signal, Phase 4/synthesize move-it prompt). */
+  openLoops: OpenLoop[];
   pressureFlags: string[];
   activeThreads: ActiveThread[];
   /** Migration 0062: triad peer activity loaded by orient, prehended by synthesize/reflect. */
