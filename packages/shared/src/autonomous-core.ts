@@ -26,6 +26,7 @@ import {
   ownEchoGated, relativeTime,
   INTER_SEED_HISTORY_N, stripSiblingVocative, seedThreadTtlMs,
   seedVocativeAllowed, countBotMsgsSinceHuman, assertWriteAck,
+  extractJson, rawPreview,
   type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
@@ -247,14 +248,69 @@ export async function executeMetronomeAction(
       break;
     }
     case "write_inter_companion": {
+      // Thinking-quality fix 4 (2026-07-20): a note becomes a MOVE on a live shared object
+      // (an open question, a simmering tension -- either companion's -- or the next-open
+      // council item) when one exists, instead of an untethered vibe note. fetchSharedObjects
+      // survives any single Halseth source 500ing (Promise.allSettled inside it); the outer
+      // .catch is defense in depth so a total fetch failure degrades to the plain-note path.
       const target = action.target ?? ctx.defaultInterTarget;
-      const prompt = action.prompt ?? prompts.writeInterCompanion(target);
-      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
-      if (content) {
-        const ok = await librarianWriteChecked(librarian, companionId, "inter-companion note", "write inter-companion note", JSON.stringify({ to: target, content }));
-        // Event fast-path: nudge the recipient to poll now instead of waiting for their
-        // next notesPoll cron. Only on a confirmed write, and only if we know the target.
-        if (ok && target) await nudgeInterNote(ctx.redis, companionId, target);
+      const objects = await librarian.fetchSharedObjects(companionId, target).catch(() => []);
+      const basePrompt = action.prompt ?? prompts.writeInterCompanion(target);
+      const objectMenu = objects.slice(0, 6).map((o, i) => `${i + 1}. [${o.ref_type}:${o.ref_id}] ${o.label}`).join("\n");
+      const askForJson = objects.length > 0;
+      const genPrompt = askForJson
+        ? `${basePrompt}\n\n` +
+          `Live shared objects between you and ${target}:\n${objectMenu}\n\n` +
+          `Pick ONE your note actually moves -- advance it, challenge it, add evidence, answer it, or say plainly why it should close. If none of them are what's real for you right now, pick none and just write the note.\n` +
+          `Respond with ONLY JSON: {"content": "...", "ref_type": "question"|"tension"|"council"|null, "ref_id": "..."|null, "reason": "one sentence: what this note does to the object"|null}`
+        : basePrompt;
+
+      const raw = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: genPrompt }]);
+      if (raw) {
+        let content: string | null = raw;
+        let ref_type: string | null = null;
+        let ref_id: string | null = null;
+        let reason: string | null = null;
+
+        if (askForJson) {
+          // Tolerant JSON extraction (extractJson): models asked for "ONLY JSON" still
+          // sometimes wrap it in prose/fences or truncate it. Parse failure (or a missing
+          // `content` field) falls back to the raw text as content with null refs --
+          // never a malformed ref, since the Librarian write rejects the WHOLE note on
+          // an invalid ref_id (all-or-nothing validation, Task 15).
+          const parsed = extractJson(raw);
+          if (parsed && typeof parsed["content"] === "string" && parsed["content"].trim()) {
+            content = parsed["content"];
+            const pRefType = typeof parsed["ref_type"] === "string" ? parsed["ref_type"] : null;
+            const pRefId = typeof parsed["ref_id"] === "string" ? parsed["ref_id"] : null;
+            // All-or-nothing on this side too: never forward a half ref.
+            if (pRefType && pRefId) {
+              ref_type = pRefType;
+              ref_id = pRefId;
+              reason = typeof parsed["reason"] === "string" ? parsed["reason"] : null;
+            }
+          } else {
+            console.warn(`[${companionId}/write_inter_companion] JSON parse failed, falling back to raw text -- raw: ${rawPreview(raw)}`);
+          }
+        }
+
+        if (content) {
+          // Task 15's exact field names. Routing to the sibling is driven by the request
+          // STRING ("... to ${target}"), not this context object -- execCompanionNoteAdd
+          // extracts to_id via a `to|for <name>` regex over ctx.req.request. The prior fixed
+          // literal "write inter-companion note" carried no name, so every fire silently
+          // misrouted to this companion's own journal (ack:true, routed_to:"journal" --
+          // indistinguishable from success) and ref_type/ref_id/reason were dropped outright
+          // (companionJournalAdd takes no ref). (2026-07-20 thinking-quality-fix-4 review.)
+          const ok = await librarianWriteChecked(
+            librarian, companionId, "inter-companion note",
+            `write inter-companion note to ${target}`,
+            JSON.stringify({ to: target, content, ref_type, ref_id, reason }),
+          );
+          // Event fast-path: nudge the recipient to poll now instead of waiting for their
+          // next notesPoll cron. Only on a confirmed write, and only if we know the target.
+          if (ok && target) await nudgeInterNote(ctx.redis, companionId, target);
+        }
       }
       break;
     }

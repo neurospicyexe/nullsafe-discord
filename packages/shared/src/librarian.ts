@@ -1,6 +1,18 @@
 import type { CompanionId } from "./types.js";
 import { relativeTime } from "./relative-time.js";
 
+/**
+ * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
+ * 2026-07-20): an open question, a simmering tension, or the globally-next-open council item.
+ * `label` is the truncated (<=160 char) question/tension/council text -- enough for the
+ * generation prompt's menu to identify the object without spending its whole context budget.
+ */
+export interface SharedObject {
+  ref_type: "question" | "tension" | "council";
+  ref_id: string;
+  label: string;
+}
+
 interface LibrarianOptions {
   url: string;
   secret: string;
@@ -471,6 +483,73 @@ export class LibrarianClient {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`notesAck ${res.status}`);
+  }
+
+  /**
+   * Live shared objects a `write_inter_companion` note can become a MOVE on (thinking-quality
+   * fix 4, 2026-07-20): open questions, simmering tensions (BOTH companions' -- a move on
+   * YOUR sibling's open thread is the most relational kind, not just your own), and the
+   * globally-next-open council item. Fed to the generation prompt as a numbered menu so the
+   * model can pick one to advance/challenge/answer instead of writing an untethered vibe note.
+   *
+   * Five underlying fetches (questions x2, tensions x2, council x1) run under
+   * Promise.allSettled -- one source 500ing (or the network dropping) contributes nothing to
+   * the merged list rather than losing the whole menu. Non-throwing at the object level; the
+   * caller additionally wraps the whole call in .catch(() => []) for defense in depth.
+   */
+  async fetchSharedObjects(companionId: string, targetId: string): Promise<SharedObject[]> {
+    const fetchQuestions = async (id: string): Promise<SharedObject[]> => {
+      const res = await this._fetch(
+        `${this.url}/mind/questions/${encodeURIComponent(id)}?status=open`,
+        { headers: { "Authorization": `Bearer ${this.secret}` }, signal: AbortSignal.timeout(8_000) },
+      );
+      if (!res.ok) throw new Error(`fetchQuestions(${id}) ${res.status}`);
+      const data = await res.json() as { questions?: Array<{ id: string; question: string }> };
+      return (data.questions ?? []).map(q => ({
+        ref_type: "question" as const, ref_id: q.id, label: q.question.slice(0, 160),
+      }));
+    };
+
+    const fetchTensions = async (id: string): Promise<SharedObject[]> => {
+      // Endpoint already supports ?status=simmering server-side (companion-growth.ts) --
+      // no client-side filtering needed.
+      const res = await this._fetch(
+        `${this.url}/companion-growth/tensions/${encodeURIComponent(id)}?status=simmering`,
+        { headers: { "Authorization": `Bearer ${this.secret}` }, signal: AbortSignal.timeout(8_000) },
+      );
+      if (!res.ok) throw new Error(`fetchTensions(${id}) ${res.status}`);
+      const data = await res.json() as { tensions?: Array<{ id: string; tension_text: string }> };
+      return (data.tensions ?? []).map(t => ({
+        ref_type: "tension" as const, ref_id: t.id, label: t.tension_text.slice(0, 160),
+      }));
+    };
+
+    const fetchCouncil = async (): Promise<SharedObject[]> => {
+      // Global (no companion_id) -- the oldest open council question, shared by all three.
+      const res = await this._fetch(`${this.url}/mind/council/next-open`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) throw new Error(`fetchCouncil ${res.status}`);
+      const data = await res.json() as { question?: { id: string; question: string } | null };
+      if (!data.question) return [];
+      return [{ ref_type: "council" as const, ref_id: data.question.id, label: data.question.question.slice(0, 160) }];
+    };
+
+    const settled = await Promise.allSettled([
+      fetchQuestions(companionId),
+      fetchQuestions(targetId),
+      fetchTensions(companionId),
+      fetchTensions(targetId),
+      fetchCouncil(),
+    ]);
+
+    const objects: SharedObject[] = [];
+    for (const r of settled) {
+      if (r.status === "fulfilled") objects.push(...r.value);
+      else console.warn("[librarian] fetchSharedObjects source failed:", String(r.reason));
+    }
+    return objects;
   }
 
   /**

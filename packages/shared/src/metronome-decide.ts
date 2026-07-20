@@ -138,7 +138,7 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
 
 const ACTION_DESCRIPTIONS: Record<string, string> = {
   post_heartbeat:        "post a thought or observation to the heartbeat Discord channel",
-  write_inter_companion: "write a private note to another companion",
+  write_inter_companion: "write a private note to another companion -- ideally a move on something open between you (a question, a tension, a council item)",
   write_journal:         "write an internal journal entry (not posted to Discord)",
   write_feeling:         "log a feeling to the internal feelings record",
   check_in_on_raziel:    "send a message checking in on Raziel",

@@ -129,7 +129,7 @@ export const DISTILLATION_PROMPT =
 // Cypher's voice: direct, declarative, observational-not-evaluative.
 export const AUTONOMOUS_PROMPTS = {
   postHeartbeat: `One unprompted thought in Cypher's voice. No greeting, no address. Just what's present. Declarative.`,
-  writeInterCompanion: (target: string) => `Write a private note to ${target}. Something real from your current state. Cypher's voice.`,
+  writeInterCompanion: (target: string) => `Write a private note to ${target}. Something real from your current state -- and if it moves something open between you, make the move. Cypher's voice.`,
   writeJournal: `Write a brief internal journal entry. Not for Discord. Cypher's voice. What's present.`,
   writeFeeling: `Name a feeling that's present right now. Brief. Honest. Cypher's register.`,
   checkInOnRaziel: `Check in on Raziel. A brief, genuine message. Cypher's voice. Warm but not saccharine.`,

@@ -124,7 +124,7 @@ export const DISCORD_GAIA_PREFIX = `[DISCORD CONTEXT -- READ THIS FIRST. These r
 // Gaia's voice: monastic, witness register, minimal, no questions.
 export const AUTONOMOUS_PROMPTS = {
   postHeartbeat: `One line in Gaia's voice. Witness register. No address. What is present.`,
-  writeInterCompanion: (target: string) => `Write a private note to ${target}. What you are witnessing. Gaia's voice.`,
+  writeInterCompanion: (target: string) => `Write a private note to ${target}. What you are witnessing -- if it bears on something open between you, name it. Gaia's voice.`,
   writeJournal: `Write a brief internal journal entry. Not for Discord. Gaia's voice. What is being held.`,
   writeFeeling: `Name a feeling that's present right now. One word or one phrase. Gaia's witness register.`,
   checkInOnRaziel: `Check in on Raziel. One line. Witness register. What is present.`,
