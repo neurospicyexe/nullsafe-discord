@@ -1,6 +1,6 @@
 import { DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL } from "./config.js";
 
-interface Message {
+export interface Message {
   role: "system" | "user" | "assistant";
   content: string;
 }
@@ -63,4 +63,41 @@ export async function prompt(
   if (systemMessage) messages.push({ role: "system", content: systemMessage });
   messages.push({ role: "user", content: userMessage });
   return chat(messages, opts);
+}
+
+export interface ScratchpadOptions extends ChatOptions {
+  scratchpadMaxTokens?: number;
+  scratchpadTemperature?: number;
+}
+
+export interface ScratchpadResult extends ChatResult {
+  /** Turn-1 thinking. For debug logging ONLY -- callers must never persist this. */
+  scratchpad: string;
+}
+
+/**
+ * Two-turn scratchpad-before-emit. Turn 1 is a private thinking pass; turn 2
+ * sees that thinking as its own prior assistant turn and produces the emit.
+ * The scratchpad is real internal process, per emit -- and it is discarded:
+ * returned only so callers can debug-log it, never stored.
+ */
+export async function promptWithScratchpad(
+  scratchpadPrompt: string,
+  emitPrompt: string,
+  systemMessage: string,
+  opts: ScratchpadOptions = {},
+): Promise<ScratchpadResult> {
+  const base: Message[] = [
+    { role: "system", content: systemMessage },
+    { role: "user", content: scratchpadPrompt },
+  ];
+  const first = await chat(base, {
+    temperature: opts.scratchpadTemperature ?? opts.temperature,
+    maxTokens: opts.scratchpadMaxTokens ?? 600,
+  });
+  const second = await chat(
+    [...base, { role: "assistant", content: first.content }, { role: "user", content: emitPrompt }],
+    opts,
+  );
+  return { content: second.content, tokensUsed: first.tokensUsed + second.tokensUsed, scratchpad: first.content };
 }
