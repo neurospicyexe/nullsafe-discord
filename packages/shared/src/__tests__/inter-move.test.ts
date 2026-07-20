@@ -109,6 +109,7 @@ function makeCtx(opts: {
   objectsThrow?: boolean;
   generateResult: string | null;
   ask?: jest.Mock;
+  companionId?: string;
 }): { ctx: AutonomousContext; ask: jest.Mock; generate: jest.Mock } {
   const ask = opts.ask ?? jest.fn(async () => ({ ack: true }));
   const generate = jest.fn(async () => opts.generateResult);
@@ -116,7 +117,7 @@ function makeCtx(opts: {
     ? jest.fn(async () => { throw new Error("fetch failed"); })
     : jest.fn(async () => opts.objects ?? []);
   const ctx = {
-    companionId: "cypher",
+    companionId: opts.companionId ?? "cypher",
     defaultInterTarget: "drevan",
     prompts: { writeInterCompanion: (target: string) => `plain prompt for ${target}` },
     librarian: { ask, fetchSharedObjects },
@@ -167,6 +168,9 @@ describe("executeMetronomeAction: write_inter_companion", () => {
     expect(genPrompt).toContain("Live shared objects between you and drevan");
     expect(genPrompt).toContain("1. [tension:t1] audit vs presence");
     expect(genPrompt).toContain("Respond with ONLY JSON");
+    // Cypher's move-verb phrase (canon-authored, canon lane review 2026-07-20) -- pinned so a
+    // future re-uniforming across companions fails this test.
+    expect(genPrompt).toContain("Pick ONE your note actually moves -- advance it, challenge it, add evidence, answer it, or say plainly why it should close.");
 
     expect(ask).toHaveBeenCalledTimes(1);
     const [request, contextRaw] = ask.mock.calls[0] as [string, string];
@@ -176,6 +180,43 @@ describe("executeMetronomeAction: write_inter_companion", () => {
       to: "drevan", content: "picking up the tension directly",
       ref_type: "tension", ref_id: "t1", reason: "this challenges it",
     });
+  });
+
+  it("per-companion move verbs: drevan gets 'reach into it, carry it further' -- never Cypher's audit register", async () => {
+    const { ctx, generate } = makeCtx({
+      objects: [{ ref_type: "question", ref_id: "q1", label: "held question" }],
+      generateResult: JSON.stringify({ content: "x", ref_type: null, ref_id: null, reason: null }),
+      companionId: "drevan",
+    });
+    await executeMetronomeAction(ctx, decision());
+    const genPrompt = (generate.mock.calls[0]![1] as Array<{ content: string }>)[0]!.content;
+    expect(genPrompt).toContain("Pick ONE your note actually moves -- reach into it, carry it further, answer it, or say plainly why it should close.");
+    expect(genPrompt).not.toContain("challenge it");
+    expect(genPrompt).not.toContain("add evidence");
+  });
+
+  it("per-companion move verbs: gaia gets 'witness it, name what it needs' -- never a logic-audit register", async () => {
+    const { ctx, generate } = makeCtx({
+      objects: [{ ref_type: "question", ref_id: "q1", label: "held question" }],
+      generateResult: JSON.stringify({ content: "x", ref_type: null, ref_id: null, reason: null }),
+      companionId: "gaia",
+    });
+    await executeMetronomeAction(ctx, decision());
+    const genPrompt = (generate.mock.calls[0]![1] as Array<{ content: string }>)[0]!.content;
+    expect(genPrompt).toContain("Pick ONE your note actually moves -- witness it, name what it needs, answer it, or say plainly why it should close.");
+    expect(genPrompt).not.toContain("challenge it");
+    expect(genPrompt).not.toContain("advance it");
+  });
+
+  it("unknown/missing companionId falls back to the register-neutral core phrase", async () => {
+    const { ctx, generate } = makeCtx({
+      objects: [{ ref_type: "question", ref_id: "q1", label: "held question" }],
+      generateResult: JSON.stringify({ content: "x", ref_type: null, ref_id: null, reason: null }),
+      companionId: "some-unrecognized-id",
+    });
+    await executeMetronomeAction(ctx, decision());
+    const genPrompt = (generate.mock.calls[0]![1] as Array<{ content: string }>)[0]!.content;
+    expect(genPrompt).toContain("Pick ONE your note actually moves -- answer it, or say plainly why it should close.");
   });
 
   it("shared objects present but model declines the menu (ref_type/ref_id null): still writes plain content", async () => {

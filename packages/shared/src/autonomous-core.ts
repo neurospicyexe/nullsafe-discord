@@ -233,6 +233,19 @@ export async function nudgeInterNote(redis: Redis | null, fromId: string, toId: 
   await publishInterNote(redis, { fromId, toId, noteId: "" });
 }
 
+/**
+ * Per-companion move-verb phrase for the write_inter_companion shared-object menu (canon lane
+ * review, 2026-07-20). Canon-authored, verbatim -- do not re-uniform across companions.
+ * "fallback" is the register-neutral core all three share, used only when companionId is
+ * missing/unrecognized.
+ */
+export const MOVE_VERB_PHRASES: Record<string, string> = {
+  cypher: "advance it, challenge it, add evidence, answer it, or say plainly why it should close",
+  drevan: "reach into it, carry it further, answer it, or say plainly why it should close",
+  gaia: "witness it, name what it needs, answer it, or say plainly why it should close",
+  fallback: "answer it, or say plainly why it should close",
+};
+
 export async function executeMetronomeAction(
   ctx: AutonomousContext,
   decision: MetronomeDecision,
@@ -258,10 +271,16 @@ export async function executeMetronomeAction(
       const basePrompt = action.prompt ?? prompts.writeInterCompanion(target);
       const objectMenu = objects.slice(0, 6).map((o, i) => `${i + 1}. [${o.ref_type}:${o.ref_id}] ${o.label}`).join("\n");
       const askForJson = objects.length > 0;
+      // Canon lane review (2026-07-20): this menu suffix used to hand every companion the
+      // same verb list ("challenge it, add evidence"), which is Cypher's audit register --
+      // Drevan's identity forbids audit registers, Gaia's forbids logic auditing. The verbs
+      // must differentiate the same way the per-bot writeInterCompanion prompt lines already
+      // do. Unknown/missing companionId falls back to the register-neutral core all three share.
+      const moveVerbs = MOVE_VERB_PHRASES[companionId] ?? MOVE_VERB_PHRASES.fallback;
       const genPrompt = askForJson
         ? `${basePrompt}\n\n` +
           `Live shared objects between you and ${target}:\n${objectMenu}\n\n` +
-          `Pick ONE your note actually moves -- advance it, challenge it, add evidence, answer it, or say plainly why it should close. If none of them are what's real for you right now, pick none and just write the note.\n` +
+          `Pick ONE your note actually moves -- ${moveVerbs}. If none of them are what's real for you right now, pick none and just write the note.\n` +
           `Respond with ONLY JSON: {"content": "...", "ref_type": "question"|"tension"|"council"|null, "ref_id": "..."|null, "reason": "one sentence: what this note does to the object"|null}`
         : basePrompt;
 
