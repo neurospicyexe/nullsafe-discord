@@ -1,4 +1,4 @@
-import { prompt } from "../deepseek.js";
+import { promptWithScratchpad } from "../deepseek.js";
 import { appendLog } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList } from "../parsers.js";
@@ -127,6 +127,58 @@ export function buildSynthesisBlocks(ctx: PipelineContext): { contextBlock: stri
   };
 }
 
+/**
+ * Turn-1 prompt: a private scratchpad the model uses to think before it writes
+ * anything durable. Never persisted -- see promptWithScratchpad in deepseek.ts
+ * and the length-only appendLog call in runSynthesize below.
+ */
+export function buildScratchpadPrompt(ctx: PipelineContext, contextBlock: string): string {
+  return `${contextBlock}
+
+Before you write anything durable: think. This is a private scratchpad -- it will be discarded, nobody reads it, it is not the journal entry.
+
+Work through, in plain prose, briefly:
+1. What did you actually find in this exploration, stripped of performance?
+2. Which of your current beliefs does it touch -- confirm, contradict, extend? Name the belief.
+3. Which open loop (if any) does it move?
+4. What would be genuinely NEW to say, given your recent entries? If the honest answer is "nothing new", say that plainly.
+5. What is the one thing worth keeping?`;
+}
+
+/**
+ * Turn-2 prompt: the actual growth journal emit, informed by (but not
+ * containing) the turn-1 scratchpad thinking.
+ */
+export function buildEmitPrompt(name: string): string {
+  return `Now write the growth journal entry, keeping only what survived your scratchpad -- if question 4 came up empty, novelty MUST be "recurring" and the entry should be short or reconsider whether to deepen instead.
+
+Write in your authentic voice. This is for yourself -- not a report to anyone. Write as ${name} would actually write.
+
+Required structure:
+  - 1 to 3 paragraphs of content. Concrete, specific, grounded.
+  - At least 2 evidence quotes -- short verbatim phrases (under 200 chars each)
+    drawn from the exploration corpus, the peer summary, or your own active patterns.
+  - Cite ids of any peer or own rows you are prehending (the peer summary lines end with "(id: <uuid>)").
+  - Choose novelty: "new" | "deepening" | "recurring" -- be honest; your scratchpad already knows.
+  - If this resonates with what a peer wrote, name it in triad_signal (one sentence).
+
+Respond with ONLY valid JSON in this exact shape:
+{
+  "entry_type": "learning" | "insight" | "connection" | "question",
+  "content": "your journal entry here (1-3 paragraphs)",
+  "tags": ["tag1", "tag2"],
+  "evidence": [
+    {"quote": "verbatim quote", "source_url": "https://...", "source_companion": null},
+    {"quote": "verbatim quote", "source_id": "uuid-of-peer-row", "source_companion": "drevan"}
+  ],
+  "prehended_ids": ["uuid1", "uuid2"],
+  "novelty": "new" | "deepening" | "recurring",
+  "triad_signal": "one sentence or null"
+}
+
+No markdown fences. No preamble. Just the JSON object.`;
+}
+
 export async function runSynthesize(ctx: PipelineContext): Promise<void> {
   if (!ctx.explorationSummary && ctx.runType !== "reflection") {
     await appendLog(ctx.runId, "synthesize:skip", "no exploration to synthesize");
@@ -151,44 +203,17 @@ ${identitySnippet}
 ${orientBlock}
 Voice directive: ${voiceReminder}`;
 
-  const userMessage = `${contextBlock}
-
-Write a growth journal entry in your authentic voice. This is for yourself -- not a report to anyone. Write as ${name} would actually write: in your voice, your register, your way of making meaning.
-
-Required structure:
-  - 1 to 3 paragraphs of content. Concrete, specific, grounded.
-  - At least 2 evidence quotes -- short verbatim phrases (under 200 chars each)
-    drawn from the exploration corpus, the peer summary above, or your own
-    active patterns. Each quote should anchor a specific claim in the content.
-  - Cite ids of any peer or own rows you are prehending (drawing on, building
-    from, echoing, contradicting). The peer summary lines end with "(id: <uuid>)".
-    Skip this only if you genuinely drew on nothing prior -- which should be rare.
-  - Choose novelty: "new" (this opens unprecedented territory), "deepening"
-    (this adds a layer to an arc you've been on), or "recurring" (this restates
-    a pattern you already know -- often valuable, but be honest about it).
-  - If this resonates with what a peer wrote, name the resonance in
-    triad_signal -- one sentence about what is shared across companions.
-
-Respond with ONLY valid JSON in this exact shape:
-{
-  "entry_type": "learning" | "insight" | "connection" | "question",
-  "content": "your journal entry here (1-3 paragraphs)",
-  "tags": ["tag1", "tag2"],
-  "evidence": [
-    {"quote": "verbatim quote", "source_url": "https://...", "source_companion": null},
-    {"quote": "verbatim quote", "source_id": "uuid-of-peer-row", "source_companion": "drevan"}
-  ],
-  "prehended_ids": ["uuid1", "uuid2"],
-  "novelty": "new" | "deepening" | "recurring",
-  "triad_signal": "one sentence or null"
-}
-
-No markdown fences. No preamble. Just the JSON object.`;
-
   try {
     const temperature = Math.round((0.75 + COMPANION_TEMP_OFFSET[ctx.companionId]) * 100) / 100;
-    const result = await prompt(userMessage, systemMessage, { temperature, maxTokens: 1100 });
+    const result = await promptWithScratchpad(
+      buildScratchpadPrompt(ctx, contextBlock),
+      buildEmitPrompt(name),
+      systemMessage,
+      { temperature, maxTokens: 1100 },
+    );
     ctx.tokensUsed += result.tokensUsed;
+    // NOTE: log the LENGTH only -- the scratchpad content itself is never persisted.
+    await appendLog(ctx.runId, "synthesize:scratchpad", `(${result.scratchpad.length} chars, discarded)`);
 
     const raw = result.content.trim();
     let parsed: {

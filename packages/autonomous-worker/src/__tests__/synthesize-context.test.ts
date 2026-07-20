@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSynthesisBlocks } from "../phases/synthesize.js";
+import { buildSynthesisBlocks, buildScratchpadPrompt, buildEmitPrompt } from "../phases/synthesize.js";
 
 const baseCtx = {
   companionId: "cypher", identityText: "id", orientSummary: "", explorationSummary: "explored X",
@@ -18,5 +18,21 @@ describe("synthesis context blocks", () => {
   it("labels beliefs with confirm/contradict/extend instruction", () => {
     const { contextBlock } = buildSynthesisBlocks(baseCtx);
     expect(contextBlock).toContain("confirm, contradict, or extend");
+  });
+});
+
+describe("synthesize scratchpad/emit prompts", () => {
+  it("scratchpad prompt asks the five questions and promises discard", () => {
+    const p = buildScratchpadPrompt(baseCtx, "CONTEXT");
+    expect(p).toContain("it will be discarded");
+    expect(p).toContain("genuinely NEW");
+    expect(p).toContain("Which open loop");
+  });
+
+  it("emit prompt keeps the strict JSON contract", () => {
+    const p = buildEmitPrompt("Cypher");
+    expect(p).toContain('"entry_type"');
+    expect(p).toContain("No markdown fences");
+    expect(p).toContain("survived");
   });
 });
