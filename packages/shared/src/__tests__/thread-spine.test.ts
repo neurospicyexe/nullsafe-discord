@@ -2,6 +2,7 @@ import { jest, describe, it, expect, afterEach } from "@jest/globals";
 import type { LibrarianClient, ConvoActiveDto } from "../librarian.js";
 import {
   isThreadsEnabled, isThreadTracked, gist, ensureThread, buildSpineBlock, parseLandMarker,
+  computeReplyRef,
 } from "../thread-spine.js";
 
 describe("isThreadTracked", () => {
@@ -138,6 +139,42 @@ describe("parseLandMarker", () => {
     const result = parseLandMarker(response);
     expect(result.resolution).toBeNull();
     expect(result.cleaned).toBe(response);
+  });
+});
+
+describe("computeReplyRef", () => {
+  it("returns the message id for an owner message when a spine is active", () => {
+    expect(computeReplyRef(false, true, "m1")).toBe("m1");
+  });
+
+  it("returns undefined when neither the sender is a companion bot nor a spine is active", () => {
+    expect(computeReplyRef(false, false, "m1")).toBeUndefined();
+  });
+
+  it("returns the message id for a companion-bot sender regardless of spine state", () => {
+    expect(computeReplyRef(true, false, "m1")).toBe("m1");
+    expect(computeReplyRef(true, true, "m1")).toBe("m1");
+  });
+});
+
+describe("parseLandMarker composition with send order", () => {
+  it("never leaks the [LANDS: ...] marker into the text that would be sent, across a multi-line response", () => {
+    const response = [
+      "First line of the reply.",
+      "Second line elaborating the point.",
+      "[LANDS: we settled on the migration path]",
+      "",
+      "A closing line after the marker.",
+    ].join("\n");
+
+    const { cleaned, resolution } = parseLandMarker(response);
+    const wouldBeSent = cleaned; // exactly what sendLong would receive as `response`
+
+    expect(resolution).toBe("we settled on the migration path");
+    expect(wouldBeSent).not.toContain("[LANDS:");
+    expect(wouldBeSent).not.toContain("]");
+    expect(wouldBeSent).toContain("First line of the reply.");
+    expect(wouldBeSent).toContain("A closing line after the marker.");
   });
 });
 

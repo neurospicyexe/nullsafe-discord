@@ -11,6 +11,11 @@
 // Tasks 10-12 consume this surface to wire threads into the live message-handling path.
 
 import { isTriadCommons } from "./channel-config.js";
+// autonomous-core sits on the far side of a latent import cycle with the barrel
+// (thread-spine -> autonomous-core -> index.ts barrel). MOVE_VERB_PHRASES itself is a
+// plain top-level export and safe to import, but it must only be READ inside function
+// bodies (as buildSpineBlock does below), never evaluated at this module's top level --
+// that's the shape that would actually trip the cycle. (Reviewer follow-up from Task 9.)
 import { MOVE_VERB_PHRASES } from "./autonomous-core.js";
 import type { LibrarianClient, ConvoActiveDto } from "./librarian.js";
 
@@ -86,4 +91,13 @@ export function buildSpineBlock(active: ConvoActiveDto, companionId: string): st
     `State: ${t.state}. You may advance this, hand it to a sibling, or -- if it has genuinely landed -- end a line with [LANDS: one-line resolution]. If this exchange is presence rather than work, none of this applies; let it be.`,
   );
   return lines.join("\n");
+}
+
+/** Pure decision for whether a reply should carry a Discord reply reference (task 10).
+ *  Companion-to-companion replies always reference (unchanged rationale: the sibling's
+ *  reply-to-me detector keys on message.reference, or the pingpong dies after one hop).
+ *  Tracked channels now ALSO reply-reference human/owner messages once a spine thread is
+ *  active, giving Raziel visible threading in the transcript. */
+export function computeReplyRef(isCompanionBot: boolean, spineActive: boolean, messageId: string): string | undefined {
+  return (isCompanionBot || spineActive) ? messageId : undefined;
 }

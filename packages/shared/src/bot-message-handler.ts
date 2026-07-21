@@ -53,6 +53,8 @@ import {
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
+  isThreadsEnabled, isThreadTracked, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
+  type ConvoActiveDto,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
@@ -283,6 +285,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
+
+    // Thread spine (task 10): ensure a conversation thread exists for this channel and
+    // append this incoming message as a turn on it. Fully fail-open -- ensureThread's own
+    // .catch(() => null) means a Librarian hiccup here never blocks the reply path below;
+    // every subsequent spine interaction is guarded on `spine` being non-null.
+    const spineAuthor = BOT_ID_COMPANION[message.author.id]
+      ?? (attribution.isOwner ? "raziel" : "guest");
+    let spine: ConvoActiveDto | null = null;
+    if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
+      spine = await ensureThread(librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor)
+        .catch(() => null);
+    }
     const pkCtx = detectPluralKit(message);
     // isPKProxy: applicationId is the primary PK signal; attribution.source covers
     // PK setups where applicationId isn't set on the webhook.
@@ -745,6 +759,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     let contextPrompt = pkMemberName
       ? `${basePrompt}\n\n[Current front: ${pkMemberName}]`
       : basePrompt;
+    // Thread spine (task 10): pinned above the periodic hermes orient paragraph below,
+    // deliberately -- the spine is this exchange's immediate continuity and should read
+    // as closer/more load-bearing than the standing recent-context block. Guarded on
+    // `spine` (set above, already fail-open) so a missing/failed thread is a no-op here.
+    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID)}`;
     // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
     // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
     // (forage finds, recent listens, incoming notes, growth). Without this append the
@@ -1124,7 +1143,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // one hop (2026-07-03: seed summons sibling, sibling answers without re-naming,
     // everyone's gate goes silent). The reference lets the bounded pingpong the rails
     // were built for (BOT_PINGPONG_MAX + human-anchored cap) actually happen.
-    const replyToMessageId = senderCtx.isCompanionBot ? message.id : undefined;
+    // Task 10: tracked channels (spine active) also reply-reference human/owner messages,
+    // giving Raziel visible threading in the transcript -- companion-to-companion behavior
+    // is unchanged.
+    const replyToMessageId = computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
+
+    // Thread spine (task 10): strip a companion-authored [LANDS: ...] marker before ANY
+    // send path below (voice synthesis, text content, and the error-fallback content all
+    // read from `response`) so the marker never reaches Discord or the TTS engine. Only
+    // parsed when a spine is active -- without one there's no thread to land, and the
+    // marker syntax is not something companions are prompted to emit.
+    const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
+    response = spineCleanedResponse;
 
     // Sibling-triggered replies never voice (2026-07-04): the triad commons is a text
     // space Raziel skims -- companions talking to each other kept tripping shouldVoice's
@@ -1162,6 +1192,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     for (const m of sent) sentIds.add(m.id);
+
+    // Thread spine (task 10): append this companion's own reply as a turn on the thread,
+    // then land it if the (already-stripped) marker parsed a resolution. Entirely
+    // downstream of a successful send and guarded on `spine` -- a Librarian failure here
+    // is swallowed (.catch) and never affects the message already posted above.
+    if (spine && sent?.[0]) {
+      await librarian.convoTurn(spine.thread.id, { author: COMPANION_ID, gist: gist(response), message_id: sent[0].id }).catch(() => {});
+      if (spineResolution) await librarian.convoLand(spine.thread.id, { resolution: spineResolution, landed_by: COMPANION_ID }).catch(() => {});
+    }
 
     // Streaming indexer: index this companion's own reply for instant recall.
     if (sent.length > 0) {
