@@ -203,6 +203,39 @@ export interface MessageHandlerDeps {
   AUDIT_MODE_INJECTION?: string;
 }
 
+/**
+ * Witnessing is Gaia's lane only (Raziel, 2026-07-21). Before this gate all three bots ran
+ * the same passive-witness branch below, so a companion message seen by two non-responding
+ * bots in an inter_companion channel produced two gaia_witness rows for the same event.
+ */
+export function shouldWriteWitness(companionId: CompanionId): boolean {
+  return companionId === "gaia";
+}
+
+/**
+ * Cold-start STM seed (bot restart, no DB row yet): rebuild short-term history from the
+ * already-fetched Discord channel window. Must mirror the warm/live-path convention (see
+ * inference.ts's `[authorName]: ` prefixing) where every INBOUND message -- human or a
+ * sibling companion bot -- is role:"user" with authorName set, and only THIS bot's own
+ * prior messages are role:"assistant". Mapping every bot-authored message (own OR sibling)
+ * to "assistant" -- the original bug -- strips the "[Name]" prefix from sibling turns, so
+ * after a restart the model reads a sibling companion's words as its own prior output.
+ */
+export function mapColdStartHistory(
+  messages: Array<{ authorId: string; username: string; content: string; createdTimestamp: number }>,
+  ownUserId: string | undefined,
+): Array<{ role: "user" | "assistant"; content: string; authorName?: string; timestamp: number }> {
+  return messages.map(m => {
+    const isOwnMessage = ownUserId !== undefined && m.authorId === ownUserId;
+    return {
+      role: (isOwnMessage ? "assistant" : "user") as "user" | "assistant",
+      content: m.content,
+      authorName: isOwnMessage ? undefined : m.username,
+      timestamp: m.createdTimestamp,
+    };
+  });
+}
+
 export async function handleMessage(message: Message, deps: MessageHandlerDeps): Promise<void> {
   const {
     client, cfg, brainClient, voiceClient, redis, librarian,
@@ -639,10 +672,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (!relevant) return;
     } else if (!brainHandlesInterCompanion && !isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
-      // write a passive witness entry so Halseth has continuity context.
-      if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion")) {
+      // write a passive witness entry so Halseth has continuity context. Witnessing is
+      // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
+      // two non-responding bots on the same message produced two duplicate witness rows.
+      if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion") && shouldWriteWitness(COMPANION_ID)) {
         const senderName = message.author.username;
-        const snippet = effectiveContent.slice(0, 120);
+        const snippet = effectiveContent.slice(0, 500);
         writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
           await librarian.witnessLog(
             `[witnessed, did not respond] ${senderName}: ${snippet}`,
@@ -707,12 +742,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     // Lazy load STM from DB on first message to this channel (fail-silent), using already-fetched Discord history as fallback.
     await stmStore.ensureLoaded(message.channelId, async () => {
-      return fetchedMessages.map(m => ({
-        role: (!m.author.bot ? "user" : "assistant") as "user" | "assistant",
-        content: m.content,
-        authorName: m.author.username,
-        timestamp: m.createdTimestamp,
-      }));
+      return mapColdStartHistory(
+        fetchedMessages.map(m => ({ authorId: m.author.id, username: m.author.username, content: m.content, createdTimestamp: m.createdTimestamp })),
+        client.user?.id,
+      );
     });
 
     const memberLabel = pkMemberName
