@@ -400,7 +400,15 @@ export async function executeMetronomeAction(
       } catch { /* non-fatal -- ask proceeds without the guard */ }
       const prompt = (action.prompt ?? prompts.askQuestion) + heldBlock;
       const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "ask_question");
+      if (msg) {
+        await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "ask_question");
+        // Track this live ask in companion_questions (thinking-quality fix B, 2026-07-21):
+        // until now this action spoke in Discord but never recorded the question, so it had
+        // no dedup, no Hearth answer box, and no answer-loop closure. librarian.postQuestion
+        // is non-throwing (fire-safe) -- the Discord send above has already happened and
+        // must not be undone by a tracking failure.
+        await librarian.postQuestion(msg, "metronome ask_question");
+      }
       break;
     }
     case "offer_presence": {

@@ -49,4 +49,42 @@ describe("pickCoverageQuestion", () => {
     const q = pickCoverageQuestion({ fresh: [], stale: ["health"], empty: ["anchors"] });
     expect(q).toContain("health");
   });
+
+  it("with no coveredTexts, behaves exactly as before (back-compat default)", () => {
+    const q = pickCoverageQuestion({ fresh: [], stale: ["health", "work"], empty: [] });
+    expect(q).toContain("health");
+  });
+
+  it("skips a stale domain already covered by an open question", () => {
+    const q = pickCoverageQuestion(
+      { fresh: [], stale: ["health", "work"], empty: [] },
+      ["I hold almost nothing recent about your health arc -- my last note there is over a month old. Deliberate, or did I stop looking?"],
+    );
+    expect(q).toContain("work");
+    expect(q).not.toContain("health arc");
+  });
+
+  it("skips a stale domain already covered by a recently-answered question", () => {
+    const q = pickCoverageQuestion(
+      { fresh: [], stale: ["health", "work"], empty: [] },
+      ["Deliberate about the health thing, or did you stop looking?"],
+    );
+    expect(q).toContain("work");
+  });
+
+  it("returns null when every stale domain is already covered", () => {
+    const q = pickCoverageQuestion(
+      { fresh: [], stale: ["health", "work"], empty: [] },
+      ["something about health", "something about work"],
+    );
+    expect(q).toBeNull();
+  });
+
+  it("match is case-insensitive", () => {
+    const q = pickCoverageQuestion(
+      { fresh: [], stale: ["health"], empty: [] },
+      ["HEALTH is already covered"],
+    );
+    expect(q).toBeNull();
+  });
 });

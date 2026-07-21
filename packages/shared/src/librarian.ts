@@ -253,6 +253,47 @@ export class LibrarianClient {
     return this.askWrite("witness log", "witness log", JSON.stringify({ entry, channel }));
   }
 
+  /**
+   * Record a question asked live in Discord (thinking-quality fix B, 2026-07-21): the
+   * `ask_question` metronome action (autonomous-core.ts) generated a message and posted
+   * it to Discord via sendAutonomousMessage, but never wrote it to companion_questions --
+   * so a live ask had no dedup, no Hearth answer box, and no answer-loop closure. Only
+   * the signal-audit coverage path (autonomous-worker halseth-client.ts postQuestion)
+   * was ever tracked. Direct REST, same url/secret this class already uses for its other
+   * non-MCP writes (stmWrite, writeWmNote, etc.) -- `source` is always "autonomous" here.
+   *
+   * Non-throwing: halseth's dedup on this endpoint returns 409 both for the open-question
+   * cap AND (in a parallel tightening) a byte-identical duplicate across any status --
+   * both are normal, quiet outcomes here, not failures. Any other non-2xx is logged and
+   * swallowed. Fire-safe by design: this is called after the Discord message has already
+   * been sent, and must never retroactively fail that send.
+   */
+  async postQuestion(question: string, context?: string): Promise<void> {
+    const text = question.trim();
+    if (!text) return;
+    try {
+      const res = await this._fetch(`${this.url}/mind/questions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({
+          companion_id: this.companionId,
+          question: text.slice(0, 600),
+          ...(context ? { context: context.slice(0, 1000) } : {}),
+          source: "autonomous",
+        }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok && res.status !== 409) {
+        console.warn(`[librarian] postQuestion ${res.status}`);
+      }
+    } catch (e) {
+      console.warn("[librarian] postQuestion failed:", String(e));
+    }
+  }
+
   // ── Sanctioned drift lane (halseth mig 0087/0093) ─────────────────────────
   // "i'm becoming" is the Librarian fast-path trigger for drift_open; the executor
   // reads drift_text from context. Opening is owner-only server-side.

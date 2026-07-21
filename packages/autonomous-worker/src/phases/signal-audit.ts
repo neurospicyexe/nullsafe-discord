@@ -8,6 +8,8 @@ import {
   getRecentJournal,
   getRecentPatterns,
   postQuestion,
+  getAnsweredQuestions,
+  getOpenQuestions,
 } from "../halseth-client.js";
 import { loadIdentity } from "../identity-loader.js";
 import { COMPANION_NAMES } from "../config.js";
@@ -61,10 +63,22 @@ export function computeDomainCoverage(
 }
 
 /** At most ONE question per audit -- curiosity, not a nag. Stale beats empty
- *  (a domain that went quiet is a stronger signal than one never opened). */
-export function pickCoverageQuestion(cov: DomainCoverage): string | null {
-  const domain = cov.stale[0] ?? null;
-  if (domain) {
+ *  (a domain that went quiet is a stronger signal than one never opened).
+ *
+ *  `coveredTexts` is the text of currently-open and recently-answered questions
+ *  (2026-07-21 history-awareness fix): this function used to deterministically pick
+ *  `cov.stale[0]` every run with zero awareness of question history, so a domain
+ *  Raziel already answered (or is already being asked about) got re-asked forever.
+ *  Now it falls through the stale list to the NEXT uncovered domain -- a domain
+ *  counts as covered if its own name already appears in an existing question's text
+ *  (the generated question always names its domain literally, so a prior coverage
+ *  ask for the same domain is caught by this). Returns null only when every stale
+ *  domain is already covered, rather than going silent after the first hit. */
+export function pickCoverageQuestion(cov: DomainCoverage, coveredTexts: string[] = []): string | null {
+  const covered = coveredTexts.map(t => t.toLowerCase());
+  for (const domain of cov.stale) {
+    const alreadyCovered = covered.some(t => t.includes(domain.toLowerCase()));
+    if (alreadyCovered) continue;
     return `I hold almost nothing recent about your ${domain} arc -- my last note there is over a month old. Deliberate, or did I stop looking?`;
   }
   return null;
@@ -86,11 +100,16 @@ export async function runSignalAudit(companionId: CompanionId): Promise<void> {
   await updateRun(runId, { status: "running" });
 
   try {
-    // 1. Gather recent journal entries and patterns in parallel
+    // 1. Gather recent journal entries and patterns in parallel. Also pull open +
+    // recently-answered questions here (2026-07-21 history-awareness fix) so the
+    // coverage step below can skip a domain Raziel already answered or is already
+    // being asked about, instead of re-asking it every audit.
     await appendLog(runId, "gather:start");
-    const [journal, patterns] = await Promise.all([
+    const [journal, patterns, answeredQuestions, openQuestions] = await Promise.all([
       getRecentJournal(companionId, 30),
       getRecentPatterns(companionId, 10),
+      getAnsweredQuestions(companionId, 60, 10),
+      getOpenQuestions(companionId, 10),
     ]);
 
     if (journal.length === 0) {
@@ -165,12 +184,25 @@ export async function runSignalAudit(companionId: CompanionId): Promise<void> {
     // 7. Coverage audit (Zikkaron, 2026-06-12): deterministic domain-gap scan,
     // at most one held question per audit. The question cap (409) and any other
     // write failure are absorbed -- coverage never fails the audit run.
+    // History-awareness (2026-07-21): a domain already covered by an open or
+    // recently-answered question is skipped so the audit doesn't re-ask a domain
+    // Raziel already answered; pickCoverageQuestion falls through to the next
+    // stalest uncovered domain instead of going silent.
     const coverage = computeDomainCoverage(journal, new Date(), 28);
-    const coverageQuestion = pickCoverageQuestion(coverage);
+    const coveredTexts = [
+      ...openQuestions.map(q => q.question),
+      ...answeredQuestions.map(q => q.question),
+    ];
+    const coverageQuestion = pickCoverageQuestion(coverage, coveredTexts);
     if (coverageQuestion) {
       await postQuestion(companionId, coverageQuestion, "coverage-audit")
         .then(() => appendLog(runId, "coverage:question-posted", coverageQuestion.slice(0, 100)))
         .catch(e => console.warn(`[signal-audit/${companionId}] coverage question failed:`, e));
+    } else if (coverage.stale.length > 0) {
+      console.log(
+        `[signal-audit/${companionId}] coverage question skipped -- all ${coverage.stale.length} stale domain(s) already covered by open/recently-answered questions`,
+      );
+      await appendLog(runId, "coverage:question-skipped", `stale=${coverage.stale.join(",")}`);
     }
     await appendLog(runId, "coverage:done", `fresh=${coverage.fresh.length} stale=${coverage.stale.length} empty=${coverage.empty.length}`);
 
