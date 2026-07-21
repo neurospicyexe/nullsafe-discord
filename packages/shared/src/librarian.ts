@@ -13,6 +13,24 @@ export interface SharedObject {
   label: string;
 }
 
+/**
+ * Conversation thread spine (2026-07-21, task 8): the durable row a live Discord
+ * exchange threads through so a companion can pick a conversation back up across
+ * turns instead of treating each message as stateless. Mirrors halseth's
+ * /mind/conversations* wire shape exactly -- no renaming at this boundary.
+ */
+export interface ConvoThreadDto {
+  id: string; channel_id: string; seed_text: string; seed_author: string;
+  ref_type: string | null; ref_id: string | null; ref_label: string | null;
+  state: string; turn_count: number; last_turn_at: string;
+}
+
+/** One entry in a thread's turn ledger -- who said what, gisted, and when. */
+export interface ConvoLedgerDto { author: string; gist: string; said_at: string; }
+
+/** convoActive() success shape: the active thread plus its ledger so far. */
+export interface ConvoActiveDto { thread: ConvoThreadDto; ledger: ConvoLedgerDto[]; }
+
 interface LibrarianOptions {
   url: string;
   secret: string;
@@ -1127,6 +1145,74 @@ export class LibrarianClient {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`logImpActivation ${res.status}`);
+  }
+
+  // ── Conversation thread spine (halseth /mind/conversations*, task 8) ───────
+  // Direct REST, not askWrite(): spine writes are best-effort infrastructure that
+  // threads a live exchange together, never companion-voiced content the Librarian
+  // NL layer needs to interpret. All four fail open/warn -- a dead spine degrades
+  // to stateless replies, it must never block or crash the live message path.
+
+  /** The channel's currently active thread + ledger so far, or null if none/on error. */
+  async convoActive(channelId: string): Promise<ConvoActiveDto | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations/active?channel_id=${encodeURIComponent(channelId)}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { thread: ConvoThreadDto | null; ledger?: ConvoLedgerDto[] };
+      return data.thread ? { thread: data.thread, ledger: data.ledger ?? [] } : null;
+    } catch { return null; }
+  }
+
+  /** Open (or resume, per halseth's own idempotency) a thread. null on any failure. */
+  async convoOpen(params: {
+    channel_id: string; seed_text: string; seed_author: string; seed_message_id?: string;
+    ref_type?: string; ref_id?: string; ref_label?: string;
+  }): Promise<ConvoThreadDto | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) { console.warn(`[librarian] convoOpen ${res.status}`); return null; }
+      const data = await res.json() as { thread: ConvoThreadDto };
+      return data.thread ?? null;
+    } catch (e) { console.warn("[librarian] convoOpen failed:", String(e)); return null; }
+  }
+
+  /**
+   * Append a turn to a thread's ledger. Fire-and-forget: warn-only on any failure,
+   * including 409 (thread already landed/faded mid-flight -- the exchange still
+   * happened, it just has nowhere left to file itself).
+   */
+  async convoTurn(threadId: string, params: { author: string; gist: string; message_id?: string }): Promise<void> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations/${encodeURIComponent(threadId)}/turns`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] convoTurn ${res.status}`);
+    } catch (e) { console.warn("[librarian] convoTurn failed:", String(e)); }
+  }
+
+  /** Land (resolve) a thread. Returns res.ok; false on any failure (network or non-2xx). */
+  async convoLand(threadId: string, params: { resolution: string; landed_by: string }): Promise<boolean> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations/${encodeURIComponent(threadId)}/land`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] convoLand ${res.status}`);
+      return res.ok;
+    } catch (e) { console.warn("[librarian] convoLand failed:", String(e)); return false; }
   }
 }
 
