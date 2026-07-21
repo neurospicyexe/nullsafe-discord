@@ -34,6 +34,7 @@ import {
 import { generateOutward } from "./outward.js";
 import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
+import { isThreadsEnabled } from "./thread-spine.js";
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
 export interface AutonomousPrompts {
@@ -343,7 +344,7 @@ export async function executeMetronomeAction(
           // must be configured. If a thread is already active in the commons, convoOpen returns it
           // unchanged (the note joins rather than steals) -- that is the intended invitational shape.
           const commonsChannel = process.env["TRIAD_COMMONS_CHANNEL_ID"];
-          if (ok && commonsChannel) {
+          if (ok && commonsChannel && isThreadsEnabled()) {
             const obj = ref_type && ref_id
               ? objects.find((o) => o.ref_type === ref_type && o.ref_id === ref_id)
               : undefined;

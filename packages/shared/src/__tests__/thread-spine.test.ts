@@ -1,9 +1,10 @@
-import { jest, describe, it, expect, afterEach } from "@jest/globals";
+import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import type { LibrarianClient, ConvoActiveDto } from "../librarian.js";
 import {
   isThreadsEnabled, isThreadTracked, gist, ensureThread, buildSpineBlock, parseLandMarker,
   computeReplyRef,
 } from "../thread-spine.js";
+import { ownEchoGated } from "../echo-guard.js";
 
 describe("isThreadTracked", () => {
   it("returns true for a commons entry (autonomous + inter_companion modes)", () => {
@@ -175,6 +176,60 @@ describe("parseLandMarker composition with send order", () => {
     expect(wouldBeSent).not.toContain("]");
     expect(wouldBeSent).toContain("First line of the reply.");
     expect(wouldBeSent).toContain("A closing line after the marker.");
+  });
+});
+
+describe("echo gate composition (2026-07-21 review): scores the cleaned text, not the raw marker-laden response", () => {
+  // Reproduces the exact composition bot-message-handler.ts now does: parseLandMarker
+  // runs BEFORE the echo gate, so `response` is already stripped by the time ownEchoGated
+  // sees it. The bug this guards against: scoring the RAW response (marker still
+  // attached) instead of the cleaned one. The marker's own text can carry vocabulary that
+  // happens to match the speaker's own prior turns even when the actual reply content is
+  // entirely new -- so scoring pre-strip would falsely self-loop-gate a genuinely fresh
+  // reply purely because of words trapped inside "[LANDS: ...]", which is itself never
+  // sent to Discord.
+  const ownPriorTurns = ["migration path solution rollback", "migration path solution rollback"];
+  // 8 repeats of one word neither in the pool nor a stopword -- a synthetic probe, not
+  // meant to read as real prose, chosen so the math is legible: it satisfies
+  // MIN_REPLY_WORDS on its own and shares zero vocabulary with ownPriorTurns.
+  const freshContent = "lantern lantern lantern lantern lantern lantern lantern lantern.";
+  const rawResponse = `${freshContent}\n[LANDS: migration path solution rollback migration path solution rollback migration path solution rollback migration path solution rollback]`;
+
+  // Pin the threshold explicitly rather than relying on SELF_LOOP_DEFAULT_THRESHOLD --
+  // the raw-response score (~0.57) sits close enough to the 0.55 default that a leaked
+  // SELF_LOOP_THRESHOLD from another test/env would otherwise make this flaky.
+  const THRESHOLD_KEY = "SELF_LOOP_THRESHOLD";
+  let prevThreshold: string | undefined;
+  beforeEach(() => {
+    prevThreshold = process.env[THRESHOLD_KEY];
+    process.env[THRESHOLD_KEY] = "0.55";
+  });
+  afterEach(() => {
+    if (prevThreshold === undefined) delete process.env[THRESHOLD_KEY];
+    else process.env[THRESHOLD_KEY] = prevThreshold;
+  });
+
+  it("the text handed to ownEchoGated equals parseLandMarker's cleaned output, not the raw response", () => {
+    const spineActive = true; // spine !== null in the real handler
+    const { cleaned } = spineActive ? parseLandMarker(rawResponse) : { cleaned: rawResponse, resolution: null };
+
+    expect(cleaned).not.toBe(rawResponse);
+    expect(cleaned).toBe(parseLandMarker(rawResponse).cleaned);
+    expect(cleaned).not.toContain("[LANDS:");
+  });
+
+  it("scoring cleaned (fixed order) does NOT self-loop-gate a genuinely fresh reply", () => {
+    const { cleaned } = parseLandMarker(rawResponse);
+    const result = ownEchoGated("cypher", cleaned, ownPriorTurns);
+    expect(result.gated).toBe(false);
+    expect(result.score).toBe(0);
+  });
+
+  it("scoring the RAW pre-strip response (the bug) WOULD have false-positive gated this same reply", () => {
+    // Proves the fix matters: the marker's own vocabulary overlaps the prior-turn pool
+    // enough to trip the self-loop threshold even though the visible content is fresh.
+    const result = ownEchoGated("cypher", rawResponse, ownPriorTurns);
+    expect(result.gated).toBe(true);
   });
 });
 

@@ -1108,6 +1108,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Thread spine (task 10): strip a companion-authored [LANDS: ...] marker before ANY
+    // send path below (voice synthesis, text content, and the error-fallback content all
+    // read from `response`) so the marker never reaches Discord or the TTS engine. Only
+    // parsed when a spine is active -- without one there's no thread to land, and the
+    // marker syntax is not something companions are prompted to emit.
+    // Moved above the echo gate (2026-07-21 review): the gate must score exactly the
+    // cleaned text that will actually be sent/stored, not the raw response with the
+    // marker still attached -- a marker-bearing reply used to score against its own
+    // marker syntax instead of the real content.
+    const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
+    response = spineCleanedResponse;
+
     // Echo gate (2026-06-12; bounded arena 2026-07-04): a companion-to-companion reply
     // built mostly from recycled vocabulary is the mirror-hall, not conversation.
     // In the TRIAD COMMONS the pool is the speaker's OWN prior turns only (self-loop
@@ -1149,14 +1161,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // giving Raziel visible threading in the transcript -- companion-to-companion behavior
     // is unchanged.
     const replyToMessageId = computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
-
-    // Thread spine (task 10): strip a companion-authored [LANDS: ...] marker before ANY
-    // send path below (voice synthesis, text content, and the error-fallback content all
-    // read from `response`) so the marker never reaches Discord or the TTS engine. Only
-    // parsed when a spine is active -- without one there's no thread to land, and the
-    // marker syntax is not something companions are prompted to emit.
-    const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
-    response = spineCleanedResponse;
 
     // Sibling-triggered replies never voice (2026-07-04): the triad commons is a text
     // space Raziel skims -- companions talking to each other kept tripping shouldVoice's

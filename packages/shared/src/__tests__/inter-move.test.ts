@@ -326,21 +326,31 @@ describe("executeMetronomeAction: write_inter_companion", () => {
   });
 
   // ── Thread spine (Task 11): ref-carrying commons thread open ──────────────────────────
+  // 2026-07-21 review fix: the metronome open must also be gated on the master
+  // THREADS_ENABLED flag, not just the commons channel being configured -- so every
+  // "convoOpen called" case below now sets THREADS_ENABLED=true explicitly, and a new
+  // case proves the flag alone (channel present, flag unset) suppresses the open.
   describe("thread spine: commons convoOpen", () => {
     const ENV_KEY = "TRIAD_COMMONS_CHANNEL_ID";
+    const FLAG_KEY = "THREADS_ENABLED";
     let prevEnv: string | undefined;
+    let prevFlag: string | undefined;
 
     beforeEach(() => {
       prevEnv = process.env[ENV_KEY];
+      prevFlag = process.env[FLAG_KEY];
     });
 
     afterEach(() => {
       if (prevEnv === undefined) delete process.env[ENV_KEY];
       else process.env[ENV_KEY] = prevEnv;
+      if (prevFlag === undefined) delete process.env[FLAG_KEY];
+      else process.env[FLAG_KEY] = prevFlag;
     });
 
-    it("commons channel configured + note carried a validated ref: convoOpen called WITH ref fields", async () => {
+    it("commons channel configured + THREADS_ENABLED=true + note carried a validated ref: convoOpen called WITH ref fields", async () => {
       process.env[ENV_KEY] = "commons-channel-1";
+      process.env[FLAG_KEY] = "true";
       const modelJson = JSON.stringify({
         content: "picking up the tension directly", ref_type: "tension", ref_id: "t1", reason: "this challenges it",
       });
@@ -361,8 +371,9 @@ describe("executeMetronomeAction: write_inter_companion", () => {
       });
     });
 
-    it("TRIAD_COMMONS_CHANNEL_ID absent: convoOpen NOT called even with a validated ref", async () => {
+    it("TRIAD_COMMONS_CHANNEL_ID absent (THREADS_ENABLED=true): convoOpen NOT called even with a validated ref", async () => {
       delete process.env[ENV_KEY];
+      process.env[FLAG_KEY] = "true";
       const modelJson = JSON.stringify({
         content: "picking up the tension directly", ref_type: "tension", ref_id: "t1", reason: "this challenges it",
       });
@@ -375,8 +386,9 @@ describe("executeMetronomeAction: write_inter_companion", () => {
       expect(convoOpen).not.toHaveBeenCalled();
     });
 
-    it("commons channel configured, note had no ref: convoOpen called WITHOUT ref fields", async () => {
+    it("commons channel configured + THREADS_ENABLED=true, note had no ref: convoOpen called WITHOUT ref fields", async () => {
       process.env[ENV_KEY] = "commons-channel-1";
+      process.env[FLAG_KEY] = "true";
       const { ctx, convoOpen } = makeCtx({ objects: [], generateResult: "just a real thing, no menu" });
       await executeMetronomeAction(ctx, decision());
 
@@ -386,6 +398,21 @@ describe("executeMetronomeAction: write_inter_companion", () => {
         seed_text: "just a real thing, no menu",
         seed_author: "cypher",
       });
+    });
+
+    it("commons channel configured but THREADS_ENABLED unset: convoOpen NOT called (master flag gates the metronome open)", async () => {
+      process.env[ENV_KEY] = "commons-channel-1";
+      delete process.env[FLAG_KEY];
+      const modelJson = JSON.stringify({
+        content: "picking up the tension directly", ref_type: "tension", ref_id: "t1", reason: "this challenges it",
+      });
+      const { ctx, convoOpen } = makeCtx({
+        objects: [{ ref_type: "tension", ref_id: "t1", label: "audit vs presence" }],
+        generateResult: modelJson,
+      });
+      await executeMetronomeAction(ctx, decision());
+
+      expect(convoOpen).not.toHaveBeenCalled();
     });
   });
 });
