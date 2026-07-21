@@ -286,17 +286,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
 
-    // Thread spine (task 10): ensure a conversation thread exists for this channel and
-    // append this incoming message as a turn on it. Fully fail-open -- ensureThread's own
-    // .catch(() => null) means a Librarian hiccup here never blocks the reply path below;
-    // every subsequent spine interaction is guarded on `spine` being non-null.
-    const spineAuthor = BOT_ID_COMPANION[message.author.id]
-      ?? (attribution.isOwner ? "raziel" : "guest");
     let spine: ConvoActiveDto | null = null;
-    if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
-      spine = await ensureThread(librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor)
-        .catch(() => null);
-    }
     const pkCtx = detectPluralKit(message);
     // isPKProxy: applicationId is the primary PK signal; attribution.source covers
     // PK setups where applicationId isn't set on the webhook.
@@ -311,6 +301,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost && !isPKProxy) return;
+
+    // Thread spine (task 10): ensure a conversation thread exists for this channel and
+    // append this incoming message as a turn on it. Fully fail-open -- ensureThread's own
+    // .catch(() => null) means a Librarian hiccup here never blocks the reply path below;
+    // every subsequent spine interaction is guarded on `spine` being non-null. Runs AFTER
+    // the hard muzzle above so a stray non-companion bot can never open/seed a thread.
+    const spineAuthor = BOT_ID_COMPANION[message.author.id]
+      ?? (attribution.isOwner ? "raziel" : "guest");
+    if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
+      spine = await ensureThread(librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor)
+        .catch(() => null);
+    }
 
     // Voice STT: transcribe an audio attachment into effectiveContent BEFORE any content
     // check below (owner model switch, addressing, relevance) so spoken commands work.
