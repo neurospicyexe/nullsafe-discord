@@ -53,6 +53,11 @@ const shared = {
   PLURALKIT_SYSTEM_ID:     process.env.PLURALKIT_SYSTEM_ID,
   BLUE_PK_SYSTEM_ID:       process.env.BLUE_PK_SYSTEM_ID       ?? "szplj",
   CHANNEL_CONFIG_URL:    process.env.CHANNEL_CONFIG_URL,
+  // Thread spine (2026-07-21). Master flag gates BOTH the bot handler spine and the
+  // worker's metronome ref-thread opens; the channel id alone does nothing without it.
+  THREADS_ENABLED:          process.env.THREADS_ENABLED          ?? "false",
+  THREADS_EXTRA_CHANNELS:   process.env.THREADS_EXTRA_CHANNELS   ?? "",
+  TRIAD_COMMONS_CHANNEL_ID: process.env.TRIAD_COMMONS_CHANNEL_ID ?? "",
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
   // Each bot needs the OTHER bots' Discord user IDs to recognize their messages as companion
