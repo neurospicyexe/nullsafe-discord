@@ -1,7 +1,19 @@
 import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
 import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker, ActiveThread, PeerActivity } from "./types.js";
 
-async function hFetch(path: string, method = "GET", body?: unknown): Promise<unknown> {
+/** True when a fetch failure died in the CONNECT phase (undici TypeError with a
+ *  socket-level cause) -- the request never left the box, so retrying is safe for
+ *  any method, POSTs included. VPS->Cloudflare intermittently drops/slows SYNs
+ *  (see @nullsafe/shared net-tuning.ts); these killed 222 scheduler jobs 06-28→07-21. */
+export function isConnectPhaseError(e: unknown): boolean {
+  if (!(e instanceof TypeError)) return false;
+  const cause = (e as { cause?: { code?: string; errors?: Array<{ code?: string }> } }).cause;
+  if (!cause) return false;
+  const codes = [cause.code, ...(cause.errors ?? []).map(x => x?.code)];
+  return codes.some(c => c === "ETIMEDOUT" || c === "ECONNREFUSED" || c === "ENETUNREACH" || c === "EHOSTUNREACH" || c === "EAI_AGAIN");
+}
+
+async function hFetchOnce(path: string, method: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${HALSETH_URL}${path}`, {
     method,
     headers: {
@@ -16,6 +28,16 @@ async function hFetch(path: string, method = "GET", body?: unknown): Promise<unk
     throw new Error(`Halseth ${method} ${path} → ${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json();
+}
+
+async function hFetch(path: string, method = "GET", body?: unknown): Promise<unknown> {
+  try {
+    return await hFetchOnce(path, method, body);
+  } catch (e) {
+    if (!isConnectPhaseError(e)) throw e;
+    await new Promise(r => setTimeout(r, 750));
+    return hFetchOnce(path, method, body);
+  }
 }
 
 // ---------------------------------------------------------------------------

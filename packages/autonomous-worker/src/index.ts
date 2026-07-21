@@ -21,6 +21,7 @@
  */
 
 import "./env.js"; // MUST be first: fills process.env from .env before config.ts reads it
+import "@nullsafe/shared/net-tuning"; // before any fetch: VPS->Cloudflare ETIMEDOUT fix (see module)
 import { startScheduler } from "./scheduler.js";
 import { runPipeline } from "./pipeline.js";
 import { runSignalAudit } from "./phases/signal-audit.js";

@@ -1,3 +1,4 @@
+import "./net-tuning.js"; // side-effect: must run before any fetch (VPS->Cloudflare ETIMEDOUT fix)
 export * from "./types.js";
 export * from "./brain-client.js";
 export * from "./floor.js";
