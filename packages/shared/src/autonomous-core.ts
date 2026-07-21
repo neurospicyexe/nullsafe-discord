@@ -302,11 +302,20 @@ export async function executeMetronomeAction(
             content = parsed["content"];
             const pRefType = typeof parsed["ref_type"] === "string" ? parsed["ref_type"] : null;
             const pRefId = typeof parsed["ref_id"] === "string" ? parsed["ref_id"] : null;
-            // All-or-nothing on this side too: never forward a half ref.
-            if (pRefType && pRefId) {
+            // All-or-nothing on this side, PLUS existence against the actual menu (2026-07-20
+            // hot-fix): a transcribed-wrong ref_id (dropped hyphen, truncated id) used to pass
+            // straight through as long as both fields were non-empty strings. Halseth's
+            // existence guard then rejects the WHOLE note (no insert) on an unknown ref_id --
+            // assertWriteAck throws, librarianWriteChecked returns false, and the companion's
+            // actual written content is gone with no retry and no fallback. Only trust a ref
+            // the model picked from the menu we actually gave it; any mismatch drops the ref
+            // and keeps the content as a plain note instead of losing the whole write.
+            if (pRefType && pRefId && objects.some(o => o.ref_type === pRefType && o.ref_id === pRefId)) {
               ref_type = pRefType;
               ref_id = pRefId;
               reason = typeof parsed["reason"] === "string" ? parsed["reason"] : null;
+            } else if (pRefType || pRefId) {
+              console.warn(`[${companionId}/write_inter_companion] model ref (${pRefType}:${pRefId}) not found in the fetched menu -- dropping ref, keeping content as a plain note`);
             }
           } else {
             console.warn(`[${companionId}/write_inter_companion] JSON parse failed, falling back to raw text -- raw: ${rawPreview(raw)}`);

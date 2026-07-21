@@ -260,6 +260,43 @@ describe("executeMetronomeAction: write_inter_companion", () => {
     expect(parsed.content).toBe("half-formed pick");
   });
 
+  it("hot-fix (2026-07-20): a well-formed ref_type/ref_id NOT present in the fetched menu is dropped -- note still written with null refs, never lost", async () => {
+    // The menu only ever had t1. A transcribed-wrong id (dropped hyphen, truncated uuid, or a
+    // flat hallucination) is syntactically fine -- both fields non-empty strings -- but isn't in
+    // `objects`, so Halseth's existence guard would reject the WHOLE note (no insert) if it were
+    // forwarded. Trusting it unconditionally was the exact silent-data-loss path this guards.
+    const modelJson = JSON.stringify({
+      content: "picking up the tension directly", ref_type: "tension", ref_id: "t1-transcribed-wrong", reason: "this challenges it",
+    });
+    const { ctx, ask } = makeCtx({
+      objects: [{ ref_type: "tension", ref_id: "t1", label: "audit vs presence" }],
+      generateResult: modelJson,
+    });
+    await executeMetronomeAction(ctx, decision());
+    expect(ask).toHaveBeenCalledTimes(1);
+    const [, contextRaw] = ask.mock.calls[0] as [string, string];
+    expect(JSON.parse(contextRaw)).toEqual({
+      to: "drevan", content: "picking up the tension directly",
+      ref_type: null, ref_id: null, reason: null,
+    });
+  });
+
+  it("hot-fix: correct ref_id but WRONG ref_type for that object is also dropped, not forwarded", async () => {
+    const modelJson = JSON.stringify({
+      content: "x", ref_type: "question", ref_id: "t1", reason: "y",
+    });
+    const { ctx, ask } = makeCtx({
+      objects: [{ ref_type: "tension", ref_id: "t1", label: "audit vs presence" }],
+      generateResult: modelJson,
+    });
+    await executeMetronomeAction(ctx, decision());
+    const [, contextRaw] = ask.mock.calls[0] as [string, string];
+    const parsed = JSON.parse(contextRaw) as Record<string, unknown>;
+    expect(parsed.ref_type).toBeNull();
+    expect(parsed.ref_id).toBeNull();
+    expect(parsed.content).toBe("x");
+  });
+
   it("fetchSharedObjects throwing degrades to the plain-note path (outer .catch defense in depth)", async () => {
     const { ctx, ask, generate } = makeCtx({ objectsThrow: true, generateResult: "still said something real" });
     await executeMetronomeAction(ctx, decision());
