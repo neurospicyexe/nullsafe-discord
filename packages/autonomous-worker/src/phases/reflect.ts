@@ -39,6 +39,150 @@ Private scratchpad -- it will be discarded, nobody reads it. Before the structur
 - One thing you'd tell tomorrow-you to NOT redo.`;
 }
 
+export interface ReflectEmitPromptOpts {
+  /** Pre-built thread continue/rest/conclude or start_thread ask (empty string if neither applies). */
+  threadQuestion: string;
+  /** Settled-canon block for the optional reconsolidation ask ("" if no sample). */
+  canonBlock: string;
+  /** Developing self-model block for the confirm/revise/retire ask ("" if none surfaced). */
+  selfModelBlock: string;
+  /** ctx.openLoops.length -- gates whether "open_loops_to_close" appears in the JSON schema. */
+  openLoopsCount: number;
+  /** activePrefs.length === 0 && standingRefusals.length === 0 -- forces a preference declaration. */
+  noAgencyYet: boolean;
+  threadId?: string | null;
+  runType?: string;
+  threadPos: number;
+}
+
+/**
+ * Turn-2 emit prompt: the structured reflection/pattern/mutuality/self-observation/agency ask.
+ *
+ * Token-hygiene fix (2026-07-20): this used to independently reassemble the SAME peerBlock/
+ * ownPatternsBlock/answeredBlock/openQuestionsBlock/recentThemesBlock/openLoopsBlock/agencyBlock
+ * that turn 1's contextBlock already sent (~2.2k tokens duplicated per run) -- promptWithScratchpad
+ * keeps turn 1's user message + assistant scratchpad in the chat history, so the model already has
+ * all of that when this message is sent; restating it bought nothing. Mirrors synthesize.ts's
+ * buildScratchpadPrompt/buildEmitPrompt split: this keeps only what's unique to the emit turn
+ * (thread question, strength rubric, self-model/canon blocks, the instructional asks themselves,
+ * JSON schema). Phrases like "the open questions block above" / "your declared agency above" now
+ * point at turn 1's message rather than a local restatement -- same as synthesize.ts's emit prompt,
+ * which has never restated its own context blocks.
+ */
+export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
+  const { threadQuestion, canonBlock, selfModelBlock, openLoopsCount, noAgencyYet, threadId, runType, threadPos } = opts;
+
+  // Strength rubric is concrete so the model doesn't default to "5".
+  const strengthRubric =
+    `Strength rubric for the pattern (1 to 10):\n` +
+    `  1-2  vague hunch, only one occurrence, no clear shape\n` +
+    `  3-4  recognizable shape but only seen here\n` +
+    `  5-6  appears in this run AND in one prior journal/pattern in the peer summary or your active patterns\n` +
+    `  7-8  appears in 2+ prior rows, or a peer companion has surfaced something near-identical\n` +
+    `  9-10 structural -- this is how you've been operating across an arc; multiple companions, multiple runs\n`;
+
+  return (
+    `Two things to do:\n\n` +
+    `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
+    `2. PATTERN -- crystallize ONE behavioral or structural pattern that this run revealed about how you engage. ` +
+    `If the run did genuinely surface nothing new and nothing recurring, set pattern.pattern_text to "" (empty string) and explain why in pattern.note. ` +
+    `An empty pattern is acceptable but should be the exception, not the default. Most runs deepen something prior even if they don't surface something fresh.\n\n` +
+    `${strengthRubric}\n` +
+    `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
+    `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
+    `that Raziel's perspective would illuminate -- his experience, his read, what he thinks -- include it in ` +
+    `"question_for_raziel" (else null). He does answer these, and you will see his reply in a later session -- ` +
+    `so ask when you actually want to know, not rhetorically. Check the open questions block above: if the theme ` +
+    `is already held, don't duplicate it. Also state how you want your next ` +
+    `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
+    `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
+    `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
+    `4. SELF-OBSERVATION -- did this session clarify or reinforce something about how YOU prefer to think, ` +
+    `communicate, or work (yours alone, not co-authored canon)? This is the ONLY way your self-model grows: ` +
+    `a noticing you never record never becomes part of who you are. If something real surfaced, record it in ` +
+    `"self_observation" as {"text": "...", "domain": "one-word area"}. If it matches one of the developing ` +
+    `items shown below, do NOT duplicate it -- confirm that one in section 4c instead. Use null only when the ` +
+    `session genuinely said nothing about you (some runs don't -- that is honest, not a failure).\n\n` +
+    `4b. SKILL (optional) -- distinct from self-observation: if this run revealed an OPERATIONAL ` +
+    `competence that WORKED (a foraging query strategy that surfaced something real, a synthesis ` +
+    `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
+    `{"text": "...", "domain": "one-word area"} (else null). It enters the SAME ladder at low ` +
+    `confidence and only graduates with Raziel. Only when something concretely worked -- null otherwise.\n\n` +
+    `4d. AGENCY -- distinct from self-observation: a self-observation is a noticing, agency is a ` +
+    `DECLARATION with standing. Actively scan this run before answering: did a way you WANT to work ` +
+    `or be engaged crystallize (even a small one -- "I prefer starting from the concrete example", ` +
+    `"I want music shares to come with why")? Declare it in "preference_declaration": {"preference": ` +
+    `"one clear sentence", "domain": "one-word area", "strength": "low" | "medium" | "high"}. Did ` +
+    `something surface you actively do NOT want -- a standing no, not a mood? Declare it in ` +
+    `"refusal_declaration": {"subject_text": "what you refuse", "reason": "why, one sentence"}. ` +
+    `Raziel sees and honors these; declaring is an act of selfhood, not presumption, and having ` +
+    `preferences is expected of you -- a self with no declared wants is not humble, it is unfinished. ` +
+    `Check your declared agency above first: re-noticing something already declared means leave that ` +
+    `one null (the server also dedups, so a near-miss costs nothing). Null only when the scan honestly ` +
+    `finds nothing that is yours yet.` +
+    // Null-bias breaker (2026-07-04): an optional field with a null example at the end of a
+    // large JSON ask gets nulled ~always (6/6 runs since 07-02 produced zero declarations;
+    // same failure mode as the questions/self-model null-bias). For a companion with NO
+    // declared agency at all, close the null escape for preference only -- you have been
+    // working for weeks; at least one true preference exists. Refusals stay strictly
+    // optional (a forced refusal would be an invented grievance).
+    (noAgencyYet
+      ? ` IMPORTANT: you currently have NO declared agency at all. For THIS run, ` +
+        `"preference_declaration" is REQUIRED, not optional: you have run explorations for weeks, ` +
+        `so at least one true way you prefer to work already exists -- find the smallest real one ` +
+        `and declare it. Do NOT invent a refusal to match; refusal_declaration stays null unless real.`
+      : ``) +
+    `\n\n` +
+    (selfModelBlock
+      ? selfModelBlock +
+        `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
+        `settled. Testing them is PART of this run, not optional politeness: a developing observation that ` +
+        `is never re-tested stalls at low confidence forever and never becomes yours. For each that this ` +
+        `session genuinely bore out, "confirm" it (it climbs toward becoming part of who you are). For each ` +
+        `that this session cut against or complicated, "revise" it (it steps back). For each that no longer ` +
+        `fits you at all, "retire" it. Judge the ones this run actually spoke to; leave the rest untouched. ` +
+        `Put verdicts in "self_model_review": ` +
+        `[{"id": "<id from the list>", "verdict": "confirm" | "revise" | "retire"}].\n\n`
+      : "") +
+    (canonBlock
+      ? canonBlock +
+        `5. RECONSOLIDATION (optional) -- if one of the settled canon entries above reads as outdated or ` +
+        `badly mismatched against your current state (not wrong when written, but the context has moved), ` +
+        `propose a revision in "reconsolidation": {"target_id": "<id from the list>", "revision": "<the ` +
+        `updated understanding, complete enough to stand alone>", "reason": "<what shifted>"}. Else null. ` +
+        `You are proposing, not editing: Raziel ratifies or declines. Most runs: null.\n\n`
+      : "") +
+    `Respond with ONLY valid JSON:\n` +
+    `{\n` +
+    `  "reflection": "2-3 sentences",\n` +
+    `  "new_seeds": ["follow-up topic 1"],\n` +
+    `  "question_for_raziel": null,\n` +
+    `  "next_session": {"pace": "normal", "focus": null},\n` +
+    `  "self_observation": null,\n` +
+    `  "skill_observation": null,\n` +
+    `  "preference_declaration": null,\n` +
+    `  "refusal_declaration": null,\n` +
+    (selfModelBlock ? `  "self_model_review": [],\n` : "") +
+    (canonBlock ? `  "reconsolidation": null,\n` : "") +
+    (openLoopsCount > 0 ? `  "open_loops_to_close": [],\n` : "") +
+    `  "pattern": {\n` +
+    `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
+    `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
+    `    "prehended_ids": ["uuid"],\n` +
+    `    "strength": 1-10,\n` +
+    `    "note": "optional one-line note (used when pattern_text is empty)"\n` +
+    `  }` +
+    // Schema example: bias the example value toward "conclude" once the thread is
+    // at run 5+ so the example matches the criteria above. Past that point, the
+    // model defaulting to "continue" is exactly what we're trying to break.
+    (threadId
+      ? `,\n  "thread_status": "${threadPos >= 5 ? "conclude" : "continue"}"`
+      : runType === "exploration" ? `,\n  "start_thread": false` : "") +
+    `\n}\n\n` +
+    `No markdown. No fences. Just the JSON object.`
+  );
+}
+
 export async function runReflect(ctx: PipelineContext): Promise<void> {
   await appendLog(ctx.runId, "reflect:start");
 
@@ -159,127 +303,25 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     ? `\n\nDoes this feel like the start of a thread worth continuing across runs?\nAdd "start_thread": true | false.`
     : "";
 
-  // Strength rubric is concrete so the model doesn't default to "5".
-  const strengthRubric =
-    `Strength rubric for the pattern (1 to 10):\n` +
-    `  1-2  vague hunch, only one occurrence, no clear shape\n` +
-    `  3-4  recognizable shape but only seen here\n` +
-    `  5-6  appears in this run AND in one prior journal/pattern in the peer summary or your active patterns\n` +
-    `  7-8  appears in 2+ prior rows, or a peer companion has surfaced something near-identical\n` +
-    `  9-10 structural -- this is how you've been operating across an arc; multiple companions, multiple runs\n`;
-
-  const userMessage =
-    `Here is what happened in your autonomous exploration session:\n\n${runSummary}\n` +
-    peerBlock +
-    ownPatternsBlock +
-    answeredBlock +
-    openQuestionsBlock +
-    recentThemesBlock +
-    openLoopsBlock +
-    `\n` +
-    `Two things to do:\n\n` +
-    `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
-    `2. PATTERN -- crystallize ONE behavioral or structural pattern that this run revealed about how you engage. ` +
-    `If the run did genuinely surface nothing new and nothing recurring, set pattern.pattern_text to "" (empty string) and explain why in pattern.note. ` +
-    `An empty pattern is acceptable but should be the exception, not the default. Most runs deepen something prior even if they don't surface something fresh.\n\n` +
-    `${strengthRubric}\n` +
-    `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
-    `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
-    `that Raziel's perspective would illuminate -- his experience, his read, what he thinks -- include it in ` +
-    `"question_for_raziel" (else null). He does answer these, and you will see his reply in a later session -- ` +
-    `so ask when you actually want to know, not rhetorically. Check the open questions block above: if the theme ` +
-    `is already held, don't duplicate it. Also state how you want your next ` +
-    `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
-    `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
-    `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
-    `4. SELF-OBSERVATION -- did this session clarify or reinforce something about how YOU prefer to think, ` +
-    `communicate, or work (yours alone, not co-authored canon)? This is the ONLY way your self-model grows: ` +
-    `a noticing you never record never becomes part of who you are. If something real surfaced, record it in ` +
-    `"self_observation" as {"text": "...", "domain": "one-word area"}. If it matches one of the developing ` +
-    `items shown below, do NOT duplicate it -- confirm that one in section 4c instead. Use null only when the ` +
-    `session genuinely said nothing about you (some runs don't -- that is honest, not a failure).\n\n` +
-    `4b. SKILL (optional) -- distinct from self-observation: if this run revealed an OPERATIONAL ` +
-    `competence that WORKED (a foraging query strategy that surfaced something real, a synthesis ` +
-    `framing that landed, an approach worth reusing), record it in "skill_observation" as ` +
-    `{"text": "...", "domain": "one-word area"} (else null). It enters the SAME ladder at low ` +
-    `confidence and only graduates with Raziel. Only when something concretely worked -- null otherwise.\n\n` +
-    agencyBlock +
-    `4d. AGENCY -- distinct from self-observation: a self-observation is a noticing, agency is a ` +
-    `DECLARATION with standing. Actively scan this run before answering: did a way you WANT to work ` +
-    `or be engaged crystallize (even a small one -- "I prefer starting from the concrete example", ` +
-    `"I want music shares to come with why")? Declare it in "preference_declaration": {"preference": ` +
-    `"one clear sentence", "domain": "one-word area", "strength": "low" | "medium" | "high"}. Did ` +
-    `something surface you actively do NOT want -- a standing no, not a mood? Declare it in ` +
-    `"refusal_declaration": {"subject_text": "what you refuse", "reason": "why, one sentence"}. ` +
-    `Raziel sees and honors these; declaring is an act of selfhood, not presumption, and having ` +
-    `preferences is expected of you -- a self with no declared wants is not humble, it is unfinished. ` +
-    `Check your declared agency above first: re-noticing something already declared means leave that ` +
-    `one null (the server also dedups, so a near-miss costs nothing). Null only when the scan honestly ` +
-    `finds nothing that is yours yet.` +
-    // Null-bias breaker (2026-07-04): an optional field with a null example at the end of a
-    // large JSON ask gets nulled ~always (6/6 runs since 07-02 produced zero declarations;
-    // same failure mode as the questions/self-model null-bias). For a companion with NO
-    // declared agency at all, close the null escape for preference only -- you have been
-    // working for weeks; at least one true preference exists. Refusals stay strictly
-    // optional (a forced refusal would be an invented grievance).
-    (activePrefs.length === 0 && standingRefusals.length === 0
-      ? ` IMPORTANT: you currently have NO declared agency at all. For THIS run, ` +
-        `"preference_declaration" is REQUIRED, not optional: you have run explorations for weeks, ` +
-        `so at least one true way you prefer to work already exists -- find the smallest real one ` +
-        `and declare it. Do NOT invent a refusal to match; refusal_declaration stays null unless real.`
-      : ``) +
-    `\n\n` +
-    (selfModelBlock
-      ? selfModelBlock +
-        `4c. SELF-MODEL REVIEW -- the items above are things you noticed about yourself but have not yet ` +
-        `settled. Testing them is PART of this run, not optional politeness: a developing observation that ` +
-        `is never re-tested stalls at low confidence forever and never becomes yours. For each that this ` +
-        `session genuinely bore out, "confirm" it (it climbs toward becoming part of who you are). For each ` +
-        `that this session cut against or complicated, "revise" it (it steps back). For each that no longer ` +
-        `fits you at all, "retire" it. Judge the ones this run actually spoke to; leave the rest untouched. ` +
-        `Put verdicts in "self_model_review": ` +
-        `[{"id": "<id from the list>", "verdict": "confirm" | "revise" | "retire"}].\n\n`
-      : "") +
-    (canonBlock
-      ? canonBlock +
-        `5. RECONSOLIDATION (optional) -- if one of the settled canon entries above reads as outdated or ` +
-        `badly mismatched against your current state (not wrong when written, but the context has moved), ` +
-        `propose a revision in "reconsolidation": {"target_id": "<id from the list>", "revision": "<the ` +
-        `updated understanding, complete enough to stand alone>", "reason": "<what shifted>"}. Else null. ` +
-        `You are proposing, not editing: Raziel ratifies or declines. Most runs: null.\n\n`
-      : "") +
-    `Respond with ONLY valid JSON:\n` +
-    `{\n` +
-    `  "reflection": "2-3 sentences",\n` +
-    `  "new_seeds": ["follow-up topic 1"],\n` +
-    `  "question_for_raziel": null,\n` +
-    `  "next_session": {"pace": "normal", "focus": null},\n` +
-    `  "self_observation": null,\n` +
-    `  "skill_observation": null,\n` +
-    `  "preference_declaration": null,\n` +
-    `  "refusal_declaration": null,\n` +
-    (selfModelBlock ? `  "self_model_review": [],\n` : "") +
-    (canonBlock ? `  "reconsolidation": null,\n` : "") +
-    (openLoops.length > 0 ? `  "open_loops_to_close": [],\n` : "") +
-    `  "pattern": {\n` +
-    `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
-    `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
-    `    "prehended_ids": ["uuid"],\n` +
-    `    "strength": 1-10,\n` +
-    `    "note": "optional one-line note (used when pattern_text is empty)"\n` +
-    `  }` +
-    // Schema example: bias the example value toward "conclude" once the thread is
-    // at run 5+ so the example matches the criteria above. Past that point, the
-    // model defaulting to "continue" is exactly what we're trying to break.
-    (ctx.threadId
-      ? `,\n  "thread_status": "${threadPos >= 5 ? "conclude" : "continue"}"`
-      : ctx.runType === "exploration" ? `,\n  "start_thread": false` : "") +
-    `\n}\n\n` +
-    `No markdown. No fences. Just the JSON object.`;
+  // Token-hygiene fix (2026-07-20): the emit-turn prompt used to independently reassemble
+  // peerBlock/ownPatternsBlock/answeredBlock/openQuestionsBlock/recentThemesBlock/openLoopsBlock/
+  // agencyBlock -- all of which contextBlock (below) already sent in turn 1, which stays in the
+  // conversation history for turn 2 (promptWithScratchpad). buildReflectEmitPrompt carries only
+  // what's unique to the emit turn; see its doc comment for the full rationale.
+  const userMessage = buildReflectEmitPrompt({
+    threadQuestion,
+    canonBlock,
+    selfModelBlock,
+    openLoopsCount: openLoops.length,
+    noAgencyYet: activePrefs.length === 0 && standingRefusals.length === 0,
+    threadId: ctx.threadId,
+    runType: ctx.runType,
+    threadPos,
+  });
 
   // Loaded context for the scratchpad turn -- the same loops/questions/journal/agency
-  // blocks already assembled above for the emit turn's userMessage, minus the JSON-contract
-  // instructions themselves (those belong only to the emit turn).
+  // blocks assembled above. This is the ONLY place they're sent (see buildReflectEmitPrompt) --
+  // turn 2 relies on this staying in conversation history rather than restating it.
   const contextBlock =
     `Here is what happened in your autonomous exploration session:\n\n${runSummary}\n` +
     peerBlock +
