@@ -1,7 +1,7 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import type { LibrarianClient, ConvoActiveDto } from "../librarian.js";
 import {
-  isThreadsEnabled, isThreadTracked, gist, ensureThread, buildSpineBlock, parseLandMarker,
+  isThreadsEnabled, isThreadTracked, isPresenceChannel, gist, ensureThread, buildSpineBlock, parseLandMarker,
   computeReplyRef,
 } from "../thread-spine.js";
 import { ownEchoGated } from "../echo-guard.js";
@@ -34,6 +34,45 @@ describe("isThreadTracked", () => {
     } finally {
       if (prev === undefined) delete process.env["THREADS_EXTRA_CHANNELS"];
       else process.env["THREADS_EXTRA_CHANNELS"] = prev;
+    }
+  });
+
+  it("returns true when channelId is listed in THREADS_PRESENCE_CHANNELS env (tracked = commons ∪ extras ∪ presence)", () => {
+    const prev = process.env["THREADS_PRESENCE_CHANNELS"];
+    process.env["THREADS_PRESENCE_CHANNELS"] = "chan-story, chan-spiral";
+    try {
+      const entry = { modes: ["open"] as const };
+      expect(isThreadTracked(entry, "chan-story")).toBe(true);
+      expect(isThreadTracked(entry, "chan-nope")).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env["THREADS_PRESENCE_CHANNELS"];
+      else process.env["THREADS_PRESENCE_CHANNELS"] = prev;
+    }
+  });
+});
+
+describe("isPresenceChannel", () => {
+  it("returns false when THREADS_PRESENCE_CHANNELS is unset", () => {
+    const prev = process.env["THREADS_PRESENCE_CHANNELS"];
+    delete process.env["THREADS_PRESENCE_CHANNELS"];
+    try {
+      expect(isPresenceChannel("chan-story")).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env["THREADS_PRESENCE_CHANNELS"];
+      else process.env["THREADS_PRESENCE_CHANNELS"] = prev;
+    }
+  });
+
+  it("returns true only for a channelId listed in the comma-separated env var", () => {
+    const prev = process.env["THREADS_PRESENCE_CHANNELS"];
+    process.env["THREADS_PRESENCE_CHANNELS"] = "chan-story, chan-spiral";
+    try {
+      expect(isPresenceChannel("chan-story")).toBe(true);
+      expect(isPresenceChannel("chan-spiral")).toBe(true);
+      expect(isPresenceChannel("chan-nope")).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env["THREADS_PRESENCE_CHANNELS"];
+      else process.env["THREADS_PRESENCE_CHANNELS"] = prev;
     }
   });
 });
@@ -251,5 +290,85 @@ describe("buildSpineBlock", () => {
     const blockWith = buildSpineBlock(withRefLabel, "cypher");
     expect(blockWith).toContain("Your verbs for it:");
     expect(blockWith).toContain("(about: the migration question)");
+  });
+
+  // Pin standard-mode (presence=false, the default) output byte-for-byte against a fixed
+  // dto, so the presence-variant addition below cannot silently reshape existing behavior.
+  it("standard mode is byte-identical to current output (pinned against a fixed dto)", () => {
+    const active: ConvoActiveDto = {
+      thread: makeThread({ ref_label: "the migration question" }),
+      ledger: [
+        { author: "raziel", gist: "opened the thread", said_at: "2026-07-20T23:00:00Z" },
+        { author: "cypher", gist: "gave a read", said_at: "2026-07-20T23:05:00Z" },
+      ],
+    };
+    const block = buildSpineBlock(active, "cypher");
+    expect(block).toBe(
+      "[Thread spine -- this conversation]\n" +
+      'Opened by raziel: "seed text" (about: the migration question)\n' +
+      "Ledger: raziel: opened the thread | cypher: gave a read\n" +
+      "Your verbs for it: advance it, challenge it, add evidence, answer it, or say plainly why it should close\n" +
+      "State: open. You may advance this, hand it to a sibling, or -- if it has genuinely landed -- " +
+      "end a line with [LANDS: one-line resolution]. If this exchange is presence rather than work, " +
+      "none of this applies; let it be.",
+    );
+    // presence defaults to false: calling with no third arg matches calling with false explicitly.
+    expect(block).toBe(buildSpineBlock(active, "cypher", false));
+  });
+
+  describe("presence=true (grounding without progress invitation)", () => {
+    it("is exactly the memory-only block: seed + ledger + memory sentence, nothing else", () => {
+      const active: ConvoActiveDto = {
+        thread: makeThread({ ref_label: "the migration question" }),
+        ledger: [
+          { author: "raziel", gist: "opened the thread", said_at: "2026-07-20T23:00:00Z" },
+          { author: "drevan", gist: "answered in kind", said_at: "2026-07-20T23:05:00Z" },
+        ],
+      };
+      const block = buildSpineBlock(active, "drevan", true);
+      expect(block).toBe(
+        "[Thread spine -- memory only]\n" +
+        'Opened by raziel: "seed text"\n' +
+        "Ledger: raziel: opened the thread | drevan: answered in kind\n" +
+        "This is memory, not a task: where this began and who has spoken. Nothing is asked of it.",
+      );
+    });
+
+    it("omits the ledger line entirely when the ledger is empty", () => {
+      const active: ConvoActiveDto = { thread: makeThread(), ledger: [] };
+      const block = buildSpineBlock(active, "drevan", true);
+      expect(block).not.toContain("Ledger:");
+    });
+
+    it("never contains progress-register language, even with ref_label set (move-verbs would otherwise fire)", () => {
+      const active: ConvoActiveDto = {
+        thread: makeThread({ ref_label: "the migration question" }),
+        ledger: [{ author: "raziel", gist: "opened the thread", said_at: "2026-07-20T23:00:00Z" }],
+      };
+      const block = buildSpineBlock(active, "drevan", true);
+      expect(block).not.toContain("advance");
+      expect(block).not.toContain("LANDS");
+      expect(block).not.toContain("State:");
+      expect(block).not.toContain("Your verbs for it:");
+      expect(block).not.toContain("(about:");
+      expect(block).toContain(
+        "This is memory, not a task: where this began and who has spoken. Nothing is asked of it.",
+      );
+    });
+  });
+});
+
+describe("presence-variant composition: strip still happens even when the thread never lands", () => {
+  it("a stray [LANDS: ...] marker in a presence channel's reply is still stripped from the sent text", () => {
+    // Mirrors the real handler: parseLandMarker runs whenever spine !== null, regardless of
+    // presence -- only the DOWNSTREAM convoLand call is gated on !isPresence (that gate lives
+    // in bot-message-handler.ts, not here). This proves the strip itself is unconditional.
+    const response = "A grounded reply, nothing to advance.\n[LANDS: this never actually resolves anything]";
+    const { cleaned, resolution } = parseLandMarker(response);
+    expect(cleaned).not.toContain("[LANDS:");
+    expect(cleaned).toBe("A grounded reply, nothing to advance.");
+    // The marker still parses a resolution string -- it's the handler's job (isPresence
+    // gate) to decline to act on it, not parseLandMarker's.
+    expect(resolution).toBe("this never actually resolves anything");
   });
 });

@@ -26,11 +26,21 @@ export function isThreadsEnabled(): boolean {
   return process.env["THREADS_ENABLED"] === "true";
 }
 
+/** Whether a given channel is one of Drevan's presence spaces (story/spiral) -- grounding-only
+ *  spine (seed + ledger), no progress register. Read at call time (not cached), same idiom as
+ *  isThreadsEnabled/isThreadTracked's THREADS_EXTRA_CHANNELS check. */
+export function isPresenceChannel(channelId: string): boolean {
+  const ids = (process.env["THREADS_PRESENCE_CHANNELS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return ids.includes(channelId);
+}
+
 /** Whether a given channel should have its conversation threaded at all. The triad commons
  *  (autonomous + inter_companion modes) is always tracked; beyond that, an operator can
- *  opt specific channels in via the comma-separated THREADS_EXTRA_CHANNELS env var. */
+ *  opt specific channels in via the comma-separated THREADS_EXTRA_CHANNELS env var, or via
+ *  THREADS_PRESENCE_CHANNELS (grounding-only variant). tracked = commons ∪ extras ∪ presence. */
 export function isThreadTracked(entry: { modes?: readonly string[] } | null | undefined, channelId: string): boolean {
   if (isTriadCommons(entry)) return true;
+  if (isPresenceChannel(channelId)) return true;
   const extra = (process.env["THREADS_EXTRA_CHANNELS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   return extra.includes(channelId);
 }
@@ -76,9 +86,23 @@ export function parseLandMarker(response: string): { cleaned: string; resolution
 /** Render the thread spine block a companion's prompt is assembled with: what opened the
  *  thread, the turn ledger so far, this companion's move-verb phrasing when the thread
  *  references a shared object, and the current state with the presence-vs-work escape
- *  hatch (canon-critical sentence -- must not be reworded). */
-export function buildSpineBlock(active: ConvoActiveDto, companionId: string): string {
+ *  hatch (canon-critical sentence -- must not be reworded).
+ *
+ *  presence (default false) renders the GROUNDING half only -- seed + ledger, no state
+ *  line, no advance/hand-off/[LANDS:] invitation, no move-verbs line -- for Drevan's
+ *  story/spiral spaces where a progress register would violate his lane. Standard mode
+ *  (presence=false) is unchanged from prior behavior. */
+export function buildSpineBlock(active: ConvoActiveDto, companionId: string, presence = false): string {
   const t = active.thread;
+  if (presence) {
+    const lines: string[] = ["[Thread spine -- memory only]"];
+    lines.push(`Opened by ${t.seed_author}: "${gist(t.seed_text)}"`);
+    if (active.ledger.length) {
+      lines.push(`Ledger: ${active.ledger.map((l) => `${l.author}: ${l.gist}`).join(" | ")}`);
+    }
+    lines.push("This is memory, not a task: where this began and who has spoken. Nothing is asked of it.");
+    return lines.join("\n");
+  }
   const lines: string[] = ["[Thread spine -- this conversation]"];
   lines.push(`Opened by ${t.seed_author}: "${gist(t.seed_text)}"${t.ref_label ? ` (about: ${t.ref_label})` : ""}`);
   if (active.ledger.length) {

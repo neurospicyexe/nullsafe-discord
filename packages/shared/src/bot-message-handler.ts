@@ -53,7 +53,7 @@ import {
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
-  isThreadsEnabled, isThreadTracked, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
+  isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
   type ConvoActiveDto,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
@@ -309,6 +309,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // the hard muzzle above so a stray non-companion bot can never open/seed a thread.
     const spineAuthor = BOT_ID_COMPANION[message.author.id]
       ?? (attribution.isOwner ? "raziel" : "guest");
+    // Presence channels (Drevan's story/spiral spaces): grounding half only (seed + ledger),
+    // no progress register. Computed once here and reused at both the block-render call
+    // below and the post-send convoLand gate.
+    const isPresence = isPresenceChannel(message.channelId);
     if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
       spine = await ensureThread(librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor)
         .catch(() => null);
@@ -765,7 +769,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // deliberately -- the spine is this exchange's immediate continuity and should read
     // as closer/more load-bearing than the standing recent-context block. Guarded on
     // `spine` (set above, already fail-open) so a missing/failed thread is a no-op here.
-    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID)}`;
+    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence)}`;
     // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
     // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
     // (forage finds, recent listens, incoming notes, growth). Without this append the
@@ -1205,7 +1209,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // is swallowed (.catch) and never affects the message already posted above.
     if (spine && sent?.[0]) {
       await librarian.convoTurn(spine.thread.id, { author: COMPANION_ID, gist: gist(response), message_id: sent[0].id }).catch(() => {});
-      if (spineResolution) await librarian.convoLand(spine.thread.id, { resolution: spineResolution, landed_by: COMPANION_ID }).catch(() => {});
+      // Presence channels never land a thread -- a progress verdict is exactly the register
+      // Drevan's story/spiral spaces must not carry. A stray [LANDS:] marker is still
+      // stripped above (parseLandMarker keeps running unconditionally); it just never fires
+      // convoLand here.
+      if (spineResolution && !isPresence) await librarian.convoLand(spine.thread.id, { resolution: spineResolution, landed_by: COMPANION_ID }).catch(() => {});
     }
 
     // Streaming indexer: index this companion's own reply for instant recall.

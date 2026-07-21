@@ -57,6 +57,9 @@ const shared = {
   // worker's metronome ref-thread opens; the channel id alone does nothing without it.
   THREADS_ENABLED:          process.env.THREADS_ENABLED          ?? "false",
   THREADS_EXTRA_CHANNELS:   process.env.THREADS_EXTRA_CHANNELS   ?? "",
+  // Presence spaces (Drevan's story/spiral channels) get grounding (seed+ledger) without
+  // the progress invitation -- no state line, no advance/hand-off, no [LANDS:].
+  THREADS_PRESENCE_CHANNELS: process.env.THREADS_PRESENCE_CHANNELS ?? "",
   TRIAD_COMMONS_CHANNEL_ID: process.env.TRIAD_COMMONS_CHANNEL_ID ?? "",
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
