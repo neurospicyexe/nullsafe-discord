@@ -338,6 +338,22 @@ export async function executeMetronomeAction(
           // Event fast-path: nudge the recipient to poll now instead of waiting for their
           // next notesPoll cron. Only on a confirmed write, and only if we know the target.
           if (ok && target) await nudgeInterNote(ctx.redis, companionId, target);
+          // Thread spine: a ref-carrying note opens (or joins) the commons conversation, so the
+          // sibling's reply is generated knowing the object exists. Best-effort; commons channel
+          // must be configured. If a thread is already active in the commons, convoOpen returns it
+          // unchanged (the note joins rather than steals) -- that is the intended invitational shape.
+          const commonsChannel = process.env["TRIAD_COMMONS_CHANNEL_ID"];
+          if (ok && commonsChannel) {
+            const obj = ref_type && ref_id
+              ? objects.find((o) => o.ref_type === ref_type && o.ref_id === ref_id)
+              : undefined;
+            await librarian.convoOpen({
+              channel_id: commonsChannel,
+              seed_text: content.slice(0, 1000),
+              seed_author: companionId,
+              ...(obj ? { ref_type: obj.ref_type, ref_id: obj.ref_id, ref_label: obj.label } : {}),
+            }).catch(() => {});
+          }
         }
       }
       break;

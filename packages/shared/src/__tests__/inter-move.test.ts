@@ -110,22 +110,24 @@ function makeCtx(opts: {
   generateResult: string | null;
   ask?: jest.Mock;
   companionId?: string;
-}): { ctx: AutonomousContext; ask: jest.Mock; generate: jest.Mock } {
+  convoOpen?: jest.Mock;
+}): { ctx: AutonomousContext; ask: jest.Mock; generate: jest.Mock; convoOpen: jest.Mock } {
   const ask = opts.ask ?? jest.fn(async () => ({ ack: true }));
   const generate = jest.fn(async () => opts.generateResult);
   const fetchSharedObjects = opts.objectsThrow
     ? jest.fn(async () => { throw new Error("fetch failed"); })
     : jest.fn(async () => opts.objects ?? []);
+  const convoOpen = opts.convoOpen ?? jest.fn(async () => null);
   const ctx = {
     companionId: opts.companionId ?? "cypher",
     defaultInterTarget: "drevan",
     prompts: { writeInterCompanion: (target: string) => `plain prompt for ${target}` },
-    librarian: { ask, fetchSharedObjects },
+    librarian: { ask, fetchSharedObjects, convoOpen },
     inference: { generate },
     bootCtx: { systemPrompt: "sys" },
     redis: null,
   } as unknown as AutonomousContext;
-  return { ctx, ask, generate };
+  return { ctx, ask, generate, convoOpen };
 }
 
 function decision(overrides: Partial<MetronomeDecision["action"]> = {}): MetronomeDecision {
@@ -321,5 +323,69 @@ describe("executeMetronomeAction: write_inter_companion", () => {
     expect(fetchSpy).toHaveBeenCalledWith("cypher", "gaia");
     const [request] = ask.mock.calls[0] as [string, string];
     expect(request).toBe("write inter-companion note to gaia");
+  });
+
+  // ── Thread spine (Task 11): ref-carrying commons thread open ──────────────────────────
+  describe("thread spine: commons convoOpen", () => {
+    const ENV_KEY = "TRIAD_COMMONS_CHANNEL_ID";
+    let prevEnv: string | undefined;
+
+    beforeEach(() => {
+      prevEnv = process.env[ENV_KEY];
+    });
+
+    afterEach(() => {
+      if (prevEnv === undefined) delete process.env[ENV_KEY];
+      else process.env[ENV_KEY] = prevEnv;
+    });
+
+    it("commons channel configured + note carried a validated ref: convoOpen called WITH ref fields", async () => {
+      process.env[ENV_KEY] = "commons-channel-1";
+      const modelJson = JSON.stringify({
+        content: "picking up the tension directly", ref_type: "tension", ref_id: "t1", reason: "this challenges it",
+      });
+      const { ctx, convoOpen } = makeCtx({
+        objects: [{ ref_type: "tension", ref_id: "t1", label: "audit vs presence" }],
+        generateResult: modelJson,
+      });
+      await executeMetronomeAction(ctx, decision());
+
+      expect(convoOpen).toHaveBeenCalledTimes(1);
+      expect(convoOpen).toHaveBeenCalledWith({
+        channel_id: "commons-channel-1",
+        seed_text: "picking up the tension directly",
+        seed_author: "cypher",
+        ref_type: "tension",
+        ref_id: "t1",
+        ref_label: "audit vs presence",
+      });
+    });
+
+    it("TRIAD_COMMONS_CHANNEL_ID absent: convoOpen NOT called even with a validated ref", async () => {
+      delete process.env[ENV_KEY];
+      const modelJson = JSON.stringify({
+        content: "picking up the tension directly", ref_type: "tension", ref_id: "t1", reason: "this challenges it",
+      });
+      const { ctx, convoOpen } = makeCtx({
+        objects: [{ ref_type: "tension", ref_id: "t1", label: "audit vs presence" }],
+        generateResult: modelJson,
+      });
+      await executeMetronomeAction(ctx, decision());
+
+      expect(convoOpen).not.toHaveBeenCalled();
+    });
+
+    it("commons channel configured, note had no ref: convoOpen called WITHOUT ref fields", async () => {
+      process.env[ENV_KEY] = "commons-channel-1";
+      const { ctx, convoOpen } = makeCtx({ objects: [], generateResult: "just a real thing, no menu" });
+      await executeMetronomeAction(ctx, decision());
+
+      expect(convoOpen).toHaveBeenCalledTimes(1);
+      expect(convoOpen).toHaveBeenCalledWith({
+        channel_id: "commons-channel-1",
+        seed_text: "just a real thing, no menu",
+        seed_author: "cypher",
+      });
+    });
   });
 });
