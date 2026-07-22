@@ -18,6 +18,7 @@ const baseOpts: ReflectEmitPromptOpts = {
   selfModelBlock: "",
   openLoopsCount: 0,
   noAgencyYet: false,
+  noQuestionRecently: false,
   threadId: null,
   runType: "continuation",
   threadPos: 0,
@@ -116,5 +117,23 @@ describe("buildReflectEmitPrompt: instructional content + JSON schema", () => {
   it("noAgencyYet false: no override text", () => {
     const p = buildReflectEmitPrompt({ ...baseOpts, noAgencyYet: false });
     expect(p).not.toContain("IMPORTANT: you currently have NO declared agency");
+  });
+
+  it("noQuestionRecently forces the question_for_raziel REQUIRED override text", () => {
+    const p = buildReflectEmitPrompt({ ...baseOpts, noQuestionRecently: true });
+    expect(p).toContain("you have not asked Raziel a single question in the last two weeks");
+    expect(p).toContain('"question_for_raziel" is REQUIRED');
+  });
+
+  it("noQuestionRecently false: no override text", () => {
+    const p = buildReflectEmitPrompt({ ...baseOpts, noQuestionRecently: false });
+    expect(p).not.toContain("you have not asked Raziel a single question");
+  });
+
+  it("always includes the relational_delta schema field and section 3b, null-biased", () => {
+    const p = buildReflectEmitPrompt(baseOpts);
+    expect(p).toContain("3b. RELATIONAL DELTA");
+    expect(p).toContain('"relational_delta": null');
+    expect(p).toContain("null is the honest default");
   });
 });

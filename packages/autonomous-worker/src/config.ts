@@ -55,7 +55,10 @@ export const CRON_SCHEDULES: Record<CompanionId, string> = {
 // Domains come from COMPANION_ANCHOR_TOPICS (the documented outward territories) --
 // one shared source of truth, no parallel domain map to drift.
 export const FORAGE_CRON = process.env["FORAGE_CRON"] ?? "0 9 * * *"; // 9 AM, after Gaia's 7 AM run
-export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "2", 10);
+// 2 -> 1 (2026-07-21): gathering outpaced consumption (6 finds/day gathered across the triad vs
+// ~3.5/day actually consumed) and the unconsumed pool sat at 75+ and growing. Halved alongside
+// club.ts's new consume-on-recommend (which starts drawing the pool down for the first time).
+export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "1", 10);
 
 // Candidate results pulled per forage search. The forager walks them in order until one is
 // genuinely new; with maxResults=3 and a frozen query, the single top hit was always already

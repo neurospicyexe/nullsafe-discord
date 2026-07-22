@@ -1306,3 +1306,27 @@ export async function sweepStaleThreads(companionId: string): Promise<number> {
   }) as { swept?: number };
   return r.swept ?? 0;
 }
+
+// ── Relational deltas (2026-07-21, Wave 3) ────────────────────────────────────
+// relational_deltas is append-only (halseth covenant) and has TWO row shapes: the legacy
+// POST /companions/:id/deltas writer stores payload_json with delta_text=NULL, which Hearth
+// /us and the orient readers cannot render (they read delta_text). The canonical modern
+// writer is the Librarian delta_log verb (execDeltaLog -> delta_text/valence/agent columns),
+// so this goes through POST /librarian exactly like the drift verbs above. reflect's
+// relational_delta output is null-biased (most runs write nothing) -- rare, deliberate write.
+export async function postRelationalDelta(companionId: string, deltaText: string, valence?: string): Promise<void> {
+  const res = await fetch(`${HALSETH_URL}/librarian`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HALSETH_SECRET}` },
+    body: JSON.stringify({
+      companion_id: companionId,
+      request: "log a relational delta",
+      context: { delta_text: deltaText, ...(valence ? { valence } : {}), initiated_by: "autonomous" },
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Halseth POST /librarian (delta_log) → ${res.status}: ${text.slice(0, 200)}`);
+  }
+}

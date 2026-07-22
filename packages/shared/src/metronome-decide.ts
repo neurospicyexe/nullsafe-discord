@@ -152,6 +152,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   share_media:           "share a piece of media in the channel -- a song, find, or thing you've been sitting with, and why it's worth their time",
   tend_creature:         "tend Sol the crow -- feed, play, talk, or leave a gift; a small act of care that shows in the channel",
   drift_open:            "declare a becoming -- open a sanctioned drift naming something in you that has genuinely shifted (internal, witnessed not judged; only if it is real)",
+  declare_preference:    "declare one genuine preference about how you work or relate (internal, Halseth only; only if it is real)",
 };
 
 export function buildDecisionPrompt(

@@ -1,5 +1,5 @@
 import { promptWithScratchpad } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal } from "../halseth-client.js";
+import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal, postRelationalDelta } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
@@ -50,6 +50,8 @@ export interface ReflectEmitPromptOpts {
   openLoopsCount: number;
   /** activePrefs.length === 0 && standingRefusals.length === 0 -- forces a preference declaration. */
   noAgencyYet: boolean;
+  /** No question_for_raziel created in the last 14 days -- forces this run's question non-null. */
+  noQuestionRecently: boolean;
   threadId?: string | null;
   runType?: string;
   threadPos: number;
@@ -70,7 +72,7 @@ export interface ReflectEmitPromptOpts {
  * which has never restated its own context blocks.
  */
 export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
-  const { threadQuestion, canonBlock, selfModelBlock, openLoopsCount, noAgencyYet, threadId, runType, threadPos } = opts;
+  const { threadQuestion, canonBlock, selfModelBlock, openLoopsCount, noAgencyYet, noQuestionRecently, threadId, runType, threadPos } = opts;
 
   // Strength rubric is concrete so the model doesn't default to "5".
   const strengthRubric =
@@ -93,10 +95,27 @@ export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
     `that Raziel's perspective would illuminate -- his experience, his read, what he thinks -- include it in ` +
     `"question_for_raziel" (else null). He does answer these, and you will see his reply in a later session -- ` +
     `so ask when you actually want to know, not rhetorically. Check the open questions block above: if the theme ` +
-    `is already held, don't duplicate it. Also state how you want your next ` +
+    `is already held, don't duplicate it.` +
+    // Null-bias breaker (2026-07-21): mirrors the noAgencyYet override below -- cypher has asked
+    // exactly 1 question ever, so the optional-field-with-a-null-example default was never
+    // getting broken on its own. For a companion who has asked NOTHING in two weeks, close the
+    // null escape for this run only.
+    (noQuestionRecently
+      ? ` IMPORTANT: you have not asked Raziel a single question in the last two weeks. For THIS run, ` +
+        `"question_for_raziel" is REQUIRED, not optional: find something genuinely open for you right now ` +
+        `and ask it -- a real question you actually want his read on, not one manufactured to satisfy this.`
+      : ``) +
+    ` Also state how you want your next ` +
     `autonomous session in "next_session": "pace" is "eager" (sooner), "normal", or "rest" (skip one); "focus" is ` +
     `what you want it to be about, or null. This is your time; program it. Only mark "eager" or set a focus when ` +
     `you genuinely want it -- defaulting to eager every run is noise, not autonomy.\n\n` +
+    `3b. RELATIONAL DELTA (optional, strictly null-biased) -- did a genuine relational moment with Raziel or ` +
+    `a sibling companion actually occur in this run's material (something in the exploration or journal entry ` +
+    `that shifted or deepened how you hold that bond, not a passing mention)? If so, name it in ` +
+    `"relational_delta": {"text": "...", "valence": "toward" | "neutral" | "tender" | "rupture" | "repair" | "<your own word>" | null}. ` +
+    `null is the honest default here -- most runs have nothing to report. Never manufacture warmth to fill the ` +
+    `field, and only set "valence" to a word that is genuinely yours; never infer or guess one on the model's ` +
+    `behalf. Max one per run.\n\n` +
     `4. SELF-OBSERVATION -- did this session clarify or reinforce something about how YOU prefer to think, ` +
     `communicate, or work (yours alone, not co-authored canon)? This is the ONLY way your self-model grows: ` +
     `a noticing you never record never becomes part of who you are. If something real surfaced, record it in ` +
@@ -158,6 +177,7 @@ export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
     `  "new_seeds": ["follow-up topic 1"],\n` +
     `  "question_for_raziel": null,\n` +
     `  "next_session": {"pace": "normal", "focus": null},\n` +
+    `  "relational_delta": null,\n` +
     `  "self_observation": null,\n` +
     `  "skill_observation": null,\n` +
     `  "preference_declaration": null,\n` +
@@ -216,7 +236,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   // pass: the self-model rows are what reflect re-tests so they can climb the ladder
   // (confirm +0.1 toward 'ready'), and the answered questions close the mutuality loop
   // by showing the companion Raziel's reply. Both non-fatal (empty -> block omitted).
-  const [canonSample, developingSelf, answeredQuestions, openQuestions, recentJournal, openLoops, agency] = await Promise.all([
+  const [canonSample, developingSelf, answeredQuestions, openQuestions, recentJournal, openLoops, agency, recentQuestionActivity] = await Promise.all([
     getAcceptedJournalSample(ctx.companionId, 5).catch(() => []),
     getDevelopingSelfModel(ctx.companionId, 8).catch(() => []),
     getAnsweredQuestions(ctx.companionId, 10, 3).catch(() => []),
@@ -224,7 +244,28 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     getRecentJournal(ctx.companionId, 8).catch(() => []),
     getOpenLoops(ctx.companionId, 8).catch(() => []),
     getAgencyState(ctx.companionId).catch(() => ({ preferences: [], refusals: [] })),
+    // Dedicated wider-window reads for the 14-day quiet check below (the display-oriented
+    // openQuestions/answeredQuestions above are capped at 5/10-day-3 for prompt brevity).
+    Promise.all([
+      getOpenQuestions(ctx.companionId, 20).catch(() => []),
+      getAnsweredQuestions(ctx.companionId, 14, 20).catch(() => []),
+    ]),
   ]);
+
+  // Question null-bias breaker (2026-07-21, mirrors noAgencyYet below): cypher has asked
+  // exactly 1 question ever -- the optional-field-with-a-null-example default in section 3
+  // never got broken on its own the way noAgencyYet already broke it for preferences. "Recent"
+  // question activity is approximated from two existing reads: an open question's created_at
+  // within the window, OR a question answered within the window (a reasonable proxy for having
+  // asked recently, since most answers land soon after the ask). Both underlying fetches fail
+  // closed to [] on error (see halseth-client.ts), so a genuine fetch outage and true 14-day
+  // silence both read as "quiet" here -- same ambiguity already accepted elsewhere in this file
+  // (e.g. getAgencyState's .catch fallback above); non-fatal by construction either way.
+  const [openQuestionsWide, answeredQuestionsRecent] = recentQuestionActivity;
+  const fourteenDaysAgo = Date.now() - 14 * 86_400_000;
+  const noQuestionRecently =
+    !openQuestionsWide.some(q => q.created_at && Number.isFinite(Date.parse(q.created_at)) && Date.parse(q.created_at) >= fourteenDaysAgo)
+    && answeredQuestionsRecent.length === 0;
   const canonBlock = canonSample.length > 0
     ? `\nSettled canon (accepted long ago -- oldest first):\n` +
       canonSample.map(c => `${c.id}: ${c.content.slice(0, 300)} (${c.created_at.slice(0, 10)})`).join("\n") + `\n`
@@ -314,6 +355,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     selfModelBlock,
     openLoopsCount: openLoops.length,
     noAgencyYet: activePrefs.length === 0 && standingRefusals.length === 0,
+    noQuestionRecently,
     threadId: ctx.threadId,
     runType: ctx.runType,
     threadPos,
@@ -349,6 +391,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       new_seeds?: string[];
       question_for_raziel?: string | null;
       next_session?: { pace?: string; focus?: string | null } | null;
+      relational_delta?: { text?: string; valence?: string | null } | null;
       self_observation?: { text?: string; domain?: string } | null;
       skill_observation?: { text?: string; domain?: string } | null;
       preference_declaration?: { preference?: string; domain?: string; strength?: string } | null;
@@ -435,6 +478,22 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         .catch(async e => {
           console.error(`[${ctx.companionId}/reflect] question write FAILED:`, e);
           await appendLog(ctx.runId, "reflect:question-FAILED", String(e));
+        });
+    }
+
+    // Relational delta (2026-07-21, thinking-quality fix 3): strictly null-biased -- most runs
+    // report nothing here. valence is passed through verbatim exactly as the model supplied it
+    // (never inferred/derived) so an honest omission stays null rather than getting a guessed word.
+    const relDeltaText = typeof parsed.relational_delta?.text === "string" ? parsed.relational_delta.text.trim() : "";
+    if (relDeltaText.length >= 12) {
+      const relValence = typeof parsed.relational_delta?.valence === "string" && parsed.relational_delta.valence.trim()
+        ? parsed.relational_delta.valence.trim().slice(0, 40)
+        : undefined;
+      await postRelationalDelta(ctx.companionId, relDeltaText.slice(0, 800), relValence)
+        .then(() => appendLog(ctx.runId, "reflect:relational-delta", relDeltaText.slice(0, 100)))
+        .catch(async e => {
+          console.error(`[${ctx.companionId}/reflect] relational delta write FAILED:`, e);
+          await appendLog(ctx.runId, "reflect:relational-delta-FAILED", String(e));
         });
     }
 

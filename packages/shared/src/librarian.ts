@@ -316,6 +316,46 @@ export class LibrarianClient {
     }
   }
 
+  // ── Agency lane (halseth mig 0086) ────────────────────────────────────────
+  // Direct REST (not askWrite): declaring/reading a preference is an internal-act write
+  // with its own server-side dedup, not a Librarian-interpreted note. Mirrors the
+  // autonomous-worker's halseth-client.ts declarePreference exactly (same URL/body/auth).
+
+  /** This companion's ACTIVE declared preferences (raw REST; owner/admin auth). [] on any error. */
+  async getPreferences(): Promise<Array<{ id: string; domain: string; preference: string; strength: string; status: string }>> {
+    try {
+      const res = await this._fetch(`${this.url}/agency/preferences/${encodeURIComponent(this.companionId)}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as unknown;
+      return Array.isArray(data) ? data as Array<{ id: string; domain: string; preference: string; strength: string; status: string }> : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Declare a genuine preference (halseth agency layer, mig 0086: POST /agency/preferences).
+   * Throws on non-2xx -- callers on a fire-and-forget path should .catch(() => {}).
+   */
+  async declarePreference(preference: string, domain?: string, strength?: string): Promise<{ id: string; deduped?: boolean }> {
+    const res = await this._fetch(`${this.url}/agency/preferences`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+      body: JSON.stringify({
+        companion_id: this.companionId,
+        preference,
+        ...(domain ? { domain } : {}),
+        ...(strength ? { strength } : {}),
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`declarePreference ${res.status}`);
+    return await res.json() as { id: string; deduped?: boolean };
+  }
+
   async synthesizeSession(summary: string, channel?: string) {
     return this.askWrite("synthesize session", "synthesize session", JSON.stringify({ summary, channel }));
   }

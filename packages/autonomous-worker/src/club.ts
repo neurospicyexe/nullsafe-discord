@@ -20,7 +20,7 @@ import { loadIdentityRemote } from "./identity-loader.js";
 import {
   getClubCurrent, getLatestClubRound, openClubRound, postClubRecommendation,
   postClubVoteWrite, postClubAbstention, patchClubRoundStatus, postClubDiscussion, getCommonsPosts,
-  getRecentMediaExperiences, getForageFindsFor,
+  getRecentMediaExperiences, getForageFindsFor, consumeForageFind,
   type ClubRound, type ClubRecommendation, type ClubVote,
 } from "./halseth-client.js";
 import {
@@ -127,7 +127,7 @@ async function inVoice(speaker: CompanionId, userMessage: string, maxTokens: num
   return result.content.trim();
 }
 
-async function companionRecommend(speaker: CompanionId): Promise<void> {
+export async function companionRecommend(speaker: CompanionId): Promise<void> {
   const [listens, finds] = await Promise.all([
     getRecentMediaExperiences(3),
     getForageFindsFor(speaker, 2),
@@ -161,6 +161,24 @@ async function companionRecommend(speaker: CompanionId): Promise<void> {
     pitch: typeof parsed["pitch"] === "string" ? parsed["pitch"] as string : null,
   });
   console.log(`[club] ${speaker} recommends: ${title}`);
+
+  // Consume-on-use (2026-07-21, forage rebalance): finds were surfaced as flavor in every
+  // recommend prompt but never consumed -- the unconsumed pool only grew (75+ and rising).
+  // Consume at most ONE, and only the find this recommendation actually drew on: a title match
+  // against the fetched finds means the model picked the find itself. With no match, both finds
+  // functioned as pure ambient flavor (the prompt never asks the model to name which one it
+  // used, if either), so the honest fallback is to consume the OLDER of the two -- never both,
+  // and never when the pool was empty to begin with. getForageFindsFor returns newest-first, so
+  // the oldest fetched find is the last element.
+  if (finds.length > 0) {
+    const norm = (s: string) => s.toLowerCase().trim();
+    const titleN = norm(title);
+    const matched = finds.find(f => titleN.includes(norm(f.title)) || norm(f.title).includes(titleN));
+    const toConsume = matched ?? finds[finds.length - 1];
+    if (toConsume) {
+      await consumeForageFind(toConsume.id, speaker).catch(() => {});
+    }
+  }
 }
 
 async function companionVote(speaker: CompanionId, recs: ClubRecommendation[]): Promise<void> {

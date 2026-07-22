@@ -499,6 +499,37 @@ export async function executeMetronomeAction(
       console.log(`[${companionId}/drift_open] opened: ${content.slice(0, 80)}`);
       break;
     }
+    case "declare_preference": {
+      // Sanctioned agency lane (halseth mig 0086, src/handlers/agency.ts): declare a genuine
+      // preference about how the companion works/relates. Internal act -- Halseth only, never
+      // Discord, so this uses inference.generate like drift_open, NOT generateOutward.
+      // Cap: never let the declared set grow unbounded; skip past 5 active preferences.
+      const activePrefs = await ctx.librarian.getPreferences();
+      if (activePrefs.length >= 5) {
+        console.log(`[${companionId}/declare_preference] skipped: ${activePrefs.length} preferences already active`);
+        break;
+      }
+      const prompt = action.prompt
+        ?? "If a genuine way you prefer to work or relate has crystallized -- something real, not invented " +
+          "to fill space -- name it in exactly two lines:\nDomain: <one word>\nPreference: <one clear sentence, first person>\n" +
+          "Only if it is real; output NONE otherwise.";
+      const content = (await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]))?.trim();
+      if (!content || /^NONE\b/i.test(content)) {
+        console.log(`[${companionId}/declare_preference] nothing real to declare`);
+        break;
+      }
+      // Tolerant two-line parse: a model that ignores the "Domain:"/"Preference:" shape still
+      // gets its raw text saved as the preference (domain undefined -> server defaults "general")
+      // rather than the whole declaration being dropped over a formatting miss.
+      const domainMatch = content.match(/domain:\s*(.+)/i);
+      const prefMatch = content.match(/preference:\s*(.+)/i);
+      const domain = domainMatch?.[1]?.trim().slice(0, 60);
+      const preference = (prefMatch?.[1]?.trim() ?? content).slice(0, 600);
+      await ctx.librarian.declarePreference(preference, domain).catch((e: unknown) =>
+        console.warn(`[${companionId}/declare_preference] write failed:`, e));
+      console.log(`[${companionId}/declare_preference] declared: ${preference.slice(0, 80)}`);
+      break;
+    }
     case "nothing":
       console.log(`[${companionId}/heartbeat] chose nothing: ${reason}`);
       break;
