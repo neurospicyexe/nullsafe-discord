@@ -815,9 +815,16 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         ownContents = selfId
           ? live.filter(m => m.author.id === selfId).map(m => m.content.slice(0, 2000))
           : [];
-        humanPresent = ordered.some(m => !m.author.bot);
+        // A PluralKit proxy is a human speaking (author.bot true, webhookId set). Keying either
+        // of these on author.bot alone counted Raziel's proxied messages as bot turns: presence
+        // went unseen and botTurnsSinceHuman inflated toward the cap, so the seed-vocative
+        // budget starved in exactly the channels he was most active in. countBotMsgsSinceHuman
+        // is called with an empty id set here, so it falls back to this flag -- it has to be right.
+        const isBotTurn = (m: { author: { bot: boolean }; webhookId?: string | null }): boolean =>
+          m.author.bot && !m.webhookId;
+        humanPresent = ordered.some(m => !isBotTurn(m));
         botTurnsSinceHuman = countBotMsgsSinceHuman(
-          ordered.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
+          ordered.map(m => ({ authorId: m.author.id, authorIsBot: isBotTurn(m), createdTimestamp: m.createdTimestamp })),
           new Set<string>(),
         );
         const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);

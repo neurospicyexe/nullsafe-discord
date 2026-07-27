@@ -51,7 +51,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
-  ChannelConfigCache, PkDedup, VoiceClient,
+  ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
   type ConvoActiveDto,
@@ -152,6 +152,13 @@ export interface MessageHandlerDeps {
   configCache: ChannelConfigCache;
   sessionWindows: SessionWindowManager;
   pkDedup: PkDedup;
+  /** PluralKit member roster -- offline identification of the fronting member behind a proxy.
+   *  Optional so direct handleMessage() calls in tests need no PK plumbing. */
+  pkRoster?: PkRoster | null;
+  /** Sender id recovered at event time by pairing this webhook with the original PluralKit
+   *  deleted (see pkIngestAtEvent). Present only on proxied messages, and only when the
+   *  pairing matched -- it is the offline half of owner resolution. */
+  pkSenderId?: string;
   // per-channel state maps/sets
   guildVoiceConnections: Map<string, { connection: VoiceConnection; player: AudioPlayer }>;
   sentIds: Set<string>;
@@ -240,7 +247,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
   const {
     client, cfg, brainClient, voiceClient, redis, librarian,
     adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
-    stmStore, writeQueue, configCache, sessionWindows, pkDedup,
+    stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
     apiKeys, apiUrls, isSuperseded,
@@ -266,19 +273,23 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (process.env["GAIA_BOT_ID"]) BOT_ID_COMPANION[process.env["GAIA_BOT_ID"]] = "gaia";
     const BOT_IDS = new Set(Object.keys(BOT_ID_COMPANION));
     const isCompanionPost = BOT_IDS.has(message.author.id);
-    // PluralKit reposts proxied messages via webhook with the proxy tag stripped,
-    // so dedup must match by content containment, not exact equality. matchWebhook
-    // also recovers the sender id captured from the direct original (used below for
-    // attribution when the PK API races).
-    const pkMatch = message.webhookId ? pkDedup.matchWebhook(message.channelId, message.content) : null;
-    const pkKnownSenderId = pkMatch?.senderId;
+    // PluralKit pairing: registration (addOriginal) and the claim (matchWebhook) both happen
+    // at messageCreate time in bot-core, OUTSIDE this serialized turn -- doing either here
+    // deadlocks the pair against the channel inbox (see PkDedup's ordering note). All that is
+    // left here is the decision: was this direct message claimed by a proxy? waitForClaim
+    // returns instantly when the claim already landed (queue was busy) or the moment it does,
+    // and only costs the full hold for a message that genuinely was never proxied.
+    const pkKnownSenderId = pkSenderId;
     if (!message.webhookId && !message.author.bot) {
-      pkDedup.addOriginal(message.channelId, message.id, message.content, message.author.id);
-      await new Promise<void>(resolve => setTimeout(resolve, PK_HOLD_MS));
-      if (pkDedup.resolveOriginal(message.channelId, message.id).skip) return;
+      const { skip } = await pkDedup.waitForClaim(message.channelId, message.id, PK_HOLD_MS);
+      if (skip) return; // PluralKit deleted this and reposted it; the proxy turn owns the reply
     }
-    // Signal conversation activity so autonomous worker skips runs while humans are present
-    if (!message.author.bot && redis) {
+    // Signal conversation activity so autonomous worker skips runs while humans are present.
+    // A PluralKit proxy IS Raziel present (webhookId set, author.bot true) -- keying this on
+    // author.bot alone made every proxied message look like bot traffic, so the autonomous
+    // worker fired mid-conversation.
+    const isHumanTraffic = !message.author.bot || message.webhookId !== null;
+    if (isHumanTraffic && redis) {
       setLastActivity(redis).catch(() => {});
       clearConsolidation(redis, COMPANION_ID).catch(() => {});
     }
@@ -297,7 +308,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     const knownSenderId = pkKnownSenderId;
     const channelConfig = await configCache.get();
-    const attribution = await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"]);
+    const attribution = await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"], pkRoster ?? null);
 
     const userTier = attribution.isOwner ? "owner" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
@@ -307,7 +318,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       userTier: "owner" | "intimate" | "guest"; activeExchangeWith?: CompanionId | null;
     } = {
       isOwner: attribution.isOwner,
-      isCompanionBot: message.author.bot && !attribution.isOwner,
+      // STRUCTURAL, not attribution-derived (2026-07-27). This was `author.bot && !isOwner`,
+      // which made every classification below hostage to one racy PK API call: when the lookup
+      // lost the race, Raziel's own proxied message became a "companion bot" and the entire
+      // cross-companion rail stack applied to it -- human-anchored cap, pingpong cooldown,
+      // per-human response cap, chain-depth limit, and vocative-only shouldRespond gating.
+      // The visible result was the bots simply never answering. A companion bot posts as a bot
+      // user with NO webhook; a PluralKit proxy is always a webhook. That distinction needs no
+      // network call, so guardrails meant for bot-to-bot traffic can never eat a human again.
+      isCompanionBot: message.author.bot && !message.webhookId,
       isMentioned: message.mentions.has(client.user?.id ?? ""),
       userTier,
     };
@@ -319,14 +338,28 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       writeQueue.fireAndForget(`drive:contact:${COMPANION_ID}`, () => librarian.shedDriveContact());
     }
 
+    // One definition of "bot turn" for every rail below (2026-07-27). A PluralKit proxy has
+    // author.bot === true, so any rail keyed on that flag alone counted Raziel's own messages
+    // as bot traffic: countBotMsgsSinceHuman and computeChainDepth both fall back to this flag
+    // when called with an empty id set, which inflated the caps that then muted the channel.
+    const botTurn = (m: { author: { bot: boolean }; webhookId?: string | null }): boolean =>
+      m.author.bot && !m.webhookId;
+
     const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
     const channelEntry = channelConfig[message.channelId];
 
     let spine: ConvoActiveDto | null = null;
     const pkCtx = detectPluralKit(message);
-    // isPKProxy: applicationId is the primary PK signal; attribution.source covers
-    // PK setups where applicationId isn't set on the webhook.
-    const isPKProxy = pkCtx.isPluralKit || attribution.source === "pluralkit";
+    // isPKProxy: four independent signals, any one sufficient. applicationId (pkCtx) is only
+    // populated when Discord attributes the webhook to an application, which a classic webhook
+    // execute often is not -- so it was never safe as the primary signal. attribution.source
+    // covers the roster hit and the API lookup; pkKnownSenderId covers the offline pairing with
+    // the original PK deleted. Together these hold when PK's API is slow, down, or rate-limited.
+    const isPKProxy = !!message.webhookId && !isCompanionPost && (
+      pkCtx.isPluralKit
+      || attribution.source === "pluralkit"
+      || pkKnownSenderId !== undefined
+    );
     // pkMemberName: PK API → detectPluralKit webhook username → raw webhook username.
     // PK always sets message.author.username to the member's display name, so the
     // raw webhook username is a reliable final fallback when the API races.
@@ -336,7 +369,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
     // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
-    if (message.author.bot && !isCompanionPost && !isPKProxy) return;
+    if (message.author.bot && !isCompanionPost && !isPKProxy) {
+      // A webhook reaching here is a proxy none of the four signals could confirm -- the shape
+      // that used to fail silently and read as "the bots ignored me". Log it so it is one grep
+      // away instead of invisible; the roster (loaded at boot) is what normally prevents it.
+      if (message.webhookId) {
+        console.warn(`[${COMPANION_ID}] unconfirmed webhook post from "${message.author.username}" in ${message.channelId} -- dropped (PK roster loaded: ${pkRoster?.loaded ?? false})`);
+      }
+      return;
+    }
 
     // Thread spine (task 10): ensure a conversation thread exists for this channel and
     // append this incoming message as a turn on it. Fully fail-open -- ensureThread's own
@@ -665,7 +706,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
             .map(m => ({
               companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
-              authorIsBot: m.author.bot,
+              authorIsBot: botTurn(m),
               createdTimestamp: m.createdTimestamp,
             })),
         );
@@ -746,7 +787,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // addressing. Only an actual human message (incl. a PK webhook proxy, whose author
       // id is not a companion bot id) re-opens the floor.
       botTurnsSinceHuman = countBotMsgsSinceHuman(
-        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
+        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
         BOT_IDS,
       );
       // Triad commons (autonomous + inter_companion modes) is the companions' own space:
@@ -797,7 +838,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     // Loop guard: derive chain depth from fetched history so the check works across processes.
     const chainDepth = computeChainDepth(
-      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: m.author.bot, createdTimestamp: m.createdTimestamp })),
+      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
       new Set(),
     );
     if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
@@ -822,9 +863,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // context block below still appends, exactly as onto bootCtx.systemPrompt. Brain/direct
     // paths are unchanged.
     const basePrompt = inferenceMode === "hermes" ? hermesSystemBase(COMPANION_ID) : bootCtx.systemPrompt;
-    let contextPrompt = pkMemberName
-      ? `${basePrompt}\n\n[Current front: ${pkMemberName}]`
-      : basePrompt;
+    // Front line (2026-07-27): a bare "[Current front: Ash]" told the model a name and nothing
+    // about whose name it was, so a member it had not seen before could read as a stranger --
+    // in a system with 538 registered members that is the common case, not the edge. Name the
+    // relationship explicitly: same person, same history, register calibrated to who is here.
+    let contextPrompt = basePrompt;
+    if (pkMemberName) {
+      const whose = attribution.isOwner
+        ? `${pkMemberName} is fronting in ${cfg.ownerDisplayName}'s system -- this IS ${cfg.ownerDisplayName}, same bond and same history, speaking through ${pkMemberName}. Calibrate register to ${pkMemberName}; never treat them as a stranger or re-introduce yourself.`
+        : userTier === "intimate"
+          ? `${pkMemberName} is fronting in Blue's system. Known, welcome, not Raziel.`
+          : `${pkMemberName} is a system member you have no standing bond with. Guest register.`;
+      contextPrompt += `\n\n[Current front: ${pkMemberName}] ${whose}`;
+    }
     // Thread spine (task 10): pinned above the periodic hermes orient paragraph below,
     // deliberately -- the spine is this exchange's immediate continuity and should read
     // as closer/more load-bearing than the standing recent-context block. Guarded on

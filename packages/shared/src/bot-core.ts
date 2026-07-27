@@ -30,7 +30,8 @@ import {
 } from "@discordjs/voice";
 import * as prism from "prism-media";
 import type { Redis } from "ioredis";
-import { PkDedup } from "./pluralkit.js";
+import { PkDedup, pkIngestAtEvent } from "./pluralkit.js";
+import { PkRoster, pkSystemsFromEnv } from "./pk-roster.js";
 import { ChannelConfigCache, DEFAULT_CHANNEL_CONFIG } from "./channel-config.js";
 import { SessionWindowManager } from "./session-window.js";
 import { StmStore } from "./stm.js";
@@ -454,6 +455,23 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const SENT_IDS_CAP = 500;
   const PK_HOLD_MS = 3000;
   const pkDedup = new PkDedup(PK_HOLD_MS);
+  // PluralKit member roster (2026-07-27): identifies the fronting member behind a proxy from
+  // the webhook username alone, with no per-message API call -- so who is speaking never
+  // depends on a race with PK's own write. Fail-open: an unloaded roster just falls back to
+  // the /v2/messages lookup. Redis-cached so all three bots share one fetch.
+  const pkRoster = new PkRoster(
+    pkSystemsFromEnv({
+      ownerSystemId: process.env["PLURALKIT_SYSTEM_ID"],
+      ownerDiscordId: env.ownerDiscordId,
+      blueSystemId: process.env["BLUE_PK_SYSTEM_ID"],
+      blueDiscordId: env.blueDiscordId,
+    }),
+    undefined,
+    redis,
+    (m) => console.log(`[${companionId}] ${m}`),
+  );
+  void pkRoster.ensureLoaded();
+  pkRoster.startRefresh();
 
   const identityBase = deriveIdentityBase(bootCtx.systemPrompt);
   const currentMoodRef = { value: null as string | null };
@@ -647,6 +665,23 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   });
 
   client.on(Events.MessageCreate, (message: Message) => {
+    // PluralKit pairing happens HERE, at event time, before the inbox -- never inside a turn.
+    // The inbox serializes per channel, so a hold taken inside the original's turn blocks the
+    // very webhook turn whose claim it waits for: the claim never lands, the already-deleted
+    // pre-proxy original gets processed in full, and the proxy loses its captured sender id
+    // (which is what demoted Raziel's own message to guest-and-peer-bot). See PkDedup's
+    // ordering note. Only the decision -- waitForClaim -- runs inside the turn.
+    const { pkSenderId } = pkIngestAtEvent(
+      {
+        id: message.id,
+        channelId: message.channelId,
+        content: message.content,
+        webhookId: message.webhookId,
+        authorId: message.author.id,
+        authorIsBot: message.author.bot,
+      },
+      pkDedup,
+    );
     inbox.enqueue(
       {
         id: message.id,
@@ -661,7 +696,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       brainClient, voiceClient, redis, librarian,
       adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
-      stmStore, writeQueue, configCache, sessionWindows, pkDedup,
+      stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster,
+      ...(pkSenderId ? { pkSenderId } : {}),
       guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
       botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
       apiKeys, apiUrls,
