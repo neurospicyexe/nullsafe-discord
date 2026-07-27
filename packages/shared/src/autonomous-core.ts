@@ -837,6 +837,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // model had nothing new to reach for and extended the thread instead. That is the loop.
     // Consumed after the post lands, never before: a gated or empty seed must not burn material.
     let servedFinds: Array<{ id: string; title: string }> = [];
+    let servedQuestionId: string | null = null;
     try {
       const orient = await librarian.botOrient();
       const fresh: string[] = [];
@@ -860,7 +861,15 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
           (l.own_reaction ? ` -- what you said then: "${l.own_reaction.slice(0, 180)}"` : ""),
         );
       }
-      for (const q of (orient?.open_questions ?? []).slice(0, 1)) {
+      // Voiced-once (2026-07-27). Halseth now excludes questions already voiced, but the
+      // seed must also STAMP the one it serves, or nothing ever marks it and the exclusion
+      // never engages. Same consume-on-use contract as forage: capture here, stamp after
+      // the post lands. Gaia re-asked one 2026-07-21 question into the commons every ~2h
+      // for six days, including as her first post in the brand-new channel.
+      const heldQs = (orient?.open_questions ?? []).slice(0, 1);
+      const heldQIds = (orient?.open_question_ids ?? []).slice(0, 1);
+      servedQuestionId = heldQIds[0] ?? null;
+      for (const q of heldQs) {
         fresh.push(`a question you're holding: ${q}`);
       }
       if (fresh.length > 0) {
@@ -954,6 +963,12 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
           ` (${matched ? "named in the post" : "ambient, older of the pair"}, ack=${ok})`,
         );
       }
+    }
+
+    // Stamp the held question as voiced, same contract: only after the post actually landed.
+    if (servedQuestionId) {
+      const ok = await librarian.markQuestionVoiced(servedQuestionId).catch(() => false);
+      console.log(`[${ctx.companionId}/autonomous] commons seed voiced question ${servedQuestionId} (ack=${ok})`);
     }
   });
 }

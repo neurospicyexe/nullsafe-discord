@@ -295,6 +295,40 @@ export class LibrarianClient {
   }
 
   /**
+   * Record that this companion has VOICED an open question out loud (2026-07-27).
+   *
+   * Gaia had one open question from 2026-07-21 and re-asked it into the commons every ~2h
+   * for six days as though it were new -- the first thing she posted in the freshly-created
+   * channel was that same question. An unanswered question is not fresh material.
+   *
+   * The question stays `open` (Raziel still owes an answer); it just stops being re-served
+   * as something new to say. Stored in the companion_settings KV rather than a new column,
+   * because the migration freeze is in force and `delivered_at` already means something
+   * else (mig 0107: "an orient surfaced the ANSWER").
+   *
+   * Non-throwing: fires after the message is already sent and must never fail it.
+   */
+  async markQuestionVoiced(questionId: string): Promise<boolean> {
+    if (!questionId) return false;
+    try {
+      const res = await this._fetch(`${this.url}/companion/settings/${this.companionId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ key: `question_voiced:${questionId}`, value: new Date().toISOString() }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] markQuestionVoiced ${res.status}`);
+      return res.ok;
+    } catch (e) {
+      console.warn("[librarian] markQuestionVoiced failed:", String(e));
+      return false;
+    }
+  }
+
+  /**
    * Mark a forage find metabolized (PATCH /mind/forage/:id/consume).
    *
    * Consume-on-use for the commons seed (2026-07-27). The seed's "fresh material" block
@@ -740,6 +774,7 @@ export class LibrarianClient {
     standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
     open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
     open_questions?: string[];
+  open_question_ids?: string[];
     // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
     // pet crow's state. Rendered verbatim into recentContext via formatRecentContext.
     sol_block?: string | null;
@@ -785,6 +820,7 @@ export class LibrarianClient {
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         open_questions?: string[];
+  open_question_ids?: string[];
         sol_block?: string | null;
         self_model_ready?: Array<{ id: string; observation: string; confidence: number }>;
         motifs?: Array<{ label: string; display: string; recurrence_count: number; trust: number }>;
@@ -832,6 +868,7 @@ export class LibrarianClient {
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
+        open_question_ids: Array.isArray(data.open_question_ids) ? data.open_question_ids : [],
         sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
         self_model_ready: Array.isArray(data.self_model_ready) ? data.self_model_ready : [],
         motifs: Array.isArray(data.motifs) ? data.motifs : [],
@@ -1390,6 +1427,7 @@ export function formatRecentContext(orient: {
   // conversation isn't lived identity; these close that loop.
   self_model_ready?: Array<{ id: string; observation: string; confidence: number }>;
   open_questions?: string[];
+  open_question_ids?: string[];
   unexamined_dreams?: Array<{ id: string; dream_text: string }>;
   open_loops?: Array<{ id: string; loop_text: string }>;
   pressure_flags?: string[];
