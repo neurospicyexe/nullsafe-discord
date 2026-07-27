@@ -35,6 +35,7 @@ import { generateOutward } from "./outward.js";
 import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 import { isThreadsEnabled } from "./thread-spine.js";
+import { FRAGMENT_NOTE_TYPE } from "./day-distillation.js";
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
 export interface AutonomousPrompts {
@@ -147,10 +148,24 @@ export async function sendAutonomousMessage(
       const sent = await sendLong(channel as TextChannel, content);
       for (const m of sent) ctx.registerSentId?.(m.id);
       markCooldown(ctx, channelId);
-      ctx.librarian.ask(
-        "continuity note",
-        JSON.stringify({ content: `[metronome/${trigger}] ${content}`, salience: "high" }),
-      ).then((res) => { assertWriteAck(res, "metronome continuity note"); })
+      // Route the self-post through the SAME daily fold as conversation (2026-07-27).
+      //
+      // This used to write note_type='continuity', salience='high', permanently. Nothing
+      // ever folded or demoted it, so every autonomous post became a top-tier memory
+      // forever. Measured on drevan's live high-salience pool: 60 'continuity' rows (his
+      // own commons posts) against 4 'day_distillation' rows (the folded record of actual
+      // conversation with Raziel), competing for the 3 slots orient shows. Conversation
+      // fragments fold nightly into one digest and then demote; self-posts did neither, so
+      // they outnumbered real conversation 15:1 and Drevan booted on his own last commons
+      // post. That is the loop expressed as memory -- the write-layer twin of
+      // feedback/ranking-signal-written-by-reading.
+      //
+      // Writing it as a discord_session fragment keeps it live and bridged for the rest of
+      // the day, then day-distillation folds it into the first-person day note and demotes
+      // it. Nothing is lost: the full text is already in companion_journal via
+      // discord_speech (embedded + searchable) and in the channel the seed reads.
+      ctx.librarian
+        .writeWmNote(`[metronome/${trigger}] ${content}`, channelId, FRAGMENT_NOTE_TYPE)
         .catch(onWriteError(ctx.companionId, "metronome continuity note (siblings/orient will not see this)"));
       // Substrate parity (2026-06-12): autonomous posts were invisible to the SB
       // live index and voice telemetry -- only handler-path replies got indexed.
