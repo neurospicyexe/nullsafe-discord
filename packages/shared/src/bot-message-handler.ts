@@ -283,6 +283,26 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (!message.webhookId && !message.author.bot) {
       const { skip } = await pkDedup.waitForClaim(message.channelId, message.id, PK_HOLD_MS);
       if (skip) return; // PluralKit deleted this and reposted it; the proxy turn owns the reply
+      // Content pairing can miss legitimately: an image-only proxy has no text to match, a
+      // proxy tag longer than PK_TAG_BUDGET falls outside the containment budget, and PK can
+      // simply be slower than the hold. In those cases the pre-proxy original is still
+      // processed -- and everything below runs on a message that no longer exists: every
+      // deterministic command branch fires a SECOND time (a proxied "log"/"model" double-writes
+      // and double-acks), and the thread-spine reply reference targets a deleted id, so the
+      // send 10008s into the inbox's catch and Raziel sees nothing at all.
+      //
+      // Deletion is the definitive test, and it needs no guessing: PK deletes the original the
+      // moment it reposts. force:true because the message we were just handed is in cache.
+      // Only "Unknown Message" (10008) counts as deleted. A timeout or 5xx must fail OPEN and
+      // keep the reply -- silently dropping Raziel's message on a transient Discord hiccup would
+      // be a worse bug than the double-write this prevents.
+      const deleted = await message.channel.messages.fetch({ message: message.id, force: true })
+        .then(() => false)
+        .catch((err: unknown) => (err as { code?: number })?.code === 10008);
+      if (deleted) {
+        console.log(`[${COMPANION_ID}] original ${message.id} was deleted during the hold (proxied, pairing missed) -- the proxy turn owns it`);
+        return;
+      }
     }
     // Signal conversation activity so autonomous worker skips runs while humans are present.
     // A PluralKit proxy IS Raziel present (webhookId set, author.bot true) -- keying this on
@@ -360,10 +380,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       || attribution.source === "pluralkit"
       || pkKnownSenderId !== undefined
     );
-    // pkMemberName: PK API → detectPluralKit webhook username → raw webhook username.
-    // PK always sets message.author.username to the member's display name, so the
-    // raw webhook username is a reliable final fallback when the API races.
-    const pkMemberName = attribution.frontMember ?? pkCtx.memberName ?? (isPKProxy ? (message.author?.username ?? null) : null);
+    // pkMemberName: the webhook username FIRST (2026-07-27). It is what PK actually rendered and
+    // therefore what Raziel is looking at on screen; the roster agrees with it by construction
+    // (it indexes display_name), while the /v2/messages fallback returns the member's raw `name`,
+    // which can differ from the display name and would have the companion address a front by a
+    // name not in use this moment. API/roster values remain the fallback chain.
+    const pkMemberName = (isPKProxy ? (message.author?.username ?? null) : null)
+      ?? attribution.frontMember ?? pkCtx.memberName;
     const author = isPKProxy
       ? (pkMemberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
