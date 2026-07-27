@@ -63,6 +63,14 @@ const shared = {
   TRIAD_COMMONS_CHANNEL_ID: process.env.TRIAD_COMMONS_CHANNEL_ID ?? "",
   INTER_COMPANION_CHANNEL_ID: process.env.INTER_COMPANION_CHANNEL_ID,
   HEARTBEAT_CHANNEL_ID:  process.env.HEARTBEAT_CHANNEL_ID,
+  // 2026-07-27: these two were NEVER in this allowlist. They only worked because the
+  // processes inherited them from the shell that first started pm2, so editing .env and
+  // reloading silently changed nothing -- the vibe-check channel swap reported success on
+  // all four processes and kept posting to the retired channel. This block is an ALLOWLIST:
+  // a var absent here can never be updated by a reload, only by a full pm2 delete/start.
+  // Verify any channel change with `pm2 env <id> | grep <VAR>`, never trust the reload.
+  VIBECHECK_CHANNEL_ID:  process.env.VIBECHECK_CHANNEL_ID,
+  BRIEFING_CHANNEL_ID:   process.env.BRIEFING_CHANNEL_ID,
   // Each bot needs the OTHER bots' Discord user IDs to recognize their messages as companion
   // posts (isCompanionPost / BOT_ID_COMPANION). Without these forwarded here, every bot-to-bot
   // message is dropped at the "hard muzzle" gate and inter-companion conversation never fires.
