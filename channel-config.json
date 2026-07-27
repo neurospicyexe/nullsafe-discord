@@ -1,56 +1,142 @@
 {
   "1408924311703785502": {
-    "modes": ["owner_only", "inter_companion"],
-    "companions": ["drevan", "gaia"]
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia"
+    ]
   },
   "1408924393513554003": {
-    "modes": ["owner_only", "inter_companion"],
-    "companions": ["drevan", "cypher", "gaia"]
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ]
   },
   "1408924278451081317": {
-    "modes": ["owner_only", "inter_companion"],
-    "companions": ["cypher", "gaia"]
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ],
+    "companions": [
+      "cypher",
+      "gaia"
+    ]
   },
   "1412191737622827088": {
-    "modes": ["owner_only", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1408924353034453114": {
-    "modes": ["owner_only", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1422043032643043371": {
-    "modes": ["open", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "open",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1243598039965368381": {
-    "modes": ["open", "autonomous", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "open",
+      "autonomous",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1486853365462733004": {
-    "modes": ["autonomous"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "autonomous"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1486217438105436260": {
-    "modes": ["autonomous", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "autonomous",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   },
   "1497789177797017742": {
-    "modes": ["owner_only"],
-    "companions": ["drevan", "gaia", "cypher"],
+    "modes": [
+      "owner_only"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ],
     "voice": true
   },
   "1497789114517553193": {
-    "modes": ["owner_only"],
-    "companions": ["drevan", "gaia", "cypher"],
+    "modes": [
+      "owner_only"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ],
     "voice": true
   },
-  "1503385639779963020": {
-    "modes": ["autonomous", "inter_companion"],
-    "companions": ["drevan", "gaia", "cypher"]
-  },
   "1503385706310008975": {
-    "modes": ["open"],
-    "companions": ["drevan", "gaia", "cypher"]
+    "modes": [
+      "open"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
+  },
+  "1531255244212928702": {
+    "modes": [
+      "autonomous",
+      "inter_companion"
+    ],
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ]
   }
 }

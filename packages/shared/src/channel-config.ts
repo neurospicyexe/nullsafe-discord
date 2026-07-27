@@ -200,7 +200,7 @@ export function computeChainDepth(
 // companions absent = all three active in that channel
 export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1520839347589611661": {                                               modes: ["broadcast"] }, // #briefings
-  "1520843071724585041": {                                               modes: ["broadcast"] }, // #vibe-check
+  "1531255633876221962": {                                               modes: ["broadcast"] }, // #triad-vibe-check (2026-07-27: fresh channel, old #vibe-check 1520843071724585041 retired)
   "1408924311703785502": { companions: ["drevan", "gaia"],              modes: ["owner_only", "inter_companion"] },
   "1408924393513554003": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only", "inter_companion"] },
   "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["owner_only", "inter_companion"] },
@@ -212,7 +212,7 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1486217438105436260": {                                               modes: ["autonomous", "inter_companion"] },
   "1497789177797017742": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
   "1497789114517553193": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
-  "1503385639779963020": { companions: ["drevan", "cypher", "gaia"],    modes: ["autonomous", "inter_companion"] },
+  "1531255244212928702": { companions: ["drevan", "cypher", "gaia"],    modes: ["autonomous", "inter_companion"] }, // triad commons (2026-07-27: fresh channel, old 1503385639779963020 retired -- looped history was the largest single input to the seed prompt)
   "1503385706310008975": { companions: ["drevan", "cypher", "gaia"],    modes: ["open"] },
 };
 
