@@ -43,6 +43,12 @@ const shared = {
   GAIA_HALSETH_SECRET:   process.env.GAIA_HALSETH_SECRET,
   REDIS_URL:             process.env.REDIS_URL,
   DEEPSEEK_API_KEY:      process.env.DEEPSEEK_API_KEY,
+  // 2026-07-27: also absent from this allowlist, so the DEEPSEEK_MODEL override in .env was
+  // silently dead. DeepSeek retired `deepseek-chat` (supported: deepseek-v4-pro /
+  // deepseek-v4-flash) and the worker pipeline has been 400ing since ~2026-07-26 -- lane
+  // guard, growth pipeline and compression all failing. Listing it here makes the .env knob
+  // actually reachable; the model CHOICE (pro vs flash = cost/quality) is Raziel's.
+  DEEPSEEK_MODEL:        process.env.DEEPSEEK_MODEL,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
   GROQ_API_KEY:          process.env.GROQ_API_KEY,
   OLLAMA_URL:            process.env.OLLAMA_URL,
@@ -168,6 +174,12 @@ module.exports = {
         // Halseth IS the WebMind for now -- /mind/* endpoints are identical.
         WEBMIND_URL:           process.env.HALSETH_URL,
         DEEPSEEK_API_KEY:      process.env.DEEPSEEK_API_KEY,
+  // 2026-07-27: also absent from this allowlist, so the DEEPSEEK_MODEL override in .env was
+  // silently dead. DeepSeek retired `deepseek-chat` (supported: deepseek-v4-pro /
+  // deepseek-v4-flash) and the worker pipeline has been 400ing since ~2026-07-26 -- lane
+  // guard, growth pipeline and compression all failing. Listing it here makes the .env knob
+  // actually reachable; the model CHOICE (pro vs flash = cost/quality) is Raziel's.
+  DEEPSEEK_MODEL:        process.env.DEEPSEEK_MODEL,
         INFERENCE_ENABLED:     "true",
         SYNTHESIS_ENABLED:     process.env.BRAIN_SYNTHESIS_ENABLED ?? "false",
         SYNTHESIS_INTERVAL:    process.env.BRAIN_SYNTHESIS_INTERVAL ?? "1200",
