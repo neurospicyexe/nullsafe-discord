@@ -391,6 +391,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       ? (pkMemberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
+    // Positive trace (2026-07-27). Every PK path here logged only on FAILURE, so a working proxy
+    // and a silently dropped one looked identical in the logs -- there was no way to verify the
+    // fix without asking Raziel whether a reply showed up. One line per recognized proxy, naming
+    // which signal identified the front, so the offline path (roster) vs the API fallback vs the
+    // dedup capture is visible at a glance.
+    if (isPKProxy) {
+      const via = attribution.source === "pluralkit"
+        ? (pkRoster?.identify(message.author?.username) ? "roster" : "pk-api")
+        : (pkKnownSenderId !== undefined ? "dedup-pairing" : "webhook-only");
+      console.log(`[${COMPANION_ID}] PK proxy: front="${pkMemberName ?? "?"}" tier=${userTier} via=${via} chars=${message.content.length}`);
+    }
+
     // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
     if (message.author.bot && !isCompanionPost && !isPKProxy) {
       // A webhook reaching here is a proxy none of the four signals could confirm -- the shape
