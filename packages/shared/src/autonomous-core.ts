@@ -815,10 +815,19 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // something from OUTSIDE the thread -- forage finds, recent listens, held
     // questions -- so the commons metabolizes shared life, not its own echo.
     let freshBlock = "";
+    // Consume-on-use (2026-07-27): the finds actually served into this seed's prompt, in
+    // the order fetched (newest first). Without consumption the SAME two finds were served
+    // to every bot on every ~2h tick until the next daily forage run -- the block whose
+    // whole purpose is to be "fresh material OUTSIDE this thread" was a constant, so the
+    // model had nothing new to reach for and extended the thread instead. That is the loop.
+    // Consumed after the post lands, never before: a gated or empty seed must not burn material.
+    let servedFinds: Array<{ id: string; title: string }> = [];
     try {
       const orient = await librarian.botOrient();
       const fresh: string[] = [];
-      for (const f of (orient?.forage_finds ?? []).slice(0, 2)) {
+      const finds = (orient?.forage_finds ?? []).slice(0, 2);
+      servedFinds = finds.filter(f => f?.id).map(f => ({ id: f.id, title: f.title }));
+      for (const f of finds) {
         fresh.push(`forage find [${f.domain}]: ${f.title} -- ${f.summary.slice(0, 200)}`);
       }
       for (const l of (orient?.recent_listens ?? []).slice(0, 2)) {
@@ -902,6 +911,25 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       return;
     }
     await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");
+
+    // Consume ONE served find now that the seed is actually in the channel. Mirrors the
+    // club recommend path (club.ts, 2026-07-21): if the posted text names a find, that one
+    // was demonstrably used; otherwise both were ambient flavor and the honest choice is
+    // the OLDER of the pair (botOrient returns newest-first, so the last element). Never
+    // both -- draining two per tick would outrun the daily gather and starve the pool.
+    if (servedFinds.length > 0) {
+      const norm = (s: string) => s.toLowerCase().trim();
+      const msgN = norm(msg);
+      const matched = servedFinds.find(f => f.title && msgN.includes(norm(f.title)));
+      const toConsume = matched ?? servedFinds[servedFinds.length - 1];
+      if (toConsume) {
+        const ok = await librarian.consumeForageFind(toConsume.id).catch(() => false);
+        console.log(
+          `[${ctx.companionId}/autonomous] commons seed consumed forage find ${toConsume.id}` +
+          ` (${matched ? "named in the post" : "ambient, older of the pair"}, ack=${ok})`,
+        );
+      }
+    }
   });
 }
 

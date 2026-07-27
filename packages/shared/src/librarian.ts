@@ -294,6 +294,40 @@ export class LibrarianClient {
     }
   }
 
+  /**
+   * Mark a forage find metabolized (PATCH /mind/forage/:id/consume).
+   *
+   * Consume-on-use for the commons seed (2026-07-27). The seed's "fresh material" block
+   * reads the top-2 UNCONSUMED finds newest-first and never consumed them, so between
+   * daily forage runs every ~2h tick for all three bots was handed the identical two
+   * items -- the block added in 2026-06-12 specifically to break the elderberry loop was
+   * itself a constant. Same defect the club recommend path fixed on 2026-07-21.
+   *
+   * Non-throwing by design: this fires AFTER the Discord message is already sent and must
+   * never retroactively fail it. 404 is a normal race (another surface consumed it first).
+   */
+  async consumeForageFind(id: string): Promise<boolean> {
+    if (!id) return false;
+    try {
+      const res = await this._fetch(`${this.url}/mind/forage/${encodeURIComponent(id)}/consume`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify({ consumed_by: this.companionId }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok && res.status !== 404) {
+        console.warn(`[librarian] consumeForageFind ${res.status}`);
+      }
+      return res.ok;
+    } catch (e) {
+      console.warn("[librarian] consumeForageFind failed:", String(e));
+      return false;
+    }
+  }
+
   // ── Sanctioned drift lane (halseth mig 0087/0093) ─────────────────────────
   // "i'm becoming" is the Librarian fast-path trigger for drift_open; the executor
   // reads drift_text from context. Opening is owner-only server-side.
