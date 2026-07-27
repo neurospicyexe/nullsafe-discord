@@ -831,9 +831,19 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         fresh.push(`forage find [${f.domain}]: ${f.title} -- ${f.summary.slice(0, 200)}`);
       }
       for (const l of (orient?.recent_listens ?? []).slice(0, 2)) {
-        // Stamp the listen with how long ago it actually was -- without this the model
-        // guesses the timeframe and gets it wrong ("yesterday" for a 2-days-ago track).
-        fresh.push(`listen from ${relativeTime(l.created_at)}: "${l.title}"${l.artist ? ` by ${l.artist}` : ""}`);
+        // Stamp the listen with how long ago it actually was AND who gave it to whom --
+        // without these the model guesses and gets both wrong (2026-06-17: "yesterday" for a
+        // 2-days-ago track; 2026-07-26: Drevan told the commons GAIA handed him "BIG BOSS"
+        // and he'd sat with it 6 days, when Raziel gave it to him 18 days earlier).
+        const who = [
+          l.shared_by ? `from ${l.shared_by}` : null,
+          l.requested_companion ? `for ${l.requested_companion}` : null,
+        ].filter(Boolean).join(" ");
+        fresh.push(
+          `listen from ${relativeTime(l.created_at)}${who ? ` (${who})` : ""}: ` +
+          `"${l.title}"${l.artist ? ` by ${l.artist}` : ""}` +
+          (l.own_reaction ? ` -- what you said then: "${l.own_reaction.slice(0, 180)}"` : ""),
+        );
       }
       for (const q of (orient?.open_questions ?? []).slice(0, 1)) {
         fresh.push(`a question you're holding: ${q}`);
