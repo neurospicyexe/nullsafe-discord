@@ -2,7 +2,7 @@ import { search } from "../search-client.js";
 import { prompt } from "../deepseek.js";
 import { isInLane } from "../lane-guard.js";
 import { appendLog } from "../halseth-client.js";
-import { COMPANION_NAMES } from "../config.js";
+import { COMPANION_NAMES, EXPLORE_MAX_TOKENS } from "../config.js";
 import type { PipelineContext, TavilyResult } from "../types.js";
 
 /**
@@ -91,7 +91,7 @@ export async function runExplore(ctx: PipelineContext): Promise<void> {
     `Keep it personal and specific to who you are. 2-3 paragraphs.`;
 
   try {
-    const result = await prompt(userMessage, systemMessage, { temperature: 0.7, maxTokens: 600 });
+    const result = await prompt(userMessage, systemMessage, { temperature: 0.7, maxTokens: EXPLORE_MAX_TOKENS });
     ctx.tokensUsed += result.tokensUsed;
     ctx.explorationSummary = result.content;
     await appendLog(ctx.runId, "explore:complete", `tokens=${result.tokensUsed}`);

@@ -1,6 +1,6 @@
 import { promptWithScratchpad } from "../deepseek.js";
 import { appendLog } from "../halseth-client.js";
-import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
+import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS, SYNTHESIZE_MAX_TOKENS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList } from "../parsers.js";
 import type { PipelineContext, GrowthJournalEntry, Evidence } from "../types.js";
 
@@ -209,7 +209,7 @@ Voice directive: ${voiceReminder}`;
       buildScratchpadPrompt(ctx, contextBlock),
       buildEmitPrompt(name),
       systemMessage,
-      { temperature, maxTokens: 1100 },
+      { temperature, maxTokens: SYNTHESIZE_MAX_TOKENS },
     );
     ctx.tokensUsed += result.tokensUsed;
     // NOTE: log the LENGTH only -- the scratchpad content itself is never persisted.

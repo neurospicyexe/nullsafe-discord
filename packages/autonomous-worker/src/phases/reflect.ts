@@ -1,6 +1,6 @@
 import { promptWithScratchpad } from "../deepseek.js";
 import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal, postRelationalDelta } from "../halseth-client.js";
-import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "../config.js";
+import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS, REFLECT_MAX_TOKENS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
 
@@ -380,7 +380,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
       buildReflectScratchpadPrompt(contextBlock),
       userMessage,
       systemMessage,
-      { temperature, maxTokens: 700 },
+      { temperature, maxTokens: REFLECT_MAX_TOKENS },
     );
     ctx.tokensUsed += result.tokensUsed;
     // NOTE: log the LENGTH only -- the scratchpad content itself is never persisted.

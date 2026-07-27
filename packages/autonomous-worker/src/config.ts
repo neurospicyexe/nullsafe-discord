@@ -6,7 +6,33 @@ export const HALSETH_URL = (process.env["HALSETH_URL"] ?? "http://localhost:8787
 export const HALSETH_SECRET = process.env["HALSETH_SECRET"] ?? "";
 export const DEEPSEEK_API_KEY = process.env["DEEPSEEK_API_KEY"] ?? "";
 export const DEEPSEEK_BASE_URL = process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1";
-export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-chat";
+// 2026-07-27: DeepSeek retired "deepseek-chat" (supported: deepseek-v4-pro /
+// deepseek-v4-flash) and it began 400ing intermittently -- ~37% of runs failed for a day
+// before anyone noticed. Live value is set in the VPS .env (deepseek-v4-pro); this default
+// only matters for a fresh checkout, so it points at a name that actually exists.
+export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash";
+
+/**
+ * Output ceilings for the phases that actually THINK (2026-07-27, Raziel: "cut off thoughts
+ * are useless"). These were 600 / 700 / 1100, which truncated the pipeline mid-thought -- the
+ * binding constraint on depth, tighter than the model tier. Roughly doubled.
+ *
+ * Deliberately NOT applied to the small calls (80-500 tokens) in seed.ts / seed-gen.ts /
+ * explore's query builder: those are classifiers and extractors, where a tight ceiling is
+ * correct and a loose one invites the model to editorialize into a structured field.
+ *
+ * Cost: output is the expensive half ($0.87/M on pro), but this is ~3 calls per run at
+ * ~3.5 runs/day -- about $0.15/month for the extra room. Env-overridable so the ceiling can
+ * be tuned without a deploy; if you add these to .env, they must ALSO be added to
+ * ecosystem.config.js (its env block is an allowlist).
+ */
+function envInt(name: string, fallback: number): number {
+  const raw = parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+export const EXPLORE_MAX_TOKENS   = envInt("EXPLORE_MAX_TOKENS", 1400);
+export const REFLECT_MAX_TOKENS   = envInt("REFLECT_MAX_TOKENS", 1600);
+export const SYNTHESIZE_MAX_TOKENS = envInt("SYNTHESIZE_MAX_TOKENS", 2000);
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
 // Hard cap on Tavily calls per calendar day -- protects free tier (1000/month)
 // Default 5: 3 scheduled + 2 headroom for manual test runs

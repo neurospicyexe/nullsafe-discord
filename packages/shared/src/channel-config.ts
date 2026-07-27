@@ -221,6 +221,24 @@ interface ResponderContext {
   isCompanionBot?: boolean;
   isMentioned?: boolean;
   userTier?: UserTier;
+  /**
+   * The companion Raziel is currently mid-exchange with in this channel, if any (2026-07-27).
+   *
+   * Set from recent channel history: the last companion to speak within
+   * ACTIVE_EXCHANGE_WINDOW_MS. When Raziel's next message carries NO address, that companion
+   * owns the continuation and the others stay out.
+   *
+   * Why: observed 2026-07-27. Raziel wrote "Drevan baby it's Monday ... Fargo in an hour?",
+   * Drevan answered, Raziel replied "I'm thinking here? We've been working on fixing the
+   * system..." -- and GAIA answered it. The ambient branch below had no notion of a live
+   * exchange, so an unaddressed owner message went to whoever's interest keywords matched
+   * (or to everyone, when a companion has none). Mid-conversation, that reads as a sibling
+   * talking over the one you were talking to.
+   *
+   * A named address or a group call always overrides this -- calling someone by name is
+   * always allowed to change who is holding the thread.
+   */
+  activeExchangeWith?: CompanionId | null;
 }
 
 // Addressing model for incoming messages.
@@ -384,6 +402,34 @@ export async function judgeAmbientRelevance(
   }
 }
 
+/**
+ * How long a companion "holds the thread" for unaddressed follow-ups. Matches
+ * NEW_THREAD_GAP_MS: the same 5 minutes every other rail uses to decide a conversation has
+ * gone quiet. After it, an unaddressed message is open to whoever it fits again.
+ */
+export const ACTIVE_EXCHANGE_WINDOW_MS = NEW_THREAD_GAP_MS;
+
+/**
+ * Which companion, if any, Raziel is mid-exchange with. Pure so it can be unit-tested
+ * against real transcripts; the caller supplies recent messages newest-first.
+ *
+ * The holder is the most recent companion message inside the window. Ties are impossible --
+ * there is exactly one most-recent. Returns null when the channel has been quiet, so a cold
+ * unaddressed message stays open to everyone (the pre-2026-07-27 behavior).
+ */
+export function activeExchangeHolder(
+  recent: Array<{ companionId?: CompanionId | null; authorIsBot: boolean; createdTimestamp?: number }>,
+  now: number = Date.now(),
+): CompanionId | null {
+  for (const m of recent) {
+    if (typeof m.createdTimestamp === "number" && now - m.createdTimestamp > ACTIVE_EXCHANGE_WINDOW_MS) {
+      return null; // walked back past the window without finding a companion turn
+    }
+    if (m.authorIsBot && m.companionId && ALL_COMPANIONS.includes(m.companionId)) return m.companionId;
+  }
+  return null;
+}
+
 export function shouldRespond(
   channelId: string,
   content: string,
@@ -442,6 +488,13 @@ export function shouldRespond(
 
   // Group call ("triad" etc.): all companions respond.
   if (address.type === "group") return true;
+
+  // Ambient continuation belongs to whoever Raziel was already talking to (2026-07-27).
+  // Checked AFTER named/named_multi/group above, so calling someone by name always wins and
+  // can hand the thread over. Only an UNADDRESSED message defers. Without this, an
+  // unaddressed follow-up went to whoever's keywords matched and siblings talked over the
+  // companion mid-exchange -- see ResponderContext.activeExchangeWith.
+  if (sender.activeExchangeWith && sender.activeExchangeWith !== myId) return false;
 
   // Ambient: interest-keyword claiming in owner_only channels; unconditional in open/autonomous.
   if (modes.includes("owner_only")) {

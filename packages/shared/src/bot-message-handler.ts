@@ -23,7 +23,7 @@ import { Readable } from "stream";
 import {
   resolveAttribution, detectPluralKit,
   isInvitation, isLeaveRequest, markVoiceUsed, shouldVoice,
-  isDirectAddress, shouldRespond, computeChainDepth, extractAddress,
+  isDirectAddress, shouldRespond, computeChainDepth, extractAddress, activeExchangeHolder,
   judgeAmbientRelevance, judgeWriteback,
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
@@ -302,7 +302,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const userTier = attribution.isOwner ? "owner" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
       : "guest" as const;
-    const senderCtx = {
+    const senderCtx: {
+      isOwner: boolean; isCompanionBot: boolean; isMentioned: boolean;
+      userTier: "owner" | "intimate" | "guest"; activeExchangeWith?: CompanionId | null;
+    } = {
       isOwner: attribution.isOwner,
       isCompanionBot: message.author.bot && !attribution.isOwner,
       isMentioned: message.mentions.has(client.user?.id ?? ""),
@@ -647,6 +650,30 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // relevance classifier -- if the owner is talking to you, you respond.
     // Ambient messages in owner_only channels go through the semantic classifier.
     const directlyAddressed = isDirectAddress(effectiveContent, COMPANION_ID);
+
+    // Active-exchange holder (2026-07-27). Observed: Raziel wrote "Drevan baby ... Fargo in
+    // an hour?", Drevan answered, Raziel replied with an UNADDRESSED follow-up -- and Gaia
+    // answered it. An unaddressed owner message went to whoever matched, with no notion that
+    // a conversation was already underway. Only computed for unaddressed owner messages, so
+    // named/group traffic pays no fetch and can always hand the thread over.
+    if (attribution.isOwner && !senderCtx.isCompanionBot && extractAddress(effectiveContent).type === "ambient") {
+      try {
+        const hist = await message.channel.messages.fetch({ limit: 8 });
+        senderCtx.activeExchangeWith = activeExchangeHolder(
+          [...hist.values()]
+            .filter(m => m.id !== message.id)
+            .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+            .map(m => ({
+              companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
+              authorIsBot: m.author.bot,
+              createdTimestamp: m.createdTimestamp,
+            })),
+        );
+        if (senderCtx.activeExchangeWith && senderCtx.activeExchangeWith !== COMPANION_ID) {
+          console.log(`[${COMPANION_ID}] unaddressed owner message -- ${senderCtx.activeExchangeWith} holds this exchange, standing down`);
+        }
+      } catch { /* history unavailable -- leave null, ambient stays open to everyone */ }
+    }
     // When brainClient is active, Brain's SwarmEvaluator handles routing -- skip per-bot relevance gate.
     const isAmbientOwnerOnly =
       !brainClient &&
