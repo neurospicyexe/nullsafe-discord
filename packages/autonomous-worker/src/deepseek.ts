@@ -1,4 +1,11 @@
-import { DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL } from "./config.js";
+import {
+  DEEPSEEK_API_KEY,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_MODEL,
+  REASONING_HEADROOM,
+  contentBudget,
+  isReasoningModel,
+} from "./config.js";
 
 export interface Message {
   role: "system" | "user" | "assistant";
@@ -22,36 +29,86 @@ interface ChatResult {
 export async function chat(messages: Message[], opts: ChatOptions = {}): Promise<ChatResult> {
   if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY is not set");
 
-  const body = {
-    model: DEEPSEEK_MODEL,
-    messages,
-    temperature: opts.temperature ?? 0.7,
-    max_tokens: opts.maxTokens ?? 1000,
-  };
+  const contentTokens = opts.maxTokens ?? 1000;
 
-  const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
-    },
-    body: JSON.stringify(body),
-  });
+  // One attempt at the caller's content budget + reasoning headroom, then ONE retry at double
+  // the headroom if the thought still ate the whole budget. The retry is the durable half of
+  // the 2026-07-28 fix: `finish_reason === "length"` with empty content is unambiguous -- the
+  // model was cut off before it emitted anything -- and catching it HERE covers every call
+  // site, including ones added later that never think about the model tier. Without it this
+  // whole class of failure surfaces only as downstream 400s ("summary is required") or as
+  // sterile output ("0 finds gathered"), which is how it went unnoticed for a full day.
+  let attemptBudget = contentBudget(contentTokens);
+  let lastTokens = 0;
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`DeepSeek API error ${res.status}: ${text.slice(0, 200)}`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: DEEPSEEK_MODEL,
+        messages,
+        temperature: opts.temperature ?? 0.7,
+        max_tokens: attemptBudget,
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`DeepSeek API error ${res.status}: ${text.slice(0, 200)}`);
+    }
+
+    const data = await res.json() as {
+      choices: Array<{ message: { content?: string }; finish_reason?: string }>;
+      usage?: { total_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } };
+    };
+
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content ?? "";
+    const finish = choice?.finish_reason ?? "";
+    const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+    lastTokens += data.usage?.total_tokens ?? 0;
+
+    if (content.trim()) return { content, tokensUsed: lastTokens };
+
+    // Empty content. Only "length" is retryable -- an empty "stop" is the model genuinely
+    // choosing to say nothing, and retrying that just burns tokens to get the same answer.
+    if (finish !== "length") {
+      console.warn(
+        `[deepseek] empty content with finish_reason="${finish}" ` +
+        `(model=${DEEPSEEK_MODEL} budget=${attemptBudget} reasoning=${reasoningTokens}) -- not retrying`,
+      );
+      return { content, tokensUsed: lastTokens };
+    }
+
+    if (attempt === 0) {
+      const retryBudget = contentTokens + REASONING_HEADROOM * 2;
+      console.warn(
+        `[deepseek] REASONING STARVED CONTENT: burned ${reasoningTokens} reasoning tokens of ` +
+        `${attemptBudget} and emitted nothing (model=${DEEPSEEK_MODEL}, content budget ` +
+        `${contentTokens}). Retrying at ${retryBudget}. If this recurs, raise ` +
+        `DEEPSEEK_REASONING_HEADROOM (currently ${REASONING_HEADROOM}).`,
+      );
+      attemptBudget = retryBudget;
+      continue;
+    }
+
+    console.error(
+      `[deepseek] EMPTY CONTENT AFTER RETRY at max_tokens=${attemptBudget} ` +
+      `(model=${DEEPSEEK_MODEL}, reasoning=${reasoningTokens}). Caller will see "" -- expect a ` +
+      `downstream validation failure. Raise DEEPSEEK_REASONING_HEADROOM.`,
+    );
+    return { content, tokensUsed: lastTokens };
   }
 
-  const data = await res.json() as {
-    choices: Array<{ message: { content: string } }>;
-    usage?: { total_tokens?: number };
-  };
-
-  const content = data.choices?.[0]?.message?.content ?? "";
-  const tokensUsed = data.usage?.total_tokens ?? 0;
-  return { content, tokensUsed };
+  return { content: "", tokensUsed: lastTokens };
 }
+
+/** Exported for the reasoning-budget tests. */
+export { contentBudget, isReasoningModel };
 
 /** Convenience: single user prompt with optional system. */
 export async function prompt(

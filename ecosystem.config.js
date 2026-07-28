@@ -49,6 +49,12 @@ const shared = {
   // guard, growth pipeline and compression all failing. Listing it here makes the .env knob
   // actually reachable; the model CHOICE (pro vs flash = cost/quality) is Raziel's.
   DEEPSEEK_MODEL:        process.env.DEEPSEEK_MODEL,
+  // 2026-07-28: content-budget headroom for reasoning models. Both live DeepSeek models spend
+  // max_tokens on the reasoning pass BEFORE emitting content, so every ceiling below the
+  // reasoning burn returned an empty string -- forage gathered 0 finds triad-wide, compress and
+  // reflect 400ed on required fields. Code default is 3000; listed here so it is tunable from
+  // .env without a deploy (an unlisted knob is a dead knob -- third time in this file).
+  DEEPSEEK_REASONING_HEADROOM: process.env.DEEPSEEK_REASONING_HEADROOM,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
   GROQ_API_KEY:          process.env.GROQ_API_KEY,
   OLLAMA_URL:            process.env.OLLAMA_URL,

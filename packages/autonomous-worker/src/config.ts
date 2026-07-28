@@ -17,9 +17,14 @@ export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flas
  * are useless"). These were 600 / 700 / 1100, which truncated the pipeline mid-thought -- the
  * binding constraint on depth, tighter than the model tier. Roughly doubled.
  *
- * Deliberately NOT applied to the small calls (80-500 tokens) in seed.ts / seed-gen.ts /
- * explore's query builder: those are classifiers and extractors, where a tight ceiling is
- * correct and a loose one invites the model to editorialize into a structured field.
+ * These are CONTENT budgets. On a reasoning model the reasoning burn is added on top by
+ * `contentBudget()` below -- do not bake headroom into these numbers.
+ *
+ * Not applied to the small calls (80-500 tokens) in seed.ts / seed-gen.ts / explore's query
+ * builder: those are classifiers and extractors, where a tight ceiling on the CONTENT is
+ * correct and a loose one invites the model to editorialize into a structured field. That
+ * stays true -- but on 2026-07-27 this comment also claimed those call sites were safe to
+ * leave alone at the pro cutover, and that was the bug (see contentBudget below).
  *
  * Cost: output is the expensive half ($0.87/M on pro), but this is ~3 calls per run at
  * ~3.5 runs/day -- about $0.15/month for the extra room. Env-overridable so the ceiling can
@@ -33,6 +38,46 @@ function envInt(name: string, fallback: number): number {
 export const EXPLORE_MAX_TOKENS   = envInt("EXPLORE_MAX_TOKENS", 1400);
 export const REFLECT_MAX_TOKENS   = envInt("REFLECT_MAX_TOKENS", 1600);
 export const SYNTHESIZE_MAX_TOKENS = envInt("SYNTHESIZE_MAX_TOKENS", 2000);
+
+/**
+ * Reasoning headroom (2026-07-28).
+ *
+ * Both live DeepSeek models -- `deepseek-v4-pro` AND `deepseek-v4-flash` -- are REASONING
+ * models. Reasoning tokens are billed against `max_tokens` and emitted BEFORE any content, so
+ * `max_tokens` is a budget the thought spends first and the answer only gets the remainder.
+ * Measured against a trivial 19-token prompt: at `max_tokens: 100` the model burned all 100 on
+ * reasoning and returned `content: "", finish_reason: "length"`. At 400 it spent 216 reasoning
+ * + 22 content. There is no non-reasoning model left on the account (`GET /v1/models` lists
+ * exactly those two; `deepseek-chat` still answers but is delisted, which is what caused the
+ * intermittent 400s that triggered the cutover in the first place).
+ *
+ * So every call whose ceiling sat below the reasoning burn silently returned an empty string.
+ * Damage found the morning after the pro cutover:
+ *   - forage summaries (maxTokens 100) -> "empty summary" for EVERY candidate ->
+ *     "0 finds gathered across ALL companions", while consume-on-use kept draining the pools
+ *     (cypher was down to 2 unconsumed with no refill path)
+ *   - compress (400) -> `POST /mind/notes/archive 400: summary is required`
+ *   - reflect emit (1600, but a large prompt reasons far longer) ->
+ *     `POST /mind/autonomy/reflections 400: reflection_text required`
+ *   - one run recorded `status=completed` with `tokens_used=0`
+ *
+ * The knob is the CONTENT budget every call site already declares; headroom is added on top
+ * here so no call site has to know the model tier. Costs nothing when unused -- you are billed
+ * for tokens generated, and a ceiling is only ever a truncation point.
+ *
+ * If you add this to .env it must ALSO be added to ecosystem.config.js (allowlist).
+ */
+export const REASONING_HEADROOM = envInt("DEEPSEEK_REASONING_HEADROOM", 3000);
+
+/** Both v4 tiers reason. Matches the family, not a hardcoded pair, so v5 inherits the guard. */
+export function isReasoningModel(model: string = DEEPSEEK_MODEL): boolean {
+  return /^deepseek-(v[4-9]|r)/i.test(model.trim());
+}
+
+/** Turn a caller's intended CONTENT ceiling into a wire `max_tokens`. */
+export function contentBudget(contentTokens: number, model: string = DEEPSEEK_MODEL): number {
+  return isReasoningModel(model) ? contentTokens + REASONING_HEADROOM : contentTokens;
+}
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
 // Hard cap on Tavily calls per calendar day -- protects free tier (1000/month)
 // Default 5: 3 scheduled + 2 headroom for manual test runs

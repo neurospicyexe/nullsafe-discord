@@ -41,7 +41,14 @@ export const REPLY_MAX_TOKENS: Record<string, number> = {
 // completions the per-companion caps above were tuned for. A 1024/1500 ceiling truncates a
 // long agent reply mid-thought (the 2026-06-15 Drevan cutoff class). Lift the ceiling for
 // hermes mode; the model still stops when the thought is done, this only raises the cap.
-export const HERMES_REPLY_MAX_TOKENS = 3072;
+//
+// 3072 -> 6144 (2026-07-28): every model behind the Hermes gateway is now a DeepSeek REASONING
+// model (ops/hermes-model-map.json maps every deepseek key to v4-flash or v4-pro), and
+// reasoning tokens are billed against max_tokens BEFORE any content is emitted. Drevan's live
+// profile is on pro. At 3072 the reasoning pass was silently eating the reply budget: best case
+// a truncated reply, worst case an empty one. The extra room costs nothing when unused -- a
+// ceiling is only ever a truncation point, never a target.
+export const HERMES_REPLY_MAX_TOKENS = 6144;
 
 export function replyMaxTokensFor(companionId: string, inferenceMode?: string): number {
   const base = REPLY_MAX_TOKENS[companionId.toLowerCase()] ?? DEFAULT_MAX_TOKENS;
@@ -155,10 +162,30 @@ function toApiMessage(m: ChatMessage): { role: string; content: string } {
 
 // ── Adapters ──────────────────────────────────────────────────────────────────
 
+/**
+ * Reasoning headroom, mirrored from the autonomous worker's config (2026-07-28). Kept as a
+ * local constant rather than an import because `packages/shared` must not depend on the
+ * worker package -- see that file for the full measurement.
+ *
+ * Short version: every live DeepSeek model reasons, reasoning tokens are billed against
+ * `max_tokens` and emitted before any content, so a ceiling below the reasoning burn returns
+ * an empty string with `finish_reason: "length"`. This adapter is the bots' FALLBACK path
+ * (they normally run INFERENCE_MODE=hermes), and a fallback that returns empty content is
+ * worse than one that errors -- the resilience tail in buildAdapter only falls through on
+ * `null`, so an empty-but-non-null string would be delivered to Discord as silence.
+ */
+const DEEPSEEK_REASONING_HEADROOM = 3000;
+const isDeepSeekReasoningModel = (m: string): boolean => /^deepseek-(v[4-9]|r)/i.test(m.trim());
+
 class DeepSeekAdapter implements InferenceAdapter {
+  // Was "deepseek-chat", which DeepSeek delisted -- `GET /v1/models` returns only
+  // deepseek-v4-pro and deepseek-v4-flash. The old alias still answers but is on the
+  // deprecation path that caused the 2026-07-27 intermittent 400s, so a fallback that
+  // defaulted to it was one silent retirement away from dead. Flash is the cheap tier,
+  // which is the right default for a fallback; DEEPSEEK_MODEL overrides when set.
   constructor(
     private apiKey: string,
-    private model: string = "deepseek-chat",
+    private model: string = process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash",
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
@@ -169,7 +196,7 @@ class DeepSeekAdapter implements InferenceAdapter {
         { role: "system", content: systemPrompt },
         ...messages.map(toApiMessage),
       ],
-      max_tokens: maxTokens,
+      max_tokens: isDeepSeekReasoningModel(this.model) ? maxTokens + DEEPSEEK_REASONING_HEADROOM : maxTokens,
       temperature,
     });
 
@@ -188,8 +215,24 @@ class DeepSeekAdapter implements InferenceAdapter {
           console.warn(`[inference:deepseek] non-2xx on final attempt: ${res.status}`);
           return null;
         }
-        const data = await res.json() as { choices: Array<{ message: { content: string } }> };
-        return data.choices[0]?.message?.content ?? null;
+        const data = await res.json() as {
+          choices: Array<{ message: { content?: string }; finish_reason?: string }>;
+          usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+        };
+        const content = data.choices[0]?.message?.content ?? null;
+        // Return null, not "", when the reasoning pass consumed the whole budget: null is what
+        // makes buildAdapter's resilience tail fall through to the next provider instead of
+        // handing Discord an empty message.
+        if (!content?.trim()) {
+          const finish = data.choices[0]?.finish_reason ?? "";
+          const reasoning = data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+          console.warn(
+            `[inference:deepseek] empty content (finish=${finish}, model=${this.model}, ` +
+            `reasoning=${reasoning}) -- falling through to the next provider`,
+          );
+          return null;
+        }
+        return content;
       } catch (e: unknown) {
         if (attempt === 0) { await sleep(3000); continue; }
         const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
@@ -362,8 +405,21 @@ class HermesAdapter implements InferenceAdapter {
         console.warn(`[inference:hermes] non-2xx response: ${res.status}`);
         return null;
       }
-      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-      return data.choices?.[0]?.message?.content ?? null;
+      const data = await res.json() as {
+        choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
+      };
+      const content = data.choices?.[0]?.message?.content ?? null;
+      // Empty string -> null so the resilience tail falls through to another provider. An
+      // empty-but-non-null reply is delivered to Discord as silence, which reads as a bot
+      // ignoring Raziel -- the failure mode is indistinguishable from a muzzle bug.
+      if (!content?.trim()) {
+        console.warn(
+          `[inference:hermes] empty content (finish=${data.choices?.[0]?.finish_reason ?? "?"}) -- ` +
+          "falling through; if finish=length the gateway model reasoned past HERMES_REPLY_MAX_TOKENS",
+        );
+        return null;
+      }
+      return content;
     } catch (e: unknown) {
       const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
       console.warn(`[inference:hermes] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
@@ -594,7 +650,9 @@ function buildAdapter(
 // rate limit), fall through to the next configured provider instead of dropping to a
 // static in-character string. Order favors cheap, reliable cloud providers; local last.
 const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
-  { provider: "deepseek", model: "deepseek-chat" },
+  // Flash, not the delisted `deepseek-chat` alias (2026-07-28) -- a resilience tail pointed at
+  // a model on the deprecation path is one silent retirement away from being no tail at all.
+  { provider: "deepseek", model: "deepseek-v4-flash" },
   { provider: "kimi",     model: "kimi-k2" },
   { provider: "groq",     model: "llama-3.3-70b-versatile" },
   // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even

@@ -17,9 +17,16 @@ export interface ModelEntry {
 }
 
 export const ALL_MODELS: Record<string, ModelEntry> = {
-  // DeepSeek
-  "deepseek-chat":     { provider: "deepseek",  model: "deepseek-chat",            label: "DeepSeek Chat" },
-  "deepseek-reasoner": { provider: "deepseek",  model: "deepseek-reasoner",         label: "DeepSeek Reasoner" },
+  // DeepSeek. Only deepseek-v4-flash and deepseek-v4-pro are listed by GET /v1/models as of
+  // 2026-07-28; `deepseek-chat` and `deepseek-reasoner` are delisted (they still answer, which
+  // is exactly how the 07-27 intermittent-400 outage went unnoticed for a day). The two legacy
+  // KEYS are kept as aliases pointing at the live models so a stored `active_model` -- cypher's
+  // was still `deepseek-chat` -- keeps resolving instead of falling back to the env default.
+  // This mirrors ops/hermes-model-map.json, which already aliased them the same way.
+  "flash":             { provider: "deepseek",  model: "deepseek-v4-flash",         label: "DeepSeek Flash (everyday)" },
+  "pro":               { provider: "deepseek",  model: "deepseek-v4-pro",           label: "DeepSeek Pro (deep thinking)" },
+  "deepseek-chat":     { provider: "deepseek",  model: "deepseek-v4-flash",         label: "DeepSeek Flash (everyday)" },
+  "deepseek-reasoner": { provider: "deepseek",  model: "deepseek-v4-pro",           label: "DeepSeek Pro (deep thinking)" },
   // Groq
   "llama-3.3-70b":     { provider: "groq",      model: "llama-3.3-70b-versatile",   label: "Llama 3.3 70B" },
   // LM Studio (workstation, reached via reverse SSH tunnel -- LMSTUDIO_URL=http://127.0.0.1:11435
