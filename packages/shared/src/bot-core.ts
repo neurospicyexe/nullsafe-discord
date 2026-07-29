@@ -18,6 +18,7 @@ import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
+import { readHermesModelKeys, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -406,6 +407,28 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     forceHermes: env.inferenceMode === "hermes" && !!env.hermesUrl,
   };
 
+  // In hermes mode the watcher -- not this bot -- applies the model change, so the live
+  // hermes-model-map.json defines what `cy: model` may offer. Read it once at boot and report the
+  // gap both ways; a key the watcher can't resolve would otherwise ack SUCCESS and change nothing.
+  // Fail-open (null => full registry) so an unreadable map never locks Raziel out of switching.
+  const hermesModelKeysRef: { value: Set<string> | null } = {
+    value: apiUrls.forceHermes ? readHermesModelKeys(env.hermesModelMapPath) : null,
+  };
+  if (apiUrls.forceHermes) {
+    const diag = diagnoseHermesMap(hermesModelKeysRef.value);
+    if (!diag) {
+      console.warn(`[${companionId}] hermes model map unreadable (${env.hermesModelMapPath ?? process.env.HERMES_MODEL_MAP ?? DEFAULT_HERMES_MODEL_MAP_PATH}) -- offering the full registry; some keys may ack and not apply`);
+    } else {
+      console.log(`[${companionId}] hermes model map: ${diag.selectableCount} selectable`);
+      if (diag.unapplicableByWatcher.length) {
+        console.warn(`[${companionId}] models NOT applicable by the live watcher, withheld from the switch list: ${diag.unapplicableByWatcher.join(", ")}`);
+      }
+      if (diag.unofferedByBot.length) {
+        console.warn(`[${companionId}] live map serves keys this build doesn't know (add to ALL_MODELS to reach them): ${diag.unofferedByBot.join(", ")}`);
+      }
+    }
+  }
+
   let activeModelKey: string | null = env.inferenceModel ?? null;
   try {
     const savedModel = await librarian.getSetting("active_model");
@@ -628,6 +651,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     persistModel: (key) =>
       writeQueue.fireAndForget(`settings:model:${companionId}`, () => librarian.setSetting("active_model", key)),
     brainClient: brainClient ?? null,
+    hermesModelKeys: hermesModelKeysRef.value,
     voice: {
       join: async (interaction) => {
         const member = interaction.guild
@@ -695,7 +719,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       brainClient, voiceClient, redis, librarian,
-      adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
+      adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster,
       ...(pkSenderId ? { pkSenderId } : {}),
       guildVoiceConnections, sentIds, distillationCounter, pulseCounter,

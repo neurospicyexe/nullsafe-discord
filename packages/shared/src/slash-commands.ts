@@ -19,6 +19,7 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import { ALL_MODELS, type ModelEntry } from "./models.js";
+import { selectableModels } from "./hermes-model-map.js";
 
 /** Discord caps autocomplete responses at 25 choices. */
 export const AUTOCOMPLETE_LIMIT = 25;
@@ -68,11 +69,18 @@ export function buildCompanionCommands(
  * Filter the model registry for an autocomplete query. Always offers `list`
  * first. Matches on key or label, case-insensitive, capped at the Discord limit.
  */
-export function filterModelChoices(query: string): { name: string; value: string }[] {
+export function filterModelChoices(
+  query: string,
+  hermesKeys?: Set<string> | null,
+): { name: string; value: string }[] {
   const q = (query ?? "").trim().toLowerCase();
+  // Autocomplete must offer only what can actually be applied; suggesting a key the live hermes
+  // watcher cannot resolve is how a switch acks success and changes nothing. Undefined/null keys
+  // (direct or brain mode, or an unreadable map) fall back to the full registry.
+  const offered = selectableModels(hermesKeys ?? null);
   const all = [
     { key: "list", label: "list — show every model" },
-    ...Object.entries(ALL_MODELS).map(([k, e]) => ({ key: k, label: `${k} — ${e.label}` })),
+    ...Object.entries(offered).map(([k, e]) => ({ key: k, label: `${k} — ${e.label}` })),
   ];
   return all
     .filter((c) => !q || c.key.toLowerCase().includes(q) || c.label.toLowerCase().includes(q))
@@ -168,6 +176,9 @@ export interface SlashHandlerContext {
   persistModel: (key: string) => void;
   /** Brain force-clear + status. null in direct mode. */
   brainClient: ModelCacheClient | null;
+  /** Keys the live hermes-model-map.json can apply. null/absent = not hermes mode or unreadable
+   *  map; both fall back to the full registry. Keeps /model from offering keys that cannot land. */
+  hermesModelKeys?: Set<string> | null;
   voice: {
     /** Join the invoking member's current VC. Returns channel name, or null if they're not in one. */
     join: (interaction: ChatInputCommandInteraction) => Promise<string | null>;
@@ -187,13 +198,21 @@ async function handleModel(
 ): Promise<void> {
   // Caller has already deferred (ephemeral); every reply below is editReply.
   const arg = (interaction.options.getString("key") ?? "").trim().toLowerCase();
+  const offered = selectableModels(ctx.hermesModelKeys ?? null);
   if (arg === "list") {
-    const list = Object.entries(ALL_MODELS).map(([k, e]) => `\`${k}\` — ${e.label}`).join("\n");
+    const list = Object.entries(offered).map(([k, e]) => `\`${k}\` — ${e.label}`).join("\n");
     await interaction.editReply({ content: `available models:\n${list}` });
     return;
   }
-  const entry = ALL_MODELS[arg];
+  const entry = offered[arg];
   if (!entry) {
+    // A real registry model that this runtime cannot apply is a deploy gap, not a typo. Say which.
+    if (ALL_MODELS[arg]) {
+      await interaction.editReply({
+        content: `\`${arg}\` is a real model but the live hermes map can't apply it, so switching would ack and change nothing. add it to hermes-model-map.json on the VPS first.`,
+      });
+      return;
+    }
     await interaction.editReply({
       content: "not a model I can switch to. run `/model` and pick from autocomplete.",
     });
@@ -268,7 +287,7 @@ export function installSlashCommandHandler(ctx: SlashHandlerContext): void {
     try {
       if (interaction.isAutocomplete()) {
         if (interaction.commandName === "model") {
-          await interaction.respond(filterModelChoices(interaction.options.getFocused()));
+          await interaction.respond(filterModelChoices(interaction.options.getFocused(), ctx.hermesModelKeys ?? null));
         }
         return;
       }

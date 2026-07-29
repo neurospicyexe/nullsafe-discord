@@ -71,6 +71,10 @@ export interface BotConfig {
   hermesUrl?: string;
   /** Bearer token (API_SERVER_KEY) for the local Hermes API server. */
   hermesApiKey?: string;
+  /** Path to the LIVE hermes-model-map.json the model watcher reads. In hermes mode this file --
+   *  not ALL_MODELS -- decides which keys `cy: model` can actually apply, so the bot reads the same
+   *  file the watcher does. Defaults to $HERMES_MODEL_MAP, then the watcher's own default path. */
+  hermesModelMapPath?: string;
 }
 
 export interface BootContext {

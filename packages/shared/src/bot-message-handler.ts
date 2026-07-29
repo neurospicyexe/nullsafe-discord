@@ -50,6 +50,7 @@ import {
   handlePetCommand,
   handleImpCommand,
   ALL_MODELS,
+  selectableModels,
   LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
@@ -138,6 +139,9 @@ export interface MessageHandlerDeps {
   // live refs (same instances the refresh loop mutates)
   adapterRef: { current: InferenceAdapter };
   activeModelRef: { key: string | null; label: string };
+  /** Keys the live hermes-model-map.json can apply, read at boot. null = not hermes mode, or the
+   *  map was unreadable; both mean fall back to the full registry. See hermes-model-map.ts. */
+  hermesModelKeysRef?: { value: Set<string> | null };
   currentMoodRef: { value: string | null };
   lastSomaRefreshRef: { value: number };
   /** Live orient context (forage finds, recent listens, incoming notes, growth) -- the
@@ -246,7 +250,7 @@ export function mapColdStartHistory(
 export async function handleMessage(message: Message, deps: MessageHandlerDeps): Promise<void> {
   const {
     client, cfg, brainClient, voiceClient, redis, librarian,
-    adapterRef, activeModelRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
+    adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
     stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
@@ -505,21 +509,36 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // Direct/Brain path: validate against the FULL registry, not this bot's local keys. Brain
         // is the live arbiter (reads active_model from Halseth), so any registry model is
         // selectable; provider keys only need to live in Brain's .env.brain.
+        // In hermes mode the WATCHER applies the switch, so only keys in the live
+        // hermes-model-map.json can take effect. Offering more than that is how a switch acks
+        // SUCCESS here and gets "unknown model key" from the watcher a second later (9 of 23 keys
+        // were in that state on 2026-07-29). selectableModels falls back to the full registry
+        // whenever the map is unreadable, so this never narrows the list without cause.
+        const offered = selectableModels(hermesModelKeysRef?.value ?? null);
+
         if (arg === "list") {
-          const list = Object.entries(ALL_MODELS)
+          const list = Object.entries(offered)
             .map(([k, e]) => `\`${k}\` -- ${e.label}`)
             .join("\n");
           await (message.channel as TextChannel).send(`${MODEL_SWITCH_LIST_INTRO}\n${list}`);
           return;
         }
 
-        if (!ALL_MODELS[arg]) {
-          const keys = Object.keys(ALL_MODELS).join(", ");
-          await (message.channel as TextChannel).send(`not a model I can switch to. valid options: ${keys}`);
+        if (!offered[arg]) {
+          // Distinguish "no such model" from "real model this runtime can't apply" -- the second
+          // is a deploy gap, and silently calling it invalid would hide that.
+          if (ALL_MODELS[arg]) {
+            await (message.channel as TextChannel).send(
+              `\`${arg}\` is a real model but the live hermes map can't apply it, so switching would ack and change nothing. ` +
+              `add it to hermes-model-map.json on the VPS first. currently switchable: ${Object.keys(offered).join(", ")}`,
+            );
+            return;
+          }
+          await (message.channel as TextChannel).send(`not a model I can switch to. valid options: ${Object.keys(offered).join(", ")}`);
           return;
         }
 
-        const entry = ALL_MODELS[arg];
+        const entry = offered[arg];
         // createAdapter is resilient: if this bot lacks the provider key it returns a
         // working local fallback (deepseek) for direct mode; Brain runs the real voice.
         adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);

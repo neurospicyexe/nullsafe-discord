@@ -55,6 +55,10 @@ export function loadBotConfig(): BotConfig {
     })(),
     hermesUrl: process.env["HERMES_API_URL"]?.trim().replace(/^=+/, "") || undefined,
     hermesApiKey: process.env["HERMES_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
+    // Optional override for the LIVE hermes-model-map.json the model watcher reads. Left unset
+    // it defaults to the watcher's own path, which is the deployed location -- so this needs no
+    // entry in the pm2 ecosystem env allowlist to work. Set it only if the watcher moves.
+    hermesModelMapPath: process.env["HERMES_MODEL_MAP"]?.trim().replace(/^=+/, "") || undefined,
   };
 }
 
