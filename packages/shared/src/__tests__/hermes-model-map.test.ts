@@ -111,6 +111,28 @@ describe("diagnoseHermesMap", () => {
   });
 });
 
+describe("a stored active_model is adopted only if this runtime can apply it", () => {
+  // Both the boot read and the periodic refresh in bot-core gate on selectableModels(), not
+  // ALL_MODELS. Otherwise a key set before this guard shipped, edited straight into D1, or orphaned
+  // when the map shrank would make the companion REPORT a model the watcher never switched it to --
+  // the same divergence this module exists to close, surviving in the place that decides what it
+  // thinks it is running.
+  const liveMap = new Set(["flash", "pro"]);
+
+  it("adopts a stored key the live map can apply", () => {
+    expect(selectableModels(liveMap)["flash"]).toBeDefined();
+  });
+
+  it("refuses a stored key that is real but unapplicable, so the label cannot lie", () => {
+    expect(ALL_MODELS["qwen-local"]).toBeDefined();
+    expect(selectableModels(liveMap)["qwen-local"]).toBeUndefined();
+  });
+
+  it("still adopts anything when there is no live map to check against", () => {
+    expect(selectableModels(null)["qwen-local"]).toBeDefined();
+  });
+});
+
 describe("keys, never model id strings", () => {
   it("does not compare model ids, because one key legitimately differs per provider", () => {
     // mistral-large is `mistral-large-latest` on the Mistral API (bots/Brain) and

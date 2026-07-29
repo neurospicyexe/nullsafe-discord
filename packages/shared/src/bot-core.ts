@@ -18,7 +18,7 @@ import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
-import { readHermesModelKeys, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
+import { readHermesModelKeys, selectableModels, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -146,6 +146,10 @@ export interface RefreshBotStateOptions {
   lastSomaRefreshRef: { value: number };
   adapterRef: { current: InferenceAdapter };
   activeModelRef: { key: string | null; label: string };
+  /** Keys the live hermes map can apply. Absent/null = full registry (direct/brain, or unreadable
+   *  map). Without this the refresh would adopt a stored key the watcher cannot resolve, so the
+   *  companion would report running a model it is not running. */
+  hermesModelKeys?: Set<string> | null;
   apiKeys: AdapterKeys;
   apiUrls: AdapterUrls;
 }
@@ -163,7 +167,7 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
   const {
     companionId, librarian, identityBase, bootCtx,
     recentContextRef, currentMoodRef, lastSomaRefreshRef,
-    adapterRef, activeModelRef, apiKeys, apiUrls,
+    adapterRef, activeModelRef, hermesModelKeys, apiKeys, apiUrls,
   } = opts;
   try {
     const [stateResult, orientResult] = await Promise.allSettled([
@@ -192,12 +196,19 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
 
     try {
       const savedModel = await librarian.getSetting("active_model");
-      if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
-        const entry = ALL_MODELS[savedModel];
+      // Adopt only what the live runtime can actually apply. A stored key the hermes watcher
+      // cannot resolve (set before the guard shipped, edited straight into D1, or orphaned when
+      // the map shrank) would otherwise make the companion report a model it is not running --
+      // the same divergence, surviving in the one place that decides what it thinks it is.
+      const refreshable = selectableModels(hermesModelKeys ?? null);
+      if (savedModel && savedModel !== activeModelRef.key && refreshable[savedModel]) {
+        const entry = refreshable[savedModel];
         adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, companionId);
         activeModelRef.key = savedModel;
         activeModelRef.label = entry.label;
         console.log(`[${companionId}] model refreshed from Halseth: ${savedModel}`);
+      } else if (savedModel && savedModel !== activeModelRef.key && ALL_MODELS[savedModel]) {
+        console.warn(`[${companionId}] stored active_model '${savedModel}' is a real model the live hermes map cannot apply -- staying on ${activeModelRef.key ?? "the env default"}`);
       }
     } catch { /* keep current model on error */ }
   } catch { /* keep cached */ }
@@ -430,13 +441,19 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   }
 
   let activeModelKey: string | null = env.inferenceModel ?? null;
+  // Same rule as the refresh loop: adopt the stored key only if this runtime can apply it,
+  // otherwise the companion boots reporting a model the watcher never switched it to.
+  const bootSelectable = selectableModels(hermesModelKeysRef.value);
   try {
     const savedModel = await librarian.getSetting("active_model");
-    if (savedModel && ALL_MODELS[savedModel]) activeModelKey = savedModel;
+    if (savedModel && bootSelectable[savedModel]) activeModelKey = savedModel;
+    else if (savedModel && ALL_MODELS[savedModel]) {
+      console.warn(`[${companionId}] stored active_model '${savedModel}' is a real model the live hermes map cannot apply -- booting on ${activeModelKey ?? env.inferenceProvider} instead`);
+    }
   } catch { console.warn(`[${companionId}] failed to load active_model setting, using env default`); }
 
-  const defaultEntry: ModelEntry = activeModelKey && ALL_MODELS[activeModelKey]
-    ? ALL_MODELS[activeModelKey]
+  const defaultEntry: ModelEntry = activeModelKey && bootSelectable[activeModelKey]
+    ? bootSelectable[activeModelKey]
     : { provider: env.inferenceProvider as InferenceProvider, model: env.inferenceProvider, label: env.inferenceProvider };
 
   const adapterRef = {
@@ -504,7 +521,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     void refreshBotState({
       companionId, librarian, identityBase, bootCtx,
       recentContextRef, currentMoodRef, lastSomaRefreshRef,
-      adapterRef, activeModelRef, apiKeys, apiUrls,
+      adapterRef, activeModelRef, hermesModelKeys: hermesModelKeysRef.value, apiKeys, apiUrls,
     });
   }, somaRefreshIntervalMs);
 
