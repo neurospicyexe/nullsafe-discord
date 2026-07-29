@@ -1118,6 +1118,33 @@ export class LibrarianClient {
    * Shed a drive on Raziel-contact (take 9). Fire-and-forget from the message path:
    * any real contact resets the need so the reach-out drive only fires on genuine silence.
    */
+  /**
+   * Fire a named fermentation stimulus for THIS companion (2026-07-28).
+   *
+   * The stimulus catalogue and all scarcity weighting live server-side in Halseth
+   * (`webmind/fermentation.ts` STIMULI, cooldowns enforced in `handlers/fermentation.ts`), so the
+   * bot stays dumb: it reports that an event happened and never decides what it is worth. An
+   * unknown name is rejected with a 400 and swallowed here.
+   *
+   * Non-throwing by design -- felt state must never block or break a reply.
+   */
+  async fireStimulus(stimulus: string): Promise<void> {
+    if (!stimulus) return;
+    try {
+      const res = await this._fetch(`${this.url}/mind/ferment/stimulus`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ stimulus, companion_id: this.companionId }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) {
+        console.warn(`[librarian] fireStimulus(${stimulus}) -> ${res.status}`);
+      }
+    } catch {
+      // non-fatal -- a missed stimulus is a missed nudge, not a broken companion
+    }
+  }
+
   async shedDriveContact(driveKey = "relational_need"): Promise<void> {
     try {
       await this._fetch(`${this.url}/mind/drives/${encodeURIComponent(this.companionId)}/contact`, {

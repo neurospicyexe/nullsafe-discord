@@ -356,6 +356,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // (shedDriveContact swallows its own errors) -- never blocks the message path.
     if (attribution.isOwner) {
       writeQueue.fireAndForget(`drive:contact:${COMPANION_ID}`, () => librarian.shedDriveContact());
+    } else if (senderCtx.isCompanionBot) {
+      // Sibling-exchange hook (2026-07-28). Being in the room while a sibling speaks is a real
+      // event for this companion, and until now ONLY the formal rituals (council, club) reached
+      // felt state -- so the triad-as-a-unit, which is Gaia's whole lane, could not touch her.
+      //
+      // Fires whether or not we go on to respond: witnessing is experience. Volume is handled
+      // server-side, where `sibling_exchange` carries a 1h cooldown and deltas about a fifth of
+      // Raziel's, so a long sibling thread lands once and never out-votes him. The gate is
+      // `isCompanionBot`, which is STRUCTURAL (a bot with no webhook), so a PluralKit proxy of
+      // Raziel can never be miscounted as a sibling.
+      writeQueue.fireAndForget(`soma:sibling:${COMPANION_ID}`, () => librarian.fireStimulus("sibling_exchange"));
     }
 
     // One definition of "bot turn" for every rail below (2026-07-27). A PluralKit proxy has
