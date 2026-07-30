@@ -225,6 +225,75 @@ def check_second_brain(rep, env):
 
 # ── output ─────────────────────────────────────────────────────────────────
 
+STATE_PATH = "/home/nullsafe/.nullsafe-health-state.json"
+RENOTIFY_SECONDS = 12 * 3600
+
+
+def _fingerprint(rep):
+    """What is wrong, ignoring how long it has been wrong.
+
+    Names + severities only, not details -- details carry counters ("37 pending", "last ran 51m ago")
+    that change on every run, so including them would make every fingerprint unique and defeat the
+    throttle entirely.
+    """
+    return ";".join(sorted("%s=%s" % (c["name"], c["severity"]) for c in rep.failures))
+
+
+def should_notify(rep, always=False):
+    """Throttle: speak on CHANGE, or every RENOTIFY_SECONDS while something is still wrong.
+
+    Without this, cronning --notify would post the same two warnings every run for as long as they
+    persist -- and guardian findings persist for days. A health check that cries wolf gets muted, and
+    a muted health check is worse than none. Returns (bool, reason) so the decision is visible.
+
+    Fails OPEN: if the state file cannot be read or written, notify. Silence must never be the
+    consequence of a bookkeeping failure.
+    """
+    import time
+    now = time.time()
+    fp = _fingerprint(rep)
+    sev = rep.severity
+
+    prev = {}
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        return True, "state unreadable -- failing open"
+
+    decided = None
+    if always:
+        decided = "forced (--always)"
+    elif not rep.failures:
+        # Recovery is news: say it once, then go quiet.
+        decided = "recovered" if prev.get("severity") not in (None, "ok") else None
+    elif fp != prev.get("fingerprint"):
+        decided = "changed"
+    elif now - float(prev.get("last_notified", 0)) > RENOTIFY_SECONDS:
+        decided = "still wrong after %dh" % (RENOTIFY_SECONDS // 3600)
+
+    if decided:
+        try:
+            with open(STATE_PATH, "w", encoding="utf-8") as fh:
+                json.dump({"fingerprint": fp, "severity": sev, "last_notified": now}, fh)
+        except Exception:
+            pass  # already decided to notify; a failed write only costs a duplicate next run
+        return True, decided
+
+    # Record the observation even when staying quiet, so a fingerprint change is detected next time.
+    try:
+        with open(STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump({
+                "fingerprint": fp, "severity": sev,
+                "last_notified": float(prev.get("last_notified", 0)),
+            }, fh)
+    except Exception:
+        pass
+    return False, "unchanged"
+
+
 def telegram(text, hermes_env):
     tok = hermes_env.get("TELEGRAM_BOT_TOKEN")
     chat = hermes_env.get("TELEGRAM_HOME_CHANNEL")
@@ -286,14 +355,20 @@ def main():
     else:
         print(render_full(rep) if "--all" in args else render(rep))
 
-    if "--notify" in args and (rep.failures or "--always" in args):
-        # Telegram caps messages; the failures are what matter, so send those and a count.
-        msg = render(rep)
-        if len(msg) > 3500:
-            msg = msg[:3500] + "\n... truncated"
-        ok, note = telegram(msg, henv)
-        if not ok:
-            print("telegram notify failed: %s" % note, file=sys.stderr)
+    if "--notify" in args:
+        send, why = should_notify(rep, always="--always" in args)
+        if send:
+            # Telegram caps messages; the failures are what matter, so send those and a count.
+            msg = render(rep)
+            if not rep.failures:
+                msg = "suite health: RECOVERED — all %d checks ok" % len(rep.checks)
+            if len(msg) > 3500:
+                msg = msg[:3500] + "\n... truncated"
+            ok, note = telegram(msg, henv)
+            print("telegram: %s (%s)" % ("sent" if ok else "FAILED: " + note, why),
+                  file=sys.stderr if not ok else sys.stdout)
+        elif "--verbose" in args:
+            print("telegram: suppressed (%s)" % why)
 
     return EXIT_FOR[rep.severity]
 
