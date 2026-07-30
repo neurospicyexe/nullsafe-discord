@@ -51,6 +51,12 @@ EXPECTED_PM2 = ["cypher-bot", "drevan-bot", "gaia-bot", "autonomous-worker"]
 SYSTEM_UNITS = ["second-brain.service"]              # root systemd
 HTTP_TIMEOUT = 25
 
+# Cloudflare rejects urllib's default "Python-urllib/3.x" User-Agent on workers.dev with a 403.
+# The check found this on its first real run and reported "halseth unreachable" -- correct behaviour from
+# the check, wrong conclusion available to the reader, since curl with the same secret got 200. Any HTTP
+# probe in this file must send a real UA or it measures Cloudflare's bot filter instead of the service.
+UA = "nullsafe-health-check/1.0 (+ops/health-check.py)"
+
 RANK = {"ok": 0, "notice": 1, "warning": 2, "red": 3}
 EXIT_FOR = {"ok": 0, "notice": 0, "warning": 1, "red": 2}
 
@@ -183,7 +189,7 @@ def check_halseth(rep, env):
         return None
     req = urllib.request.Request(
         url.rstrip("/") + "/admin/health",
-        headers={"Authorization": "Bearer " + secret},
+        headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
     )
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
@@ -208,7 +214,7 @@ def check_second_brain(rep, env):
         rep.add("second_brain:config", "notice", "no SECOND_BRAIN_URL in %s -- skipped" % DISCORD_ENV)
         return
     try:
-        with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/health"), timeout=HTTP_TIMEOUT) as r:
+        with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/health", headers={"User-Agent": UA}), timeout=HTTP_TIMEOUT) as r:
             rep.add("second_brain:reachable", "ok", "HTTP %s" % r.status)
     except urllib.error.HTTPError as e:
         # Reachable but unhappy is still reachable; distinguish it from a dead tunnel.
