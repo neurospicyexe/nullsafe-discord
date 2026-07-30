@@ -49,8 +49,12 @@ export function loadBotConfig(): BotConfig {
     disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["PARTNER_DISCORD_ID"] ?? process.env["BLUE_DISCORD_ID"] ?? undefined,
     inferenceMode: (() => {
-      const v = (process.env["INFERENCE_MODE"] ?? "direct").trim().replace(/^=+/, "");
-      return (v === "brain" ? "brain" : v === "hermes" ? "hermes" : "direct") as "direct" | "brain" | "hermes";
+      // "brain" was a third mode, removed 2026-07-29 with BrainClient. It is deliberately still
+      // RECOGNISED here so a leftover INFERENCE_MODE=brain (the VPS .env carried one) resolves to
+      // "direct" loudly rather than being silently treated as an unknown string. bot-core logs the
+      // fallback at boot, so the stale value is visible instead of inferred.
+      const v = (process.env["INFERENCE_MODE"] ?? "hermes").trim().replace(/^=+/, "");
+      return (v === "hermes" ? "hermes" : "direct") as "direct" | "hermes";
     })(),
     hermesUrl: process.env["HERMES_API_URL"]?.trim().replace(/^=+/, "") || undefined,
     hermesApiKey: process.env["HERMES_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
