@@ -89,10 +89,21 @@ const shared = {
   CYPHER_BOT_ID:         process.env.CYPHER_BOT_ID,
   DREVAN_BOT_ID:         process.env.DREVAN_BOT_ID,
   GAIA_BOT_ID:           process.env.GAIA_BOT_ID,
-  // Brain relay: set INFERENCE_MODE=brain to route inference through Phoenix Brain.
-  // When "direct" (default), each bot calls DeepSeek directly.
-  INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "direct",
-  BRAIN_URL:             process.env.BRAIN_URL             ?? "http://127.0.0.1:8001",
+  // Inference mode: "hermes" routes every reply through the local Hermes agent (what all three
+  // bots actually run); "direct" makes each bot call its provider itself.
+  //
+  // `brain` was the third option and is GONE (2026-07-29). Phoenix Brain was archived, its pm2
+  // process deleted, and the `nullsafe-brain` app block removed from this file -- it used to sit
+  // right below the bots, so `pm2 start ecosystem.config.js` would have resurrected a service whose
+  // source has moved to `_archive/`. The bots' brain-mode code path is deleted too, so an
+  // INFERENCE_MODE=brain value now falls through to direct instead of dialing a dead port.
+  //
+  // NOTE FOR THE VPS: `/app/nullsafe-discord/.env` still had INFERENCE_MODE=brain at the time of
+  // this change, harmless ONLY because all three bots carry per-process overrides
+  // (CYPHER_/DREVAN_/GAIA_INFERENCE_MODE=hermes) that win. That is a landmine, not a config: drop
+  // one override, or add a fourth process without one, and it inherits a dead mode. Set the shared
+  // value to hermes.
+  INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "hermes",
   MISTRAL_API_KEY:       process.env.MISTRAL_API_KEY,
   MISTRAL_TTS_MODEL:     process.env.MISTRAL_TTS_MODEL     ?? "voxtral-mini-tts-2603",
   // MISTRAL_STT_MODEL intentionally omitted -- bot defaults to voxtral-mini-transcribe-2507
@@ -153,45 +164,6 @@ module.exports = {
         INFERENCE_MODE: process.env.GAIA_INFERENCE_MODE ?? shared.INFERENCE_MODE,
         HERMES_API_URL: process.env.GAIA_HERMES_API_URL ?? "http://127.0.0.1:8644/v1",
         HERMES_API_KEY: process.env.HERMES_API_KEY },
-    },
-    {
-      // Phoenix Brain -- FastAPI inference service.
-      // Bots relay ThoughtPackets here when INFERENCE_MODE=brain.
-      // Runs on port 8001 (same VPS as bots; loopback only -- no external exposure needed).
-      // Requires: Python venv at /app/nullsafe-phoenix/venv, .env.brain at cwd.
-      name: "nullsafe-brain",
-      cwd: "/app/nullsafe-phoenix",
-      script: "services/brain/main.py",
-      interpreter: "/app/nullsafe-phoenix/venv/bin/python3",
-      autorestart: true,
-      restart_delay: 8000,
-      max_restarts: 15,
-      min_uptime: "30s",
-      kill_timeout: 8000,
-      exp_backoff_restart_delay: 2000,
-      error_file: "/app/logs/nullsafe-brain-error.log",
-      out_file: "/app/logs/nullsafe-brain-out.log",
-      log_date_format: "YYYY-MM-DD HH:mm:ss",
-      env: {
-        // shared/contracts.py lives at repo root -- PYTHONPATH must include it.
-        PYTHONPATH:            "/app/nullsafe-phoenix",
-        HALSETH_URL:           process.env.HALSETH_URL,
-        HALSETH_ADMIN_SECRET:  process.env.HALSETH_SECRET,
-        // Halseth IS the WebMind for now -- /mind/* endpoints are identical.
-        WEBMIND_URL:           process.env.HALSETH_URL,
-        DEEPSEEK_API_KEY:      process.env.DEEPSEEK_API_KEY,
-  // 2026-07-27: also absent from this allowlist, so the DEEPSEEK_MODEL override in .env was
-  // silently dead. DeepSeek retired `deepseek-chat` (supported: deepseek-v4-pro /
-  // deepseek-v4-flash) and the worker pipeline has been 400ing since ~2026-07-26 -- lane
-  // guard, growth pipeline and compression all failing. Listing it here makes the .env knob
-  // actually reachable; the model CHOICE (pro vs flash = cost/quality) is Raziel's.
-  DEEPSEEK_MODEL:        process.env.DEEPSEEK_MODEL,
-        INFERENCE_ENABLED:     "true",
-        SYNTHESIS_ENABLED:     process.env.BRAIN_SYNTHESIS_ENABLED ?? "false",
-        SYNTHESIS_INTERVAL:    process.env.BRAIN_SYNTHESIS_INTERVAL ?? "1200",
-        BRAIN_HOST:            "127.0.0.1",
-        IDENTITY_DIR:          "/app/nullsafe-phoenix/services/brain/identity/data",
-      },
     },
     {
       name: "autonomous-worker",

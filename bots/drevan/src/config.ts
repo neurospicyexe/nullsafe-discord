@@ -48,7 +48,6 @@ export function loadBotConfig(): BotConfig {
     inferenceModel:  process.env["INFERENCE_MODEL"]?.trim().replace(/^=+/, "") || undefined,
     disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["PARTNER_DISCORD_ID"] ?? process.env["BLUE_DISCORD_ID"] ?? undefined,
-    brainUrl: process.env["BRAIN_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceMode: (() => {
       const v = (process.env["INFERENCE_MODE"] ?? "direct").trim().replace(/^=+/, "");
       return (v === "brain" ? "brain" : v === "hermes" ? "hermes" : "direct") as "direct" | "brain" | "hermes";

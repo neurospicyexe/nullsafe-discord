@@ -88,15 +88,20 @@ export function filterModelChoices(
     .map((c) => ({ name: c.label.slice(0, 100), value: c.key }));
 }
 
+/** What the bot process is ACTUALLY running.
+ *
+ *  "Brain swarm" was the third value and is gone (2026-07-29) with brain mode. Worth noting what it
+ *  cost: the expression producing it could only ever return "direct/fallback", because brainClient
+ *  was always null -- so `/status` reported "direct/fallback" on all three bots while every reply
+ *  actually came from the Hermes agent. A label that cannot be right is worse than no label. */
+export type Substrate = "hermes" | "direct/fallback";
+
 export interface StatusInput {
   companionLabel: string;
   modelKey: string | null; // active_model setting (null = env default)
   modelLabel: string | null;
   provider: string | null;
-  substrate: "Brain swarm" | "direct/fallback";
-  /** Brain's actually-live model key. undefined = not queried; null = Brain on env default. */
-  brainLiveModel?: string | null;
-  brainReachable?: boolean;
+  substrate: Substrate;
   voiceChannel: string | null; // channel name, or null when not connected
   front?: string | null;
 }
@@ -113,15 +118,6 @@ export function buildStatusLines(s: StatusInput): string {
       : "model (setting): env default",
   );
   lines.push(`substrate: ${s.substrate}`);
-  if (s.substrate === "Brain swarm") {
-    if (s.brainReachable === false) {
-      lines.push("Brain live model: unreachable (switch will apply within 60s)");
-    } else if (s.brainLiveModel !== undefined) {
-      const live = s.brainLiveModel ?? "env default";
-      const matches = s.brainLiveModel === s.modelKey;
-      lines.push(`Brain live model: ${live}${matches ? " ✓ in sync" : " (catching up)"}`);
-    }
-  }
   lines.push(`voice: ${s.voiceChannel ? `connected to ${s.voiceChannel}` : "not in voice"}`);
   if (s.front) lines.push(`front: ${s.front}`);
   return lines.join("\n");
@@ -167,15 +163,13 @@ export interface SlashHandlerContext {
   companionId: string; // "cypher"
   ownerDiscordId: string;
   /** Whether Brain or the local adapter actually answers right now. */
-  substrate: () => "Brain swarm" | "direct/fallback";
+  substrate: () => Substrate;
   /** The live active-model setting. Mutated by applyModel; read by /status. */
   activeModel: { key: string | null; label: string | null };
   /** Swap the live inference adapter + update the activeModel refs. */
   applyModel: (key: string, entry: ModelEntry) => void;
   /** Persist the selection to Halseth (fire-and-forget). */
   persistModel: (key: string) => void;
-  /** Brain force-clear + status. null in direct mode. */
-  brainClient: ModelCacheClient | null;
   /** Keys the live hermes-model-map.json can apply. null/absent = not hermes mode or unreadable
    *  map; both fall back to the full registry. Keeps /model from offering keys that cannot land. */
   hermesModelKeys?: Set<string> | null;
@@ -194,7 +188,7 @@ const EPHEMERAL = { flags: MessageFlags.Ephemeral } as const;
 async function handleModel(
   ctx: SlashHandlerContext,
   interaction: ChatInputCommandInteraction,
-  substrate: "Brain swarm" | "direct/fallback",
+  substrate: Substrate,
 ): Promise<void> {
   // Caller has already deferred (ephemeral); every reply below is editReply.
   const arg = (interaction.options.getString("key") ?? "").trim().toLowerCase();
@@ -221,13 +215,11 @@ async function handleModel(
   ctx.applyModel(arg, entry);
   ctx.persistModel(arg);
 
-  let note: string;
-  if (substrate === "Brain swarm" && ctx.brainClient) {
-    const cleared = await ctx.brainClient.invalidateModelCache(ctx.companionId);
-    note = cleared ? "Brain cache cleared — live now." : "Brain will pick this up within 60s.";
-  } else {
-    note = "live now in direct mode.";
-  }
+  // Applied in-process, so it is live on the next reply. The Brain cache-invalidation branch that
+  // used to sit here went with brain mode (2026-07-29) -- there is no second cache to clear.
+  const note = substrate === "hermes"
+    ? "live now (the hermes agent picks it up on the next reply)."
+    : "live now.";
   await interaction.editReply({
     content: `now live: \`${arg}\` — ${entry.label} · substrate: ${substrate}\n${note}`,
   });
@@ -236,19 +228,8 @@ async function handleModel(
 async function handleStatus(
   ctx: SlashHandlerContext,
   interaction: ChatInputCommandInteraction,
-  substrate: "Brain swarm" | "direct/fallback",
+  substrate: Substrate,
 ): Promise<void> {
-  let brainLiveModel: string | null | undefined;
-  let brainReachable: boolean | undefined;
-  if (substrate === "Brain swarm" && ctx.brainClient) {
-    const st = await ctx.brainClient.getModelStatus(ctx.companionId);
-    if (st) {
-      brainReachable = true;
-      brainLiveModel = st.active_model;
-    } else {
-      brainReachable = false;
-    }
-  }
   const key = ctx.activeModel.key;
   const lines = buildStatusLines({
     companionLabel: ctx.companionLabel,
@@ -256,8 +237,6 @@ async function handleStatus(
     modelLabel: ctx.activeModel.label,
     provider: key && ALL_MODELS[key] ? ALL_MODELS[key].provider : null,
     substrate,
-    brainLiveModel,
-    brainReachable,
     voiceChannel: ctx.voice.currentChannelName(interaction.guildId),
   });
   await interaction.editReply({ content: lines });

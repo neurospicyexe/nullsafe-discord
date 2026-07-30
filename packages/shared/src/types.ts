@@ -64,9 +64,11 @@ export interface BotConfig {
   disabledModels?: string;   // comma-separated model keys to disable
   blueDiscordId?: string;
   /** When set, bot relays inference to Phoenix Brain instead of calling DeepSeek directly. */
-  brainUrl?: string;
   /** "brain" = relay to Phoenix Brain; "hermes" = relay to the local Hermes agent API server; "direct" (default) = bot handles inference. */
-  inferenceMode?: "direct" | "brain" | "hermes";
+  // "brain" was a third mode, removed 2026-07-29 along with BrainClient, the relay branch in the
+  // message handler, and the nullsafe-brain block in ecosystem.config.js. An INFERENCE_MODE of
+  // "brain" now falls through to direct (and says so at boot) instead of dialing a dead port.
+  inferenceMode?: "direct" | "hermes";
   /** Base URL of this companion's local Hermes API server, e.g. http://127.0.0.1:8642/v1 (INFERENCE_MODE=hermes). */
   hermesUrl?: string;
   /** Bearer token (API_SERVER_KEY) for the local Hermes API server. */

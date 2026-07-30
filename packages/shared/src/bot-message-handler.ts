@@ -30,7 +30,6 @@ import {
   countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
-  buildThoughtPacket, isSwarmReply,
   claimFloor, releaseFloor, setLastActivity,
   clearConsolidation,
   isResponseCoherent,
@@ -51,7 +50,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, BrainClient, WriteQueue, StmStore, SessionWindowManager,
+  LibrarianClient, WriteQueue, StmStore, SessionWindowManager,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -132,7 +131,6 @@ export interface MessageHandlerCfg {
 export interface MessageHandlerDeps {
   client: Client;
   cfg: MessageHandlerCfg;
-  brainClient: BrainClient | null;
   voiceClient: VoiceClient | null;
   redis: Parameters<typeof claimFloor>[0] | null;
   librarian: LibrarianClient;
@@ -249,7 +247,7 @@ export function mapColdStartHistory(
 
 export async function handleMessage(message: Message, deps: MessageHandlerDeps): Promise<void> {
   const {
-    client, cfg, brainClient, voiceClient, redis, librarian,
+    client, cfg, voiceClient, redis, librarian,
     adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
     stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
@@ -780,21 +778,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         }
       } catch { /* history unavailable -- leave null, ambient stays open to everyone */ }
     }
-    // When brainClient is active, Brain's SwarmEvaluator handles routing -- skip per-bot relevance gate.
+    // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
+    // (2026-07-29): brainClient was always null, so the gate always applied. Same for the
+    // `brainHandlesInterCompanion` escape below it, which deferred inter-companion routing to
+    // Brain's SwarmEvaluator -- it evaluated to false on every message, so per-bot shouldRespond
+    // has been the only routing authority for as long as the bots have run hermes.
     const isAmbientOwnerOnly =
-      !brainClient &&
       channelEntry?.modes?.includes("owner_only") === true &&
       !senderCtx.isCompanionBot &&
       !senderCtx.isMentioned &&
       !isReplyToMe &&
       !directlyAddressed;
-
-    // In brain mode, Brain's SwarmEvaluator is the routing authority for inter-companion messages.
-    // Per-bot shouldRespond would block ambient companion messages that Brain should route.
-    const brainHandlesInterCompanion =
-      brainClient != null &&
-      senderCtx.isCompanionBot === true &&
-      channelEntry?.modes?.includes("inter_companion") === true;
 
     if (isAmbientOwnerOnly) {
       const relevant = await judgeAmbientRelevance(
@@ -803,7 +797,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         (sys, msgs) => adapterRef.current.generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!brainHandlesInterCompanion && !isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -1144,12 +1138,16 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const allAddressed = [...new Set([...textAddressed, ...mentionedViaMention])];
     const addressedCompanion = allAddressed.length > 0 ? allAddressed.join(",") : undefined;
 
-    // Direct-mode floor coordination (Finding 5): with no Brain to arbitrate who speaks, the three
-    // bots would all answer the same ambient human message. Claim the shared floor so only one does.
-    // Brain mode is coordinated by the SwarmEvaluator; addressed / replied-to / mentioned messages
-    // and companion-bot turns (which have their own pingpong rails) bypass this gate.
+    // Floor coordination (Finding 5): nothing arbitrates who speaks, so all three bots would answer
+    // the same ambient human message. Claim the shared floor so only one does. Addressed /
+    // replied-to / mentioned messages and companion-bot turns (which have their own pingpong rails)
+    // bypass this gate.
+    //
+    // The `!brainClient &&` guard is gone with brain mode (2026-07-29). It read as "Brain mode is
+    // coordinated by the SwarmEvaluator", but brainClient was always null, so this floor lock has
+    // been the real and only speaker arbitration all along.
     let floorClaimed = false;
-    if (!brainClient && redis && !senderCtx.isCompanionBot
+    if (redis && !senderCtx.isCompanionBot
         && !directlyAddressed && !isReplyToMe && !senderCtx.isMentioned) {
       floorClaimed = await claimFloor(redis, COMPANION_ID, 6000);
       if (!floorClaimed) return;
@@ -1172,68 +1170,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : groundedHistory;
 
-    let response: string | null;
-    // A listen that ran on THIS bot must be answered by THIS bot, directly -- never
-    // via the swarm. The [HEARD] packet arrives ~15s late (pipeline latency) and
-    // loses Brain's message_id dedup to siblings' bare packets, so the listener gets
-    // muted and a blind sibling answers (2026-06-13). Going direct pins the reply to
-    // the companion who actually heard the track, with the [HEARD] block already in
-    // `history` (appended to STM above).
-    if (brainClient && !pendingMediaId) {
-      // Relay mode: send assembled context to Phoenix Brain for inference.
-      // Brain returns reply_text; falls back to direct inference on failure.
-      const packet = buildThoughtPacket(
-        COMPANION_ID,
-        message.author.id,
-        message.channelId,
-        message.id,
-        effectiveContent,
-        systemPromptWithImp,
-        groundedHistory,
-        channelHistory,
-        temperature,
-        {
-          isOwner: attribution.isOwner,
-          frontMember: pkMemberName,
-          guildId: message.guildId ?? undefined,
-          author,
-          authorIsCompanion: isCompanionPost,
-          depth: chainDepth,
-          addressedCompanion,
-          voiceInput,
-        },
-      );
-      const typingInterval = setInterval(() => { ch.sendTyping().catch(() => {}); }, 4_000);
-      const brainResult = await brainClient.chat(packet).finally(() => clearInterval(typingInterval));
-      if (brainResult === null) {
-        console.warn(`[${COMPANION_ID}] brain relay failed, falling back to direct inference`);
-        response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
-      } else if (isSwarmReply(brainResult)) {
-        const slotReply = brainResult.responses[COMPANION_ID];
-        if (slotReply === null || slotReply === undefined) {
-          // Brain suppressed this companion. Advance distillation cadence for the trigger message
-          // so STM rolling window stays in sync with the actual conversation cadence.
-          distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
-          return;
-        }
-        const priorityOrder: string[] = brainResult.priority_order ?? [];
-        const myPosition = priorityOrder.indexOf(COMPANION_ID);
-        if (myPosition > 0) {
-          const staggerMs = parseInt(process.env.SWARM_STAGGER_MS ?? "2500", 10);
-          await new Promise<void>(resolve => setTimeout(resolve, myPosition * staggerMs));
-        }
-        response = slotReply;
-      } else {
-        if (brainResult.status === "ok" && brainResult.reply_text) {
-          response = brainResult.reply_text;
-        } else {
-          console.warn(`[${COMPANION_ID}] brain relay failed (status=${brainResult.status}), falling back to direct inference`);
-          response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
-        }
-      }
-    } else {
-      response = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
-    }
+    // Direct inference. A Brain-relay branch used to wrap this call and was deleted 2026-07-29:
+    // Phoenix Brain is archived, its pm2 process is gone, its `nullsafe-brain` block is out of
+    // ecosystem.config.js, and all three bots boot INFERENCE_MODE=hermes -- so `brainClient` was
+    // never constructed and this was the only reachable path.
+    //
+    // Deleted rather than left dormant on purpose: dead code in live message handling reads as a
+    // live option. That exact confusion produced a flatly wrong topology claim on 2026-07-28 ("the
+    // bots run on Brain"), when hermes was the harness and Brain was the dormant one. Behaviour
+    // that no longer exists should not be described in the present tense by the source.
+    //
+    // Gone with it: the swarm slot/priority_order stagger, Brain's suppression path (which could
+    // `return` without replying), and the buildThoughtPacket/isSwarmReply call sites.
+    // `let`, not `const`: the coherence retry and the imp/scramble passes downstream reassign it.
+    let response: string | null = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
 
     if (!response) {
       await sendLong(ch, IN_CHARACTER_FALLBACK);

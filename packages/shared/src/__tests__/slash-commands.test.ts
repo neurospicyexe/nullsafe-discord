@@ -73,44 +73,40 @@ describe("buildStatusLines", () => {
     expect(out).not.toContain("Brain live model");
   });
 
-  it("flags in-sync vs catching-up when Brain is the substrate", () => {
-    const synced = buildStatusLines({
-      companionLabel: "Cypher",
-      modelKey: "kimi-k2",
-      modelLabel: "Kimi K2",
-      provider: "kimi",
-      substrate: "Brain swarm",
-      brainLiveModel: "kimi-k2",
-      brainReachable: true,
-      voiceChannel: "general",
-    });
-    expect(synced).toContain("✓ in sync");
-    expect(synced).toContain("connected to general");
-
-    const lagging = buildStatusLines({
-      companionLabel: "Cypher",
-      modelKey: "kimi-k2",
-      modelLabel: "Kimi K2",
-      provider: "kimi",
-      substrate: "Brain swarm",
-      brainLiveModel: "deepseek-chat",
-      brainReachable: true,
-      voiceChannel: null,
-    });
-    expect(lagging).toContain("catching up");
-  });
-
-  it("reports Brain unreachable without throwing", () => {
+  // These two tests used to cover the Brain live-model sync lines ("✓ in sync" / "catching up" /
+  // "unreachable"). Brain mode was removed 2026-07-29, so that behaviour is gone -- replaced here
+  // rather than deleted, because the thing worth protecting is that /status reports the substrate
+  // TRUTHFULLY. The old code could only ever emit "direct/fallback" (brainClient was always null),
+  // so all three bots reported direct/fallback while every reply came from the Hermes agent. A label
+  // that cannot be right is worse than no label, and that is what these now pin.
+  it("reports hermes as the substrate when that is what is running", () => {
     const out = buildStatusLines({
       companionLabel: "Cypher",
       modelKey: "kimi-k2",
       modelLabel: "Kimi K2",
       provider: "kimi",
-      substrate: "Brain swarm",
-      brainReachable: false,
-      voiceChannel: null,
+      substrate: "hermes",
+      voiceChannel: "general",
     });
-    expect(out).toContain("unreachable");
+    expect(out).toContain("substrate: hermes");
+    expect(out).toContain("connected to general");
+  });
+
+  it("never emits a Brain line on any substrate -- the mode no longer exists", () => {
+    for (const substrate of ["hermes", "direct/fallback"] as const) {
+      const out = buildStatusLines({
+        companionLabel: "Cypher",
+        modelKey: "kimi-k2",
+        modelLabel: "Kimi K2",
+        provider: "kimi",
+        substrate,
+        voiceChannel: null,
+      });
+      expect(out).not.toContain("Brain");
+      expect(out).not.toContain("in sync");
+      expect(out).not.toContain("catching up");
+      expect(out).not.toContain("unreachable");
+    }
   });
 
   it("falls back to 'env default' when no model setting is active", () => {

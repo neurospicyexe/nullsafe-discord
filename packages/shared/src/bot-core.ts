@@ -39,7 +39,6 @@ import { StmStore } from "./stm.js";
 import { WriteQueue } from "./write-queue.js";
 import { createRedisClient } from "./floor.js";
 import { wireEventSubscriptions, setPresence } from "./events.js";
-import { BrainClient } from "./brain-client.js";
 import { handleMessage } from "./bot-message-handler.js";
 import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
@@ -308,21 +307,19 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     autonomous, auditConfig,
   } = brc;
 
-  const brainClient = env.inferenceMode === "brain" && env.brainUrl
-    ? new BrainClient(env.brainUrl)
-    : null;
-  // Dormancy is announced, not implied: "mode: hermes" alone doesn't tell a
-  // reader that the Brain swarm evaluator + progress brake AND the whole
-  // multi-provider fallback chain are dead code for this process. Say it.
-  if (brainClient) {
-    console.log(`[${companionId}] inference mode: brain (${env.brainUrl})`);
-    console.log(`[${companionId}] DORMANT: provider fallback chain (Brain owns inference)`);
-  } else if (env.inferenceMode === "hermes" && env.hermesUrl) {
+  // Dormancy is announced, not implied: "mode: hermes" alone doesn't tell a reader that the whole
+  // multi-provider fallback chain is bypassed for this process. Say it.
+  //
+  // `brain` was a third mode and is gone (2026-07-29) along with BrainClient, the relay branch in
+  // the message handler, and the `nullsafe-brain` block in ecosystem.config.js. An INFERENCE_MODE of
+  // `brain` now lands here as `direct` rather than dialing a port nothing listens on -- which is the
+  // right failure, since /app/nullsafe-discord/.env still carried INFERENCE_MODE=brain and was
+  // survivable only because all three per-bot overrides said hermes.
+  if (env.inferenceMode === "hermes" && env.hermesUrl) {
     console.log(`[${companionId}] inference mode: hermes (${env.hermesUrl})`);
-    console.log(`[${companionId}] DORMANT: Brain swarm + progress brake (bot-side gates active); provider fallback chain bypassed (forceHermes)`);
+    console.log(`[${companionId}] DORMANT: provider fallback chain bypassed (forceHermes)`);
   } else {
-    console.log(`[${companionId}] inference mode: direct`);
-    console.log(`[${companionId}] DORMANT: Brain swarm + progress brake (bot-side gates active)`);
+    console.log(`[${companionId}] inference mode: direct${env.inferenceMode && env.inferenceMode !== "direct" ? ` (INFERENCE_MODE="${env.inferenceMode}" is not a mode this build has; falling back)` : ""}`);
   }
 
   const redis = redisUrl ? createRedisClient(redisUrl) : null;
@@ -658,7 +655,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     companionLabel,
     companionId,
     ownerDiscordId: env.ownerDiscordId,
-    substrate: () => (env.inferenceMode === "brain" && brainClient ? "Brain swarm" : "direct/fallback"),
+    // Reports what the process is ACTUALLY running. The old expression could only ever return
+    // "direct/fallback" (brainClient was always null) even on the three bots that run hermes -- so
+    // `/status` told Raziel "direct/fallback" while every reply came from the Hermes agent. Now it
+    // says hermes when it means hermes.
+    substrate: () => (env.inferenceMode === "hermes" && env.hermesUrl ? "hermes" : "direct/fallback"),
     activeModel: activeModelRef,
     applyModel: (key, entry) => {
       adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, companionId);
@@ -667,7 +668,6 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     },
     persistModel: (key) =>
       writeQueue.fireAndForget(`settings:model:${companionId}`, () => librarian.setSetting("active_model", key)),
-    brainClient: brainClient ?? null,
     hermesModelKeys: hermesModelKeysRef.value,
     voice: {
       join: async (interaction) => {
@@ -735,7 +735,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       (isSuperseded) => handleMessage(message, {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
-      brainClient, voiceClient, redis, librarian,
+      voiceClient, redis, librarian,
       adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster,
       ...(pkSenderId ? { pkSenderId } : {}),
