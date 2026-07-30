@@ -487,6 +487,33 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // ── Record on arrival (2026-07-30) ────────────────────────────────────────
+    //
+    // Every message this bot can see goes into short-term memory HERE, before any gate can decline
+    // it. The inbound append used to sit ~400 lines below, under every response gate, so a bot that
+    // chose not to answer never recorded the message: its memory had holes exactly where it stayed
+    // quiet, and it remembered only the turns it took part in.
+    //
+    // Two things follow. (1) Silence stops costing context -- a companion that hangs back for ten
+    // turns still knows what those ten turns were. (2) It is the PRECONDITION for fit-based speaker
+    // selection: a companion cannot judge "is this for me" from a transcript of only its own lines,
+    // and asking it to is why a name has to be said out loud on every message.
+    //
+    // Same defect Hermes issue #14853 hit from the other side ("the agent only sees the single
+    // @mention message -- zero context about what other agents said"). Their fix re-fetched channel
+    // history at prompt time; recording it once, speaker-labeled and persisted, is strictly cheaper.
+    //
+    // Placed after STT so a voice note is stored as its transcript rather than as an empty string,
+    // and idempotent by message id so the later append and the command branches collapse into one.
+    stmStore.appendInboundOnce(message.channelId, message.id, {
+      role: "user",
+      content: effectiveContent,
+      authorName: pkMemberName
+        ? `${pkMemberName} (via PK)`
+        : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
+      timestamp: message.createdTimestamp,
+    });
+
     // Owner model switch command: <prefix>: model <key> | <prefix>: model list
     if (attribution.isOwner) {
       const switchMatch = effectiveContent.match(MODEL_SWITCH_TRIGGER);
@@ -596,7 +623,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // dump. Feed the snippets back to the model for an in-voice weave, and land BOTH
         // turns in STM -- before this, the searching bot never saw its own results (its own
         // messageCreate is skipped), so it literally could not discuss what it just found.
-        stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
+        // appendInboundOnce, not append: record-on-arrival already stored this message, and a plain
+        // append here would duplicate the search query in the transcript.
+        stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: effectiveContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
         stmStore.append(message.channelId, { role: "assistant", content: search.reply, timestamp: Date.now() });
         if (search.results.length > 0) {
           try {
@@ -896,7 +925,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const memberLabel = pkMemberName
       ? `${pkMemberName} (via PK)`
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
-    stmStore.append(message.channelId, { role: "user", content: effectiveContent, authorName: memberLabel, timestamp: message.createdTimestamp });
+    // No-op when the early record-on-arrival above already stored this message. Kept as a second call
+    // rather than deleted so the command branches (search, listen) that reach this point by their own
+    // route still record, and so a future refactor that moves the early call cannot silently drop it.
+    stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: effectiveContent, authorName: memberLabel, timestamp: message.createdTimestamp });
     if (attribution.isOwner) pushRazielMessage(effectiveContent);
 
     // Streaming indexer: index the inbound message into Second Brain's vector store
