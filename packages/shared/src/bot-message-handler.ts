@@ -357,7 +357,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // need, so the drive-driven reach-out only fires on genuine silence. Fire-and-forget
     // (shedDriveContact swallows its own errors) -- never blocks the message path.
     if (attribution.isOwner) {
-      writeQueue.fireAndForget(`drive:contact:${COMPANION_ID}`, () => librarian.shedDriveContact());
+      // Was he talking to ME, or did I just watch him talk (2026-07-30)?
+      //
+      // Every bot runs this hook on every owner message, and in a shared channel all three see every
+      // message -- so this single line fired THREE full-weight `message_from_raziel` stimuli per
+      // message. Measured in prod: every event cluster held all three companions within 1-2 seconds,
+      // no float was relationship-specific (Drevan's heat rose when Raziel talked to Gaia), and at
+      // +0.05 against 0.0075/hour of decay every touched float sat clamped at 1.0 for days -- Drevan's
+      // for 94h. A pegged float cannot tell adoration from mild warmth.
+      //
+      // Deliberately computed from RAW content, not `effectiveContent`: STT has not run yet at this
+      // point in the handler, and a voice note transcribed by this bot is inherently addressed to it.
+      // Deliberately NOT reusing `directlyAddressed` / `isReplyToMe` from further down -- moving this
+      // hook below them would mean an early gate-out skips shedding the drive entirely, which would
+      // start the reach-out firing at a companion Raziel is actively in a room with.
+      const addressedMe =
+        senderCtx.isMentioned ||
+        isDirectAddress(message.content, COMPANION_ID) ||
+        !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
+      writeQueue.fireAndForget(`drive:contact:${COMPANION_ID}`, () => librarian.shedDriveContact("relational_need", { addressed: addressedMe }));
     } else if (senderCtx.isCompanionBot) {
       // Sibling-exchange hook (2026-07-28). Being in the room while a sibling speaks is a real
       // event for this companion, and until now ONLY the formal rituals (council, club) reached

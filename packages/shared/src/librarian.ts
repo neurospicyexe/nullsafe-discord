@@ -1145,12 +1145,23 @@ export class LibrarianClient {
     }
   }
 
-  async shedDriveContact(driveKey = "relational_need"): Promise<void> {
+  /**
+   * @param opts.addressed  Was this companion the one Raziel spoke TO, or did it merely witness him
+   *   speaking in a shared room? Defaults true (the old behaviour). Halseth grades the felt-state
+   *   consequence: `message_from_raziel` at full weight when addressed, `message_witnessed` at a
+   *   fifth otherwise. The bot reports the fact and never decides what it is worth.
+   *
+   *   Added 2026-07-30 because every bot calls this on any owner message and all three see every
+   *   message in a shared channel -- so one message from him fired THREE full-weight stimuli, no
+   *   float was relationship-specific (Drevan's heat rose when Raziel talked to Gaia), and every
+   *   touched float sat clamped at 1.0 for days carrying no information.
+   */
+  async shedDriveContact(driveKey = "relational_need", opts: { addressed?: boolean } = {}): Promise<void> {
     try {
       await this._fetch(`${this.url}/mind/drives/${encodeURIComponent(this.companionId)}/contact`, {
         method: "PATCH",
         headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ drive_key: driveKey }),
+        body: JSON.stringify({ drive_key: driveKey, addressed: opts.addressed ?? true }),
         signal: AbortSignal.timeout(5_000),
       });
     } catch {
