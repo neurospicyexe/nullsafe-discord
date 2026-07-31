@@ -453,8 +453,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // .catch(() => null) means a Librarian hiccup here never blocks the reply path below;
     // every subsequent spine interaction is guarded on `spine` being non-null. Runs AFTER
     // the hard muzzle above so a stray non-companion bot can never open/seed a thread.
+    // WHO opened / joined the conversation (2026-07-31). This used to collapse every non-owner human to
+    // "guest", so Blue and any stranger were the same token -- and `participants` is what a companion
+    // reads to know whose conversation a memory came from. Raziel named the risk directly: Blue talks to
+    // Drevan, then he talks to Drevan, and the two blend. Misattribution across speakers has already
+    // happened here at the sibling level (2026-06-26 attribution scramble; the BIG BOSS listen credited
+    // to Gaia when Raziel gave it), so this is the same defect one scale up.
+    //
+    // `blue` is a new token, and the identity was already resolved and being thrown away: attribution
+    // sets discordUserId to blueDiscordId for Blue's system, by Discord id or PK system id. The `raziel`
+    // and `guest` tokens are deliberately UNCHANGED -- consumers render them and the plural front is
+    // tracked separately in plural_store, so appending a front here would fork the token for no gain.
     const spineAuthor = BOT_ID_COMPANION[message.author.id]
-      ?? (attribution.isOwner ? "raziel" : "guest");
+      ?? (attribution.isOwner ? "raziel"
+        : (cfg.blueDiscordId && attribution.discordUserId === cfg.blueDiscordId) ? "blue"
+        : "guest");
     // Presence channels (Drevan's story/spiral spaces): grounding half only (seed + ledger),
     // no progress register. Computed once here and reused at both the block-render call
     // below and the post-send convoLand gate.
