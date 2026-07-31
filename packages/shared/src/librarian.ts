@@ -568,9 +568,25 @@ export class LibrarianClient {
    * same-channel discord-live echoes, dedups, and returns readable lines -- or null
    * when nothing real surfaced. Non-JSON results pass through unchanged.
    */
-  static formatSbRecall(raw: string, excludeChannelId?: string): string | null {
-    let parsed: { chunks?: Array<{ text?: string; vault_path?: string }> };
-    try { parsed = JSON.parse(raw) as { chunks?: Array<{ text?: string; vault_path?: string }> }; } catch { return raw; }
+  /**
+   * Render recalled chunks for the prompt.
+   *
+   * EVERY LINE CARRIES ITS AGE (2026-07-31). Before this, a chunk arrived as `- <text> (<vault_path>)`
+   * and nothing else -- no date, no relative time. So a June summary and a note from last night were
+   * presented to the model as equally current, and it had no way to prefer the newer one even when it
+   * mattered. Measured case: asked which Fargo episode was watched last, the top hit was a June entry
+   * about having FINISHED the show, and the reply confidently used it.
+   *
+   * Recency now also nudges the RANKING inside Second Brain, but ranking alone is not enough: the
+   * model still has to be able to see that one memory is six weeks older than another in order to say
+   * so out loud, or to distrust it. Age is stated in words ("6 weeks ago") rather than a raw
+   * timestamp, because the model reasons about elapsed time far more reliably that way -- the same
+   * reason `stampRelative` exists for STM turns.
+   */
+  static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
+    type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
+    let parsed: { chunks?: Chunk[] };
+    try { parsed = JSON.parse(raw) as { chunks?: Chunk[] }; } catch { return raw; }
     if (!Array.isArray(parsed.chunks)) return raw;
     const seen = new Set<string>();
     const lines: string[] = [];
@@ -581,11 +597,43 @@ export class LibrarianClient {
       const key = text.slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
-      const source = c.vault_path ? ` (${c.vault_path})` : "";
-      lines.push(`- ${text.length > 400 ? `${text.slice(0, 400)}...` : text}${source}`);
+      const age = LibrarianClient.chunkAge(c.created_at, now);
+      // Age leads the citation: it is the thing that was missing, and putting it first means a
+      // truncated line still carries it.
+      const source = [age, c.vault_path].filter(Boolean).join(", ");
+      lines.push(`- ${text.length > 400 ? `${text.slice(0, 400)}...` : text}${source ? ` (${source})` : ""}`);
       if (lines.length >= 4) break;
     }
     return lines.length ? lines.join("\n") : null;
+  }
+
+  /**
+   * Human-relative age of a recalled chunk, or "" when the timestamp is missing or unparseable.
+   *
+   * Returns "" rather than "unknown" on purpose: an honest blank is better than a label the model
+   * might quote back as if it were a fact about the memory.
+   */
+  static chunkAge(createdAt: string | null | undefined, now: number = Date.now()): string {
+    if (!createdAt) return "";
+    // SQLite `datetime('now')` has no zone marker and Date.parse would read it as LOCAL time; the
+    // stored value is UTC. Same normalisation as the Second Brain recency term.
+    const s = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(createdAt)
+      ? createdAt.replace(" ", "T") + "Z"
+      : createdAt;
+    const t = Date.parse(s);
+    if (!Number.isFinite(t)) return "";
+    const mins = Math.floor((now - t) / 60_000);
+    if (mins < 0) return "just now";          // clock skew: never claim a memory is from the future
+    if (mins < 60) return "today";
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return "yesterday";
+    if (days < 14) return `${days} days ago`;
+    const weeks = Math.floor(days / 7);
+    if (weeks < 9) return `${weeks} weeks ago`;
+    const months = Math.floor(days / 30);
+    return months < 24 ? `${months} months ago` : `${Math.floor(days / 365)} years ago`;
   }
 
   /**
