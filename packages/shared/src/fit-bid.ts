@@ -40,12 +40,21 @@ export const LANE_SATURATION_HITS = 8;
 /** Consecutive own turns since the last owner message that count as monopolising the channel.
  *  A normal back-and-forth (owner, me, owner, me) never reaches 2 and so is never penalised. */
 export const MONOPOLY_TURNS = 2;
-/** How long to wait for siblings to post their bids. Long enough for three processes on one VPS to
- *  land a Redis write; short enough that a reply still feels immediate. */
-export const BID_WINDOW_MS = 600;
+/**
+ * How long after THE MESSAGE ARRIVED the round closes. Anchored to the Discord message timestamp,
+ * not to when this process happens to reach the bid -- see `deadlineAt` on runBidRound.
+ *
+ * 2500ms, not 600ms, because of what sits upstream: in `owner_only` channels (10 of the 13 live
+ * channels) `judgeAmbientRelevance` makes an LLM call BEFORE the bid, and three independent hermes
+ * gateways do not return in lockstep. With a window measured from each bot's own arrival, a bot whose
+ * judge answered fast posts, waits 600ms, sees only its own bid and "wins" -- and so does the slow
+ * one a second later. That is the footrace reappearing upstream of the fix, and it would have looked
+ * exactly like working (someone always answers).
+ */
+export const BID_WINDOW_MS = 2500;
 /** Bid keys are transient scratch space; expire them well after the window so a slow process cannot
  *  read a half-populated round, but soon enough that Redis does not accumulate one key per message. */
-export const BID_TTL_MS = 15_000;
+export const BID_TTL_MS = 30_000;
 /**
  * Minimum fit to speak at all. Deliberately LOW to start (0.15): the failure mode of a high threshold
  * is Raziel talking into silence, which reads as the bots being broken. The failure mode of a low one
@@ -252,11 +261,32 @@ export async function runBidRound(
   messageId: string,
   me: CompanionId,
   myScore: number,
-  opts: { windowMs?: number; minScore?: number; sleep?: (ms: number) => Promise<void> } = {},
+  opts: {
+    windowMs?: number;
+    minScore?: number;
+    sleep?: (ms: number) => Promise<void>;
+    /**
+     * Absolute epoch-ms at which the round closes -- pass `message.createdTimestamp + BID_WINDOW_MS`.
+     * This is what makes the round tolerant of the three bots reaching the bid at different times:
+     * every process reads at the SAME instant instead of `windowMs` after its own arrival, so upstream
+     * latency spread (the ambient LLM judge) no longer decides the winner. Omit and the window is
+     * measured from now, which is only safe when the callers arrive together.
+     */
+    deadlineAt?: number;
+    /** Injectable clock; keeps the deadline path testable without real time. */
+    now?: () => number;
+  } = {},
 ): Promise<BidOutcome> {
   const minScore = opts.minScore ?? MIN_BID_TO_SPEAK;
   const windowMs = opts.windowMs ?? BID_WINDOW_MS;
+  const now = opts.now ?? (() => Date.now());
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  // Clamped to [0, windowMs]: a deadline already past means read immediately (a bot that arrived late
+  // still gets a real comparison against whoever posted), and the upper clamp means clock skew between
+  // Discord's timestamp and the VPS cannot stall a reply for an unbounded stretch.
+  const waitMs = opts.deadlineAt === undefined
+    ? windowMs
+    : Math.max(0, Math.min(windowMs, opts.deadlineAt - now()));
 
   if (myScore < minScore) {
     return { iSpeak: false, winner: null, myScore, bids: {}, reason: "below_threshold" };
@@ -269,7 +299,7 @@ export async function runBidRound(
   try {
     await redis.hset(key, me, myScore.toFixed(4));
     await redis.pexpire(key, BID_TTL_MS);
-    await sleep(windowMs);
+    await sleep(waitMs);
     const raw = await redis.hgetall(key);
     const bids: Record<string, number> = {};
     for (const [k, v] of Object.entries(raw ?? {})) {

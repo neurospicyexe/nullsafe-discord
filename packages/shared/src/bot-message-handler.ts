@@ -31,7 +31,7 @@ import {
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, BID_WINDOW_MS,
   clearConsolidation,
   isResponseCoherent,
   sendLong,
@@ -1237,14 +1237,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             })),
         });
         const myScore = scoreFit(signals);
-        const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore);
+        // How late this bot reached the bid. THE number to read out of these logs: the deadline anchor
+        // tolerates arrival spread only up to BID_WINDOW_MS, and 2500ms is an estimate of how far apart
+        // three hermes gateways finish the upstream ambient judge. If the spread across the three bots
+        // on the same msg= id exceeds the window, the early bot still wins on timing and the window
+        // needs raising -- or the judge needs to move below the bid.
+        const arrivalOffsetMs = Date.now() - message.createdTimestamp;
+        // Deadline anchored to the MESSAGE, not to this process's arrival. All three bots compute the
+        // same instant, so the upstream ambient LLM judge (owner_only channels, variable latency per
+        // gateway) can no longer decide the winner by returning first.
+        const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore, {
+          deadlineAt: message.createdTimestamp + BID_WINDOW_MS,
+        });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
         // they have to be tuned against the real score distribution, and this line is the only place
         // that distribution exists. Losing quietly would make a mis-tuned threshold look like the
         // bots ignoring him -- the one failure mode that reads as broken rather than as tact.
         console.log(
           `[${COMPANION_ID}] fit-bid ch=${message.channelId} msg=${message.id} ` +
-          `me=${myScore.toFixed(3)} winner=${bid.winner ?? "none"} reason=${bid.reason} ` +
+          `me=${myScore.toFixed(3)} arrival=+${arrivalOffsetMs}ms winner=${bid.winner ?? "none"} reason=${bid.reason} ` +
           `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
         );
         if (!bid.iSpeak) return;

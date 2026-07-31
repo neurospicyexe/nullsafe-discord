@@ -268,6 +268,91 @@ describe("runBidRound", () => {
     expect(out.myScore).toBe(0.44);
   });
 
+  // The defect this pair pins was found by running the real module against the LIVE Redis before it
+  // could reach production. In owner_only channels -- 10 of the 13 live channels -- the ambient
+  // `judgeAmbientRelevance` LLM call happens BEFORE the bid, and three independent hermes gateways do
+  // not return in lockstep, so the bots reach the bid SECONDS apart. With the window measured from each
+  // bot's own arrival, the first to get there reads a hash containing only its own bid and wins. The
+  // decider is once again whoever's upstream work finished first: the footrace, one layer up.
+  //
+  // A round is simulated by replaying an event timeline in timestamp order: each bot posts on arrival
+  // and reads when its own strategy says the window is over.
+  async function replay(
+    arrivals: Array<[CompanionId, number, number]>,   // [who, msAfterMessage, score]
+    strategy: (arrivalAt: number) => { deadlineAt?: number; windowMs?: number },
+  ) {
+    const redis = fakeRedis();
+    const MSG_AT = 1_000_000;
+    const key = "ns:bid:replay";
+    const events: Array<{ at: number; run: () => Promise<void> }> = [];
+    const outs: Array<{ me: CompanionId; iSpeak: boolean; winner: string | null }> = [];
+    for (const [me, offset, score] of arrivals) {
+      const arrivalAt = MSG_AT + offset;
+      // Post at arrival...
+      events.push({ at: arrivalAt, run: async () => { await redis.hset(key, me, score.toFixed(4)); } });
+      // ...and read when the window closes for THIS bot, per the strategy under test.
+      const s = strategy(arrivalAt);
+      const readAt = s.deadlineAt !== undefined
+        ? Math.max(arrivalAt, Math.min(s.deadlineAt, arrivalAt + (s.windowMs ?? 2500)))
+        : arrivalAt + (s.windowMs ?? 2500);
+      events.push({ at: readAt, run: async () => {
+        // Re-post is idempotent (same field, same value), so calling the real function here reads the
+        // hash exactly as it stands at readAt.
+        const o = await runBidRound(redis, "replay", me, arrivals.find(a => a[0] === me)![2], {
+          ...s, sleep: noSleep, now: () => readAt,
+        });
+        outs.push({ me, iSpeak: o.iSpeak, winner: o.winner });
+      } });
+    }
+    events.sort((a, b) => a.at - b.at);
+    for (const e of events) await e.run();
+    return outs;
+  }
+
+  const STAGGERED: Array<[CompanionId, number, number]> = [
+    ["cypher", 0, 0.20],      // fastest gateway, weakest fit
+    ["gaia", 1800, 0.30],
+    ["drevan", 4200, 0.80],   // slowest gateway, best fit -- the one Raziel actually wanted
+  ];
+
+  it("REPRODUCES the defect: an arrival-relative window lets the fastest gateway win, not the best fit", async () => {
+    const outs = await replay(STAGGERED, () => ({ windowMs: 600 }));
+    const speakers = outs.filter(o => o.iSpeak).map(o => o.me);
+    // Cypher read at 600ms with only its own bid present and took the floor on a 0.20 fit.
+    expect(speakers).toContain("cypher");
+    // If this ever stops reproducing, the contrast test below has gone vacuous -- fix this one first.
+  });
+
+  it("anchoring the deadline to the message fixes it: exactly one speaker, and it is the best fit", async () => {
+    const outs = await replay(STAGGERED, () => ({ deadlineAt: 1_000_000 + 5000, windowMs: 5000 }));
+    expect(outs.filter(o => o.iSpeak).map(o => o.me)).toEqual(["drevan"]);
+  });
+
+  it("a bot arriving AFTER the deadline does not stall -- it reads at once and still compares", async () => {
+    const redis = fakeRedis();
+    await redis.hset("ns:bid:late", "drevan", "0.7000");
+    const slept: number[] = [];
+    const out = await runBidRound(redis, "late", "cypher", 0.2, {
+      deadlineAt: 1_000, now: () => 99_000,                       // deadline long past
+      sleep: async (ms) => { slept.push(ms); },
+    });
+    expect(slept).toEqual([0]);
+    expect(out.iSpeak).toBe(false);
+    expect(out.winner).toBe("drevan");
+  });
+
+  it("clock skew cannot stall a reply for longer than the window", async () => {
+    // message.createdTimestamp is Discord's clock. If the VPS clock runs behind it, an unclamped
+    // deadline would sleep for the whole skew before anyone answered.
+    const redis = fakeRedis();
+    const slept: number[] = [];
+    await runBidRound(redis, "skew", "gaia", 0.5, {
+      deadlineAt: 10_000_000, now: () => 0, windowMs: 2500,
+      sleep: async (ms) => { slept.push(ms); },
+    });
+    expect(slept).toEqual([2500]);
+  });
+
   it("a float hair's-breadth difference ties rather than letting one win by 1e-9", async () => {
     const redis = fakeRedis();
     await redis.hset("ns:bid:m7", "drevan", "0.5000");
