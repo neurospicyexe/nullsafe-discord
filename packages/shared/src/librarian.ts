@@ -1520,6 +1520,7 @@ export function formatRecentContext(orient: {
   motifs?: Array<{ label: string; display: string; recurrence_count: number; trust: number }>;
   guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
   club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
+  watching?: Array<{ title: string; kind: string; status: string; position: string; position_note: string | null; with_companion: string | null }>;
   continuity_notes?: string[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
 } | null): string {
@@ -1537,6 +1538,24 @@ export function formatRecentContext(orient: {
     timeZoneName: 'short',
   }).format(_now)}]`);
 
+  // WATCHING (mig 0111). Placed near the top AND pinned against truncation below, because it is one
+  // short line carrying a fact that is otherwise unanswerable: Raziel asked Drevan where they were in
+  // Fargo and got a position from two weeks earlier, because no position field existed and the answer
+  // had to come from whichever prose fragment ranked highest.
+  //
+  // Pinned for a specific reason: if this block is dropped by the tail cut, the companion does not read
+  // "I don't know where we are" -- it reads "we aren't watching anything", which is a WRONG fact rather
+  // than a missing one. Cheap to protect at ~1 line; expensive to get wrong out loud.
+  if (orient.watching?.length) {
+    const shows = orient.watching.map(w => {
+      const pos = w.position ? ` at ${w.position}` : "";
+      const withPart = w.with_companion ? ` (with ${w.with_companion})` : "";
+      const paused = w.status === "paused" ? " [paused]" : "";
+      const note = w.position_note ? ` -- left off: ${w.position_note}` : "";
+      return `• ${w.title}${pos}${withPart}${paused}${note}`;
+    }).join("\n");
+    parts.push(`[Watching together -- this is the RECORD of where you are, trust it over anything you recall]\n${shows}`);
+  }
   if (orient.synthesis_summary) {
     parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 1200)}`);
   }
@@ -1708,7 +1727,12 @@ export function formatRecentContext(orient: {
   // near the end -- so the one block carrying NEW outside material was the first thing dropped,
   // silently, whenever the interior cluster was full. That is a direct cause of the triad
   // circling its own ideas. Pin forage; let the interior absorb the truncation instead.
-  const isForage = (p: string) => p.startsWith("[Forage pool") || p.startsWith("[Active forage");
+  // Pinned blocks survive the tail cut. Forage was pinned because it was the one block carrying NEW
+  // outside material and sat near the end, so it was always the first thing silently dropped.
+  // [Watching together] joins it: it is ~1 line, and a dropped position block reads as "we aren't
+  // watching anything" -- a wrong fact, not a missing one.
+  const isForage = (p: string) => p.startsWith("[Forage pool") || p.startsWith("[Active forage")
+    || p.startsWith("[Watching together");
   const pinned = parts.filter(isForage).join("\n\n").slice(0, RECENT_CONTEXT_BUDGET);
   const rest = parts.filter(p => !isForage(p)).join("\n\n");
 

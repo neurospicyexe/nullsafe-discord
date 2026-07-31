@@ -46,6 +46,7 @@ import {
   handleClubCommand,
   handleLogCommand,
   handleIntoCommand,
+  handleWatchCommand,
   handleToolSearch, formatSearchReadIn, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
@@ -201,6 +202,7 @@ export interface MessageHandlerDeps {
   HEX_TRIGGER?: RegExp;
   LOG_TRIGGER?: RegExp;
   INTO_TRIGGER?: RegExp;
+  WATCH_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -257,7 +259,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, WATCH_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -722,6 +724,23 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const reply = await handleIntoCommand(intoMatch[1]!, cfg.halsethSecret)
           .catch(err => `into command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await (message.channel as TextChannel).send(reply);
+        return;
+      }
+    }
+
+    // Owner watch-shelf command: <prefix>: watching | watched <title> s4e5 [-- note] (0111).
+    // Deterministic Halseth write + literal ack -- never the model narrating a shelf change.
+    //
+    // Unlike the other commands a BARE form is valid here ("dre: watching" = "where are we?"), so the
+    // trigger's argument group is optional and this must not fall through to the usage guard. That
+    // question is the entire reason the organ exists: Raziel asked it, Drevan answered from a
+    // two-week-old prose fragment, and there was no position field anywhere to answer it properly.
+    if (attribution.isOwner && WATCH_TRIGGER) {
+      const watchMatch = effectiveContent.match(WATCH_TRIGGER);
+      if (watchMatch) {
+        const reply = await handleWatchCommand(watchMatch[1] ?? "", cfg.halsethSecret, COMPANION_ID)
+          .catch(err => `watch command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        await sendLong(message.channel as TextChannel, reply);
         return;
       }
     }

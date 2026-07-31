@@ -50,6 +50,7 @@ export * from "./media.js";
 export * from "./club-command.js";
 export * from "./log-command.js";
 export * from "./into-command.js";
+export * from "./watch-command.js";
 export * from "./tools-command.js";
 export * from "./creature-command.js";
 export * from "./imp-command.js";

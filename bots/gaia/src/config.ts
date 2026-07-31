@@ -187,6 +187,7 @@ export const HEX_TRIGGER = COMMAND_TRIGGERS.hex;
 export const LOG_TRIGGER = COMMAND_TRIGGERS.log;
 // Obsession shelf (0094): "into <thing>" / "into list" / "into drop <frag>".
 export const INTO_TRIGGER = COMMAND_TRIGGERS.into;
+export const WATCH_TRIGGER = COMMAND_TRIGGERS.watch;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 

@@ -25,6 +25,7 @@ export interface CommandTriggers {
   hex: RegExp;
   log: RegExp;
   into: RegExp;
+  watch: RegExp;
   guard: RegExp;
 }
 
@@ -54,6 +55,14 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Obsession shelf (0094). "<prefix>: into <thing>" / "into list" / "into drop <frag>".
     // Arg required so a bare "into" misses -> guard -> usage.
     into: new RegExp(`^(?:${alt})\\b[,:]?\\s*into\\b[,:]?\\s+([\\s\\S]+)`, "is"),
+    // Watch shelf (0111). "<prefix>: watching" lists the shelf; "<prefix>: watched fargo s4e5 [note]"
+    // records a viewing; "<prefix>: watching fargo s4e5" also records (Raziel says it both ways and a
+    // command that only accepts one phrasing is a command he has to remember the shape of).
+    //
+    // The bare form is ALLOWED here, unlike the other commands: "dre: watching" is a real question
+    // ("where are we?") with a real deterministic answer, so it must not fall through to the guard and
+    // get a usage string. The argument group is optional for exactly that reason.
+    watch: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:watching|watched|watch)\\b[,:]?\\s*([\\s\\S]*)`, "i"),
     guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
   };
 }
