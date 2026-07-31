@@ -133,8 +133,29 @@ describe("ensureThread", () => {
       channel_id: "chan-1", seed_text: "hello there",
       seed_author: "cypher", seed_message_id: "m1",
     });
-    expect(mock.convoTurn).toHaveBeenCalledWith("t1", { author: "cypher", gist: "hello there", message_id: "m1" });
+    expect(mock.convoTurn).toHaveBeenCalledWith("t1", { author: "cypher", gist: "hello there", message_id: "m1", front: null });
     expect(result).toEqual({ thread, ledger: [] });
+  });
+
+  // The fronting member rides the TURN (2026-07-31). Raziel's reason: "the front team members should be
+  // visible on the memories, because then there's not random 'oh, so and so said this' and then we have
+  // to freak out and think that we just don't remember saying it." In a plural system a memory that says
+  // HE said something when another member was fronting makes him doubt his own recall of his own life.
+  it("passes the fronting member through on the turn when one is known", async () => {
+    const mock = makeMockLibrarian();
+    const thread = makeThread();
+    mock.convoActive.mockResolvedValue(null);
+    mock.convoOpen.mockResolvedValue(thread);
+    mock.convoTurn.mockResolvedValue(undefined);
+
+    await ensureThread(mock as unknown as LibrarianClient, "chan-1", { id: "m1", content: "hello there" }, "raziel", "Magpie");
+
+    expect(mock.convoTurn).toHaveBeenCalledWith("t1", {
+      author: "raziel", gist: "hello there", message_id: "m1", front: "Magpie",
+    });
+    // seed_author stays the COARSE token -- participants is derived from it, and the attribution logic
+    // asks "was Raziel here at all". A forked `raziel (Magpie)` token would break that question.
+    expect(mock.convoOpen).toHaveBeenCalledWith(expect.objectContaining({ seed_author: "raziel" }));
   });
 
   it("returns null when convoOpen fails to produce a thread", async () => {
@@ -160,7 +181,7 @@ describe("ensureThread", () => {
     const result = await ensureThread(mock as unknown as LibrarianClient, "chan-1", msg, "gaia");
 
     expect(mock.convoOpen).not.toHaveBeenCalled();
-    expect(mock.convoTurn).toHaveBeenCalledWith("t1", { author: "gaia", gist: "continuing the thread", message_id: "m2" });
+    expect(mock.convoTurn).toHaveBeenCalledWith("t1", { author: "gaia", gist: "continuing the thread", message_id: "m2", front: null });
     expect(result).toEqual(active);
   });
 });

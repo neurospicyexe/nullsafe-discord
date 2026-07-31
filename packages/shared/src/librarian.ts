@@ -1427,7 +1427,7 @@ export class LibrarianClient {
    * including 409 (thread already landed/faded mid-flight -- the exchange still
    * happened, it just has nowhere left to file itself).
    */
-  async convoTurn(threadId: string, params: { author: string; gist: string; message_id?: string }): Promise<void> {
+  async convoTurn(threadId: string, params: { author: string; gist: string; message_id?: string; front?: string | null }): Promise<void> {
     try {
       const res = await this._fetch(`${this.url}/mind/conversations/${encodeURIComponent(threadId)}/turns`, {
         method: "POST",

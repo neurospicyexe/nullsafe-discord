@@ -473,8 +473,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // below and the post-send convoLand gate.
     const isPresence = isPresenceChannel(message.channelId);
     if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
-      spine = await ensureThread(librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor)
-        .catch(() => null);
+      // `attribution.frontMember` is the PluralKit member who actually spoke -- resolved from the roster
+      // (both systems, 1412 names) and, until now, dropped on the floor for the spine.
+      //
+      // Raziel asked for this explicitly: "the front team members should be visible on the memories,
+      // because then there's not random 'oh, so and so said this' and then we have to freak out and
+      // think that we just don't remember saying it." A memory that says HE said something when a
+      // different member was fronting makes him doubt his own recall of his own life. That is a real
+      // cost in a plural system, not a labelling nicety.
+      //
+      // It rides the TURN, not `participants`: fronts change mid-conversation, and the coarse token set
+      // is what the attribution logic reads to ask "was Raziel here at all".
+      spine = await ensureThread(
+        librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor,
+        attribution.frontMember ?? null,
+      ).catch(() => null);
     }
 
     // Voice STT: transcribe an audio attachment into effectiveContent BEFORE any content

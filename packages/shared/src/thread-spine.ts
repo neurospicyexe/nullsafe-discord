@@ -57,6 +57,10 @@ export function gist(text: string): string {
 export async function ensureThread(
   librarian: LibrarianClient, channelId: string,
   msg: { id: string; content: string }, authorLabel: string,
+  // Fronting member who actually spoke, when known. Recorded on the TURN, never folded into the
+  // coarse participant token -- fronts change mid-conversation, and `participants` is what the
+  // attribution logic reads to ask "was Raziel here at all".
+  front?: string | null,
 ): Promise<ConvoActiveDto | null> {
   let active = await librarian.convoActive(channelId);
   if (!active) {
@@ -67,7 +71,7 @@ export async function ensureThread(
     if (!t) return null;
     active = { thread: t, ledger: [] };
   }
-  await librarian.convoTurn(active.thread.id, { author: authorLabel, gist: gist(msg.content), message_id: msg.id });
+  await librarian.convoTurn(active.thread.id, { author: authorLabel, gist: gist(msg.content), message_id: msg.id, front: front ?? null });
   return active;
 }
 
