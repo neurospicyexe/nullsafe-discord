@@ -55,14 +55,32 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Obsession shelf (0094). "<prefix>: into <thing>" / "into list" / "into drop <frag>".
     // Arg required so a bare "into" misses -> guard -> usage.
     into: new RegExp(`^(?:${alt})\\b[,:]?\\s*into\\b[,:]?\\s+([\\s\\S]+)`, "is"),
-    // Watch shelf (0111). "<prefix>: watching" lists the shelf; "<prefix>: watched fargo s4e5 [note]"
-    // records a viewing; "<prefix>: watching fargo s4e5" also records (Raziel says it both ways and a
-    // command that only accepts one phrasing is a command he has to remember the shape of).
+    // Watch shelf (0111). "<prefix>: watching" lists the shelf; "<prefix>: watched fargo s4e5 [-- note]"
+    // records a viewing; "<prefix>: watch fargo finished" changes status.
     //
-    // The bare form is ALLOWED here, unlike the other commands: "dre: watching" is a real question
-    // ("where are we?") with a real deterministic answer, so it must not fall through to the guard and
-    // get a usage string. The argument group is optional for exactly that reason.
-    watch: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:watching|watched|watch)\\b[,:]?\\s*([\\s\\S]*)`, "i"),
+    // NARROWED 2026-07-31 (review finding). The first version accepted any trailing text, so
+    // "dre: watching the storm roll in" MATCHED -- and did two harms at once: it created a watch_shelf row
+    // titled "the storm roll in", and it returned before inference so Drevan never answered what Raziel
+    // actually said. "watching" is a conversational verb, unlike into/log/club/pet, so it cannot claim a
+    // message on the strength of the word alone.
+    //
+    // Now a message is only claimed when it is unambiguously a command:
+    //   * the BARE form, or an explicit list word -- "dre: watching" is a real question ("where are we?")
+    //     with a deterministic answer, so it must not fall through to the usage guard;
+    //   * or it carries a POSITION token (s4e5 / 4x5 / season 4 / episode 6);
+    //   * or it carries a STATUS word (finished / paused / dropped / ...).
+    // Anything else is Raziel talking, and a command must never eat conversation. Corruption of this
+    // organ matters more than most: its whole value is "trust the record over anything you recall".
+    watch: new RegExp(
+      `^(?:${alt})\\b[,:]?\\s*(?:watching|watched|watch)\\b[,:]?\\s*` +
+      `(` +
+        `\\s*|` +                                                     // bare: "dre: watching"
+        `(?:list|shelf|all)\\s*|` +                                   // explicit list
+        `[\\s\\S]*?\\b(?:s\\s*\\d{1,2}\\s*[\\s._-]*e\\s*\\d{1,3}|\\d{1,2}\\s*x\\s*\\d{1,3}|season\\s*\\d{1,2}|ep(?:isode)?\\s*\\d{1,3})\\b[\\s\\S]*|` +
+        `[\\s\\S]*?\\b(?:finished|done|complete|completed|paused|pause|hold|abandoned|dropped|abandon|resumed?)\\s*` +
+      `)$`,
+      "i",
+    ),
     guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
   };
 }

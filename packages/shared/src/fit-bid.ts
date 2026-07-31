@@ -247,6 +247,51 @@ export interface BidRedis {
   hset(key: string, field: string, value: string): Promise<unknown>;
   hgetall(key: string): Promise<Record<string, string>>;
   pexpire(key: string, ms: number): Promise<unknown>;
+  /** `SET key val PX ms NX` -> "OK" | null. The commit claim; see COMMIT_KEY_PREFIX. */
+  set(key: string, val: string, mode: "PX", ms: number, nx: "NX"): Promise<string | null>;
+}
+
+/**
+ * Commit claim, held for one message id.
+ *
+ * WHY THIS EXISTS ON TOP OF THE BID (2026-07-31, found in review before it reached traffic). Winning the
+ * bid is a DECISION; it is not a COMMITMENT, and the two must be separate or the window's tolerance
+ * becomes a second race.
+ *
+ * The failure: `waitMs` clamps to 0 for a bot that arrives after the deadline. Bot A arrives at +500ms in
+ * an owner_only channel, waits to the shared deadline, reads a hash holding only its own bid, wins, and
+ * sends. Bot B's ambient LLM judge returns at +3000ms -- past the 2500ms window -- so it reads
+ * immediately, sees a populated hash, and if its lane score is higher it ALSO wins and ALSO sends. Two
+ * replies to one message. Nothing downstream catches it: a posted bid carries no "already committed"
+ * marker, echo-gating is content-dependent, and the supersede check only fires on a newer human message.
+ *
+ * `SET NX` made losing UNCONDITIONAL, which is the one property the footrace had and the bid lost. So the
+ * shape is: compare to decide who SHOULD speak, then claim to make exactly one bot actually speak. The
+ * bid supplies fitness; the claim supplies mutual exclusion. Neither alone is sufficient.
+ */
+export const COMMIT_KEY_PREFIX = "ns:spoke:";
+/** Long enough that a slow arrival cannot slip past a committed reply; short enough not to accumulate. */
+export const COMMIT_TTL_MS = 90_000;
+
+/**
+ * Claim the right to actually speak for this message. Returns true when this bot may send.
+ *
+ * FAILS OPEN, same reasoning as the bid: a dead cache must degrade to "possibly two replies", never to
+ * "nobody answers". A missing `set` on the client (an older injected fake) also passes, so this can never
+ * silence a companion by being unavailable.
+ */
+export async function claimSpoken(
+  redis: BidRedis | null,
+  messageId: string,
+  me: CompanionId,
+): Promise<boolean> {
+  if (!redis || typeof redis.set !== "function") return true;
+  try {
+    const res = await redis.set(COMMIT_KEY_PREFIX + messageId, me, "PX", COMMIT_TTL_MS, "NX");
+    return res === "OK";
+  } catch {
+    return true;
+  }
 }
 
 /**

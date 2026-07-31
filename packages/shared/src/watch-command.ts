@@ -166,12 +166,18 @@ export async function handleWatchCommand(
   const advanced = res.json["advanced"] === true;
 
   const pos = item.position ? ` at ${item.position}` : "";
-  // Say plainly when the position did NOT move. A rewatch or an out-of-order mention is logged but
-  // does not rewind the shelf, and silently accepting it would leave Raziel believing he had corrected
-  // a position he hadn't.
+  // Three distinct outcomes, not two (review finding 2026-07-31). The first version said "that's at or
+  // behind where we already were" whenever `advanced` was false -- including for a MOVIE (position is
+  // inherently empty) and for a first shelving with no episode given. Telling Raziel his brand-new row is
+  // "behind" reads as a rejected write, and this module's whole doctrine is that the ack tells the truth.
+  //
+  // A position was only "not moved" if there is a position to compare against.
+  const gaveNoPosition = parsed.season === null && parsed.episode === null;
   const moved = advanced
     ? `Logged. **${item.title}**${pos}.`
-    : `Logged the viewing, but the shelf still reads **${item.title}**${pos} — that's at or behind where we already were. Use \`watch ${item.title} s#e#\` style correction if the shelf is wrong.`;
+    : gaveNoPosition
+      ? `Logged. **${item.title}** is on the shelf${pos ? `${pos}` : ""}${item.position ? "" : " (no episode position — say `watched ${item.title} s1e1` when you want one)"}.`
+      : `Logged the viewing, but the shelf still reads **${item.title}**${pos} — that's at or behind where we already were, so I left the position alone. Correct it with \`watch ${item.title} s#e#\` if the shelf is wrong.`;
   const noteLine = parsed.note ? `\nLeft off: ${parsed.note}` : "";
   return `${moved}${noteLine}`;
 }

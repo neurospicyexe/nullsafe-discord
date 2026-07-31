@@ -31,7 +31,7 @@ import {
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound, BID_WINDOW_MS,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS,
   clearConsolidation,
   isResponseCoherent,
   sendLong,
@@ -534,14 +534,34 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     //
     // Placed after STT so a voice note is stored as its transcript rather than as an empty string,
     // and idempotent by message id so the later append and the command branches collapse into one.
-    stmStore.appendInboundOnce(message.channelId, message.id, {
-      role: "user",
-      content: effectiveContent,
-      authorName: pkMemberName
-        ? `${pkMemberName} (via PK)`
-        : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
-      timestamp: message.createdTimestamp,
-    });
+    //
+    // COMMANDS ARE EXCLUDED (2026-07-31, review finding). Every command branch below sends a
+    // deterministic ack and `return`s without appending an assistant turn, so recording the command as a
+    // user turn built a transcript of Raziel issuing instructions into apparent silence -- which is
+    // exactly the malformed context this whole record-on-arrival change exists to prevent.
+    //
+    // Excluding rather than also-recording-the-ack, because a command is not a conversational turn: it is
+    // an instruction to the machine, answered deterministically, and needing no fit judgment from anyone.
+    // Its absence from the conversational transcript is correct, not a gap. (The search branch is the one
+    // command that DOES belong -- it records both sides itself at its own call site, since its result
+    // genuinely becomes conversational material.)
+    // Both the guard AND the watch trigger, deliberately. `watch` is NOT in COMMAND_GUARD and must not be
+    // added: the guard replies with a usage string, so a conversational "dre: watching the storm roll in"
+    // would then get eaten by the guard instead of by the trigger -- the same harm through a second door.
+    // Testing the narrowed watch trigger here excludes real watch commands while leaving that sentence to
+    // be recorded and answered as the conversation it is.
+    const isOwnerCommand = attribution.isOwner
+      && (!!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent));
+    if (!isOwnerCommand) {
+      stmStore.appendInboundOnce(message.channelId, message.id, {
+        role: "user",
+        content: effectiveContent,
+        authorName: pkMemberName
+          ? `${pkMemberName} (via PK)`
+          : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
+        timestamp: message.createdTimestamp,
+      });
+    }
 
     // Owner model switch command: <prefix>: model <key> | <prefix>: model list
     if (attribution.isOwner) {
@@ -1304,6 +1324,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
         );
         if (!bid.iSpeak) return;
+
+        // WINNING IS A DECISION; SPEAKING IS A COMMITMENT. Separate steps on purpose.
+        //
+        // Found in review before it reached traffic: `waitMs` clamps to 0 for a bot arriving after the
+        // shared deadline, so with the ambient judge's latency spread exceeding the window, an early bot
+        // can win a hash holding only its own bid and send, while a late bot reads a populated hash, wins
+        // on a higher lane score, and sends too. TWO replies to one message -- something `SET NX` could
+        // never produce, because it made losing unconditional.
+        //
+        // So the bid decides WHO SHOULD speak and this claim makes exactly one bot actually speak. Fails
+        // open (no redis / no `set` / throw -> speak), because "nobody answers" stays the worse failure.
+        if (!(await claimSpoken(redis, message.id, COMPANION_ID))) {
+          console.log(`[${COMPANION_ID}] won the bid but another companion already committed to msg=${message.id} -- standing down`);
+          return;
+        }
       }
     }
 
