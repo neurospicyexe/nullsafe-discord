@@ -164,18 +164,37 @@ def check_systemd(rep):
             rep.add("systemd:" + unit + ":enabled", "warning", "is-enabled=%s (will not survive reboot)" % en)
 
 
+# `systemctl --user` needs a session bus, and cron has no XDG_RUNTIME_DIR -- so under cron every user
+# unit query dies with "Failed to connect to bus: No medium found" while the same command works fine
+# over ssh. Exporting the runtime dir explicitly makes the two environments agree.
+#
+# This is the bug that shipped on 2026-07-30: with `2>/dev/null` on the discovery command, an
+# unreachable bus was indistinguishable from an empty result, so the check reported "no hermes* user
+# units found" while all four units were active. Wrong in the harmless direction that day, but the
+# same code would have reported the same line with the gateways genuinely dead -- a monitor that
+# cannot tell "I could not look" from "there is nothing there" says nothing in either direction.
+# Never suppress stderr on a probe whose silence is the finding.
+USER_SYSTEMCTL_ENV = "XDG_RUNTIME_DIR=/run/user/$(id -u)"
+
+
 def check_hermes(rep):
     # The gateways are USER systemd units, so they are invisible to `systemctl` without --user.
     # Discovered rather than hardcoded: the unit names have changed before.
-    ok, out = run("systemctl --user list-units --type=service --no-legend --plain 'hermes*' 2>/dev/null")
+    ok, out = run("%s systemctl --user list-units --type=service --no-legend --plain 'hermes*'"
+                  % USER_SYSTEMCTL_ENV)
+    if "Failed to connect to bus" in out or "Failed to get D-Bus connection" in out:
+        rep.add("hermes:gateways", "red",
+                "cannot reach the user systemd manager, so gateway state is UNKNOWN, not absent: %s"
+                % (out.strip().splitlines()[0] if out.strip() else "no output"))
+        return
     units = [l.split()[0] for l in out.splitlines() if l.strip() and l.split()[0].endswith(".service")]
     if not units:
         rep.add("hermes:gateways", "warning",
-                "no hermes* user units found (all three bots relay inference here -- if this is wrong, "
-                "the discovery pattern needs updating, not the conclusion)")
+                "user manager reachable but no hermes* units exist (all three bots relay inference "
+                "here -- if this is wrong, the discovery pattern needs updating, not the conclusion)")
         return
     for u in units:
-        ok2, st = run("systemctl --user is-active %s" % u)
+        ok2, st = run("%s systemctl --user is-active %s" % (USER_SYSTEMCTL_ENV, u))
         state = st.strip().splitlines()[0] if st.strip() else "unknown"
         rep.add("hermes:" + u, "ok" if state == "active" else "red", state)
 
