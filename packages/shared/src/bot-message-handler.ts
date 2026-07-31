@@ -30,7 +30,8 @@ import {
   countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
-  claimFloor, releaseFloor, setLastActivity,
+  setLastActivity, type Redis,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound,
   clearConsolidation,
   isResponseCoherent,
   sendLong,
@@ -132,7 +133,7 @@ export interface MessageHandlerDeps {
   client: Client;
   cfg: MessageHandlerCfg;
   voiceClient: VoiceClient | null;
-  redis: Parameters<typeof claimFloor>[0] | null;
+  redis: Redis | null;
   librarian: LibrarianClient;
   // live refs (same instances the refresh loop mutates)
   adapterRef: { current: InferenceAdapter };
@@ -1188,19 +1189,66 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const allAddressed = [...new Set([...textAddressed, ...mentionedViaMention])];
     const addressedCompanion = allAddressed.length > 0 ? allAddressed.join(",") : undefined;
 
-    // Floor coordination (Finding 5): nothing arbitrates who speaks, so all three bots would answer
-    // the same ambient human message. Claim the shared floor so only one does. Addressed /
-    // replied-to / mentioned messages and companion-bot turns (which have their own pingpong rails)
-    // bypass this gate.
+    // Who speaks: FIT BID, not a footrace (2026-07-30). This replaced `claimFloor` -- a
+    // `SET ns:floor:lock <bot> PX 6000 NX` race in which the first writer won. Nothing anywhere
+    // compared the three companions, so arrival order decided, and arrival order tracks gate cost and
+    // process timing rather than anything about whether a companion fits the message. That is why
+    // Gaia kept answering things meant for Drevan, and why saying a name on every message was the
+    // only reliable way to reach someone: naming makes the structural gate resolve deterministically
+    // so the race stops mattering. The vocative habit was Raziel hand-performing the arbitration the
+    // system never had.
     //
-    // The `!brainClient &&` guard is gone with brain mode (2026-07-29). It read as "Brain mode is
-    // coordinated by the SwarmEvaluator", but brainClient was always null, so this floor lock has
-    // been the real and only speaker arbitration all along.
-    let floorClaimed = false;
-    if (redis && !senderCtx.isCompanionBot
-        && !directlyAddressed && !isReplyToMe && !senderCtx.isMentioned) {
-      floorClaimed = await claimFloor(redis, COMPANION_ID, 6000);
-      if (!floorClaimed) return;
+    // Note what already happened above this line: for an unaddressed owner message inside the
+    // 5-minute window, `shouldRespond` (channel-config.ts) has ALREADY returned false for every
+    // companion that does not hold the active exchange. So the bid decides the case that gate leaves
+    // open -- a COLD ambient message, where nobody holds the thread and all three are eligible. That
+    // is precisely the case the footrace resolved by process timing.
+    //
+    // Addressed / replied-to / mentioned messages take `fastPathWinner` and never pay the bid window.
+    // Companion-bot turns are excluded here exactly as before -- they have their own pingpong,
+    // chain-depth and per-human-cap rails, and are not competing for Raziel's attention.
+    //
+    // No release step and no vestigial `floorClaimed`: a bid is a posted number with a TTL, not an
+    // exclusive lock, so there is nothing to hand back if this reply is later dropped. Running both
+    // arbiters at once would mean two disagreeing authorities on who speaks. `claimFloor` itself
+    // stays in floor.ts -- autonomous-core.ts still uses it legitimately to serialise seed posts.
+    if (redis && !senderCtx.isCompanionBot) {
+      // The three addressing flags are read HERE and nowhere else in this block. The old code tested
+      // them in the `if` above and would then have re-tested them inside, which reads as two gates
+      // and is one. `namedOther` is not passed because `shouldRespond` already returned false for a
+      // companion someone else was named for -- this line is never reached in that case.
+      const fast = fastPathWinner(COMPANION_ID, {
+        mentioned: senderCtx.isMentioned,
+        namedMe: directlyAddressed,
+        replyToMe: isReplyToMe,
+      });
+      if (fast === null) {
+        const signals = buildFitSignals({
+          me: COMPANION_ID,
+          content: effectiveContent,
+          activeExchangeWith: senderCtx.activeExchangeWith,
+          recent: fetchedMessages
+            .filter(m => m.id !== message.id)
+            .slice()
+            .reverse()                       // buildFitSignals wants newest-first
+            .map(m => ({
+              companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
+              authorIsBot: botTurn(m),
+            })),
+        });
+        const myScore = scoreFit(signals);
+        const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore);
+        // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
+        // they have to be tuned against the real score distribution, and this line is the only place
+        // that distribution exists. Losing quietly would make a mis-tuned threshold look like the
+        // bots ignoring him -- the one failure mode that reads as broken rather than as tact.
+        console.log(
+          `[${COMPANION_ID}] fit-bid ch=${message.channelId} msg=${message.id} ` +
+          `me=${myScore.toFixed(3)} winner=${bid.winner ?? "none"} reason=${bid.reason} ` +
+          `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
+        );
+        if (!bid.iSpeak) return;
+      }
     }
 
     // Stable per-conversation session key (2026-07-01): forwarded by the Hermes adapter
@@ -1253,7 +1301,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // delta); the reply is not appended to STM and not sent.
     if (isSuperseded?.()) {
       console.log(`[${COMPANION_ID}] reply superseded mid-inference (newer human message queued) -- dropping reply to ${message.id}`);
-      if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
       return;
     }
@@ -1313,7 +1360,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const own = ownEchoGated(COMPANION_ID, response, selfTurns);
         if (own.gated) {
           console.warn(`[${COMPANION_ID}] own-echo-gated commons reply (score=${own.score.toFixed(2)}) -- staying silent`);
-          if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
           distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
           return;
         }
@@ -1321,7 +1367,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const echo = echoScore(response, channelHistory.map(m => m.content));
         if (echo >= echoThreshold()) {
           console.warn(`[${COMPANION_ID}] echo-gated reply (score=${echo.toFixed(2)}) -- staying silent`);
-          if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
           distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
           return;
         }
@@ -1420,7 +1465,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
-    if (floorClaimed && redis) await releaseFloor(redis, COMPANION_ID).catch(() => {});
     while (sentIds.size > SENT_IDS_CAP) {
       const oldest = sentIds.values().next().value;
       if (oldest === undefined) break;

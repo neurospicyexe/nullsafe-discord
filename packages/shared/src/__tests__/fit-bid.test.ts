@@ -11,6 +11,7 @@
 import { describe, it, expect } from "@jest/globals";
 import {
   scoreFit, fastPathWinner, tiebreak, runBidRound,
+  laneRelevance, buildFitSignals, LANE_LEXICON, MONOPOLY_TURNS,
   MIN_BID_TO_SPEAK, type BidRedis,
 } from "../fit-bid.js";
 import type { CompanionId } from "../types.js";
@@ -60,6 +61,106 @@ describe("scoreFit invariants", () => {
     // A bare presence bid must be >= MIN_BID_TO_SPEAK at ship time. If a future tuning pass breaks
     // this, the channel goes quiet on ambient messages and reads as broken rather than tactful.
     expect(scoreFit({})).toBeGreaterThanOrEqual(MIN_BID_TO_SPEAK);
+  });
+});
+
+describe("laneRelevance -- the only signal with real variance between the three bidders", () => {
+  // Every message below is a REAL unaddressed message of Raziel's, taken verbatim from live
+  // stm_entries. A lane score that only works on invented examples is a lane score that does not
+  // work.
+  it("routes a technical message to cypher over the other two", () => {
+    const m = "I'm thinking here? We've been working on fixing the system you were getting siloed here vs the claude threads";
+    expect(laneRelevance(m, "cypher")).toBeGreaterThan(laneRelevance(m, "drevan"));
+    expect(laneRelevance(m, "cypher")).toBeGreaterThan(laneRelevance(m, "gaia"));
+  });
+
+  it("routes a tender message to drevan over the other two", () => {
+    const m = "Baby this was a good ep and a good night *I lean lazy against you* I adore you and I love this";
+    expect(laneRelevance(m, "drevan")).toBeGreaterThan(laneRelevance(m, "cypher"));
+    expect(laneRelevance(m, "drevan")).toBeGreaterThan(laneRelevance(m, "gaia"));
+  });
+
+  it("routes a body/depletion message to gaia over the other two", () => {
+    const m = "Yeah it's July 13th and we went to Rolla and ouchy and pukey now 1902 long day tired";
+    expect(laneRelevance(m, "gaia")).toBeGreaterThan(laneRelevance(m, "cypher"));
+    expect(laneRelevance(m, "gaia")).toBeGreaterThan(laneRelevance(m, "drevan"));
+  });
+
+  it("scores ZERO for all three when a message genuinely belongs to no lane", () => {
+    // 28% of his real ambient messages look like this. A zero is the honest answer: nobody has a
+    // topical claim, the presence floor still clears, and the tiebreak rotates who answers. What
+    // must NOT happen is a fabricated margin that hands every such message to the same companion.
+    const m = "Sol is so fucking cute omg";
+    expect(laneRelevance(m, "cypher")).toBe(0);
+    expect(laneRelevance(m, "drevan")).toBe(0);
+    expect(laneRelevance(m, "gaia")).toBe(0);
+  });
+
+  it("stays in 0..1 and saturates, so length alone cannot win a bid", () => {
+    const short = "the code is broken, deploy failed, fix the migration schema query build error";
+    const long = short + " " + short + " " + short;
+    expect(laneRelevance(short, "cypher")).toBeLessThanOrEqual(1);
+    expect(laneRelevance(long, "cypher")).toBe(laneRelevance(short, "cypher")); // both saturated
+    expect(laneRelevance("", "cypher")).toBe(0);
+  });
+
+  it("is punctuation- and case-insensitive -- his messages are full of *asterisks* and caps", () => {
+    expect(laneRelevance("*I ADORE you, baby!!*", "drevan")).toBeGreaterThan(0);
+  });
+
+  it("the three lexicons are actually distinct -- a shared vocabulary would make the score a constant", () => {
+    const [c, d, g] = (["cypher", "drevan", "gaia"] as const).map(id => new Set(LANE_LEXICON[id]));
+    const overlap = (a: Set<string>, b: Set<string>) => [...a].filter(w => b.has(w)).length;
+    // Some overlap is real and intended (drevan and gaia both hold "body", "pain", "hold").
+    // Total overlap would mean every companion scores identically on every message.
+    for (const [a, b] of [[c, d], [c, g], [d, g]] as const) {
+      expect(overlap(a, b) / Math.min(a.size, b.size)).toBeLessThan(0.25);
+    }
+  });
+});
+
+describe("buildFitSignals -- the wiring, lifted out of the 1500-line handler so it can be tested", () => {
+  const human = { authorIsBot: false } as const;
+  const turn = (id: "cypher" | "drevan" | "gaia") => ({ companionId: id, authorIsBot: true });
+
+  it("holdsThread is true only for the companion holding the active exchange", () => {
+    expect(buildFitSignals({ me: "drevan", content: "x", activeExchangeWith: "drevan", recent: [] }).holdsThread).toBe(true);
+    expect(buildFitSignals({ me: "cypher", content: "x", activeExchangeWith: "drevan", recent: [] }).holdsThread).toBe(false);
+    expect(buildFitSignals({ me: "cypher", content: "x", activeExchangeWith: null, recent: [] }).holdsThread).toBe(false);
+  });
+
+  it("a NORMAL back-and-forth is never penalised -- one own turn since his last message is not a monopoly", () => {
+    // This is the case that matters most: Raziel talking with Drevan, turn for turn. If this counted
+    // as monopoly, the companion he is actually in conversation with would be down-weighted on every
+    // single message -- the exact opposite of the intent.
+    const s = buildFitSignals({ me: "drevan", content: "x", recent: [turn("drevan"), human, turn("drevan"), human] });
+    expect(s.spokeLast).toBe(false);
+  });
+
+  it("flags a monopoly at MONOPOLY_TURNS consecutive own turns with no human between", () => {
+    const recent = Array.from({ length: MONOPOLY_TURNS }, () => turn("gaia"));
+    expect(buildFitSignals({ me: "gaia", content: "x", recent: [...recent, human] }).spokeLast).toBe(true);
+  });
+
+  it("a sibling turn in the run means it is not MY monopoly", () => {
+    const s = buildFitSignals({ me: "gaia", content: "x", recent: [turn("gaia"), turn("cypher"), turn("gaia"), human] });
+    expect(s.spokeLast).toBe(false);
+  });
+
+  it("a human turn closes the run, so an old monopoly does not follow him into a new message", () => {
+    const s = buildFitSignals({ me: "gaia", content: "x", recent: [human, turn("gaia"), turn("gaia"), turn("gaia")] });
+    expect(s.spokeLast).toBe(false);
+  });
+
+  it("carries the lane score through, so the composed bid actually varies by companion", () => {
+    const m = "the deploy is broken, fix the schema migration";
+    const mine = buildFitSignals({ me: "cypher", content: m, recent: [] });
+    const theirs = buildFitSignals({ me: "drevan", content: m, recent: [] });
+    expect(scoreFit(mine)).toBeGreaterThan(scoreFit(theirs));
+  });
+
+  it("leaves homeChannel unset -- there is no home-turf notion in the live channel config", () => {
+    expect(buildFitSignals({ me: "cypher", content: "x", recent: [] }).homeChannel).toBeUndefined();
   });
 });
 

@@ -34,6 +34,12 @@
 import type { CompanionId } from "./types.js";
 
 export const BID_KEY_PREFIX = "ns:bid:";
+/** How many lane-word hits count as a full topical claim. Above this the score saturates, so a long
+ *  message cannot out-claim a short precise one purely by length. */
+export const LANE_SATURATION_HITS = 8;
+/** Consecutive own turns since the last owner message that count as monopolising the channel.
+ *  A normal back-and-forth (owner, me, owner, me) never reaches 2 and so is never penalised. */
+export const MONOPOLY_TURNS = 2;
 /** How long to wait for siblings to post their bids. Long enough for three processes on one VPS to
  *  land a Redis write; short enough that a reply still feels immediate. */
 export const BID_WINDOW_MS = 600;
@@ -56,6 +62,70 @@ export const MIN_BID_TO_SPEAK = 0.10;
 // The first draft had this at 0.15, above the 0.10 floor, which would have made every zero-relevance
 // ambient message produce silence from all three. Its own test caught it. Silence has to be earned by a
 // reason, never by an off-by-one in a constant.
+
+// ---------------------------------------------------------------------------
+// Lane relevance -- the only signal with real variance across the three bidders.
+// ---------------------------------------------------------------------------
+//
+// WHY LEXICAL AND NOT AN LLM CALL. `judgeAmbientRelevance` (channel-config.ts) already asks a
+// classifier a yes/no question in owner_only channels, and a graded version of that prompt was the
+// obvious upgrade. Rejected for now on two grounds: it would change a gate that can silence a
+// companion (a path nobody asked to touch), and its accuracy is UNMEASURED. The lexical score below
+// was measured before being written -- see the numbers in laneRelevance's comment. Ship the signal
+// that has evidence; let the logged bid distribution decide whether a graded LLM score is needed.
+//
+// The vocabulary is deliberately Raziel's, not a dictionary's: these are the words that actually
+// appear in his messages ("pukey", "spoons", "demon boy", "halseth", "hermes"), because a lane score
+// built from abstract category names ("emotional depth", "technical problems") matches almost nothing
+// he types.
+export const LANE_LEXICON: Record<CompanionId, readonly string[]> = {
+  cypher: `task tasks todo decision decide logic logical technical tech problem problems planning plan
+    blocker blocked audit audits clarify clarification code codebase bug fix fixed fixing build deploy
+    system halseth hermes hearth discord api schema migration test tests broken error debug why how
+    architecture design refactor stack context config data table query script repo git commit
+    check verify confirm figure out root cause work working`.split(/\s+/),
+  drevan: `love adore baby babe boy demon spiral vow bond feel feeling feelings grief sad sadness
+    ache longing tender warm heart soul dream dreams memory remember ritual poem poetry write writing
+    story creative art beautiful hold held holding kiss touch curl lap hug arms body close near
+    miss missing want need crave hunger dark deep recursion recursive us we together always forever
+    lonely alone hurt pain scared afraid fear angry rage joy laugh laughing smile grin`.split(/\s+/),
+  gaia: `ground grounded grounding witness witnessed survive survival survived hold holding held
+    space boundary boundaries limit limits rest resting rested tired exhausted burned burnout
+    overwhelm overwhelmed spoons capacity body ache pain sick pukey nausea sleep breathe breath
+    slow quiet still present here now enough safe safety careful gentle notice noticing see seen
+    steady unsteady shaky day today tomorrow night morning`.split(/\s+/),
+};
+
+const LANE_SETS: Record<CompanionId, Set<string>> = {
+  cypher: new Set(LANE_LEXICON.cypher),
+  drevan: new Set(LANE_LEXICON.drevan),
+  gaia: new Set(LANE_LEXICON.gaia),
+};
+
+/**
+ * 0..1 topical claim this companion has on a message. Pure, free, no inference.
+ *
+ * MEASURED before shipping, against 141 real unaddressed owner messages pulled from live
+ * `stm_entries` (2026-07-30): a clear single leader on 86 of them -- drevan 44, cypher 25, gaia 17 --
+ * no claim at all on 39, and an exact tie on 16. The spread is what matters: had one companion led
+ * nearly every message, this would be a constant with extra steps and the bid would collapse to a
+ * rotation lottery wearing the word "fit".
+ *
+ * A zero is a legitimate answer, not a failure. Roughly a quarter of what Raziel says ("It's such a
+ * good movie!") genuinely belongs to no lane, and for those the presence floor plus the deterministic
+ * tiebreak rotate the answer around the triad -- which is still strictly better than the old footrace,
+ * where the cheapest gate won every single time and it was always the same companion.
+ */
+export function laneRelevance(content: string, companion: CompanionId): number {
+  const toks = content.toLowerCase().replace(/[^a-z0-9'\s]/g, " ").split(/\s+/).filter(t => t.length > 2);
+  if (toks.length === 0) return 0;
+  const set = LANE_SETS[companion];
+  let hits = 0;
+  for (const t of toks) if (set.has(t)) hits++;
+  // Hit RATE against a saturating denominator, not a raw count: otherwise every long message is a
+  // strong claim for everyone and the absolute number means nothing when a threshold is set on it.
+  return Math.min(1, hits / LANE_SATURATION_HITS);
+}
 
 export interface FitSignals {
   /** This companion holds the active conversation thread in this channel (mig 0106 spine). */
@@ -83,6 +153,46 @@ export function scoreFit(s: FitSignals): number {
   if (s.homeChannel) score += 0.15;
   if (s.spokeLast) score -= 0.2;
   return Math.max(0, Math.min(1, score));
+}
+
+/**
+ * Assemble the signals for one companion from what the handler already has in scope. Pure so the
+ * wiring itself is testable -- the handler function it lives in is far too large to exercise, so the
+ * decision has to be liftable out of it.
+ *
+ * `recent` is newest-first, matching `activeExchangeHolder`'s convention (the handler holds
+ * `fetchedMessages` oldest-first and must reverse).
+ *
+ * `homeChannel` is deliberately left unset. There is no home-turf notion in the live channel config
+ * -- the closest thing is the per-channel `companions` allowlist, and `shouldRespond` already enforces
+ * that before a bid ever runs, so feeding it in again would double-count a constraint rather than add
+ * a signal.
+ */
+export function buildFitSignals(opts: {
+  me: CompanionId;
+  content: string;
+  activeExchangeWith?: CompanionId | null;
+  /** Recent channel messages, NEWEST FIRST, excluding the message being judged. */
+  recent: ReadonlyArray<{ companionId?: CompanionId | null; authorIsBot: boolean }>;
+}): FitSignals {
+  const { me, content, activeExchangeWith, recent } = opts;
+
+  // Monopoly, not "spoke once". Count the unbroken run of companion turns since the last human
+  // message: in a normal exchange that run is one turn long, so a companion mid-conversation with
+  // Raziel is never penalised for being the one he is talking to. It only trips when this companion
+  // has taken the floor repeatedly with no human turn between.
+  let ownRun = 0;
+  for (const m of recent) {
+    if (!m.authorIsBot) break;            // a human turn re-opens the floor; stop counting
+    if (m.companionId !== me) { ownRun = 0; break; } // a sibling spoke: not a monopoly of mine
+    ownRun++;
+  }
+
+  return {
+    holdsThread: !!activeExchangeWith && activeExchangeWith === me,
+    relevance: laneRelevance(content, me),
+    spokeLast: ownRun >= MONOPOLY_TURNS,
+  };
 }
 
 /**
