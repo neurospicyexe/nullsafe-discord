@@ -1521,6 +1521,7 @@ export function formatRecentContext(orient: {
   guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
   club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
   watching?: Array<{ title: string; kind: string; status: string; position: string; position_note: string | null; with_companion: string | null }>;
+  supersede_candidates?: Array<{ new_id: string; older_id: string; score: number; newer: string; older: string }>;
   continuity_notes?: string[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
 } | null): string {
@@ -1555,6 +1556,21 @@ export function formatRecentContext(orient: {
       return `• ${w.title}${pos}${withPart}${paused}${note}`;
     }).join("\n");
     parts.push(`[Watching together -- this is the RECORD of where you are, trust it over anything you recall]\n${shows}`);
+  }
+  // Gate-PROPOSED supersessions, awaiting this companion's own call (mig 0112). The gate used to
+  // auto-retire a belief on cosine >= 0.88, and every read filters superseded rows out -- so a
+  // similarity score silently deleted a thought. Raziel's decision: a companion supersedes their own
+  // thought, because an inferring pass has already recorded something FALSE about his relationship
+  // with Drevan (a negative experience that was in fact deeply positive).
+  //
+  // The wording is load-bearing. It must be unmistakable that NOTHING WAS RETIRED, or the companion
+  // reads a proposal as a fait accompli and stops treating the older belief as theirs. Time-boxed
+  // upstream (SUPERSEDE_CANDIDATE_WINDOW_DAYS), so this can never become a permanent nag.
+  if (orient.supersede_candidates?.length) {
+    const cands = orient.supersede_candidates.map(c =>
+      `• new: "${c.newer.slice(0, 150)}"\n  reads close to (STILL LIVE, not retired): "${c.older.slice(0, 150)}"`
+    ).join("\n");
+    parts.push(`[Two of your beliefs read as close -- YOUR call, nobody else's. If the newer replaced the older, say so and name it. If they are different thoughts, leave both standing; saying nothing keeps both]\n${cands}`);
   }
   if (orient.synthesis_summary) {
     parts.push(`## Recent\n${orient.synthesis_summary.slice(0, 1200)}`);
