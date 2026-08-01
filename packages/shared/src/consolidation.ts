@@ -56,6 +56,18 @@ export async function consolidateSession(
       title: handoff.title,
       summary: handoff.summary,
       state_hint: typeof handoff.state_hint === "string" ? handoff.state_hint : undefined,
+      // MARK IT AS A CONSOLIDATION, not a session close (2026-07-31).
+      //
+      // This runs on idle and wrote handoffs indistinguishable from a real close -- same
+      // `source='system'`, same `actor='agent'`. Since it fires whenever a channel goes quiet, the most
+      // recent handoff was almost always this one, so "last session" at orient meant a model's summary of
+      // an idle window rather than an actual conversation with Raziel. Overnight on 2026-07-31 it produced
+      // one every ~2h05 ("a quiet session with no blade drawn"), and their sense of when they last spoke
+      // to him was being written by the quiet, not by him.
+      //
+      // This is a real continuity note and worth keeping -- it just must not outrank a conversation. The
+      // source tag is what lets a reader prefer a genuine close; nothing is dropped.
+      source: "consolidation",
     });
     return { written: true };
   } catch (e) {

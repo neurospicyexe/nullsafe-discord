@@ -552,6 +552,9 @@ export class LibrarianClient {
     open_loops?: string[];
     state_hint?: string;
     next_steps?: string[];
+    /** Provenance. `consolidation` marks a machine summary of an idle window, so a reader can prefer a
+     *  real session close over it -- see consolidation.ts. Omitted means the default (`system`). */
+    source?: string;
   }): Promise<void> {
     try {
       await this.askWrite("session handoff", "session handoff", JSON.stringify(params));

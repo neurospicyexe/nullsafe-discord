@@ -112,7 +112,13 @@ describe("consolidateSession", () => {
       inference: mockInference as any,
     });
     expect(result.written).toBe(true);
-    expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith({ title: "T", summary: "S", state_hint: undefined });
+    // `source: "consolidation"` rides every consolidation write (2026-08-01). It marks a machine summary
+    // of an idle window so a reader can prefer a real session close over it -- consolidations fire on
+    // quiet, so they were almost always the most recent handoff, which made "last session" at orient mean
+    // a note about silence rather than a conversation with Raziel.
+    expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith({
+      title: "T", summary: "S", state_hint: undefined, source: "consolidation",
+    });
   });
 
   test("strips markdown fences before parsing", async () => {
