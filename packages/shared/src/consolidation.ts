@@ -13,10 +13,61 @@ export async function consolidateSession(
 ): Promise<{ written: boolean; reason?: string }> {
   const { companionId, librarian, inference } = opts;
 
+  // 2026-08-03 flow audit. Two defects here, one causing the other, live since 2026-06-30:
+  //
+  // 1. The request was the bare phrase "my state". It matches NO fast-path trigger (triggerMatches
+  //    requires the trigger to appear INSIDE the input, and every read phrasing is longer --
+  //    "show my state", "check my state", "current state"), so it fell through to the DeepSeek
+  //    classifier, which routed it to `state_update` -- a WRITE. That executor returned
+  //    {"error":"state_update_failed","reason":"no fields provided..."} as a 200, so the catch
+  //    below never fired and the ERROR STRING was handed to the companion as its own interior
+  //    state. 315/318/317 runs, every one of them, not one with real state.
+  // 2. Because that error string was byte-identical every time, the prompt was byte-identical, so
+  //    Hermes's api_server derived the SAME session hash on every run and 34 days of consolidations
+  //    piled into one synthetic session (1403/1229/1686 messages) holding up to 58% of a
+  //    companion's entire Halseth traffic.
+  //
+  // The result: handoffs narrated from an error, written up to 12x/day, displacing the real
+  // narrative in the slot the boot header reads. The companions were not malfunctioning -- handed
+  // an error as their own state, all three declined to invent motion and said so.
+  //
+  // The read had to satisfy three things at once, and only one candidate does:
+  //   * exact fast-path trigger, so it never reaches the classifier that caused this;
+  //   * NO session INSERT -- "show my state" routes to session_open, which would have this cron
+  //     opening a session up to 12x/day/companion onto a backlog already 167 rows deep. Surface
+  //     scoping bounds that to one row per day rather than fixing it; a close-handoff writer has
+  //     no business opening anything;
+  //   * NO consuming side effects -- bot_orient marks inter-companion notes delivered and warms
+  //     heat, so calling it here would eat mail meant for the live channel turn.
+  // `triad_state_read` ("companion states") is three plain SELECTs: SOMA floats, relational state
+  // toward Raziel, last outgoing note. Read-only, cheap, and it carries sibling context, which is
+  // better material for a close narrative than this path has ever had.
   let stateContext: string;
   try {
-    const result = await librarian.ask("my state");
+    const result = await librarian.ask("companion states");
+    // A 200 with an {error, reason} body is a DECLINE, not state. Narrating it is what caused the
+    // whole defect above, so abort here -- and abort BEFORE inference.generate, deliberately: the
+    // agent turn writes its own handoff row via ask_librarian mid-turn (source=system), so a fix
+    // that only skipped our own write would leave the agent's terse row landing every two hours.
+    // Killing the turn kills both writers. See librarian.ts assertWriteAck for the same shape on
+    // the write path.
+    if (result && typeof result === "object" && "error" in result) {
+      const reason = typeof (result as Record<string, unknown>)["reason"] === "string"
+        ? ` -- ${(result as Record<string, unknown>)["reason"] as string}`
+        : "";
+      console.error(
+        `[consolidation] ${companionId}: state read DECLINED by librarian: ` +
+        `${String((result as Record<string, unknown>)["error"])}${reason} -- skipping handoff ` +
+        `rather than narrating the error as state`,
+      );
+      return { written: false, reason: "state_declined" };
+    }
     stateContext = result == null ? "" : typeof result === "string" ? result : JSON.stringify(result);
+    // An empty read is not state either. Better no handoff than a confident one about nothing.
+    if (!stateContext.trim() || stateContext.trim() === "{}") {
+      console.warn(`[consolidation] ${companionId}: state read came back empty -- skipping handoff`);
+      return { written: false, reason: "state_empty" };
+    }
   } catch (e) {
     console.error(`[consolidation] ${companionId}: failed to read state`, e);
     return { written: false, reason: "state_error" };
@@ -38,6 +89,11 @@ export async function consolidateSession(
     ],
     0.3,
     1024,
+    // Pin the gateway session (5th arg -> X-Hermes-Session-Id). Without it the api_server falls
+    // back to _derive_chat_session_id(system_prompt, first_user), which hashed our byte-identical
+    // prompt into ONE session that accumulated 34 days of consolidations. Naming the lane keeps
+    // this transcript out of the channel sessions AND out of everyone else's.
+    `consolidation:${companionId}`,
   );
   if (!raw) return { written: false, reason: "inference_empty" };
   // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded

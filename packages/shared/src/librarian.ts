@@ -80,6 +80,11 @@ export class LibrarianClient {
     request: string,
     context?: string,
     sessionType?: "checkin" | "hangout" | "work" | "ritual",
+    /** Where this call is speaking from (Halseth mig 0113). Sessions dedup per
+     *  (companion, surface), so a request that opens a session -- 'show my state' routes to
+     *  session_open -- lands in its own lane instead of joining whatever Raziel has open in a
+     *  Claude.ai thread. Omit for calls that never open a session. */
+    surface?: string,
   ): Promise<Record<string, unknown>> {
     const body = JSON.stringify({
       jsonrpc: "2.0",
@@ -92,6 +97,7 @@ export class LibrarianClient {
           companion_id: this.companionId,
           ...(context ? { context } : {}),
           ...(sessionType ? { session_type: sessionType } : {}),
+          ...(surface ? { surface } : {}),
         },
       },
     });

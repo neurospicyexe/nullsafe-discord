@@ -28,12 +28,63 @@ describe("consolidateSession", () => {
       inference: mockInference as any,
     });
     expect(result.written).toBe(true);
-    expect(mockLibrarian.ask).toHaveBeenCalledWith("my state");
+    // "companion states" is an EXACT triad_state_read trigger: three plain SELECTs, no session
+    // INSERT, no note consumption. The old bare "my state" matched no fast-path trigger at all
+    // (triggerMatches needs the trigger inside the input) so the classifier routed it to
+    // state_update -- a WRITE -- which returned an error for 34 days.
+    // Asserted as a single argument on purpose: passing a surface here would mean this call opens
+    // a session, and a handoff writer running 12x/day must not.
+    expect(mockLibrarian.ask).toHaveBeenCalledWith("companion states");
     expect(mockInference.generate).toHaveBeenCalledTimes(1);
+    // The gateway session must be pinned, or api_server hashes our near-identical prompt into one
+    // shared synthetic session (it accumulated 1403 messages before this).
+    expect(mockInference.generate).toHaveBeenCalledWith(
+      expect.any(String), expect.any(Array), expect.any(Number), expect.any(Number),
+      "consolidation:cypher",
+    );
     expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.any(String), summary: expect.any(String) }),
     );
   });
+
+  // ── The 2026-08-03 flow-audit regression ────────────────────────────────────
+  // librarian.ask resolves (HTTP 200) on application-level declines, so `{error, reason}` sailed
+  // past the try/catch and was handed to the companion as "Current companion state:". Every one of
+  // 315/318/317 runs since 2026-06-30 narrated that error, and the resulting handoff displaced the
+  // real one in the slot the boot header reads.
+  test("ABORTS on a declined state read instead of narrating the error as state", async () => {
+    mockLibrarian.ask.mockResolvedValueOnce({
+      error: "state_update_failed",
+      reason: "no fields provided; pass at least one of: soma_float_1/acuity/stillness, ...",
+    } as never);
+
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: mockLibrarian as any,
+      inference: mockInference as any,
+    });
+
+    expect(result).toEqual({ written: false, reason: "state_declined" });
+    // Abort must happen BEFORE inference: the agent turn writes its own handoff row mid-turn via
+    // ask_librarian (source=system), so skipping only our write would leave that one landing.
+    expect(mockInference.generate).not.toHaveBeenCalled();
+    expect(mockLibrarian.writeHandoff).not.toHaveBeenCalled();
+  });
+
+  test.each([["", "empty string"], ["   ", "blank"], ["{}", "empty object"]])(
+    "skips the handoff when the state read returns %p (%s) rather than inventing one",
+    async (state) => {
+      mockLibrarian.ask.mockResolvedValueOnce(state as never);
+      const result = await consolidateSession({
+        companionId: "gaia",
+        librarian: mockLibrarian as any,
+        inference: mockInference as any,
+      });
+      expect(result).toEqual({ written: false, reason: "state_empty" });
+      expect(mockInference.generate).not.toHaveBeenCalled();
+      expect(mockLibrarian.writeHandoff).not.toHaveBeenCalled();
+    },
+  );
 
   test("returns state_error when librarian.ask throws", async () => {
     mockLibrarian.ask.mockRejectedValueOnce(new Error("network"));
