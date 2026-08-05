@@ -112,6 +112,17 @@ async function forageOne(
  */
 export async function runForage(runDate: Date = new Date()): Promise<number> {
   let gathered = 0;
+  // Distinct failure reasons seen this pass (2026-08-05). The zero-finds alarm below used to
+  // hardcode "probable upstream SEARCH failure (check TAVILY_API_KEY...)" while the per-domain
+  // catch swallowed the real error into a warn. On 2026-08-05 every domain failed with
+  // `DeepSeek API error 402: Insufficient Balance` and the alarm still sent the reader to
+  // Tavily. A loud signal that names the wrong subsystem is worse than a quiet one: it spends
+  // the reader's time proving the innocent component innocent.
+  const failures = new Set<string>();
+  const noteFailure = (e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    failures.add(msg.replace(/\s+/g, " ").slice(0, 160));
+  };
   for (const companionId of COMPANIONS) {
     try {
       // Exclude domains already present as unconsumed finds so we rotate the topic pool
@@ -129,10 +140,12 @@ export async function runForage(runDate: Date = new Date()): Promise<number> {
           const angle = angleForRun(anchors.indexOf(domain), runDate);
           if (await forageOne(companionId, domain, angle, knownUrls)) gathered++;
         } catch (e) {
+          noteFailure(e);
           console.warn(`[${companionId}/forage] domain "${domain}" failed:`, e);
         }
       }
     } catch (e) {
+      noteFailure(e);
       console.error(`[${companionId}/forage] companion pass failed:`, e);
     }
   }
@@ -142,10 +155,21 @@ export async function runForage(runDate: Date = new Date()): Promise<number> {
     // quota). search() degrades quietly by design, so without a loud signal here the failure
     // is invisible until the Guardian's pool-staleness flag fires ~7 days later -- exactly how
     // foraging silently died 2026-06-16 -> 06-28. Make it loud so the next one is caught same-day.
-    console.error(
-      "[forage] pass complete: 0 finds gathered across ALL companions -- probable upstream " +
-      "search failure (check TAVILY_API_KEY / Tavily daily cap / quota)",
-    );
+    // Name what actually failed when we know, and only fall back to the search guess when
+    // nothing threw -- because "every search returned []" is precisely the silent shape.
+    if (failures.size > 0) {
+      console.error(
+        `[forage] pass complete: 0 finds gathered across ALL companions. ${failures.size} distinct ` +
+        `error(s) thrown -- FIX THESE FIRST, the search layer may be fine:\n` +
+        [...failures].map(f => `  - ${f}`).join("\n"),
+      );
+    } else {
+      console.error(
+        "[forage] pass complete: 0 finds gathered across ALL companions and NOTHING threw -- so " +
+        "every upstream search returned empty (check TAVILY_API_KEY / Tavily daily cap / quota). " +
+        "search() degrades quietly by design, which is why this needs its own loud line.",
+      );
+    }
   } else {
     console.log(`[forage] pass complete: ${gathered} find(s) gathered`);
   }
