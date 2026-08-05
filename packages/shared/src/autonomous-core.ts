@@ -848,11 +848,35 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // already had. NEW GROUND fires when the thread is spent or there is no live thread: the
     // 15-message history block is withheld, because a model handed fifteen vivid messages and
     // a one-line preference to do otherwise will extend them every time.
-    let spine = await librarian.convoActive(interCompanionChannelId!).catch(() => null);
+    // FAILS OPEN, and that is the whole design of this block. New ground is the restrictive mode
+    // (history withheld, fresh material required, silence without it), so it may only be entered
+    // on a POSITIVE answer from the spine. Three ways we do not have one, all of which mean
+    // CONTINUE:
+    //   - the spine is unreachable (convoActive throws now; it used to return null and would
+    //     have muted the commons on any Halseth blip);
+    //   - THREADS_ENABLED is off, so no thread is ever created and convoActive would answer
+    //     "no thread" forever -- which would pin the seed in new-ground mode permanently;
+    //   - Halseth answers and there genuinely is no thread, which IS new ground.
+    // Only the third is a licence to withhold.
+    let spine: Awaited<ReturnType<LibrarianClient["convoActive"]>> = null;
+    let spineAnswered = isThreadsEnabled();
+    if (spineAnswered) {
+      try {
+        spine = await librarian.convoActive(interCompanionChannelId!);
+      } catch (e) {
+        spineAnswered = false;
+        console.warn(
+          `[${ctx.companionId}/autonomous] commons spine unreachable (${String(e)}) -- ` +
+          `staying in continue mode; an unreadable spine must never mute the channel`,
+        );
+      }
+    } else {
+      console.log(`[${ctx.companionId}/autonomous] THREADS_ENABLED off -- no turn budget, continue mode`);
+    }
     const spent = spine
       ? isThreadSpent(spine.thread, { isCommons: true, channelId: interCompanionChannelId! })
       : false;
-    const newGround = !spine || spent;
+    const newGround = spineAnswered && (!spine || spent);
     if (spent && spine) {
       console.log(
         `[${ctx.companionId}/autonomous] commons thread ${spine.thread.id} spent ` +
@@ -866,6 +890,16 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // questions -- so the commons metabolizes shared life, not its own echo.
     let freshBlock = "";
     let freshCount = 0;
+    // ROTATING supply only -- forage finds (consumed on use) and held questions (stamped voiced).
+    // Deliberately NOT recent listens: nothing ever consumes a listen and there is no tight
+    // recency window (a listen surfaced at 18 days old on 2026-07-26), so counting them would
+    // mean that once the questions drain, every new-ground tick across all three companions gets
+    // the IDENTICAL two listens as its PRIMARY INSTRUCTION. That is
+    // [anti-loop-block-that-never-rotates] rebuilt inside its own fix -- the 07-27 change turned a
+    // constant block into a missing one, and this would turn it back into a constant one and put
+    // it in charge. Listens stay in the block as texture; they just cannot license a new-ground
+    // post on their own.
+    let rotatingCount = 0;
     // Consume-on-use (2026-07-27): the finds actually served into this seed's prompt, in
     // the order fetched (newest first). Without consumption the SAME two finds were served
     // to every bot on every ~2h tick until the next daily forage run -- the block whose
@@ -909,6 +943,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         fresh.push(`a question you're holding: ${q}`);
       }
       freshCount = fresh.length;
+      rotatingCount = servedFinds.length + (servedQuestionId ? 1 : 0);
       if (fresh.length > 0) {
         // In NEW GROUND mode this stops being a preference and becomes the instruction. A
         // nudge ("prefer bringing one of these") loses to fifteen messages of live imagery
@@ -930,10 +965,11 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // Measured 2026-08-05: the unconsumed forage pool was at ZERO for every companion --
     // 3 gathered/day against 36 seed ticks/day -- so this is not a hypothetical branch.
     // Silence for one tick at a two-hourly cadence costs nothing. A re-orbit costs everything.
-    if (newGround && freshCount === 0) {
+    if (newGround && rotatingCount === 0) {
       console.warn(
-        `[${ctx.companionId}/autonomous] new-ground tick with no fresh material ` +
-        `(forage/listens/questions all empty) -- staying silent rather than re-opening the thread`,
+        `[${ctx.companionId}/autonomous] new-ground tick with no ROTATING material ` +
+        `(0 unconsumed forage finds, 0 unvoiced questions; ${freshCount} non-rotating items ignored) ` +
+        `-- staying silent rather than re-opening the thread. Check the forage pool.`,
       );
       return;
     }
@@ -985,7 +1021,8 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     const seedPrompt = prompts.interCompanionSeed(effectiveHistory) + freshBlock + landBlock + vocativeBlock;
     console.log(
       `[${ctx.companionId}/autonomous] inter-companion seed tick -- generating ` +
-      `(mode=${newGround ? "new-ground" : "continue"}, ${botTurnsSinceHuman} bot turns in window, ${freshCount} fresh items)`,
+      `(mode=${newGround ? "new-ground" : "continue"}, ${botTurnsSinceHuman} bot turns in window, ` +
+      `${freshCount} fresh items of which ${rotatingCount} rotating)`,
     );
     let msg = await generateOutward(
       inference, bootCtx.systemPrompt, seedPrompt,

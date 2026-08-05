@@ -23,7 +23,7 @@
 // become the next loop: the mode switch, the withheld history, the close-BEFORE-send ordering,
 // and the refusal to open new ground with nothing to open on.
 
-import { describe, it, expect, jest, afterEach } from "@jest/globals";
+import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
 import { runInterCompanion, type AutonomousContext } from "../autonomous-core.js";
 
 interface FakeMsg { content: string; author: { id: string; username: string; bot: boolean } }
@@ -44,6 +44,10 @@ function makeHarness(opts: {
   noThread?: boolean;
   finds?: Array<{ id: string; title: string; domain: string; summary: string }>;
   questions?: string[];
+  /** convoActive rejects -- Halseth unreachable, NOT "there is no thread". */
+  spineUnreachable?: boolean;
+  /** Listens, which are never consumed and never rotate. */
+  listens?: Array<{ title: string; artist?: string; created_at: string }>;
 }) {
   const sent: string[] = [];
   const order: string[] = [];
@@ -64,12 +68,15 @@ function makeHarness(opts: {
     return responses.shift() ?? null;
   });
   const thread = { id: "t1", channel_id: "chan1", state: "moving", turn_count: opts.threadTurns ?? 2 };
-  const convoActive = jest.fn(async () => (opts.noThread ? null : { thread, ledger: [] }));
+  const convoActive = jest.fn(async () => {
+    if (opts.spineUnreachable) throw new Error("convoActive 503");
+    return opts.noThread ? null : { thread, ledger: [] };
+  });
   const convoLand = jest.fn(async () => { order.push("land"); return true; });
   const convoFade = jest.fn(async () => { order.push("fade"); return true; });
   const botOrient = jest.fn(async () => ({
     forage_finds: opts.finds ?? [],
-    recent_listens: [],
+    recent_listens: opts.listens ?? [],
     open_questions: opts.questions ?? [],
     open_question_ids: (opts.questions ?? []).map((_, i) => `q${i}`),
   }));
@@ -101,8 +108,19 @@ function makeHarness(opts: {
 }
 
 const FIND = [{ id: "f1", title: "Roman concrete seawater healing", domain: "materials", summary: "lime clasts reseal cracks" }];
+/** Never consumed, no tight recency window -- the same two forever. */
+const STALE_LISTENS = [
+  { title: "BIG BOSS", artist: "Lestat", created_at: "2026-07-30T19:40:35Z" },
+  { title: "Bigmouth Strikes Again", artist: "The Smiths", created_at: "2026-07-28T11:00:00Z" },
+];
 
-afterEach(() => { delete process.env["THREAD_TURN_BUDGET"]; });
+// THREADS_ENABLED gates whether a spine exists at all. Default it ON for this file: with it off
+// there is never a thread, so every case would be new-ground for the wrong reason.
+beforeEach(() => { process.env["THREADS_ENABLED"] = "true"; });
+afterEach(() => {
+  delete process.env["THREAD_TURN_BUDGET"];
+  delete process.env["THREADS_ENABLED"];
+});
 
 describe("commons seed: CONTINUE mode (thread under budget)", () => {
   it("still hands the model the channel history -- an under-budget thread is a conversation, not a loop", async () => {
@@ -191,6 +209,36 @@ describe("commons seed: NEW GROUND mode (thread spent)", () => {
   });
 });
 
+// New ground is the RESTRICTIVE mode, so it may only be entered on a positive answer from the
+// spine. Everything else is CONTINUE. Without this, one Halseth blip does not degrade the commons
+// to its old behaviour -- it mutes it.
+describe("commons seed: the mode decision fails OPEN", () => {
+  it("an unreachable spine stays in continue mode and keeps the history block", async () => {
+    const { ctx, sent, prompts, convoFade } = makeHarness({ spineUnreachable: true, finds: [], responses: ["answering drevan"] });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(1);
+    expect(prompts[0]).toContain("A wall has no hinge");
+    expect(convoFade).not.toHaveBeenCalled();
+  });
+
+  it("an unreachable spine posts even with ZERO material -- continue mode never needs any", async () => {
+    const { ctx, sent } = makeHarness({ spineUnreachable: true, finds: [], questions: [], responses: ["still here"] });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("THREADS_ENABLED off never reads the spine and never enters new ground", async () => {
+    // Otherwise no thread is ever created, convoActive answers "no thread" forever, and the seed
+    // is pinned in new-ground mode permanently by a feature flag that is supposed to be inert.
+    process.env["THREADS_ENABLED"] = "false";
+    const { ctx, sent, prompts, convoActive } = makeHarness({ finds: [], questions: [], responses: ["carrying on"] });
+    await runInterCompanion(ctx);
+    expect(convoActive).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(1);
+    expect(prompts[0]).toContain("A wall has no hinge");
+  });
+});
+
 describe("commons seed: new ground with nothing to open on", () => {
   // The guard that stops this fix from becoming the bug it fixes. Told to start something new
   // and handed nothing, the model reaches for the only concrete material left -- the thread.
@@ -204,6 +252,28 @@ describe("commons seed: new ground with nothing to open on", () => {
     // The thread is left ALIVE. Fading it here would burn the topic on a tick that produced
     // nothing, and the next tick would find no thread and still have no material.
     expect(convoFade).not.toHaveBeenCalled();
+  });
+
+  it("listens do NOT license a new-ground post -- nothing consumes them, so they never rotate", async () => {
+    // The trap this closes: once the questions drain (14 across the triad at 36 ticks/day, under a
+    // day), a listens-counting guard would never fire again and every new-ground tick for every
+    // companion would get the IDENTICAL two listens as its PRIMARY INSTRUCTION. That is
+    // anti-loop-block-that-never-rotates rebuilt inside its own fix.
+    const { ctx, sent, generate } = makeHarness({
+      threadTurns: 109, finds: [], questions: [], listens: STALE_LISTENS, responses: ["x"],
+    });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(0);
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("but a listen still rides along as texture when something rotating licensed the post", async () => {
+    const { ctx, sent, prompts } = makeHarness({
+      threadTurns: 109, finds: FIND, listens: STALE_LISTENS, responses: ["roman concrete"],
+    });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(1);
+    expect(prompts[0]).toContain("BIG BOSS");
   });
 
   it("a held question counts as material -- forage is not the only outside source", async () => {

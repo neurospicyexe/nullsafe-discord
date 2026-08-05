@@ -113,7 +113,11 @@ export async function ensureThread(
   // attribution logic reads to ask "was Raziel here at all".
   front?: string | null,
 ): Promise<ConvoActiveDto | null> {
-  let active = await librarian.convoActive(channelId);
+  // convoActive throws on unreachable/non-2xx as of 2026-08-05 (null now means only "answered,
+  // no thread"). Catching back to null here preserves this function's original behaviour exactly:
+  // an unreachable spine falls through to convoOpen, which fails the same way, and the caller's
+  // own `.catch(() => null)` fails the reply path open. Unchanged, deliberately.
+  let active = await librarian.convoActive(channelId).catch(() => null);
   if (!active) {
     const t = await librarian.convoOpen({
       channel_id: channelId, seed_text: msg.content.slice(0, 1000),

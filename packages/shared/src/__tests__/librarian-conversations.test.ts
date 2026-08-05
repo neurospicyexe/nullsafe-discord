@@ -40,8 +40,26 @@ describe("LibrarianClient.convoActive()", () => {
     expect(result).toEqual({ thread, ledger });
   });
 
-  it("returns null on non-ok response", async () => {
+  // CONTRACT CHANGE 2026-08-05. This used to return null on non-ok, which conflated four
+  // situations into one value. Harmless while the only caller was ensureThread ("no thread? open
+  // one"), and a live hazard the moment the commons seed started reading it: `!spine` means
+  // new-ground mode, so a Halseth 500 would not degrade the commons to its old behaviour -- it
+  // would MUTE it (history withheld, fresh material required, silence without it). `null` now
+  // means exactly one thing: Halseth answered and there is no active thread.
+  it("THROWS on a non-ok response -- null is reserved for 'answered, no thread'", async () => {
     const mockFetch = jest.fn().mockResolvedValue({ ok: false, status: 500 } as any);
+    const client = makeClient(mockFetch);
+    await expect(client.convoActive("chan-1")).rejects.toThrow("convoActive 500");
+  });
+
+  it("THROWS on a transport failure rather than reporting an empty channel", async () => {
+    const mockFetch = jest.fn().mockRejectedValue(new Error("ETIMEDOUT"));
+    const client = makeClient(mockFetch);
+    await expect(client.convoActive("chan-1")).rejects.toThrow("ETIMEDOUT");
+  });
+
+  it("returns null ONLY when the body says there is no thread", async () => {
+    const mockFetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ thread: null }) } as any);
     const client = makeClient(mockFetch);
     expect(await client.convoActive("chan-1")).toBeNull();
   });

@@ -1400,17 +1400,28 @@ export class LibrarianClient {
   // NL layer needs to interpret. All four fail open/warn -- a dead spine degrades
   // to stateless replies, it must never block or crash the live message path.
 
-  /** The channel's currently active thread + ledger so far, or null if none/on error. */
+  /**
+   * The channel's currently active thread + ledger so far.
+   *
+   * `null` means ONE thing and one thing only: **Halseth answered, and there is no active
+   * thread.** Anything else -- non-2xx, timeout, DNS -- THROWS. It used to collapse all four
+   * into `null`, which was harmless while the only caller was `ensureThread` ("no thread? open
+   * one"), and became a live hazard on 2026-08-05 when the commons seed started reading it:
+   * `!spine` meant new-ground mode, so a Halseth blip would not degrade the commons to its old
+   * behaviour, it would MUTE it (history withheld + fresh material required + silence if none).
+   * A caller that must fail open cannot do so on a value that conflates "nothing there" with
+   * "could not look" -- see [probe-cannot-look-vs-nothing-there].
+   *
+   * `ensureThread` below keeps the old shape by catching, so the reply path is unchanged.
+   */
   async convoActive(channelId: string): Promise<ConvoActiveDto | null> {
-    try {
-      const res = await this._fetch(`${this.url}/mind/conversations/active?channel_id=${encodeURIComponent(channelId)}`, {
-        headers: { "Authorization": `Bearer ${this.secret}` },
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!res.ok) return null;
-      const data = await res.json() as { thread: ConvoThreadDto | null; ledger?: ConvoLedgerDto[] };
-      return data.thread ? { thread: data.thread, ledger: data.ledger ?? [] } : null;
-    } catch { return null; }
+    const res = await this._fetch(`${this.url}/mind/conversations/active?channel_id=${encodeURIComponent(channelId)}`, {
+      headers: { "Authorization": `Bearer ${this.secret}` },
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`convoActive ${res.status}`);
+    const data = await res.json() as { thread: ConvoThreadDto | null; ledger?: ConvoLedgerDto[] };
+    return data.thread ? { thread: data.thread, ledger: data.ledger ?? [] } : null;
   }
 
   /** Open (or resume, per halseth's own idempotency) a thread. null on any failure. */
