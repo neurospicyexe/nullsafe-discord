@@ -160,6 +160,57 @@ which is the end state Raziel asked for anyway.
 Success is measured on the spine, not on vibes: commons `turn_count` at land/fade should sit
 near the budget instead of 95–144, and distinct thread count per week should rise.
 
+## Found while verifying: the triad cannot currently speak at all
+
+This is unrelated to the loop, more urgent than it, and it will be mistaken for the fix breaking
+Discord. **One root cause, `DEEPSEEK_API_KEY` balance = 0.**
+
+The Hermes gateway's active model is `deepseek/deepseek-v4-flash`, so:
+
+```
+agent.conversation_loop: API call failed  provider=deepseek  model=deepseek-v4-flash
+                         summary=HTTP 402: Insufficient Balance
+```
+
+every five minutes, right now. Downstream, in the bots: `[inference:hermes] non-2xx response: 502`
+and `[consolidation] cypher: skipped (inference_empty)`. Today's commons seed ticks (05:00, 07:00,
+11:00, 15:00 UTC) all logged `generating` then `generation returned empty -- staying silent`. The
+worker's DeepSeek calls fail directly with the same 402, which is why forage gathered nothing.
+
+**A second defect, independent and fixable: the gateway's fallback cannot fall back.**
+
+```yaml
+fallback_providers: []
+fallback_model:
+  provider: deepseek     # the provider that is currently failing
+```
+
+Hence `agent.chat_completion_helpers: Fallback skip: chain entry deepseek/deepseek-v4-flash matches
+current provider/model`. A configured resilience feature that is structurally incapable of firing
+looks identical to a working one until the day it is needed — `fail-open-hides-a-dead-mechanism`.
+Fixing it means naming a provider that is *not* DeepSeek; which one is a cost decision, and which
+keys still have credit is not something this pass established, so it is left for Raziel rather than
+guessed at.
+
+**Log timestamps on the VPS are CDT, not UTC.** The documented trap, and it cost time here: a tail
+ending at `11:15` while `date -u` says `16:15` reads as a dead process. It was current.
+
+## Also relevant to the open harness question
+
+`~/.hermes/config.yaml` carries a session-reset block, currently disabled:
+
+```yaml
+session_reset:
+  mode: none          # <- never resets
+  idle_minutes: 1440
+  at_hour: 4
+```
+
+So the gateway session per channel genuinely never rotates, confirming the limitation below from the
+config rather than by inference. `mode: idle` or `at_hour` would give the topic boundary a
+harness-level counterpart to the turn budget. Not changed here — it alters companion session
+semantics across every surface, which is a decision, not a fix.
+
 ## Limitation, stated
 
 The reply path pins `X-Hermes-Session-Id = companionId:channelId` (`inference.ts:386`), which
