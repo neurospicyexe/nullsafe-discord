@@ -66,7 +66,14 @@ function makeHarness(opts: {
     interCompanionChannelId: "chan1",
     interestKeywords: [], defaultInterTarget: "drevan",
     prompts: { interCompanionSeed: (h: string) => `Recent:\n${h}\n\nOne real contribution.` },
-    librarian: { botOrient, ask: async () => ({ ack: true }), consumeForageFind: jest.fn(async () => true), markQuestionVoiced },
+    librarian: {
+      botOrient, ask: async () => ({ ack: true }),
+      consumeForageFind: jest.fn(async () => true), markQuestionVoiced,
+      // Spine reads (2026-08-05): a live thread under budget keeps these cases in CONTINUE mode.
+      convoActive: async () => ({ thread: { id: "t1", channel_id: "chan1", state: "moving", turn_count: 2 }, ledger: [] }),
+      convoLand: async () => true,
+      convoFade: async () => true,
+    },
     inference: { generate },
     client: { user: { id: "gaia" }, channels: { fetch: async () => channel } },
     configCache: {}, bootCtx: { systemPrompt: "sys" },

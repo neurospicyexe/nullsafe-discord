@@ -56,6 +56,7 @@ import {
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
+  isThreadSpent,
   type ConvoActiveDto,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
@@ -1055,7 +1056,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // deliberately -- the spine is this exchange's immediate continuity and should read
     // as closer/more load-bearing than the standing recent-context block. Guarded on
     // `spine` (set above, already fail-open) so a missing/failed thread is a no-op here.
-    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence)}`;
+    // Budget notice (2026-08-05): the reply path burns turns too, so a vocative chain can run
+    // well past the budget between two-hourly seed ticks. isThreadSpent is channel-gated
+    // (commons only, presence exempt) and never suppresses -- it only tells the companion the
+    // count and offers [LANDS:] as the alternative to finding one more facet.
+    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence, isThreadSpent(spine.thread, { isCommons: isTriadCommons(channelEntry), channelId: message.channelId }))}`;
     // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
     // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
     // (forage finds, recent listens, incoming notes, growth). Without this append the

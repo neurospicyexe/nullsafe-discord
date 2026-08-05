@@ -40,6 +40,11 @@ function makeHarness(opts: {
   history?: FakeMsg[];
   companionId?: string;
   selfId?: string;
+  /** Turn count on the channel's active thread. Default 2 -- well under the 18-turn budget,
+   *  so every pre-existing case in this file stays in CONTINUE mode. */
+  threadTurns?: number;
+  /** No active thread at all (a fresh or just-faded channel). */
+  noThread?: boolean;
 }) {
   const sent: string[] = [];
   const channel = {
@@ -59,6 +64,10 @@ function makeHarness(opts: {
     if (opts.orientThrows) throw new Error("orient offline");
     return { forage_finds: opts.finds ?? [], recent_listens: [], open_questions: [] };
   });
+  const thread = { id: "t1", channel_id: "chan1", state: "moving", turn_count: opts.threadTurns ?? 2 };
+  const convoActive = jest.fn(async () => (opts.noThread ? null : { thread, ledger: [] }));
+  const convoLand = jest.fn(async () => true);
+  const convoFade = jest.fn(async () => true);
   const ctx = {
     companionId: opts.companionId ?? "cypher",
     cooldownMs: 60_000,
@@ -67,7 +76,7 @@ function makeHarness(opts: {
     interestKeywords: [],
     defaultInterTarget: "drevan",
     prompts: { interCompanionSeed: (h: string) => `Recent messages:\n${h}\n\nOne real contribution.` },
-    librarian: { botOrient, ask: async () => ({ ack: true }), consumeForageFind },
+    librarian: { botOrient, ask: async () => ({ ack: true }), consumeForageFind, convoActive, convoLand, convoFade },
     inference: { generate },
     client: { user: { id: opts.selfId ?? "cypher" }, channels: { fetch: async () => channel } },
     configCache: {},
@@ -78,7 +87,7 @@ function makeHarness(opts: {
     messageBuffer: [],
     cycleGuard: {},
   } as unknown as AutonomousContext;
-  return { ctx, generate, sent, consumeForageFind, botOrient };
+  return { ctx, generate, sent, consumeForageFind, botOrient, convoActive, convoLand, convoFade };
 }
 
 // Disjoint vocabulary, no recurring motif, none of it authored by cypher -- nothing gates.

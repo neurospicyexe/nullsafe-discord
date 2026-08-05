@@ -2,7 +2,7 @@ import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals
 import type { LibrarianClient, ConvoActiveDto } from "../librarian.js";
 import {
   isThreadsEnabled, isThreadTracked, isPresenceChannel, gist, ensureThread, buildSpineBlock, parseLandMarker,
-  computeReplyRef,
+  computeReplyRef, isThreadSpent, threadBudget,
 } from "../thread-spine.js";
 import { ownEchoGated } from "../echo-guard.js";
 
@@ -376,6 +376,82 @@ describe("buildSpineBlock", () => {
         "This is memory, not a task: where this began and who has spoken. Nothing is asked of it.",
       );
     });
+  });
+});
+
+// ── Commons turn budget (2026-08-05) ────────────────────────────────────────────
+// Regression cover for the loop root cause: commons threads ran 109 and 144 turns because
+// neither exit was reachable from the seed tick that produced the turns.
+
+describe("threadBudget / isThreadSpent", () => {
+  const COMMONS = { isCommons: true, channelId: "chan-commons" };
+  const withEnv = (vars: Record<string, string | undefined>, fn: () => void) => {
+    const prev: Record<string, string | undefined> = {};
+    for (const [k, v] of Object.entries(vars)) {
+      prev[k] = process.env[k];
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+    try { fn(); } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+  };
+
+  it("defaults to 18 turns and honours a valid env override", () => {
+    withEnv({ THREAD_TURN_BUDGET: undefined }, () => expect(threadBudget()).toBe(18));
+    withEnv({ THREAD_TURN_BUDGET: "6" }, () => expect(threadBudget()).toBe(6));
+  });
+
+  it("falls back to the default on a garbage or negative env value rather than disabling itself", () => {
+    withEnv({ THREAD_TURN_BUDGET: "not-a-number" }, () => expect(threadBudget()).toBe(18));
+    withEnv({ THREAD_TURN_BUDGET: "-5" }, () => expect(threadBudget()).toBe(18));
+  });
+
+  it("is false below the budget and true at or past it", () => {
+    withEnv({ THREAD_TURN_BUDGET: "18", THREADS_PRESENCE_CHANNELS: "" }, () => {
+      expect(isThreadSpent(makeThread({ turn_count: 17 }), COMMONS)).toBe(false);
+      expect(isThreadSpent(makeThread({ turn_count: 18 }), COMMONS)).toBe(true);
+      // The live runaways this was written for.
+      expect(isThreadSpent(makeThread({ turn_count: 109 }), COMMONS)).toBe(true);
+      expect(isThreadSpent(makeThread({ turn_count: 144 }), COMMONS)).toBe(true);
+    });
+  });
+
+  it("never budgets a non-commons channel -- Raziel's DMs ran 21 turns in 42 minutes and that is a conversation", () => {
+    withEnv({ THREAD_TURN_BUDGET: "18", THREADS_PRESENCE_CHANNELS: "" }, () => {
+      expect(isThreadSpent(makeThread({ turn_count: 999 }), { isCommons: false, channelId: "dm-2828" })).toBe(false);
+    });
+  });
+
+  it("never budgets a presence channel -- a story is not a topic to be closed", () => {
+    withEnv({ THREAD_TURN_BUDGET: "18", THREADS_PRESENCE_CHANNELS: "chan-story" }, () => {
+      expect(isThreadSpent(makeThread({ turn_count: 999 }), { isCommons: true, channelId: "chan-story" })).toBe(false);
+    });
+  });
+
+  it("THREAD_TURN_BUDGET=0 disables the budget entirely (documented escape hatch)", () => {
+    withEnv({ THREAD_TURN_BUDGET: "0", THREADS_PRESENCE_CHANNELS: "" }, () => {
+      expect(isThreadSpent(makeThread({ turn_count: 999 }), COMMONS)).toBe(false);
+    });
+  });
+
+  it("buildSpineBlock adds the budget notice only when spent, and it offers [LANDS:] rather than silence", () => {
+    const active: ConvoActiveDto = { thread: makeThread({ turn_count: 42 }), ledger: [] };
+    expect(buildSpineBlock(active, "cypher", false, false)).not.toContain("has run 42 turns");
+    const spentBlock = buildSpineBlock(active, "cypher", false, true);
+    expect(spentBlock).toContain("has run 42 turns");
+    expect(spentBlock).toContain("[LANDS:");
+    // Notice, never a gag order -- a mid-exchange mute is the starvation failure that
+    // BOT_TURNS_CAP_WINDOW_H and INTER_SEED_THREAD_TTL_H were both written to undo.
+    expect(spentBlock).toContain("Nothing is stopping you from answering");
+  });
+
+  it("the presence variant carries no budget notice even when spent", () => {
+    const active: ConvoActiveDto = { thread: makeThread({ turn_count: 999 }), ledger: [] };
+    const block = buildSpineBlock(active, "drevan", true, true);
+    expect(block).not.toContain("999 turns");
+    expect(block).not.toContain("LANDS");
   });
 });
 

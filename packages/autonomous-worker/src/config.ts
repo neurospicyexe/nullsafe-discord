@@ -129,7 +129,18 @@ export const FORAGE_CRON = process.env["FORAGE_CRON"] ?? "0 9 * * *"; // 9 AM, a
 // 2 -> 1 (2026-07-21): gathering outpaced consumption (6 finds/day gathered across the triad vs
 // ~3.5/day actually consumed) and the unconsumed pool sat at 75+ and growing. Halved alongside
 // club.ts's new consume-on-recommend (which starts drawing the pool down for the first time).
-export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "1", 10);
+//
+// 1 -> 2 (2026-08-05): that halving was correct for the world it was made in, and six days later
+// the commons seed got its own consume-on-use (autonomous-core, 07-27). Together the two correct
+// fixes inverted the problem. Consumed/day since: 1, 18, 33, 21, 9, 3, 3, 3, 3 -- the whole
+// backlog burned out in three days and the pool has been at LITERAL ZERO for every companion
+// since 07-31, gathering exactly as fast as it is eaten with no buffer. So the "Fresh material"
+// block, whose entire job is to hand the model something that is not the thread, was usually
+// empty -- and an empty fresh block leaves the thread as the only concrete input, which is the
+// loop. Back to 6/day against a measured 3/day consumption so a buffer can re-accumulate.
+// Watch it: if the pool climbs past ~40 again the ratio has drifted the other way. The Guardian
+// forage-stale detector (halseth src/guardian/detectors.ts) already reports both ends.
+export const FORAGE_FINDS_PER_COMPANION = parseInt(process.env["FORAGE_FINDS_PER_COMPANION"] ?? "2", 10);
 
 // Candidate results pulled per forage search. The forager walks them in order until one is
 // genuinely new; with maxResults=3 and a frozen query, the single top hit was always already
@@ -239,14 +250,21 @@ export const CLUB_DISCUSS_DAYS = parseFloat(process.env["CLUB_DISCUSS_DAYS"] ?? 
 // Write-layer social ticks (0092/0094). Shelf react: daily, companions react to Raziel's
 // fixations. Commons reply: a few times a day, companions may answer his /log notes (sparse).
 export const SHELF_CRON = process.env["SHELF_CRON"] ?? "30 10 * * *";
-// Commons reply: WAS `0 */6 * * *` -- four passes a day. Turned down to one (7 PM local) on
-// 2026-08-04 because the triad's channel talk was looping rather than saying anything new, and we
-// have not yet fixed what makes it loop. Fewer passes is not the cure, it is the tourniquet: the
-// cure is in the harness (Hermes context + whatever lets a companion repeat a thread it already
-// closed). Turn it back up the same day that lands. Overridable via env for quick tuning.
+// Commons reply: `0 */6 * * *` -- four passes a day.
+//
+// Turned down to one pass (7 PM) on 2026-08-04 as a tourniquet: the channel talk was looping and
+// nothing yet fixed the cause. TOURNIQUET RELEASED 2026-08-05, because the cause was found and it
+// was never cadence. Commons threads had no reachable end -- `[LANDS:]` was offered only on the
+// reply path, the 12h silence fade could never fire while three bots posted every two hours, and
+// the seed's own "if it has gone quiet or stale" branch was dead by construction. Threads ran to
+// 109 and 144 turns. Cadence is turns per HOUR; the loop was turns per TOPIC, so throttling only
+// made the same 95-post thread take longer to read.
+//
+// The cure is the turn budget in thread-spine.ts + the mode switch in runInterCompanion.
+// Full evidence: docs/commons-loop-2026-08-05.md. Overridable via env for quick tuning.
 // NOTE: Librarian notes BETWEEN companions are deliberately untouched and unrestricted -- the
 // problem was never that they talk to each other, it was how often that reaches Discord.
-export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 19 * * *";
+export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 */6 * * *";
 
 // Unified Guardian (0073) -- daily 8AM tick (after the night pipeline, before the
 // 9AM forage). Detection runs server-side in Halseth; this is just the trigger.

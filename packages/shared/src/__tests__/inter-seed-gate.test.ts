@@ -113,6 +113,12 @@ function makeHarness(
     librarian: {
       botOrient: async () => { throw new Error("orient offline"); },
       ask: async () => ({ ack: true }),
+      // Spine reads (2026-08-05): the seed now checks the commons thread's turn budget before
+      // generating. A live thread well under budget keeps every case in this file in CONTINUE
+      // mode, which is the behaviour these gate tests were written against.
+      convoActive: async () => ({ thread: { id: "t1", channel_id: "chan1", state: "moving", turn_count: 2 }, ledger: [] }),
+      convoLand: async () => true,
+      convoFade: async () => true,
     },
     inference: { generate },
     client: {

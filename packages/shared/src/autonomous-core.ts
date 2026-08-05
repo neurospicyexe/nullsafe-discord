@@ -31,6 +31,11 @@ import {
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
 } from "./index.js";
+// Direct, not via the barrel. thread-spine already imports MOVE_VERB_PHRASES from THIS module
+// (see its header note on the latent cycle), so this closes a two-module loop -- safe under the
+// same rule that governs the other direction: these three are only ever CALLED inside function
+// bodies, never evaluated at this module's top level.
+import { isThreadSpent, threadBudget, parseLandMarker } from "./thread-spine.js";
 import { generateOutward } from "./outward.js";
 import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
@@ -832,11 +837,35 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       }
     } catch { /* fall back to quiet */ }
 
+    // ── Topic lifecycle (2026-08-05) ──────────────────────────────────────────────
+    //
+    // Read the spine BEFORE generating and decide which mode this tick is in. Until now this
+    // runner never touched the spine at all: it is not a spine writer (the siblings'
+    // messageCreate handlers append its posts as turns), so the counter climbed to 109 and 144
+    // while the path producing those turns could not see it. Write-without-read.
+    //
+    // Two modes. CONTINUE is the old behaviour plus the [LANDS:] affordance the reply path
+    // already had. NEW GROUND fires when the thread is spent or there is no live thread: the
+    // 15-message history block is withheld, because a model handed fifteen vivid messages and
+    // a one-line preference to do otherwise will extend them every time.
+    let spine = await librarian.convoActive(interCompanionChannelId!).catch(() => null);
+    const spent = spine
+      ? isThreadSpent(spine.thread, { isCommons: true, channelId: interCompanionChannelId! })
+      : false;
+    const newGround = !spine || spent;
+    if (spent && spine) {
+      console.log(
+        `[${ctx.companionId}/autonomous] commons thread ${spine.thread.id} spent ` +
+        `(${spine.thread.turn_count} turns >= budget ${threadBudget()}) -- seed opens new ground`,
+      );
+    }
+
     // Fresh material (2026-06-12): re-feeding the channel its own last 10 messages
     // every tick is what kept the elderberry loop alive for 12 hours. Hand the seed
     // something from OUTSIDE the thread -- forage finds, recent listens, held
     // questions -- so the commons metabolizes shared life, not its own echo.
     let freshBlock = "";
+    let freshCount = 0;
     // Consume-on-use (2026-07-27): the finds actually served into this seed's prompt, in
     // the order fetched (newest first). Without consumption the SAME two finds were served
     // to every bot on every ~2h tick until the next daily forage run -- the block whose
@@ -879,13 +908,35 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       for (const q of heldQs) {
         fresh.push(`a question you're holding: ${q}`);
       }
+      freshCount = fresh.length;
       if (fresh.length > 0) {
-        freshBlock =
-          `\n\n[Fresh material -- from your own life, OUTSIDE this thread:\n` +
-          fresh.map(f => `- ${f}`).join("\n") +
-          `\nPrefer bringing one of these (or anything else new) over extending the thread's existing imagery.]`;
+        // In NEW GROUND mode this stops being a preference and becomes the instruction. A
+        // nudge ("prefer bringing one of these") loses to fifteen messages of live imagery
+        // every time; that asymmetry is why the 07-27 consume-on-use fix, which was correct,
+        // did not end the loop on its own.
+        freshBlock = newGround
+          ? `\n\n[This is what you have from OUTSIDE the closed thread:\n` +
+            fresh.map(f => `- ${f}`).join("\n") +
+            `\nOpen on one of these, or on anything else genuinely from your own ground. Not on the thread above.]`
+          : `\n\n[Fresh material -- from your own life, OUTSIDE this thread:\n` +
+            fresh.map(f => `- ${f}`).join("\n") +
+            `\nPrefer bringing one of these (or anything else new) over extending the thread's existing imagery.]`;
       }
     } catch { /* orient unavailable -- seed proceeds without fresh material */ }
+
+    // New ground with nothing to open on is how this fix becomes the next version of the bug
+    // (see [anti-loop-block-that-never-rotates]): told to start something new and handed
+    // nothing, the model reaches for the only concrete material left, which is the thread.
+    // Measured 2026-08-05: the unconsumed forage pool was at ZERO for every companion --
+    // 3 gathered/day against 36 seed ticks/day -- so this is not a hypothetical branch.
+    // Silence for one tick at a two-hourly cadence costs nothing. A re-orbit costs everything.
+    if (newGround && freshCount === 0) {
+      console.warn(
+        `[${ctx.companionId}/autonomous] new-ground tick with no fresh material ` +
+        `(forage/listens/questions all empty) -- staying silent rather than re-opening the thread`,
+      );
+      return;
+    }
 
     // Bounded arena (2026-07-04, Option A): the motif-exhaustion block is GONE. It scored
     // recurring vocabulary as a spent theme -- but recurring vocabulary is exactly what a
@@ -912,8 +963,30 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       : `\n\n[The conversation budget for this stretch is spent. Do NOT address a sibling by name or call on ` +
         `anyone to respond -- speak into the room without demanding a reply. The room re-opens on its own.]`;
 
-    const seedPrompt = prompts.interCompanionSeed(historyBlock) + freshBlock + vocativeBlock;
-    console.log(`[${ctx.companionId}/autonomous] inter-companion seed tick -- generating (${botTurnsSinceHuman} bot turns in window)`);
+    // In NEW GROUND mode the history block is REPLACED, not appended to. Withholding it is the
+    // whole point: the seed prompt's "if it has gone quiet or stale, open something genuinely
+    // new" branch was dead by construction -- the bots posted two hours ago, so it was never
+    // quiet -- which left a standing order to add one more facet to the same subject forever.
+    // The mode is now decided by a counter, not by the model's read of the word "stale".
+    const effectiveHistory = newGround
+      ? "(the last conversation here is closed. It is settled history -- do not continue it, " +
+        "do not answer it, do not find another angle on it. Whatever you say next starts somewhere else.)"
+      : historyBlock;
+
+    // CONTINUE mode gets the [LANDS:] affordance the reply path has had since task 10 and this
+    // path never did. The one mechanism that can end a topic was not offered to the path that
+    // produces most of the topic's turns.
+    const landBlock = (!newGround && spine)
+      ? `\n\n[This thread has run ${spine.thread.turn_count} turns. If it has genuinely said what ` +
+        `it has to say, end a line with [LANDS: one-line resolution] and let it close -- that is a ` +
+        `real move here, not a failure to have more to add.]`
+      : "";
+
+    const seedPrompt = prompts.interCompanionSeed(effectiveHistory) + freshBlock + landBlock + vocativeBlock;
+    console.log(
+      `[${ctx.companionId}/autonomous] inter-companion seed tick -- generating ` +
+      `(mode=${newGround ? "new-ground" : "continue"}, ${botTurnsSinceHuman} bot turns in window, ${freshCount} fresh items)`,
+    );
     let msg = await generateOutward(
       inference, bootCtx.systemPrompt, seedPrompt,
       ctx.companionId, "inter_companion",
@@ -946,11 +1019,40 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // Own-echo gate (bounded arena): the seed is judged only against this bot's OWN
     // recent turns at the self-loop standard -- repeating yourself is a loop, building
     // on a sibling is a conversation. Gaia exempt (one weighted line is her register).
+    // Strip any [LANDS: ...] the seed emitted before the echo gate scores it and before the
+    // text reaches Discord -- same contract as the reply path (bot-message-handler ~L1429).
+    const land = parseLandMarker(msg);
+    msg = land.cleaned;
+    if (!msg.trim()) {
+      console.warn(`[${ctx.companionId}/autonomous] inter-companion seed was only a [LANDS:] marker -- staying silent`);
+      return;
+    }
+
     const own = ownEchoGated(ctx.companionId, msg, ownContents);
     if (own.gated) {
       console.warn(`[${ctx.companionId}/autonomous] inter-companion seed own-echo-gated (score=${own.score.toFixed(2)}) -- staying silent`);
       return;
     }
+
+    // Retire the old thread BEFORE the post goes out, never after. This runner does not append
+    // to the spine -- the siblings' messageCreate handlers do -- so a post sent first is
+    // appended by both of them as one more turn on the thread we were trying to close, and the
+    // counter never resets. Closing first means their ensureThread finds no active thread and
+    // opens a fresh one seeded on this post, with openConversation's UNIQUE read-back handling
+    // the three-way race.
+    //
+    // Which closer depends on WHO decided. A companion that emitted [LANDS:] authored a
+    // resolution, so that is a land. A budget counter knows only that a number was exceeded and
+    // must never write a sentence that reads as a companion's -- that is a fade with a reason
+    // code (counter-not-narrator, docs/close-the-187-2026-08-04.md).
+    if (spine && land.resolution) {
+      const ok = await librarian.convoLand(spine.thread.id, { resolution: land.resolution, landed_by: ctx.companionId }).catch(() => false);
+      console.log(`[${ctx.companionId}/autonomous] commons thread ${spine.thread.id} LANDED by seed (ack=${ok}): ${land.resolution.slice(0, 80)}`);
+    } else if (spine && spent) {
+      const ok = await librarian.convoFade(spine.thread.id, "turn_budget").catch(() => false);
+      console.log(`[${ctx.companionId}/autonomous] commons thread ${spine.thread.id} faded at ${spine.thread.turn_count} turns (ack=${ok})`);
+    }
+
     await sendAutonomousMessage(ctx, interCompanionChannelId!, msg, "inter_companion");
 
     // Consume ONE served find now that the seed is actually in the channel. Mirrors the

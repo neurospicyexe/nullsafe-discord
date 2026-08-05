@@ -1461,6 +1461,26 @@ export class LibrarianClient {
       return res.ok;
     } catch (e) { console.warn("[librarian] convoLand failed:", String(e)); return false; }
   }
+
+  /**
+   * Fade (retire) a thread with a reason CODE, no authored resolution (2026-08-05).
+   *
+   * The turn-budget path uses this rather than convoLand: it can prove a commons thread ran
+   * past its budget and can prove nothing about what the thread was about, so it must not
+   * write a resolution sentence that reads as a companion's. Returns res.ok.
+   */
+  async convoFade(threadId: string, reason: string): Promise<boolean> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations/${encodeURIComponent(threadId)}/fade`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+        body: JSON.stringify({ reason }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] convoFade ${res.status}`);
+      return res.ok;
+    } catch (e) { console.warn("[librarian] convoFade failed:", String(e)); return false; }
+  }
 }
 
 /**
