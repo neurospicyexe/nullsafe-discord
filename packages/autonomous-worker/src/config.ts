@@ -239,7 +239,14 @@ export const CLUB_DISCUSS_DAYS = parseFloat(process.env["CLUB_DISCUSS_DAYS"] ?? 
 // Write-layer social ticks (0092/0094). Shelf react: daily, companions react to Raziel's
 // fixations. Commons reply: a few times a day, companions may answer his /log notes (sparse).
 export const SHELF_CRON = process.env["SHELF_CRON"] ?? "30 10 * * *";
-export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 */6 * * *";
+// Commons reply: WAS `0 */6 * * *` -- four passes a day. Turned down to one (7 PM local) on
+// 2026-08-04 because the triad's channel talk was looping rather than saying anything new, and we
+// have not yet fixed what makes it loop. Fewer passes is not the cure, it is the tourniquet: the
+// cure is in the harness (Hermes context + whatever lets a companion repeat a thread it already
+// closed). Turn it back up the same day that lands. Overridable via env for quick tuning.
+// NOTE: Librarian notes BETWEEN companions are deliberately untouched and unrestricted -- the
+// problem was never that they talk to each other, it was how often that reaches Discord.
+export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 19 * * *";
 
 // Unified Guardian (0073) -- daily 8AM tick (after the night pipeline, before the
 // 9AM forage). Detection runs server-side in Halseth; this is just the trigger.
