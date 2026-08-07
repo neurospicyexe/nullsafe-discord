@@ -93,7 +93,20 @@ export async function consolidateSession(
     // back to _derive_chat_session_id(system_prompt, first_user), which hashed our byte-identical
     // prompt into ONE session that accumulated 34 days of consolidations. Naming the lane keeps
     // this transcript out of the channel sessions AND out of everyone else's.
-    `consolidation:${companionId}`,
+    //
+    // The DATE SUFFIX is the 2026-08-07 half of the fix. A static lane name is a rail with no
+    // decay: pinning solved the hash-collision problem and then became the same problem slower,
+    // because nothing ever ended the lane. Measured that day: ONE stored user message of 3.24 MB
+    // holding 713 nested copies of this very prompt (~4.7 KB each) -- 713 five-minute ticks, about
+    // 2.5 days of accumulation, in a run where every call was failing 402 so nothing ever
+    // succeeded to break the chain. Our side sends ~5 KB; the gateway grew the rest.
+    //
+    // Hermes' own `session_reset: idle` (idle_minutes 1440) CANNOT rescue this lane -- a job on a
+    // 5-minute cron is never idle for 24h, so the only reset that can ever fire here is one we
+    // spend ourselves. Rotating daily keeps the lane separation the pin was for AND bounds it.
+    // UTC deliberately: the VPS logs in CDT, and a local-time boundary would rotate at a different
+    // instant than every other date-keyed thing in the suite.
+    `consolidation:${companionId}:${new Date().toISOString().slice(0, 10)}`,
   );
   if (!raw) return { written: false, reason: "inference_empty" };
   // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded

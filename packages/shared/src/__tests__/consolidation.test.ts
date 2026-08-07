@@ -37,14 +37,44 @@ describe("consolidateSession", () => {
     expect(mockLibrarian.ask).toHaveBeenCalledWith("companion states");
     expect(mockInference.generate).toHaveBeenCalledTimes(1);
     // The gateway session must be pinned, or api_server hashes our near-identical prompt into one
-    // shared synthetic session (it accumulated 1403 messages before this).
+    // shared synthetic session (it accumulated 1403 messages before this) -- AND the pin must carry
+    // a UTC date so the lane rotates daily (2026-08-07; see the rotation test below for why).
     expect(mockInference.generate).toHaveBeenCalledWith(
       expect.any(String), expect.any(Array), expect.any(Number), expect.any(Number),
-      "consolidation:cypher",
+      `consolidation:cypher:${new Date().toISOString().slice(0, 10)}`,
     );
     expect(mockLibrarian.writeHandoff).toHaveBeenCalledWith(
       expect.objectContaining({ title: expect.any(String), summary: expect.any(String) }),
     );
+  });
+
+  // ── The 2026-08-07 unbounded-lane regression ────────────────────────────────
+  //
+  // The pin was correct and incomplete: a STATIC lane name is a rail with no decay. It solved the
+  // hash-collision problem and became the same problem slower, because nothing ever ended the lane.
+  // Measured on the VPS that day: one stored user message of 3.24 MB containing 713 nested copies
+  // of this prompt (~4.7 KB each) -- 713 five-minute ticks, ~2.5 days, during a stretch where every
+  // call 402'd so nothing ever succeeded to break the chain. Our side sent ~5 KB; the gateway grew
+  // the rest. Three of those, one per companion, were a meaningful slice of a disk that hit 100%
+  // and took the whole triad offline for two days.
+  //
+  // Hermes' own `session_reset: idle` (idle_minutes 1440) cannot rescue THIS lane specifically: a
+  // job on a 5-minute cron is never idle for 24h. Channel sessions do go idle and are covered by
+  // the config; this one has to spend its own reset. Same family as [[rails-need-decay]].
+  it("rotates the gateway lane daily -- a cron that never goes idle must end its own session", () => {
+    const key = (d: Date) => `consolidation:cypher:${d.toISOString().slice(0, 10)}`;
+    const day1 = new Date("2026-08-07T23:59:00Z");
+    const day2 = new Date("2026-08-08T00:01:00Z");
+    // Two minutes apart, but a different lane -- the accumulation cannot cross the boundary.
+    expect(key(day1)).not.toBe(key(day2));
+    // Same day, twelve hours apart -- SAME lane, so a day's consolidations still share context
+    // and the pin keeps doing the job it was added for.
+    expect(key(new Date("2026-08-07T00:05:00Z"))).toBe(key(new Date("2026-08-07T12:05:00Z")));
+    // Companion separation survives rotation -- lanes must never merge across companions.
+    expect(key(day1)).not.toBe(`consolidation:drevan:${day1.toISOString().slice(0, 10)}`);
+    // UTC, not local: the VPS logs in CDT, and a local boundary would rotate at a different
+    // instant than every other date-keyed thing in the suite.
+    expect(key(new Date("2026-08-08T02:00:00Z"))).toContain("2026-08-08");
   });
 
   // ── The 2026-08-03 flow-audit regression ────────────────────────────────────
