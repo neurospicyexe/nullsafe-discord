@@ -51,3 +51,7 @@ DEPLOY_NOTES*.md
 # Git worktrees
 .worktrees/
 README_Raz.md
+
+# Python bytecode (ops/ scripts)
+__pycache__/
+*.pyc
