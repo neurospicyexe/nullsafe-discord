@@ -274,17 +274,29 @@ def should_notify(rep, always=False):
     sev = rep.severity
 
     prev = {}
+    unreadable = False
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as fh:
             prev = json.load(fh)
     except FileNotFoundError:
         pass
     except Exception:
-        return True, "state unreadable -- failing open"
+        # Corrupt state -- e.g. the disk filled mid-write and truncated this file to 0 bytes
+        # (2026-08-06). Treat it like a MISSING file and fall through, so the write below repairs
+        # it. The old code `return`ed here, which meant the one path that could not recover was the
+        # failure path: unreadable -> notify -> return -> still unreadable. Raziel got 25 identical
+        # Telegram alerts, one every 15 minutes, until the file was fixed by hand.
+        #
+        # Fail-open is preserved by the `unreadable` branch below rather than by the early return,
+        # so this still speaks up AND leaves the throttle able to work on the next run.
+        prev = {}
+        unreadable = True
 
     decided = None
     if always:
         decided = "forced (--always)"
+    elif unreadable:
+        decided = "state unreadable -- failing open (state rewritten)"
     elif not rep.failures:
         # Recovery is news: say it once, then go quiet.
         decided = "recovered" if prev.get("severity") not in (None, "ok") else None
