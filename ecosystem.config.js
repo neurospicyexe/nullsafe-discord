@@ -55,6 +55,17 @@ const shared = {
   // reflect 400ed on required fields. Code default is 3000; listed here so it is tunable from
   // .env without a deploy (an unlisted knob is a dead knob -- third time in this file).
   DEEPSEEK_REASONING_HEADROOM: process.env.DEEPSEEK_REASONING_HEADROOM,
+  // 2026-08-07: FOURTH instance of the trap this file keeps documenting. The consolidation
+  // narrator reads the companion's identity file to write a session close handoff in voice
+  // (packages/shared/src/consolidation-narrator.ts). These vars were already in .env -- the
+  // autonomous WORKER reads them, and it is a separate process that gets its env elsewhere --
+  // but they were never in this allowlist, so the BOTS could not see them. Absent, the narrator
+  // returns null and consolidation silently falls back to the Hermes agent path at ~44,600
+  // prompt tokens per call instead of ~200. It warns rather than breaking, which is exactly the
+  // kind of quiet regression this allowlist has caused three times before.
+  CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
+  DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,
+  GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
   GROQ_API_KEY:          process.env.GROQ_API_KEY,
   OLLAMA_URL:            process.env.OLLAMA_URL,
