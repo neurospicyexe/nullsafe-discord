@@ -170,7 +170,49 @@ produces a slightly-generic Drevan for weeks. Same shape as `a-bad-at-path-fails
 Unguessable from the code. Once named, the implementation is small and should assert loudly (and
 fall back to the Hermes path) if a configured heading is missing from the file.
 
-## Separate standing finding: Cypher's cache-hit rate
+## CORRECTION (later the same night): there was never a cache problem, and the win is ~10x bigger
+
+Two claims in the "Cypher's cache-hit rate" section below are **wrong**. Both came from reading a
+single consolidation session as if it were a population. Kept here rather than deleted, because the
+mistake is the lesson.
+
+**Wrong claim 1: "Cypher's 14% hit rate is a standing multiplier on every Cypher call."** Across the
+last 40 sessions per profile, Cypher has the *most volatile* system prompt (6 distinct vs 2) and the
+*best* hit rate. There is no Cypher-specific cause to hunt.
+
+**Wrong claim 2: "the cause is prefix volatility from the skill watcher and `cf_*`."** Splitting the
+same 40 sessions by whether the session was a consolidation run settles it:
+
+| profile | consolidation: per call | hit | everything else: per call | hit |
+|---|---|---|---|---|
+| cypher | **394,895** | 26.9% | 54,582 | 58.9% |
+| drevan | **884,402** | 5.1% | 50,214 | 66.4% |
+| gaia | **923,695** | 4.8% | 47,101 | 49.4% |
+
+Non-consolidation traffic caches at **49–66%**, which is healthy. The terrible aggregate was
+consolidation dragging the average down — a multi-megabyte user message that can never cache,
+because it changed every single tick.
+
+**And the headline number in this document understated the problem by ~10x.** The `~44,600/call`
+figure was measured on the freshly-rotated dated lane — the youngest, least-accumulated sample
+available. It missed consolidation's other two id shapes:
+
+- the static `consolidation:<companion>` lane (247,432/call), and
+- **timestamp-named forks** (`20260807_172229_6c215f`) that Hermes creates when it *compacts* an
+  oversized lane. Those carry the real damage: one Gaia fork held a **3,485,770-char user message**
+  and billed **936,506 uncached tokens for a single call**, and they arrived on the 5-minute tick.
+
+A pattern-matched `WHERE id LIKE 'consolidation:%'` cannot see those, which is also why the first
+post-deploy verification was incomplete. Re-verified without any id pattern — every session started
+after the deploy — **Cypher's profile shows zero new Hermes sessions at all.**
+
+So the true saving is **~395k–924k prompt tokens per call → ~200 warm**, not 44.6k → 200.
+
+**Method note worth keeping:** "which sessions belong to this job" is a *provenance* question, and
+consolidation wore three different id shapes because the gateway renamed it during compaction.
+Grouping by an id pattern silently answered a narrower question than the one being asked.
+
+## Superseded: Cypher's cache-hit rate
 
 Cypher cached 6,144 of 44,612 (**14%**); Gaia 38,144 of 45,424 (**84%**); Drevan 93%. Cache misses
 bill at a multiple of hits, so this is a cost multiplier on **every** Cypher call, not just
