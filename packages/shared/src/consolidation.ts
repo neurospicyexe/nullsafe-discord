@@ -1,17 +1,26 @@
 import type { LibrarianClient } from "./librarian.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
+import { buildNarratorPrompt } from "./consolidation-narrator.js";
 
 export interface ConsolidationOpts {
   companionId: "cypher" | "drevan" | "gaia";
   librarian: LibrarianClient;
+  /** The bots' normal adapter (Hermes agent). Used only as the narrator fallback. */
   inference: InferenceAdapter;
+  /**
+   * Direct, toolless adapter for writing the handoff (see consolidation-narrator.ts). When present
+   * AND the companion's identity file is readable, this replaces `inference` for this one call:
+   * ~7.7k prompt tokens cold / ~200 warm, against ~44,600 unconditional on the Hermes agent path.
+   * Absent or unusable, we fall back to `inference` -- more expensive, still correct.
+   */
+  narrator?: InferenceAdapter | null;
 }
 
 export async function consolidateSession(
   opts: ConsolidationOpts,
 ): Promise<{ written: boolean; reason?: string }> {
-  const { companionId, librarian, inference } = opts;
+  const { companionId, librarian, inference, narrator } = opts;
 
   // 2026-08-03 flow audit. Two defects here, one causing the other, live since 2026-06-30:
   //
@@ -73,20 +82,47 @@ export async function consolidateSession(
     return { written: false, reason: "state_error" };
   }
 
+  const userTurn = {
+    role: "user" as const,
+    content:
+      `Current companion state:\n${stateContext}\n\n` +
+      `Write JSON with: title (one sentence arc in your voice), ` +
+      `summary (2-3 sentences in your voice), ` +
+      `state_hint ("in_motion" | "at_rest" | "floating").`,
+  };
+
+  // Prefer the NARRATOR: a direct, toolless call to the same model with the companion's identity
+  // file as the system prompt. ~7.7k prompt tokens cold / ~200 warm against ~44,600 unconditional
+  // on the Hermes agent path, measured 2026-08-07 -- see consolidation-narrator.ts for why the
+  // Hermes floor cannot be lowered from this file, and for the verified voice output.
+  //
+  // Fall back to `inference` whenever the narrator or the identity file is unavailable. The fallback
+  // is more expensive, not broken: it is exactly the behaviour that shipped before this change, lane
+  // rotation included. Degrading loudly beats a consolidation that stops writing.
+  const narratorPrompt = narrator ? buildNarratorPrompt(companionId) : null;
+  if (narrator && narratorPrompt) {
+    // 256 tokens truncated replies (the model narrates before/around the JSON), so the object
+    // arrived cut off and unparseable. 1024 is pure ceiling headroom -- and DeepSeekAdapter adds
+    // DEEPSEEK_REASONING_HEADROOM on top, which v4-flash needs: reasoning is billed against
+    // max_tokens and burns first, so a bare 1024 returns an EMPTY string (measured).
+    //
+    // No 5th arg: a direct provider call has no gateway session, so there is no lane to name and
+    // nothing accumulates between calls. That is the whole point.
+    const raw = await narrator.generate(narratorPrompt, [userTurn], 0.3, 1024);
+    return await finishHandoff(raw, companionId, librarian, "narrator");
+  }
+
+  console.warn(
+    `[consolidation] ${companionId}: narrator unavailable ` +
+    `(${narrator ? "identity file unreadable" : "no DeepSeek key"}) -- ` +
+    `falling back to the Hermes agent path (~44.6k prompt tokens for this call)`,
+  );
+
   // 256 tokens truncated Hermes-agent replies (the agent narrates before/around the
   // JSON), so the object arrived cut off and unparseable. 1024 is pure ceiling headroom.
   const raw = await inference.generate(
     "Write a concise session close handoff. Respond with ONLY valid JSON, no markdown.",
-    [
-      {
-        role: "user",
-        content:
-          `Current companion state:\n${stateContext}\n\n` +
-          `Write JSON with: title (one sentence arc in your voice), ` +
-          `summary (2-3 sentences in your voice), ` +
-          `state_hint ("in_motion" | "at_rest" | "floating").`,
-      },
-    ],
+    [userTurn],
     0.3,
     1024,
     // Pin the gateway session (5th arg -> X-Hermes-Session-Id). Without it the api_server falls
@@ -108,6 +144,20 @@ export async function consolidateSession(
     // instant than every other date-keyed thing in the suite.
     `consolidation:${companionId}:${new Date().toISOString().slice(0, 10)}`,
   );
+  return await finishHandoff(raw, companionId, librarian, "hermes");
+}
+
+/**
+ * Parse the model's reply and write the handoff. Shared by BOTH inference paths deliberately: the
+ * tolerant extraction and the `source: "consolidation"` tag are guarantees, not incidentals, and a
+ * second copy is how one of them would quietly go missing on the new path.
+ */
+async function finishHandoff(
+  raw: string | null,
+  companionId: string,
+  librarian: LibrarianClient,
+  via: "narrator" | "hermes",
+): Promise<{ written: boolean; reason?: string }> {
   if (!raw) return { written: false, reason: "inference_empty" };
   // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded
   // JSON despite the ONLY-JSON instruction. Never throw here -- a raw JSON.parse crash
@@ -116,7 +166,7 @@ export async function consolidateSession(
   const handoff = parsed as { title?: string; summary?: string; state_hint?: string } | null;
   if (!handoff || typeof handoff.title !== "string" || !handoff.title ||
       typeof handoff.summary !== "string" || !handoff.summary) {
-    console.warn(`[consolidation] ${companionId}: no usable handoff JSON in output, skipping -- raw: ${rawPreview(raw)}`);
+    console.warn(`[consolidation] ${companionId}: no usable handoff JSON in output (via ${via}), skipping -- raw: ${rawPreview(raw)}`);
     return { written: false, reason: "parse_error" };
   }
 
@@ -138,6 +188,7 @@ export async function consolidateSession(
       // source tag is what lets a reader prefer a genuine close; nothing is dropped.
       source: "consolidation",
     });
+    console.log(`[consolidation] ${companionId}: handoff written via ${via}`);
     return { written: true };
   } catch (e) {
     console.error(`[consolidation] ${companionId}: librarian write error`, e);

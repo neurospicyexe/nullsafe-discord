@@ -56,5 +56,6 @@ export * from "./creature-command.js";
 export * from "./imp-command.js";
 export * from "./session-tracker.js";
 export * from "./consolidation.js";
+export * from "./consolidation-narrator.js";
 export * from "./json-extract.js";
 export * from "./thread-spine.js";

@@ -177,7 +177,10 @@ function toApiMessage(m: ChatMessage): { role: string; content: string } {
 const DEEPSEEK_REASONING_HEADROOM = 3000;
 const isDeepSeekReasoningModel = (m: string): boolean => /^deepseek-(v[4-9]|r)/i.test(m.trim());
 
-class DeepSeekAdapter implements InferenceAdapter {
+// Exported for the consolidation narrator, which must NOT go through buildAdapter: the bots run
+// INFERENCE_MODE=hermes, so every buildAdapter call returns the Hermes adapter by design, which is
+// the ~44.6k/call path the narrator exists to bypass. See consolidation-narrator.ts.
+export class DeepSeekAdapter implements InferenceAdapter {
   // Was "deepseek-chat", which DeepSeek delisted -- `GET /v1/models` returns only
   // deepseek-v4-pro and deepseek-v4-flash. The old alias still answers but is on the
   // deprecation path that caused the 2026-07-27 intermittent 400s, so a fallback that

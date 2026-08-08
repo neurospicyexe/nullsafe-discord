@@ -16,8 +16,13 @@ import {
   CONSOLIDATION_IDLE_MINUTES,
 } from "./config.js";
 import {
-  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession,
+  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession, createNarrator,
 } from "@nullsafe/shared";
+
+// Built once, not per tick: the adapter is stateless and rebuilding it every 5 minutes would only
+// re-log the same warning. Null when DEEPSEEK_API_KEY is unset -- consolidateSession then falls back
+// to the Hermes agent path. See packages/shared/src/consolidation-narrator.ts.
+const narrator = createNarrator();
 
 // Per-process state shared by-reference with the shared autonomous runners (autonomous-core.ts).
 // pushRazielMessage (called from the message handler) and the runner signal-detection read the
@@ -101,12 +106,17 @@ export function startAutonomous(
       const lastMs = await getLastActivityMs(redis).catch(() => null);
       if (!isIdle(lastMs, CONSOLIDATION_IDLE_MINUTES)) return;
       if (await isConsolidated(redis, COMPANION_ID)) return;
-      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference });
+      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference, narrator });
+      // Hold on the ATTEMPT, not just the success. `markConsolidated` used to run only when a write
+      // landed, so any persistent failure (a 402 balance, an empty parse) left this cron free to
+      // retry on all 288 five-minute ticks -- which is exactly how 2026-08-07 burned 864 calls with
+      // nobody talking. A shorter hold on failure still retries (48x/day instead of 288x) without
+      // delaying a legitimate handoff by the full success window.
+      await markConsolidated(redis, COMPANION_ID, result.written ? 7200 : 1800);
       if (result.written) {
-        await markConsolidated(redis, COMPANION_ID, 7200);
         console.log("[consolidation] cypher: session handoff written to Halseth");
       } else {
-        console.log(`[consolidation] cypher: skipped (${result.reason})`);
+        console.log(`[consolidation] cypher: skipped (${result.reason}) -- holding 30m before retry`);
       }
     } catch (e) {
       console.error("[consolidation] cypher: cron error", e);
