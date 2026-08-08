@@ -98,7 +98,36 @@ First attempt returned an **empty string**: `completion_tokens: 1024`, all of it
 content. `DeepSeekAdapter` already adds `DEEPSEEK_REASONING_HEADROOM = 3000`; my probe under-sent.
 Any implementation must go through the adapter, not hand-rolled.
 
-## BUILT (pending deploy)
+## SHIPPED + VERIFIED LIVE (2026-08-07 19:25 CDT)
+
+Deployed as `c0ed8cd` + `705d78f`. First real run, all three checks pass:
+
+```
+19:25:00  [narrator] cypher: loaded identity (25320 chars) from /app/identity/CYPHER_IDENTITY_v2.md
+19:25:06  [consolidation] cypher: handoff written via narrator
+```
+
+1. **Narrator path taken**, not the fallback.
+2. **No Hermes gateway session created.** Latest `consolidation:*` lane in `~/.hermes/state.db` is
+   still `consolidation:cypher:2026-08-07` from 23:10 UTC (pre-deploy). The 00:25 UTC run added
+   nothing — the ~44.6k lane is simply not opened any more.
+3. **Handoff landed in Halseth** with provenance intact — `wm_session_handoffs`,
+   `created_at 2026-08-08T00:25:06.225Z`, `source: "consolidation"`, `state_hint: "in_motion"`,
+   title *"PDA line drawn, dispatch mode sharpened: operating rule locked in"*. In voice, and the
+   `source` tag survived the new path, so it still cannot outrank a real session close.
+
+**One deploy trap, worth its own note.** `*_IDENTITY_PATH` was in `.env` but NOT in
+`ecosystem.config.js`'s env allowlist — the autonomous worker reads those vars and gets its env
+elsewhere, so nothing had ever exposed the gap. The bots could not see them, `loadIdentity` would
+have returned null, and consolidation would have kept paying ~44.6k while logging a warning nobody
+reads. **Fourth quiet regression from this allowlist** (VIBECHECK/BRIEFING ids, `DEEPSEEK_MODEL`,
+`DEEPSEEK_REASONING_HEADROOM` were the first three). Fixed in `705d78f`.
+
+Correction to that file's own note: it claims an absent var can only be fixed by a full pm2
+delete/start. **`pm2 reload ecosystem.config.js --only <name> --update-env` does pick up new
+allowlist entries** — verified with `pm2 env <id>`. Still verify rather than trust the reload.
+
+## What was built
 
 Raziel chose the whole identity file over a slice, on the stated ground that he prefers anything that
 self-heals and survives neither of us remembering that specific verbiage is required. That preference
