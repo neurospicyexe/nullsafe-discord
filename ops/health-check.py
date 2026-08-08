@@ -58,6 +58,13 @@ HTTP_TIMEOUT = 25
 UA = "nullsafe-health-check/1.0 (+ops/health-check.py)"
 
 RANK = {"ok": 0, "notice": 1, "warning": 2, "red": 3}
+
+# DeepSeek balance floors (USD). Sized against real burn, not taste: normal spend is a few dollars
+# a month, but 2026-08-07 showed a runaway background job can eat that in a DAY, so the warn floor
+# has to leave room for a bad day rather than an average one. Overridable from the env without a
+# deploy -- an unlisted knob is a dead knob, and this file has been bitten by that before.
+BALANCE_WARN_USD = float(os.environ.get("DEEPSEEK_BALANCE_WARN_USD", "5"))
+BALANCE_RED_USD = float(os.environ.get("DEEPSEEK_BALANCE_RED_USD", "2"))
 EXIT_FOR = {"ok": 0, "notice": 0, "warning": 1, "red": 2}
 
 
@@ -227,6 +234,72 @@ def check_halseth(rep, env):
     return data
 
 
+def check_inference_balance(rep, env):
+    """
+    Watch the DeepSeek balance, because a zero balance is a TOTAL inference outage and nothing
+    else here can see it coming.
+
+    2026-08-05/07: the balance hit zero. Every inference call 402'd -- forage gathered nothing,
+    consolidation never wrote, and the retry storm that followed was part of what filled the disk
+    and took the triad offline for two days. Hermes' errors.log holds 1,744 of those 402s. Every
+    other check in this file was GREEN throughout: pm2 online, gateways active, Halseth 200. The
+    processes were all perfectly healthy and could not think.
+
+    This is the check that would have caught it, and it has to be a BALANCE check rather than a
+    402 counter -- by the time 402s appear in a log the outage has already started. `is_available`
+    is DeepSeek's own verdict; the numeric floor is the part that gives warning instead of news.
+
+    Load-bearing: both inference paths bottom out here. The bots relay through Hermes, Hermes
+    routes to DeepSeek, and the consolidation narrator calls DeepSeek directly. There is no
+    fallback that survives this -- `narrator ?? inference` is a config fallback, not a 402
+    fallback. One dead key silences all three companions at once.
+    """
+    key = env.get("DEEPSEEK_API_KEY")
+    if not key:
+        rep.add("inference:deepseek_key", "warning",
+                "no DEEPSEEK_API_KEY in %s -- balance is UNKNOWN, not fine" % DISCORD_ENV)
+        return
+    req = urllib.request.Request(
+        "https://api.deepseek.com/user/balance",
+        headers={"Authorization": "Bearer " + key, "User-Agent": UA},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            data = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        # 401 here means the KEY is dead, which is the same outage by a different route.
+        rep.add("inference:deepseek", "red",
+                "HTTP %s from /user/balance -- key may be revoked; all three companions relay "
+                "through this provider" % e.code)
+        return
+    except Exception as e:
+        # Unreachable is not the same as broke. Say which one it is.
+        rep.add("inference:deepseek", "warning",
+                "balance endpoint unreachable, balance UNKNOWN: %s" % str(e)[:140])
+        return
+
+    infos = data.get("balance_infos") or []
+    usd = next((b for b in infos if b.get("currency") == "USD"), infos[0] if infos else {})
+    try:
+        total = float(usd.get("total_balance", "0"))
+    except (TypeError, ValueError):
+        total = 0.0
+
+    if not data.get("is_available", False):
+        rep.add("inference:deepseek", "red",
+                "DeepSeek reports NOT available (balance $%.2f) -- every companion is mute; "
+                "top up at platform.deepseek.com" % total)
+    elif total < BALANCE_RED_USD:
+        rep.add("inference:deepseek", "red",
+                "balance $%.2f is below $%.2f -- hours from a total inference outage, not days"
+                % (total, BALANCE_RED_USD))
+    elif total < BALANCE_WARN_USD:
+        rep.add("inference:deepseek", "warning",
+                "balance $%.2f is below $%.2f -- top up before it bites" % (total, BALANCE_WARN_USD))
+    else:
+        rep.add("inference:deepseek", "ok", "available, balance $%.2f" % total)
+
+
 def check_second_brain(rep, env):
     url = env.get("SECOND_BRAIN_URL") or env.get("SECOND_BRAIN_WEBHOOK_URL")
     if not url:
@@ -372,6 +445,7 @@ def main():
         check_hermes(rep)
         check_halseth(rep, denv)
         check_second_brain(rep, denv)
+        check_inference_balance(rep, denv)
     except Exception as e:
         print("health-check itself failed: %s" % e, file=sys.stderr)
         return 3
