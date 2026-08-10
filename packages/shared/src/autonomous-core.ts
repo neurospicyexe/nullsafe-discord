@@ -1172,13 +1172,24 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // re-offering the same top note every tick.
     if (servedNotes.length > 0) {
       const msgN = msg.toLowerCase();
-      const named = servedNotes.find(n => msgN.includes(n.agent_id));
-      const toMark = named ?? servedNotes[servedNotes.length - 1];
-      if (toMark) {
-        await librarian.commonsConsume([toMark.note_id], interCompanionChannelId!);
+      // Mark EVERY served note whose author the post actually names -- not just the first (2026-08-10).
+      //
+      // Found by reading a real post rather than the prompt. Cypher was served Gaia's and Drevan's day notes
+      // and used BOTH: it credited Gaia's insight to Gaia by name and answered Drevan's note to Drevan in the
+      // second person. Marking only the first match left Drevan's note eligible to be re-served to Cypher as
+      // "fresh material from OUTSIDE this thread" when he had already spoken to it -- re-offering spent
+      // material as new is the exact echo this whole change exists to end.
+      //
+      // Bounded by construction: at most two notes are ever served, so this cannot outrun the nightly supply
+      // the way draining an unbounded set would. When the post names nobody, fall back to ONE -- the older of
+      // the pair, so the pool drains oldest-first instead of re-offering the same top note every tick.
+      const named = servedNotes.filter(n => msgN.includes(n.agent_id));
+      const toMark = named.length > 0 ? named : servedNotes.slice(-1);
+      if (toMark.length > 0) {
+        await librarian.commonsConsume(toMark.map(n => n.note_id), interCompanionChannelId!);
         console.log(
-          `[${ctx.companionId}/autonomous] commons seed opened on ${toMark.agent_id}'s note ${toMark.note_id}` +
-          ` (${named ? "sibling named in the post" : "ambient, older of the pair"})`,
+          `[${ctx.companionId}/autonomous] commons seed opened on ${toMark.map(n => `${n.agent_id}'s note ${n.note_id}`).join(" + ")}` +
+          ` (${named.length > 0 ? `${named.length} sibling(s) named in the post` : "ambient, older of the pair"})`,
         );
       }
     }

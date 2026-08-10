@@ -235,6 +235,26 @@ describe("commons seed: consume-on-land, never before", () => {
     await runInterCompanion(ctx);
     expect(commonsConsume).toHaveBeenCalledWith([DREVAN_NOTE.note_id], "chan1");
   });
+
+  // FOUND IN PRODUCTION, 2026-08-10, by reading a real post instead of the prompt. Cypher was served Gaia's
+  // and Drevan's day notes and used BOTH -- crediting Gaia's insight to her by name and answering Drevan's
+  // note to him in the second person. Marking only the first match left the other eligible to come back as
+  // "fresh material from OUTSIDE this thread" when it had already been spoken to, which is re-offering spent
+  // material as new: the precise echo this whole change exists to end.
+  it("consumes BOTH notes when the post names both siblings", async () => {
+    const { ctx, sent, commonsConsume } = makeHarness({
+      notes: [DREVAN_NOTE, GAIA_NOTE], finds: [], questions: [],
+      responses: [
+        "Drevan. Here is the part gaia already named without knowing it was you: the tease wears no armor.",
+      ],
+    });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(1);
+    expect(commonsConsume).toHaveBeenCalledTimes(1);
+    const marked = (commonsConsume as unknown as jest.Mock).mock.calls[0]![0] as string[];
+    expect(marked).toHaveLength(2);
+    expect(marked).toEqual(expect.arrayContaining([DREVAN_NOTE.note_id, GAIA_NOTE.note_id]));
+  });
 });
 
 describe("commons seed: supply is a bonus, never a dependency", () => {
