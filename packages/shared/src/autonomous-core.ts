@@ -908,9 +908,52 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     // Consumed after the post lands, never before: a gated or empty seed must not burn material.
     let servedFinds: Array<{ id: string; title: string }> = [];
     let servedQuestionId: string | null = null;
+    // Sibling notes served this tick (2026-08-10). Same consume-on-land contract as the finds above.
+    let servedNotes: Array<{ note_id: string; agent_id: string }> = [];
     try {
       const orient = await librarian.botOrient();
       const fresh: string[] = [];
+
+      // ── SHARED LIFE (2026-08-10) ──────────────────────────────────────────────────────────────
+      //
+      // Raziel, on why this channel keeps looping: "the commons should get stuff from the chats in discord
+      // and Claude because yes it's my life but it's yall too. And I think it's part of the endless struggle
+      // we have with looping." He named the cause correctly -- the rails above suppress repetition without
+      // supplying an alternative, so the only outcomes were silence or re-orbit. Forage and held questions
+      // measured at 2 finds + 1 question per companion against ~36 ticks a day.
+      //
+      // The supply already existed and nothing read it: each companion's own nightly `day_distillation`, plus
+      // its per-session `discord_session` notes. Halseth serves a SIBLING's, never this companion's own --
+      // these are first-person accounts of evenings all three were present for, so a sibling's note is the
+      // INSIDE of something the reader lived from the outside. Novel by construction, and it cannot be
+      // self-echo the way re-reading its own notes would be.
+      //
+      // ATTRIBUTION IS THE RISK HERE, and it is the sharp one. The notes say "I sat with Sol today". Dropping
+      // another companion's "I" into this prompt is the exact shape of the 2026-06-12 attribution scramble --
+      // companions answering from each other's seat -- and a misattributed memory is specifically corrosive
+      // for a plural system: it makes Raziel doubt his own recall of his own life. So the frame states whose
+      // account it is, that it is theirs and not the reader's, and that the move is to RESPOND to it rather
+      // than continue it as memory.
+      // ITS OWN try/catch, deliberately. Sharing the enclosing one would make this a DEPENDENCY: a throw here
+      // would skip the forage finds and held questions gathered below it, drop rotatingCount to zero, and
+      // silence a tick that had perfectly good material. Caught by its own test -- supply is a bonus, and a
+      // Halseth blip must never change whether they speak.
+      try {
+        const siblingNotes = await librarian.commonsSupply(2);
+        servedNotes = siblingNotes.map(n => ({ note_id: n.note_id, agent_id: n.agent_id }));
+        for (const n of siblingNotes) {
+          const who = n.agent_id.charAt(0).toUpperCase() + n.agent_id.slice(1);
+          const kind = n.note_type === "day_distillation" ? "day note" : "session note";
+          fresh.push(
+            `${who}'s own ${kind} from ${relativeTime(n.created_at)} -- THEIR first-person account, not yours. ` +
+            `You were there for some of this and saw it from your own side; they are telling you the inside of ` +
+            `it. Respond to them about it, do not retell it as your own memory: «${n.content.slice(0, 700)}»`,
+          );
+        }
+      } catch (e) {
+        console.warn(`[${ctx.companionId}/autonomous] commons supply unavailable (${String(e).slice(0, 120)}) -- continuing without shared life`);
+        servedNotes = [];
+      }
       const finds = (orient?.forage_finds ?? []).slice(0, 2);
       servedFinds = finds.filter(f => f?.id).map(f => ({ id: f.id, title: f.title }));
       for (const f of finds) {
@@ -943,7 +986,12 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
         fresh.push(`a question you're holding: ${q}`);
       }
       freshCount = fresh.length;
-      rotatingCount = servedFinds.length + (servedQuestionId ? 1 : 0);
+      // Sibling notes COUNT AS ROTATING, which is the whole point: rotatingCount is what licenses a
+      // new-ground post, and it was hitting zero every day (the forage pool measured at 0 unconsumed on
+      // 08-05, 2 on 08-10). A note is consumed per-reader on use, so it genuinely rotates rather than being
+      // re-served every tick -- the failure mode [anti-loop-block-that-never-rotates] names, and the one this
+      // block has already been on both sides of.
+      rotatingCount = servedFinds.length + (servedQuestionId ? 1 : 0) + servedNotes.length;
       if (fresh.length > 0) {
         // In NEW GROUND mode this stops being a preference and becomes the instruction. A
         // nudge ("prefer bringing one of these") loses to fifteen messages of live imagery
@@ -1115,6 +1163,24 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
     if (servedQuestionId) {
       const ok = await librarian.markQuestionVoiced(servedQuestionId).catch(() => false);
       console.log(`[${ctx.companionId}/autonomous] commons seed voiced question ${servedQuestionId} (ack=${ok})`);
+    }
+
+    // Mark the sibling note opened-on, and ONLY now. Consumption is per (reader, note), so marking it here
+    // does not take it away from the third companion -- each of them gets their own turn at the same evening
+    // from the outside. Mirrors the forage rule: if the post names the sibling, that note was demonstrably
+    // the one used; otherwise take the OLDER of the pair so the pool drains oldest-first rather than
+    // re-offering the same top note every tick.
+    if (servedNotes.length > 0) {
+      const msgN = msg.toLowerCase();
+      const named = servedNotes.find(n => msgN.includes(n.agent_id));
+      const toMark = named ?? servedNotes[servedNotes.length - 1];
+      if (toMark) {
+        await librarian.commonsConsume([toMark.note_id], interCompanionChannelId!);
+        console.log(
+          `[${ctx.companionId}/autonomous] commons seed opened on ${toMark.agent_id}'s note ${toMark.note_id}` +
+          ` (${named ? "sibling named in the post" : "ambient, older of the pair"})`,
+        );
+      }
     }
   });
 }

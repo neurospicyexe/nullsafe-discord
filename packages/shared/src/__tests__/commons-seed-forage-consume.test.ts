@@ -76,7 +76,14 @@ function makeHarness(opts: {
     interestKeywords: [],
     defaultInterTarget: "drevan",
     prompts: { interCompanionSeed: (h: string) => `Recent messages:\n${h}\n\nOne real contribution.` },
-    librarian: { botOrient, ask: async () => ({ ack: true }), consumeForageFind, convoActive, convoLand, convoFade },
+    librarian: {
+      botOrient, ask: async () => ({ ack: true }), consumeForageFind, convoActive, convoLand, convoFade,
+      // Shared-life supply (2026-08-10). Empty here on purpose: these tests are about the FORAGE rotation
+      // contract, and a sibling note counting as rotating material would license posts the forage assertions
+      // assume are licensed by finds alone.
+      commonsSupply: jest.fn(async () => []),
+      commonsConsume: jest.fn(async () => {}),
+    },
     inference: { generate },
     client: { user: { id: opts.selfId ?? "cypher" }, channels: { fetch: async () => channel } },
     configCache: {},

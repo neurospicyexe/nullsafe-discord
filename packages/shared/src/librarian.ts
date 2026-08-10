@@ -695,6 +695,52 @@ export class LibrarianClient {
     }
   }
 
+  /**
+   * Shared life for the commons seed: a SIBLING's recent day note or session note (2026-08-10).
+   *
+   * Raziel, on why the inter-companion chat loops: "the commons should get stuff from the chats in discord
+   * and Claude because yes it's my life but it's yall too. And I think it's part of the endless struggle we
+   * have with looping." He is right about the cause -- the anti-loop rails suppress repetition but never
+   * supplied an alternative, so the menu was silence or re-orbit.
+   *
+   * Always a sibling's note, never this companion's own: the day notes are first-person accounts of evenings
+   * all three were present for, so a sibling's is the INSIDE of something the reader lived from the outside.
+   * That cannot be self-echo, which re-reading its own notes would be.
+   *
+   * Returns [] on any failure. Supply is a bonus, never a dependency -- the seed's own gates decide whether
+   * to speak, and a Halseth blip must not change that decision.
+   */
+  async commonsSupply(limit = 2): Promise<Array<{
+    note_id: string; agent_id: string; note_type: string; content: string; created_at: string;
+  }>> {
+    try {
+      const url = `${this.url}/mind/commons-supply/${encodeURIComponent(this.companionId)}?limit=${limit}`;
+      const res = await this._fetch(url, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as { notes?: Array<{ note_id: string; agent_id: string; note_type: string; content: string; created_at: string }> };
+      return data.notes ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Mark sibling notes as opened-on. Called ONLY after the post lands -- a gated or empty seed must never
+   *  burn material (the 07-27 and 08-05 regressions were both this contract being broken). */
+  async commonsConsume(noteIds: string[], channelId?: string): Promise<void> {
+    if (noteIds.length === 0) return;
+    try {
+      await this._fetch(`${this.url}/mind/commons-supply/consume`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ reader_id: this.companionId, note_ids: noteIds, channel_id: channelId }),
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch { /* non-fatal: worst case the note is offered again next tick */ }
+  }
+
   async bridgePull() {
     return this.ask("check bridge events");
   }

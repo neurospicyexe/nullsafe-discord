@@ -90,6 +90,7 @@ function makeHarness(opts: {
     prompts: { interCompanionSeed: (h: string) => `Recent messages in this channel:\n${h}\n\nOne real contribution.` },
     librarian: {
       botOrient, ask: async () => ({ ack: true }),
+      commonsSupply: jest.fn(async () => []), commonsConsume: jest.fn(async () => {}),
       consumeForageFind: jest.fn(async () => true),
       markQuestionVoiced: jest.fn(async () => true),
       convoActive, convoLand, convoFade,
