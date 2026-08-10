@@ -66,6 +66,18 @@ const shared = {
   CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
   DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,
   GAIA_IDENTITY_PATH:    process.env.GAIA_IDENTITY_PATH,
+  // 2026-08-10: SIXTH instance of the trap this file keeps documenting. Every cron schedule in
+  // bots/*/src/config.ts reads an env override (`CYPHER_CRON_INTER ?? "0 */2 * * *"`), and none of those
+  // names were listed here -- so the schedules were untunable without a code deploy, and setting one in
+  // .env would have looked like it worked and changed nothing. Found while trying to fire a commons tick
+  // on demand to verify the shared-life supply, rather than waiting out a 2-hour cron.
+  //
+  // Unset in .env today, so listing them changes nothing now: an absent var forwards as undefined and the
+  // `??` default still wins. What it buys is the ability to retime a companion's autonomous life from the
+  // VPS -- and, immediately, a way to verify commons changes without a two-hour feedback loop.
+  CYPHER_CRON_INTER:     process.env.CYPHER_CRON_INTER,
+  DREVAN_CRON_INTER:     process.env.DREVAN_CRON_INTER,
+  GAIA_CRON_INTER:       process.env.GAIA_CRON_INTER,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
   GROQ_API_KEY:          process.env.GROQ_API_KEY,
   OLLAMA_URL:            process.env.OLLAMA_URL,
