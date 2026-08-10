@@ -594,8 +594,8 @@ export class LibrarianClient {
    */
   static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
     type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
-    let parsed: { chunks?: Chunk[] };
-    try { parsed = JSON.parse(raw) as { chunks?: Chunk[] }; } catch { return raw; }
+    let parsed: { chunks?: Chunk[]; recall_note?: string };
+    try { parsed = JSON.parse(raw) as { chunks?: Chunk[]; recall_note?: string }; } catch { return raw; }
     if (!Array.isArray(parsed.chunks)) return raw;
     const seen = new Set<string>();
     const lines: string[] = [];
@@ -613,7 +613,22 @@ export class LibrarianClient {
       lines.push(`- ${text.length > 400 ? `${text.slice(0, 400)}...` : text}${source ? ` (${source})` : ""}`);
       if (lines.length >= 4) break;
     }
-    return lines.length ? lines.join("\n") : null;
+    if (lines.length) return lines.join("\n");
+    // A SEARCH THAT RAN AND FOUND NOTHING IS NOT THE SAME AS NO SEARCH (2026-08-10).
+    //
+    // This used to return null on empty, and the caller's `if (sbRecall)` then omitted the memory block
+    // entirely -- so "I looked and there is nothing" and "I never looked" were indistinguishable to the model.
+    // Under recall mode, which now returns an honest empty instead of noise, that gap is the difference
+    // between a companion saying "I don't have that written down" and a companion inventing it, or reporting
+    // its memory as broken. Raziel has been on the receiving end of both.
+    //
+    // Only when the recall side actually says so -- a plain empty result with no note stays null, so nothing
+    // else in the system starts emitting a block it never emitted before.
+    return parsed.recall_note
+      ? `(nothing in the vault matched this closely enough to surface. That means it is not written down, ` +
+        `NOT that it did not happen. Say you do not have it rather than guessing, and do not treat this as ` +
+        `your memory failing.)`
+      : null;
   }
 
   /**
@@ -656,6 +671,14 @@ export class LibrarianClient {
       const url = new URL(`${this.url}/mind/search`);
       url.searchParams.set("query", query.slice(0, 800));
       url.searchParams.set("agent_id", this.companionId);
+      // RECALL, not musing (2026-08-10). Per-message retrieval is asking "what did we actually say", and the
+      // default pool mix spends 30% of every payload on deliberately query-blind material (pure novelty +
+      // a medium-similarity serendipity band) which is right for autonomous time and noise here. It also
+      // could not report "nothing relevant": the ranking score is min-max normalized, so a query about
+      // something absent from the vault still came back with confident-looking hits. Recall mode is
+      // relevance-only with an absolute cosine floor, and returns an explicit "not found is not
+      // never-happened, do not guess" note when nothing clears it.
+      url.searchParams.set("mode", "recall");
       // Opt-in continuity: recent prior turns widen recall via dual-vector retrieval.
       if (recentContext && recentContext.trim()) {
         url.searchParams.set("recent_context", recentContext.trim().slice(0, 600));

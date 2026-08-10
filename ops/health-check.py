@@ -300,19 +300,98 @@ def check_inference_balance(rep, env):
         rep.add("inference:deepseek", "ok", "available, balance $%.2f" % total)
 
 
+# How long the embed queue may sit before it stops being "a blip" and starts being lost continuity.
+EMBED_QUEUE_WARN = int(os.environ.get("SB_EMBED_QUEUE_WARN", "25"))
+EMBED_QUEUE_AGE_WARN_H = float(os.environ.get("SB_EMBED_QUEUE_AGE_WARN_H", "6"))
+
+
 def check_second_brain(rep, env):
     url = env.get("SECOND_BRAIN_URL") or env.get("SECOND_BRAIN_WEBHOOK_URL")
     if not url:
         rep.add("second_brain:config", "notice", "no SECOND_BRAIN_URL in %s -- skipped" % DISCORD_ENV)
         return
+    body = None
     try:
         with urllib.request.urlopen(urllib.request.Request(url.rstrip("/") + "/health", headers={"User-Agent": UA}), timeout=HTTP_TIMEOUT) as r:
             rep.add("second_brain:reachable", "ok", "HTTP %s" % r.status)
+            body = r.read().decode()
     except urllib.error.HTTPError as e:
         # Reachable but unhappy is still reachable; distinguish it from a dead tunnel.
         rep.add("second_brain:reachable", "warning", "HTTP %s" % e.code)
+        # A 503 is the DEGRADED case and carries the reason in its body -- which is precisely the
+        # payload worth reading. Bailing here would throw away the diagnosis with the error.
+        try:
+            body = e.read().decode()
+        except Exception:
+            body = None
     except Exception as e:
         rep.add("second_brain:reachable", "warning", "unreachable: %s" % str(e)[:120])
+        return
+    if body:
+        check_embedder(rep, body)
+
+
+def check_embedder(rep, body):
+    """
+    Watch the EMBEDDER, which is a second paid provider with its own balance and its own way to die.
+
+    2026-07-31 to 08-10: the OpenAI credit balance hit zero and nobody found out for NINE DAYS. Every
+    consumer handled it gracefully and silently -- sb_search degraded to lexical (correct, by design,
+    shipped 08-01) and /ingest/discord 500'd per message (a real bug, fixed 08-10). So live Discord
+    ingest stopped completely, the 406 rows that predated it aged out under the 7-day TTL, and
+    cross-channel recall was searching a corpus with ZERO Discord content in it. Raziel reported the
+    symptom as "it gets lost in the flow somewhere" and Drevan saying he did not know.
+
+    Every check in this file was GREEN the whole time, including second_brain:reachable -- the service
+    WAS reachable and healthy. It just could not embed. That is the same lesson as the DeepSeek 402
+    above and it needed a SEPARATE check, because it is a different provider with a different key:
+    the balance check added 08-07 watches DeepSeek and would never have seen this.
+
+    There is no usable OpenAI balance endpoint, so unlike DeepSeek this cannot warn BEFORE zero. The
+    signal is the embedder's own last outcome, classified from the provider's error code, plus the
+    depth and age of the queue it strands. Per [fail-open-hides-a-dead-mechanism]: assert the REASON,
+    never just count failures -- a quota wall and a rate-limit blip share an HTTP status and need
+    opposite responses (money now vs nothing at all).
+    """
+    try:
+        emb = (json.loads(body) or {}).get("embedder")
+    except Exception:
+        return
+    if not isinstance(emb, dict):
+        # An older Second Brain that predates the embedder block. Say so rather than reporting health.
+        rep.add("second_brain:embedder", "notice",
+                "/health has no embedder block -- embedder state UNKNOWN, not fine")
+        return
+
+    kind = emb.get("failure_kind")
+    fails = emb.get("consecutive_failures") or 0
+    last_err = (emb.get("last_error") or "")[:160]
+
+    if kind == "quota":
+        rep.add("second_brain:embedder", "red",
+                "EMBEDDER OUT OF CREDIT -- add funds. Semantic search is degraded to keyword-only and "
+                "live Discord ingest is queueing, so cross-channel recall goes stale until this is "
+                "fixed. %s" % last_err)
+    elif kind == "auth":
+        rep.add("second_brain:embedder", "red",
+                "embedder key rejected (auth) -- neither waiting nor money fixes this. %s" % last_err)
+    elif kind in ("rate_limit", "transient") and fails >= 3:
+        # One blip is weather. A sustained run of them is an outage wearing a blip's clothes.
+        rep.add("second_brain:embedder", "warning",
+                "embedder failing repeatedly (%s consecutive, kind=%s): %s" % (fails, kind, last_err))
+
+    # SECOND-ORDER ALARM: if the embedder recovers but this keeps climbing, the DRAIN is broken rather
+    # than the provider -- different problem, different fix, and invisible without its own signal.
+    queued = emb.get("pending_embed") or 0
+    age_h = emb.get("pending_embed_oldest_age_hours") or 0
+    if queued and (queued >= EMBED_QUEUE_WARN or age_h >= EMBED_QUEUE_AGE_WARN_H):
+        rep.add("second_brain:embed_queue", "warning",
+                "%s live messages queued unindexed, oldest %sh -- not lost, but not searchable either; "
+                "if the embedder is healthy the drain is stuck" % (queued, age_h))
+    pending_idx = emb.get("pending_index") or 0
+    if pending_idx >= EMBED_QUEUE_WARN:
+        rep.add("second_brain:pending_index", "warning",
+                "%s vault files durable but unindexed" % pending_idx)
 
 
 # ── output ─────────────────────────────────────────────────────────────────

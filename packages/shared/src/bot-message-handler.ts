@@ -1107,7 +1107,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     // Thalamus: fire Second Brain search concurrently with typing + floor jitter.
-    // Skip for short messages (< 20 chars) -- searches on "ok" or "lol" produce noise.
+    // Skip for very short messages -- a search on "ok" or "lol" produces noise.
+    //
+    // 2026-08-10: 20 -> 12, the read-side half of the same gate as MIN_HUMAN_CHARS in sb-live-ingest. The
+    // write side dropped these messages and the read side declined to search for them, so a short question
+    // ("did we watch it yet?", 20) got neither stored nor looked up -- two independent gates producing one
+    // symptom, which is the shape where fixing either alone leaves the bug alive. Recall mode now returns an
+    // honest empty rather than noise, so a low-value query costs a null instead of a wrong memory.
     // Continuity: recent prior user turns (current msg already appended, so excluded)
     // widen recall via dual-vector retrieval on the Halseth side.
     const recentContext = stmStore.get(message.channelId)
@@ -1116,7 +1122,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       .map(m => m.content)
       .slice(-3)
       .join("\n");
-    const sbSearchPromise = effectiveContent.length >= 20
+    const sbSearchPromise = effectiveContent.length >= 12
       ? librarian.searchForMessage(effectiveContent, recentContext).catch(() => null)
       : Promise.resolve(null);
 
