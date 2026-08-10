@@ -367,6 +367,13 @@ def check_embedder(rep, body):
     fails = emb.get("consecutive_failures") or 0
     last_err = (emb.get("last_error") or "")[:160]
 
+    # An OK line, deliberately, even though this file otherwise only speaks up about problems. Without it a
+    # healthy embedder and a check that never ran look identical in the output -- which is the exact confusion
+    # that let a nine-day outage pass as silence. Presence of this line is the proof the probe looked.
+    if kind is None:
+        rep.add("second_brain:embedder", "ok",
+                "embedding OK (last success %s)" % (emb.get("last_success_at") or "not since restart"))
+
     if kind == "quota":
         rep.add("second_brain:embedder", "red",
                 "EMBEDDER OUT OF CREDIT -- add funds. Semantic search is degraded to keyword-only and "
