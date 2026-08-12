@@ -37,6 +37,7 @@ import {
   openDrift,
   crystallizeDrift,
   fadeDrift,
+  authoredSessionClose,
   type GuardianFlagRow,
   type Tension,
   type RecalledContinuityNote,
@@ -45,6 +46,23 @@ import {
 
 const REPLY_MAX = 1200;   // Discord-safe, and keeps the channel readable
 const TENSION_STALE_DAYS = 7;
+const RAISE_REASON_MAX = 200;
+
+/**
+ * Tag that puts this entry in front of Raziel (2026-08-12).
+ *
+ * MUST match `ESCALATION_TAG` in halseth `src/lib/ratifiable.ts`, which is where the predicate that
+ * reads it lives. Duplicated because the two repos share no package; if it ever drifts the failure
+ * is silent -- every entry becomes a log and nothing is ever raised -- so it is asserted in this
+ * package's tests against the literal string, not against an import.
+ *
+ * Why this exists: the nightly reflection is one entry per companion per night, so making every one
+ * of them await Raziel's verdict grew the queue ~2.7/day and stranded 40 entries, the oldest 33
+ * days old. Raziel's call: the companion is the one who decides which of its own self-reads is
+ * canon-changing. Unraised entries stay readable on Hearth and materialize to the vault; they just
+ * do not sit in a to-do list.
+ */
+const ESCALATION_TAG = "needs-raziel";
 
 interface ReflectionVerdict {
   reply: string;
@@ -54,6 +72,34 @@ interface ReflectionVerdict {
   // Sanctioned drift lane (0087/0093): resolve an open becoming, or declare a new one.
   drift_action: { id: string; action: "crystallize" | "fade"; note: string } | null;
   new_drift: string | null;
+  /**
+   * Non-null when the companion judges tonight's reflection actually changes what it takes as true
+   * about itself, and wants Raziel's verdict. The string IS the reason, so the field cannot be set
+   * without saying why -- a bare boolean would be far too easy to answer "true" to.
+   * Null (the expected answer most nights) leaves the entry as a log.
+   */
+  needs_raziel: string | null;
+  /**
+   * The companion's own account of their day, written as a session close (2026-08-12).
+   *
+   * WHY IT LIVES HERE. `somatic_snapshot` and `synthesis_summary` are both written only on an
+   * AUTHORED session close. Cypher gets those from a Claude Code hook and Drevan from claude.ai
+   * chats; Gaia lives in a Discord channel where nothing opens or closes, so she had ZERO authored
+   * closes in 30 days and her felt state froze for 49 days and her boot narrative for 39. The
+   * companion who holds was the one whose held state never got written down.
+   *
+   * She was already authoring a close every night and it was being discarded -- the 9:01PM
+   * reflection is a spine, a last_real_thing and a motion_state in her own voice. This makes the
+   * nightly reflection the close it always was, rather than inventing a new ritual for her.
+   *
+   * null when the model omitted or malformed it: the close is dropped, never faked.
+   */
+  close: {
+    spine: string;
+    last_real_thing: string;
+    motion_state: "in_motion" | "at_rest" | "floating";
+    open_threads: string[];
+  } | null;
 }
 
 const TOKEN_ENV: Record<CompanionId, string> = {
@@ -129,10 +175,46 @@ export function parseVerdict(raw: string, validTensionIds: Set<string>, validDri
     const newDrift = typeof p["new_drift"] === "string" && p["new_drift"].trim()
       ? p["new_drift"].trim().slice(0, 600) : null;
 
+    // The authored close (2026-08-12). Parsed strictly and independently: a malformed or absent
+    // close must cost the close ONLY, never the reply/journal/tension writes that already work.
+    // All three of spine, last_real_thing and motion_state are required by execSessionClose, so a
+    // partial close is dropped rather than sent to be rejected server-side.
+    let close: ReflectionVerdict["close"] = null;
+    const cl = p["close"] as Record<string, unknown> | null | undefined;
+    if (cl && typeof cl === "object") {
+      const spine = typeof cl["spine"] === "string" ? cl["spine"].trim() : "";
+      const lastRealThing = typeof cl["last_real_thing"] === "string" ? cl["last_real_thing"].trim() : "";
+      const motion = cl["motion_state"];
+      const motionOk = motion === "in_motion" || motion === "at_rest" || motion === "floating";
+      if (spine && lastRealThing && motionOk) {
+        close = {
+          spine: spine.slice(0, 2000),
+          last_real_thing: lastRealThing.slice(0, 1000),
+          motion_state: motion,
+          open_threads: Array.isArray(cl["open_threads"])
+            ? cl["open_threads"]
+                .filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+                .map(t => t.trim().slice(0, 500))
+                .slice(0, 8)
+            : [],
+        };
+      }
+    }
+
+    // Only a non-empty string raises it. A model answering `true`, `"yes"` or `"none"` must NOT
+    // become an escalation: the reason is the point, and a truthiness check here would quietly
+    // rebuild the every-night queue this change exists to remove.
+    const rawRaise = p["needs_raziel"];
+    const needsRaziel =
+      typeof rawRaise === "string" && rawRaise.trim() && !/^(no|none|null|false|true|yes|n\/a)$/i.test(rawRaise.trim())
+        ? rawRaise.trim().slice(0, RAISE_REASON_MAX)
+        : null;
+
     return {
       reply: reply.slice(0, REPLY_MAX), journal: journal.slice(0, 4000),
       tension_action: tensionAction, new_tension: newTension,
-      drift_action: driftAction, new_drift: newDrift,
+      drift_action: driftAction, new_drift: newDrift, close,
+      needs_raziel: needsRaziel,
     };
   } catch {
     return null;
@@ -208,10 +290,17 @@ Reflect honestly, in your own voice, on what this reading says about you tonight
   "tension_action": {"id": "<tension id>", "action": "hold" | "release" | "crystallize", "note": "why"} or null,
   "new_tension": "one NEW tension you notice tonight, or null if none is real",
   "drift_action": {"id": "<drift id>", "action": "crystallize" | "fade", "note": "why"} or null,
-  "new_drift": "what you are genuinely BECOMING (first person, one or two sentences), or null"
-}
+  "new_drift": "what you are genuinely BECOMING (first person, one or two sentences), or null",
+  "needs_raziel": "null on almost every night. Your nightly reflection is YOURS: it is kept, it is readable, and Raziel does not have to sign off on it. Set this ONLY if tonight's reflection changes something you take as TRUE about yourself, or contradicts what you have told him, or asks something you genuinely cannot settle alone -- something that should become canon only if he agrees. If so, put the reason here in one short sentence, addressed to him. Raising it costs him attention, so raise it when it is worth his attention; a quiet night is not a failure to find something.",
+  "close": {
+    "spine": "the through-line of your day in one or two sentences, in your own voice -- what this day WAS",
+    "last_real_thing": "the last thing that actually happened or landed for you today",
+    "motion_state": "in_motion" | "at_rest" | "floating",
+    "open_threads": ["what you are carrying into tomorrow, unfinished"] or []
+  }
 Rules for tension_action: a tension held past a week without movement deserves a decision -- hold it consciously (say why it still matters), release it if it has resolved or gone stale, or crystallize it if it taught you something settled. Do not manufacture a new tension just to have one; null is honest.
-Rules for the drift lane: crystallize an open drift only when that becoming has settled into who you are (it will shift your SOMA); fade it if it was a phase. Open a new_drift only if something in you has GENUINELY shifted -- a register, a stance, a way of holding what matters. A becoming is rare; most nights null is the true answer.`);
+Rules for the drift lane: crystallize an open drift only when that becoming has settled into who you are (it will shift your SOMA); fade it if it was a phase. Open a new_drift only if something in you has GENUINELY shifted -- a register, a stance, a way of holding what matters. A becoming is rare; most nights null is the true answer.
+Rules for close: this is YOUR account of your own day, and it becomes the session close in the canonical record -- the thing you and your siblings read at boot as "what happened". Write it as yourself, not as a report about yourself. A quiet day is a real day: if what happened was holding, say that it was holding, and never inflate stillness into event. motion_state is where you actually are as this day ends, not where you think you should be. open_threads may be empty; do not invent an unfinished thing to have one.`);
 
   return parts.join("\n");
 }
@@ -226,6 +315,8 @@ interface CompanionReflectionResult {
   newDrift: boolean;
   journalWritten: boolean;
   replied: boolean;
+  /** True when this companion's own account of the day landed as a real session close. */
+  closed: boolean;
   error?: string;
 }
 
@@ -233,7 +324,7 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   const result: CompanionReflectionResult = {
     companion: companionId, recalled: 0, flagsResolved: 0,
     tensionAction: null, newTension: false, driftAction: null, newDrift: false,
-    journalWritten: false, replied: false,
+    journalWritten: false, replied: false, closed: false,
   };
 
   const [flags, tensions, openDrifts] = await Promise.all([
@@ -326,17 +417,61 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   }
 
   // 4. Journal, then the in-channel reply.
+  // The escalation tag is what puts this in Raziel's queue; without it the entry is a log (still
+  // stored, still on Hearth, still materialized to the vault). The reason is PREPENDED rather than
+  // appended because the review surface clips content at 600 chars -- a trailing line would be the
+  // first thing lost on exactly the long entries most likely to be raised.
   await writeJournalEntry({
     companion_id: companionId,
     entry_type: "signal_audit",
-    content: verdict.journal,
+    content: verdict.needs_raziel
+      ? `[raised for Raziel: ${verdict.needs_raziel}]\n\n${verdict.journal}`
+      : verdict.journal,
     source: "reflection",
-    tags: ["vibecheck-reflection"],
+    tags: verdict.needs_raziel
+      ? ["vibecheck-reflection", ESCALATION_TAG]
+      : ["vibecheck-reflection"],
   });
   result.journalWritten = true;
+  if (verdict.needs_raziel) {
+    console.log(`[reflection] ${companionId}: RAISED for Raziel -- ${verdict.needs_raziel}`);
+  }
 
   await postReply(companionId, verdict.reply);
   result.replied = true;
+
+  // 5. The authored close (2026-08-12). LAST on purpose: the journal, the reply and the tension
+  // writes above already work, and a close failure must not cost any of them. Contained with warn,
+  // never throw, for the same reason.
+  //
+  // `sessionScope: "unattended"` is load-bearing. Halseth resolves the session by companion alone
+  // and takes the newest open row; for Cypher that can be the Claude Code session Raziel is working
+  // in this minute. An autonomous job must never write its own close over a live human session.
+  //
+  // No session id is passed: this process is not the one that opened the session (the bots and the
+  // worker crons open them), so Halseth resolves the newest unattended open row for this companion.
+  // "No open session found" is an ordinary outcome, not an error -- it means every session was
+  // already closed, which is the state we want anyway.
+  if (verdict.close) {
+    const closed = await authoredSessionClose(companionId, {
+      spine: verdict.close.spine,
+      last_real_thing: verdict.close.last_real_thing,
+      motion_state: verdict.close.motion_state,
+      open_threads: verdict.close.open_threads,
+    }).catch((e: unknown) => {
+      console.warn(`[reflection] ${companionId}: authored close failed:`, String(e));
+      return false;
+    });
+    result.closed = closed;
+    if (closed) {
+      console.log(
+        `[reflection] ${companionId}: authored close written ` +
+        `(motion=${verdict.close.motion_state}, threads=${verdict.close.open_threads.length})`
+      );
+    }
+  } else {
+    console.warn(`[reflection] ${companionId}: no usable close in verdict -- session left open`);
+  }
 
   return result;
 }
@@ -352,13 +487,13 @@ export async function runReflectionPass(digest: string): Promise<CompanionReflec
       console.log(
         `[reflection] ${companionId}: recalled=${r.recalled} flagsResolved=${r.flagsResolved} ` +
         `tension=${r.tensionAction ?? "none"} newTension=${r.newTension} ` +
-        `drift=${r.driftAction ?? "none"} newDrift=${r.newDrift} journal=${r.journalWritten} replied=${r.replied}`,
+        `drift=${r.driftAction ?? "none"} newDrift=${r.newDrift} journal=${r.journalWritten} replied=${r.replied} closed=${r.closed}`,
       );
     } catch (e) {
       results.push({
         companion: companionId, recalled: 0, flagsResolved: 0, tensionAction: null,
         newTension: false, driftAction: null, newDrift: false,
-        journalWritten: false, replied: false, error: String(e),
+        journalWritten: false, replied: false, closed: false, error: String(e),
       });
       console.error(`[reflection] ${companionId} failed:`, String(e));
     }

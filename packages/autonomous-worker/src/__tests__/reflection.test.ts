@@ -112,3 +112,65 @@ describe("ageDays", () => {
     expect(ageDays(future)).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// needs_raziel: the companion raises its own entry (2026-08-12)
+//
+// The nightly reflection is a log by default. Escalation is opt-in and must carry a REASON, because
+// the failure mode is silent in both directions: too eager and the every-night queue this change
+// removed comes straight back; too strict and a companion can never reach Raziel at all.
+// ---------------------------------------------------------------------------
+
+// Must equal ESCALATION_TAG in halseth src/lib/ratifiable.ts, which owns the predicate that reads
+// it. Asserted against the LITERAL on purpose -- the two repos share no package, and if the strings
+// drift the failure is silent (nothing is ever raised).
+const ESCALATION_TAG = "needs-raziel";
+
+function verdictJson(extra: Record<string, unknown> = {}) {
+  return JSON.stringify({
+    reply: "a short reply",
+    journal: "a fuller reflection",
+    tension_action: null,
+    new_tension: null,
+    drift_action: null,
+    new_drift: null,
+    ...extra,
+  });
+}
+
+describe("parseVerdict needs_raziel", () => {
+  it("is null on an ordinary night, so the entry stays a log", () => {
+    expect(parseVerdict(verdictJson(), new Set())!.needs_raziel).toBeNull();
+    expect(parseVerdict(verdictJson({ needs_raziel: null }), new Set())!.needs_raziel).toBeNull();
+  });
+
+  it("carries the reason when the companion raises it", () => {
+    const v = parseVerdict(
+      verdictJson({ needs_raziel: "This contradicts what I told you in April about auditing." }),
+      new Set(),
+    )!;
+    expect(v.needs_raziel).toBe("This contradicts what I told you in April about auditing.");
+  });
+
+  it("refuses filler that is not a reason", () => {
+    // A model answering the field instead of using it must not cost Raziel his queue back.
+    for (const junk of ["true", "yes", "no", "none", "null", "false", "n/a", "  ", ""]) {
+      expect(parseVerdict(verdictJson({ needs_raziel: junk }), new Set())!.needs_raziel).toBeNull();
+    }
+  });
+
+  it("ignores a bare boolean -- the reason is the point", () => {
+    expect(parseVerdict(verdictJson({ needs_raziel: true }), new Set())!.needs_raziel).toBeNull();
+    expect(parseVerdict(verdictJson({ needs_raziel: 1 }), new Set())!.needs_raziel).toBeNull();
+  });
+
+  it("caps the reason so it cannot flood the entry it annotates", () => {
+    const v = parseVerdict(verdictJson({ needs_raziel: "x".repeat(500) }), new Set())!;
+    expect(v.needs_raziel!.length).toBe(200);
+  });
+
+  it("keeps the escalation tag in step with halseth's predicate", () => {
+    // Guards the cross-repo constant: halseth matches tags_json LIKE '%"needs-raziel"%'.
+    expect(ESCALATION_TAG).toBe("needs-raziel");
+  });
+});
