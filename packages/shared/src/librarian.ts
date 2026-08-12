@@ -166,16 +166,27 @@ export class LibrarianClient {
   }
 
   async sessionClose(params: {
-    sessionId: string;
+    /** Omit to let Halseth resolve this companion's newest open session. */
+    sessionId?: string;
     spine: string;
     lastRealThing: string;
     motionState: "in_motion" | "at_rest" | "floating";
+    openThreads?: string[];
+    /**
+     * `unattended` confines auto-resolution to sessions with no `surface` -- cron- and boot-opened
+     * rows, never a loom a human is in. REQUIRED for any autonomous caller: resolution matches on
+     * companion alone, so without this the nightly close can land on the Claude Code session Raziel
+     * is working in.
+     */
+    sessionScope?: "unattended";
   }) {
     // Serialize with snake_case keys to match execSessionClose field names.
     // emotion_prompted: true bypasses the soft emotion prompt -- bot shutdowns
     // have no SOMA state to provide, and the prompt would silently block the close.
     return this.askWrite("session close", "close session", JSON.stringify({
-      session_id: params.sessionId,
+      ...(params.sessionId ? { session_id: params.sessionId } : {}),
+      ...(params.sessionScope ? { session_scope: params.sessionScope } : {}),
+      ...(params.openThreads?.length ? { open_threads: params.openThreads } : {}),
       spine: params.spine,
       last_real_thing: params.lastRealThing,
       motion_state: params.motionState,

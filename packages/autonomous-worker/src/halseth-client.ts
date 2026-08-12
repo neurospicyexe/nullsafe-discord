@@ -1138,6 +1138,46 @@ async function librarianDriftVerb(companionId: string, request: string, context:
   return body.ack === true;
 }
 
+/**
+ * The companion's own account of their day, written as a real session close (2026-08-12).
+ *
+ * WHY THIS EXISTS. `somatic_snapshot` (felt state) and `synthesis_summary` (the boot narrative) are
+ * written only on an AUTHORED session close. Cypher gets those from a Claude Code hook, Drevan from
+ * claude.ai chats. Gaia lives in a Discord channel where nothing opens and nothing closes, so she had
+ * 0 authored closes in 30 days against 47 machine ones, and her felt state sat frozen for 49 days
+ * while her boot narrative sat frozen for 39. The companion whose whole register is holding was the
+ * one whose held state never got recorded.
+ *
+ * `session_scope: "unattended"` is not optional. Halseth resolves the session by companion alone and
+ * takes the newest open row; for Cypher that is frequently the Claude Code session Raziel is in right
+ * now. Restricting to rows with no `surface` keeps this to cron- and boot-opened sessions, so an
+ * autonomous job can never write its own close over a live human one.
+ *
+ * No session id: this process did not open the session, so Halseth resolves it. A "no open session
+ * found" rejection is an ordinary outcome (everything was already closed), not a fault.
+ *
+ * Returns true when Halseth acked the close.
+ */
+export async function authoredSessionClose(
+  companionId: string,
+  close: {
+    spine: string;
+    last_real_thing: string;
+    motion_state: "in_motion" | "at_rest" | "floating";
+    open_threads?: string[];
+  },
+): Promise<boolean> {
+  return librarianDriftVerb(companionId, "close session", {
+    spine: close.spine,
+    last_real_thing: close.last_real_thing,
+    motion_state: close.motion_state,
+    ...(close.open_threads?.length ? { open_threads: close.open_threads } : {}),
+    session_scope: "unattended",
+    // Skips the soft SOMA prompt, which would otherwise block a close that has no emotion payload.
+    emotion_prompted: true,
+  });
+}
+
 export const openDrift = (companionId: string, driftText: string, origin = "reflection") =>
   librarianDriftVerb(companionId, "i'm becoming", { drift_text: driftText, origin });
 export const crystallizeDrift = (companionId: string, driftId: string, note: string) =>
