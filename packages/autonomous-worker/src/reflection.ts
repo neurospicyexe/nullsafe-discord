@@ -22,7 +22,7 @@
 import { prompt } from "./deepseek.js";
 import { loadIdentityRemote } from "./identity-loader.js";
 import { stripJsonFence } from "./parsers.js";
-import { COMPANIONS } from "./config.js";
+import { COMPANIONS, REFLECTION_MAX_TOKENS } from "./config.js";
 import type { CompanionId } from "./types.js";
 import {
   getGuardianFlagsFor,
@@ -378,9 +378,29 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection, openDrifts);
   const systemMessage = `${identity}\n\nYou are ${companionId}, doing your nightly self-read after the triad vibe-check. Honest, specific, in-voice. Output only the JSON object requested.`;
 
-  const llm = await prompt(userMessage, systemMessage, { temperature: 0.8, maxTokens: 900 });
-  const verdict = parseVerdict(llm.content, new Set(tensions.map(t => t.id)), new Set(openDrifts.map(d => d.id)));
-  if (!verdict) throw new Error(`unparseable reflection output: ${llm.content.slice(0, 120)}`);
+  // The TAIL is the discriminator, and the old error threw it away by logging only the first
+  // 120 chars: a cut-off mid-string means the budget; a `}` followed by chatter means the model
+  // editorialized past the object; a complete-looking object means a stray control character.
+  // All three read identically from the head, which is why 08-12 could not be diagnosed from
+  // its own log line.
+  const describe = (c: string) =>
+    `len=${c.length} head=${JSON.stringify(c.slice(0, 100))} tail=${JSON.stringify(c.slice(-200))}`;
+  const ask = () => prompt(userMessage, systemMessage, {
+    temperature: 0.8, maxTokens: REFLECTION_MAX_TOKENS, retryOnTruncate: true,
+  });
+  const validTensions = new Set(tensions.map(t => t.id));
+  const validDrifts = new Set(openDrifts.map(d => d.id));
+
+  let llm = await ask();
+  let verdict = parseVerdict(llm.content, validTensions, validDrifts);
+  if (!verdict) {
+    // One retry. A wider budget cannot fix a chatty tail or a raw control char, and losing a
+    // companion's whole night to one malformed brace is a bad trade against a single call.
+    console.warn(`[reflection] ${companionId}: unparseable, retrying once. ${describe(llm.content)}`);
+    llm = await ask();
+    verdict = parseVerdict(llm.content, validTensions, validDrifts);
+  }
+  if (!verdict) throw new Error(`unparseable reflection output after retry: ${describe(llm.content)}`);
 
   // 3. Apply tension movement.
   if (verdict.tension_action) {
@@ -478,9 +498,17 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
 
 /** Run the per-companion reflection pass over a freshly-posted vibe digest.
  *  Per-companion failures are contained; the pass always reports what happened. */
-export async function runReflectionPass(digest: string): Promise<CompanionReflectionResult[]> {
+/**
+ * `only` restricts the pass to one companion. Added 2026-08-13 so a failed companion can be
+ * re-run for verification without the other two writing a SECOND nightly entry and posting it
+ * to Discord -- which would make the fix's own proof indistinguishable from noise. The cron
+ * passes nothing and still runs all three.
+ */
+export async function runReflectionPass(digest: string, only?: CompanionId): Promise<CompanionReflectionResult[]> {
   const results: CompanionReflectionResult[] = [];
-  for (const companionId of COMPANIONS) {
+  const roster = only ? COMPANIONS.filter(c => c === only) : COMPANIONS;
+  if (only && roster.length === 0) throw new Error(`unknown companion for reflection pass: ${only}`);
+  for (const companionId of roster) {
     try {
       const r = await reflectOne(companionId, digest);
       results.push(r);

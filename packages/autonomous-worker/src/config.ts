@@ -37,6 +37,21 @@ function envInt(name: string, fallback: number): number {
 }
 export const EXPLORE_MAX_TOKENS   = envInt("EXPLORE_MAX_TOKENS", 1400);
 export const REFLECT_MAX_TOKENS   = envInt("REFLECT_MAX_TOKENS", 1600);
+/**
+ * The NIGHTLY vibe-check self-read (reflection.ts). Distinct from REFLECT_MAX_TOKENS above,
+ * which belongs to the `phases/reflect.ts` pipeline -- different call, different shape.
+ *
+ * It was hardcoded at 900 and was the ONLY thinking call in the worker without a knob, which
+ * is how it stayed the smallest budget while its output shape kept growing. On 2026-08-12 two
+ * fields landed the same night (the authored `close` object and `needs_raziel`) and cypher --
+ * the wordiest of the three -- stopped parsing, after 20 consecutive clean nights. This is one
+ * JSON object carrying reply + journal + tension + drift + a close with open_threads; a cut-off
+ * costs the WHOLE night, not a shortened sentence, so the ceiling is set with real room.
+ *
+ * Default raised here rather than set in .env on purpose: ecosystem.config.js's env block is
+ * an allowlist, so an .env-only knob would silently apply to nothing.
+ */
+export const REFLECTION_MAX_TOKENS = envInt("REFLECTION_MAX_TOKENS", 1800);
 export const SYNTHESIZE_MAX_TOKENS = envInt("SYNTHESIZE_MAX_TOKENS", 2000);
 
 /**

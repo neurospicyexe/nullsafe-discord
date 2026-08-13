@@ -66,7 +66,7 @@ if (reflectIdx !== -1) {
   console.log("[autonomous-worker] reflection mode");
   import("./halseth-client.js")
     .then(({ postVibeCheck }) => postVibeCheck())
-    .then(res => import("./reflection.js").then(({ runReflectionPass }) => runReflectionPass(res.text)))
+    .then(res => import("./reflection.js").then(({ runReflectionPass }) => runReflectionPass(res.text, companionArg)))
     .then(() => { console.log("[autonomous-worker] reflection pass complete"); process.exit(0); })
     .catch(e => { console.error("[autonomous-worker] reflection pass failed:", e); process.exit(1); });
 } else if (vibecheckIdx !== -1) {

@@ -15,6 +15,14 @@ export interface Message {
 interface ChatOptions {
   temperature?: number;
   maxTokens?: number;
+  /**
+   * Retry once at double the CONTENT budget if the answer comes back cut off.
+   *
+   * Opt-in, not default: for a prose caller (a Discord reply) a truncated answer is degraded
+   * but usable, and a retry would just truncate again at the same ceiling for double the cost.
+   * Worth it only where the output is PARSED, because there a cut-off is a total loss.
+   */
+  retryOnTruncate?: boolean;
 }
 
 interface ChatResult {
@@ -29,7 +37,7 @@ interface ChatResult {
 export async function chat(messages: Message[], opts: ChatOptions = {}): Promise<ChatResult> {
   if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY is not set");
 
-  const contentTokens = opts.maxTokens ?? 1000;
+  let contentTokens = opts.maxTokens ?? 1000;
 
   // One attempt at the caller's content budget + reasoning headroom, then ONE retry at double
   // the headroom if the thought still ate the whole budget. The retry is the durable half of
@@ -72,7 +80,30 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
     const reasoningTokens = data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
     lastTokens += data.usage?.total_tokens ?? 0;
 
-    if (content.trim()) return { content, tokensUsed: lastTokens };
+    if (content.trim()) {
+      // A non-empty answer can still be a CUT-OFF answer. Until 2026-08-13 this returned here
+      // without ever reading finish_reason, so at every call site in the worker a truncated
+      // response was indistinguishable from a complete one -- it surfaced only downstream, as
+      // a parse failure with no cause attached to it (cypher's nightly reflection, 08-12).
+      // The warning is unconditional even when we do not retry: knowing the ceiling was hit is
+      // what turns "unparseable, flaky, who knows" into a one-line diagnosis.
+      if (finish === "length") {
+        const willRetry = opts.retryOnTruncate === true && attempt === 0;
+        console.warn(
+          `[deepseek] TRUNCATED CONTENT: finish_reason="length" after ${content.length} chars ` +
+          `(model=${DEEPSEEK_MODEL}, content budget ${contentTokens}, reasoning ${reasoningTokens}). ` +
+          (willRetry
+            ? `Retrying once at content budget ${contentTokens * 2}.`
+            : `Returning as-is -- if the caller PARSES this, expect a parse failure.`),
+        );
+        if (willRetry) {
+          contentTokens *= 2;
+          attemptBudget = contentBudget(contentTokens);
+          continue;
+        }
+      }
+      return { content, tokensUsed: lastTokens };
+    }
 
     // Empty content. Only "length" is retryable -- an empty "stop" is the model genuinely
     // choosing to say nothing, and retrying that just burns tokens to get the same answer.
