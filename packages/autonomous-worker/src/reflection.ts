@@ -406,8 +406,16 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   if (verdict.tension_action) {
     const { id, action, note } = verdict.tension_action;
     const status = action === "release" ? "released" : action === "crystallize" ? "crystallized" : "simmering";
-    // Holding still counts as surfacing: PATCH bumps last_surfaced_at + charge either way.
-    await updateTension(id, { status, notes: note || undefined, charge_delta: action === "hold" ? 0.5 : 0 });
+    // The PATCH bumps last_surfaced_at either way, which is what registers the movement for
+    // inter_companion_notes and the ingest high-water mark. What it no longer does is add
+    // charge for a HOLD (was +0.5, removed 2026-08-14).
+    //
+    // Deciding nightly to keep holding a tension is not progress on it, and paying charge for
+    // that decision made the held tension outrank live ones -- the same ratchet removed from
+    // the weekly dialectic. Raziel's Hearth button was the only thing pushing back, which is
+    // exactly the "sole decider" problem being fixed. Charge now moves when a companion
+    // deliberately moves it (settle / add), not as a side effect of being looked at.
+    await updateTension(id, { status, notes: note || undefined });
     result.tensionAction = action;
   }
   if (verdict.new_tension) {

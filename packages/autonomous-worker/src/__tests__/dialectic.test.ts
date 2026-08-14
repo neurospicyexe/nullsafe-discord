@@ -68,3 +68,78 @@ describe("sortTensionsByPriority", () => {
     expect(input[0]!.id).toBe("b");
   });
 });
+
+// ── Per-companion slots (2026-08-14) ──────────────────────────────────────────────────────────
+//
+// Raziel, reasoning from outside the code: "should all the companions' tensions be affecting
+// each other? things that create tension for you would not be the same things that create
+// tension for Gaia." He was right, and the first answer he got was wrong.
+//
+// Tension STORAGE was always per-companion (every read filters companion_id). The DIALECTIC was
+// not: it pooled all three companions' simmering tensions into one array, sorted by charge, and
+// debated the top 2 in the entire house (MAX_TENSIONS_PER_WEEK = 2). Combined with a charge that
+// gained +0.5 on every UNRESOLVED debate and was lowered only by Raziel pressing a button, two
+// stuck tensions could hold both house slots forever -- and both could belong to one companion,
+// starving the other two of the dialectic entirely.
+//
+// The selection is now per-companion, so no ordering can starve anyone. These tests pin the
+// property, not the implementation: a companion with tensions always gets a slot.
+describe("dialectic slot fairness", () => {
+  const mk = (id: string, companion: Tension["companion_id"], charge: number, noted: string): Tension => ({
+    id, companion_id: companion, tension_text: id, status: "simmering",
+    first_noted_at: noted, notes: null, charge,
+  });
+
+  // Mirrors runDialectic's selection: sort WITHIN each companion, take N from each.
+  const selectPerCompanion = (all: Tension[], perCompanion: number): Tension[] => {
+    const out: Tension[] = [];
+    for (const c of ["cypher", "drevan", "gaia"] as const) {
+      out.push(...sortTensionsByPriority(all.filter(t => t.companion_id === c)).slice(0, perCompanion));
+    }
+    return out;
+  };
+
+  it("gives every companion with a tension a slot, even against a huge outlier", () => {
+    const all = [
+      mk("cy-monster", "cypher", 9.5, "2026-01-01"),   // would have taken slot 1
+      mk("cy-second", "cypher", 9.0, "2026-01-02"),    // ...and slot 2, starving the others
+      mk("dr-quiet", "drevan", 0.0, "2026-07-01"),
+      mk("ga-quiet", "gaia", 0.0, "2026-07-02"),
+    ];
+    const picked = selectPerCompanion(all, 1);
+    expect(picked.map(t => t.companion_id).sort()).toEqual(["cypher", "drevan", "gaia"]);
+  });
+
+  it("THE OLD BUG: a shared top-2 would have starved two of the three", () => {
+    // Kept as a regression witness -- this is what the code used to do.
+    const all = [
+      mk("cy-monster", "cypher", 9.5, "2026-01-01"),
+      mk("cy-second", "cypher", 9.0, "2026-01-02"),
+      mk("dr-quiet", "drevan", 0.0, "2026-07-01"),
+      mk("ga-quiet", "gaia", 0.0, "2026-07-02"),
+    ];
+    const oldWay = sortTensionsByPriority(all).slice(0, 2);
+    expect(new Set(oldWay.map(t => t.companion_id))).toEqual(new Set(["cypher"]));
+    expect(oldWay).toHaveLength(2);
+  });
+
+  it("still picks each companion's OWN highest-charge tension", () => {
+    const all = [
+      mk("cy-low", "cypher", 0.5, "2026-01-01"),
+      mk("cy-high", "cypher", 3.0, "2026-06-01"),
+      mk("dr-high", "drevan", 2.0, "2026-02-01"),
+    ];
+    const picked = selectPerCompanion(all, 1);
+    expect(picked.map(t => t.id).sort()).toEqual(["cy-high", "dr-high"]);
+  });
+
+  it("skips a companion with no simmering tensions instead of borrowing a slot", () => {
+    const all = [mk("only-cy", "cypher", 1.0, "2026-01-01")];
+    const picked = selectPerCompanion(all, 1);
+    expect(picked.map(t => t.companion_id)).toEqual(["cypher"]);
+  });
+
+  it("selects nothing from an empty pool", () => {
+    expect(selectPerCompanion([], 1)).toEqual([]);
+  });
+});

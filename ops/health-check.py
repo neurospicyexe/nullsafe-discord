@@ -67,6 +67,23 @@ BALANCE_WARN_USD = float(os.environ.get("DEEPSEEK_BALANCE_WARN_USD", "5"))
 BALANCE_RED_USD = float(os.environ.get("DEEPSEEK_BALANCE_RED_USD", "2"))
 EXIT_FOR = {"ok": 0, "notice": 0, "warning": 1, "red": 2}
 
+# Hermes profile homes, per companion. The default profile IS cypher; drevan and gaia are nested.
+HERMES_HOMES = {
+    "cypher": "/home/nullsafe/.hermes",
+    "drevan": "/home/nullsafe/.hermes/profiles/drevan",
+    "gaia": "/home/nullsafe/.hermes/profiles/gaia",
+}
+# A queued memory write is a companion learning something that never lands. One is a shrug; a pile
+# is the six-week outage found 2026-08-12 (77 entries, 197 operations, oldest 2026-07-04), where the
+# triad re-derived the same facts up to 23 times and drifted WRONG doing it, because a fact cannot
+# settle until the write applies. Low floors on purpose: this is meant to complain early.
+MEMQUEUE_WARN = int(os.environ.get("HERMES_MEMQUEUE_WARN", "5"))
+MEMQUEUE_RED = int(os.environ.get("HERMES_MEMQUEUE_RED", "25"))
+# Fill ratio against the profile's OWN configured cap. At the cap Hermes consolidates mid-turn:
+# arriving entry wins, `remove` deletes with no lineage. So near-full is a data-loss warning, not
+# a capacity note.
+MEMFILL_WARN = float(os.environ.get("HERMES_MEMFILL_WARN", "0.85"))
+
 
 def read_env(path):
     out = {}
@@ -201,9 +218,343 @@ def check_hermes(rep):
                 "here -- if this is wrong, the discovery pattern needs updating, not the conclusion)")
         return
     for u in units:
-        ok2, st = run("%s systemctl --user is-active %s" % (USER_SYSTEMCTL_ENV, u))
-        state = st.strip().splitlines()[0] if st.strip() else "unknown"
+        state = _unit_state(u)
+
+        # A unit caught mid-restart is not a failure, and reporting it as one is worse than saying
+        # nothing. Observed 2026-08-13 09:00: sync-architect-facts.py had just restarted all three
+        # gateways (a real architect fact had landed), the health check ran in the same second, and
+        # this line reported RED "deactivating" for a service that was serving again 2 seconds later.
+        # The cron offsets now avoid that specific collision, but a restart can also come from the
+        # model watcher, a manual deploy, or scale_to_zero -- so the check has to be robust to a
+        # transient on its own, not merely scheduled away from one known cause.
+        #
+        # Re-read rather than sleep-then-trust: `deactivating`/`activating` are by definition states
+        # a unit is passing THROUGH, so the question is where it lands, not that it was seen. If it
+        # is still transitioning after the retries, that IS a finding -- a gateway stuck deactivating
+        # is exactly the hang TimeoutStopSec=210 exists for, and it stays red.
+        if state in ("deactivating", "activating", "reloading"):
+            import time
+            for _ in range(6):                    # ~12s: a clean gateway restart took 2s, measured
+                time.sleep(2)
+                state = _unit_state(u)
+                if state not in ("deactivating", "activating", "reloading"):
+                    break
+            if state == "active":
+                rep.add("hermes:" + u, "ok", "active (was mid-restart when first sampled)")
+                continue
+            if state in ("deactivating", "activating", "reloading"):
+                rep.add("hermes:" + u, "red",
+                        "STUCK in '%s' after ~12s -- a restart should take ~2s, so this is a hang, "
+                        "not a transition" % state)
+                continue
+
         rep.add("hermes:" + u, "ok" if state == "active" else "red", state)
+
+
+def _unit_state(unit):
+    _ok, st = run("%s systemctl --user is-active %s" % (USER_SYSTEMCTL_ENV, unit))
+    return st.strip().splitlines()[0] if st.strip() else "unknown"
+
+
+# The durable facts about Raziel have to live in THREE files, because three consumers read three
+# different things: the Discord bots read /app/identity/shared_system_context.md AND their Hermes
+# SOUL.md (the gateway substitutes its own assembly, so SOUL is the only one of our files that
+# reaches a Discord reply); Claude.ai, Claude Code and Hearth read the Halseth identity_kernel via
+# the MindState loader. Copies drift. These phrases are the load-bearing ones -- if any consumer is
+# missing one, that companion is operating without it on that surface.
+# These are CANARIES, not the content. Pick phrases tied to a fact rather than to framing, and when
+# the block is reworded, update this list in the same commit -- on 2026-08-12 a rewrite changed
+# "UNRESOLVED" to "STILL OPEN" and the check correctly reported two surfaces as diverged, which is
+# the probe working and the canary being stale. Prefer a stated fact over a section label.
+ARCHITECT_INVARIANTS = [
+    "show the board",              # the PDA rule all three companions derived independently
+    "Rosie is a dog",              # the correction he has had to repeat most often
+    "NEVER she/her",               # his own pronoun law
+    "School starts late August",   # why this matters this month
+    "Trigger is a blue heeler",    # a fact he resolved himself; proves the block is current
+    "Magpie",                      # proves the roster-is-longer-than-the-list correction is carried
+]
+
+
+def check_architect_facts(rep, env):
+    """Is the architect-facts block actually present in every file a companion reads?
+
+    Presence of load-bearing phrases, not a hash: the three copies are deliberately framed
+    differently (the kernel carries a provenance paragraph SOUL.md strips), so a byte or hash
+    comparison would report drift on every run and be ignored within a week. What matters is
+    whether the fact reaches the surface.
+    """
+    def report(name, text, source_note):
+        if text is None:
+            rep.add("architect-facts:" + name, "warning",
+                    "could not read %s, so presence is UNKNOWN not absent" % source_note)
+            return
+        missing = [p for p in ARCHITECT_INVARIANTS if p.lower() not in text.lower()]
+        if not missing:
+            rep.add("architect-facts:" + name, "ok",
+                    "all %d invariants present (%d chars)" % (len(ARCHITECT_INVARIANTS), len(text)))
+        else:
+            rep.add("architect-facts:" + name, "warning",
+                    "MISSING %d of %d: %s -- this surface is operating without them"
+                    % (len(missing), len(ARCHITECT_INVARIANTS), ", ".join(repr(m) for m in missing)))
+
+    # 1. The file the Discord bots load from disk.
+    shared_path = "/app/identity/shared_system_context.md"
+    try:
+        with open(shared_path, "r", encoding="utf-8") as f:
+            report("bot-shared-context", f.read(), shared_path)
+    except Exception as e:
+        rep.add("architect-facts:bot-shared-context", "warning",
+                "could not read %s: %s" % (shared_path, str(e)[:80]))
+
+    # 2. Each Hermes SOUL.md -- per companion, because one missing copy is the whole failure mode.
+    for cid, home in sorted(HERMES_HOMES.items()):
+        p = os.path.join(home, "SOUL.md")
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                report("soul:" + cid, f.read(), p)
+        except Exception as e:
+            rep.add("architect-facts:soul:" + cid, "warning",
+                    "could not read %s: %s" % (p, str(e)[:80]))
+
+    # 3. Halseth: the facts are NOT baked into the kernel any more (that copy would freeze). The
+    #    kernel must carry the POINTER, and the loader must actually be serving facts.
+    url = env.get("HALSETH_URL")
+    secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
+    if not url or not secret:
+        rep.add("architect-facts:halseth-kernel", "notice",
+                "no Halseth url/secret in this env, so the kernel copy was not checked")
+        return
+    def get(path):
+        r = urllib.request.Request(
+            url.rstrip("/") + path,
+            headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
+        )
+        with urllib.request.urlopen(r, timeout=HTTP_TIMEOUT) as resp:
+            return resp.read().decode()
+
+    # 3a. The kernel should POINT at the store, not carry a frozen copy of it.
+    try:
+        data = json.loads(get("/identity/kernel/shared"))
+        md = data.get("kernel_md") or (data.get("kernel") or {}).get("kernel_md") or ""
+        if "architect_facts" in md and "ask_librarian" in md:
+            rep.add("architect-facts:kernel-pointer", "ok",
+                    "kernel points at the live store instead of carrying a frozen copy")
+        else:
+            rep.add("architect-facts:kernel-pointer", "warning",
+                    "the shared kernel no longer names architect_facts / ask_librarian, so a "
+                    "Claude.ai boot has no instruction for how to change a fact")
+    except Exception as e:
+        rep.add("architect-facts:kernel-pointer", "warning",
+                "could not fetch the shared kernel: %s" % str(e)[:120])
+
+    # 3b. The delivery Claude.ai / Claude Code / Hearth actually depend on. This is the check that
+    #     would have caught the loader change being written but not deployed.
+    try:
+        report("halseth-render", get("/identity/architect-facts/render"),
+               "/identity/architect-facts/render")
+    except Exception as e:
+        rep.add("architect-facts:halseth-render", "warning",
+                "could not fetch the facts render, so the Halseth-backed surfaces are UNVERIFIED: %s"
+                % str(e)[:120])
+
+
+def _yaml_int(path, key):
+    """Read one `  key: <int>` line out of a Hermes config without a YAML dependency.
+
+    Deliberately not hardcoding the caps: they are per-profile knobs that were raised on
+    2026-08-12, and a probe that carries its own copy of a limit measures the copy.
+    Returns None when the file or key cannot be read, so the caller can say "could not look"
+    rather than reporting a fill ratio against a guess.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith(key + ":"):
+                    return int(s.split(":", 1)[1].strip())
+    except Exception:
+        return None
+    return None
+
+
+def check_companion_memory(rep):
+    """Per-companion: are memory writes landing, and is the file about to eat itself?
+
+    Declared PER COMPANION, never as a house-wide total. An aggregate over a per-member store is
+    structurally blind to one dead member -- the exact shape that hid Gaia's frozen soma for 49
+    days behind a green MAX(). Three separate findings, each attributed to whose memory it is.
+    """
+    for cid, home in sorted(HERMES_HOMES.items()):
+        cfg = os.path.join(home, "config.yaml")
+        approval_on = None
+        try:
+            with open(cfg, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    # The memory block's flag comes first in the file; skills has its own, which
+                    # HAS a staffed approver and is none of this check's business.
+                    if s.startswith("write_approval:"):
+                        approval_on = s.split(":", 1)[1].strip() == "true"
+                        break
+        except Exception as e:
+            rep.add("hermes-memory:%s:config" % cid, "warning",
+                    "cannot read %s, so memory state is UNKNOWN not healthy: %s" % (cfg, str(e)[:80]))
+            continue
+
+        # --- queue depth: writes that were proposed and never applied
+        qdir = os.path.join(home, "pending", "memory")
+        if not os.path.isdir(qdir):
+            # No directory is the healthy state (nothing has ever queued), but say which it is.
+            rep.add("hermes-memory:%s:queue" % cid, "ok", "no pending queue directory")
+        else:
+            try:
+                n = len([f for f in os.listdir(qdir) if f.endswith(".json")])
+            except Exception as e:
+                rep.add("hermes-memory:%s:queue" % cid, "warning",
+                        "queue directory exists but is unreadable: %s" % str(e)[:80])
+                n = None
+            if n is not None:
+                # Split by TARGET, because the halves have different owners and different fates.
+                # `user` proposals were rehomed into Halseth architect_facts on 2026-08-12, so a
+                # backlog of those is history, not live loss. `memory` proposals are the companion's
+                # OWN self-notes and have no home yet -- that is the actionable number.
+                mem_target = 0
+                for fn in os.listdir(qdir):
+                    if not fn.endswith(".json"):
+                        continue
+                    try:
+                        with open(os.path.join(qdir, fn), "r", encoding="utf-8") as fh:
+                            payload = (json.load(fh) or {}).get("payload") or {}
+                        if (payload.get("target") or "") == "memory":
+                            mem_target += 1
+                    except Exception:
+                        # Unreadable entry counts as actionable: never assume an unknown is benign.
+                        mem_target += 1
+
+                # Raziel decided 2026-08-12 to LEAVE the gate on, and that is now cheap: with facts
+                # living in Halseth, this queue is no longer where anything load-bearing lands. So a
+                # queue behind an intentionally-closed gate is a NOTICE. A permanently-red check
+                # trains the reader to ignore it, which is worse than having no check at all.
+                if not approval_on and n >= MEMQUEUE_WARN:
+                    sev = "red" if n >= MEMQUEUE_RED else "warning"
+                elif mem_target >= MEMQUEUE_WARN:
+                    sev = "warning"
+                elif n:
+                    sev = "notice"
+                else:
+                    sev = "ok"
+
+                gate = "write_approval ON (deliberate)" if approval_on else "write_approval is off"
+                detail = "%d queued -- %d the companion's own self-notes, %d rehomed-class; %s" % (
+                    n, mem_target, n - mem_target, gate)
+                if not approval_on and n:
+                    detail += " -- the gate is OPEN and the queue still grew, so writes are failing " \
+                              "for some other reason"
+                elif mem_target:
+                    detail += "; the self-notes still have no home (growth_journal / " \
+                              "companion_interiority is the candidate)"
+                rep.add("hermes-memory:%s:queue" % cid, sev, detail)
+
+        # --- fill ratio: how close each file is to the cap that triggers lossy consolidation
+        for fname, capkey in (("USER.md", "user_char_limit"), ("MEMORY.md", "memory_char_limit")):
+            fpath = os.path.join(home, "memories", fname)
+            cap = _yaml_int(cfg, capkey)
+            if cap is None:
+                rep.add("hermes-memory:%s:%s" % (cid, fname), "notice",
+                        "cannot read %s from config, so fill is unmeasured" % capkey)
+                continue
+            if not os.path.isfile(fpath):
+                rep.add("hermes-memory:%s:%s" % (cid, fname), "ok", "absent (cap %d)" % cap)
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    used = len(f.read())
+            except Exception as e:
+                rep.add("hermes-memory:%s:%s" % (cid, fname), "warning",
+                        "exists but unreadable: %s" % str(e)[:80])
+                continue
+            ratio = used / cap if cap else 0.0
+            sev = "warning" if ratio >= MEMFILL_WARN else "ok"
+            detail = "%d/%d chars (%d%% of cap)" % (used, cap, round(ratio * 100))
+            if sev == "warning":
+                detail += " -- at the cap Hermes consolidates mid-turn and `remove` deletes with " \
+                          "no lineage, so the next write can silently drop an older fact"
+            rep.add("hermes-memory:%s:%s" % (cid, fname), sev, detail)
+
+
+def check_roster(rep, env):
+    """Is the system roster fresh, and can a lookup still tell absence from unreachability?
+
+    Why this is watched (mig 0117, 2026-08-13): the roster exists so an unfamiliar name is a
+    question rather than an error -- a companion called a real system member "drift" when there was
+    nothing to check against. A silently frozen roster reintroduces the same failure with a mechanism
+    behind it: a member added after the freeze reads as "not in the roster", which is a confident
+    wrong claim about a real person.
+
+    Two separate assertions on purpose:
+      * FRESHNESS -- the refresh cron is self-gated to 24h, so anything past ~48h means it stopped.
+      * THE FAILING PROBE -- a lookup for a name that cannot exist must answer `not_found`. If it
+        answers `unavailable`, the cache is cold or hard-stale and every lookup is currently useless.
+        Asserting the reason, not just a 200: a fail-open lookup looks identical working or dead.
+    """
+    url = env.get("HALSETH_URL")
+    secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
+    if not url or not secret:
+        rep.add("roster:config", "notice",
+                "no Halseth url/secret in this env, so the roster was not checked")
+        return
+
+    def get(path):
+        r = urllib.request.Request(
+            url.rstrip("/") + path,
+            headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
+        )
+        with urllib.request.urlopen(r, timeout=HTTP_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+
+    try:
+        s = get("/roster/stats")
+    except Exception as e:
+        rep.add("roster:stats", "warning",
+                "could not read /roster/stats: %s -- freshness is UNKNOWN, not ok" % str(e)[:100])
+        return
+
+    members = s.get("members") or 0
+    age = s.get("age_hours")
+    if not s.get("system_id_configured"):
+        rep.add("roster:config", "red",
+                "PLURALKIT_SYSTEM_ID is unset, so every lookup answers 'unavailable'")
+    if members == 0:
+        rep.add("roster:size", "red",
+                "roster cache is EMPTY -- no companion can resolve any name; last syncs: %s"
+                % [x.get("status") for x in (s.get("recent_syncs") or [])][:3])
+    elif age is None:
+        rep.add("roster:freshness", "warning", "%d members but no fetch timestamp" % members)
+    elif age > 48:
+        rep.add("roster:freshness", "red",
+                "roster last fetched %.1fh ago (cron self-gates to 24h, so >48h means it STOPPED); "
+                "a member added since would read as 'not in the roster'" % age)
+    else:
+        rep.add("roster:freshness", "ok",
+                "%d members, %d with pronouns / %d without, fetched %.1fh ago"
+                % (members, s.get("with_pronouns") or 0, s.get("without_pronouns") or 0, age))
+
+    # The failing probe. A name that cannot be a member must come back not_found, never unavailable.
+    try:
+        probe = get("/roster/who?q=zzz-healthcheck-not-a-member")
+        st = probe.get("status")
+        if st == "not_found":
+            rep.add("roster:probe", "ok", "a nonexistent name returns not_found (absence is expressible)")
+        elif st == "unavailable":
+            rep.add("roster:probe", "red",
+                    "lookups return 'unavailable' (%s) -- the roster cannot answer anything right now"
+                    % str(probe.get("reason"))[:120])
+        else:
+            rep.add("roster:probe", "warning",
+                    "a nonexistent name returned '%s', which should be impossible" % st)
+    except Exception as e:
+        rep.add("roster:probe", "warning", "lookup probe failed: %s" % str(e)[:100])
 
 
 def check_halseth(rep, env):
@@ -529,6 +880,9 @@ def main():
         check_pm2(rep)
         check_systemd(rep)
         check_hermes(rep)
+        check_companion_memory(rep)
+        check_architect_facts(rep, denv)
+        check_roster(rep, denv)
         check_halseth(rep, denv)
         check_second_brain(rep, denv)
         check_inference_balance(rep, denv)

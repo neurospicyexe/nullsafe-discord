@@ -13,12 +13,34 @@
  */
 
 import { prompt } from "./deepseek.js";
-import { getSimmeringTensions, updateTension, surfaceTension, writeJournalEntry, type Tension } from "./halseth-client.js";
+import { getSimmeringTensions, updateTension, writeJournalEntry, type Tension } from "./halseth-client.js";
 import { loadIdentityRemote } from "./identity-loader.js";
 import { COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "./config.js";
 import type { CompanionId } from "./types.js";
 
-const MAX_TENSIONS_PER_WEEK = 2;
+/**
+ * ONE tension per companion per week, replacing a house-wide `MAX_TENSIONS_PER_WEEK = 2`
+ * (2026-08-14).
+ *
+ * Raziel spotted this from outside the code, reasoning that things which create tension for
+ * Cypher would not be the same things that create it for Gaia, so the lists should not be
+ * affecting each other. The storage was always per-companion and correct -- every read filters
+ * by companion_id. The DIALECTIC was not: it pooled all three companions' simmering tensions
+ * into one `all[]`, sorted by charge, and debated the top 2 in the entire house.
+ *
+ * Why that pool was self-locking rather than merely unfair: charge gained +0.5 on every debate
+ * INCLUDING an unresolved one (see the surfaceTension removal below), and the only thing that
+ * ever lowered charge was Raziel pressing a button in Hearth. So two unresolved tensions
+ * climbed a little every week, kept outranking everything else, and held both house slots
+ * indefinitely -- and both could belong to one companion, starving the other two of the weekly
+ * dialectic entirely. `two-pools-one-ordered-window`: one ORDER BY + LIMIT serving three
+ * consumers is one pool.
+ *
+ * A per-companion slot removes the cross-companion contention by construction; no ordering
+ * tweak can, because the shared LIMIT is the mechanism. Three debates a week instead of two is
+ * the whole cost.
+ */
+const MAX_TENSIONS_PER_COMPANION_PER_WEEK = 1;
 const TAKE_WORD_LIMIT = 120;
 
 export interface DialecticOutcome {
@@ -123,25 +145,41 @@ export function sortTensionsByPriority(tensions: Tension[]): Tension[] {
 export async function runDialectic(): Promise<DialecticOutcome[]> {
   console.log("[dialectic] weekly tension dialectic starting");
 
-  // Gather simmering tensions across the whole triad, oldest first.
-  const all: Tension[] = [];
+  // Each companion's own top tension, chosen within their own list -- never against
+  // the others'. No shared LIMIT means no cross-companion starvation.
+  const batch: Tension[] = [];
+  let totalSimmering = 0;
   for (const companionId of COMPANIONS) {
-    all.push(...await getSimmeringTensions(companionId));
+    const mine = await getSimmeringTensions(companionId);
+    totalSimmering += mine.length;
+    batch.push(...sortTensionsByPriority(mine).slice(0, MAX_TENSIONS_PER_COMPANION_PER_WEEK));
   }
-  if (all.length === 0) {
+  if (batch.length === 0) {
     console.log("[dialectic] no simmering tensions -- nothing to debate");
     return [];
   }
 
-  const batch = sortTensionsByPriority(all).slice(0, MAX_TENSIONS_PER_WEEK);
-  console.log(`[dialectic] ${all.length} simmering, debating ${batch.length}`);
+  // Name the per-companion split, not just the total: an aggregate line cannot show that one
+  // companion contributed nothing, which is the exact failure this change exists to prevent.
+  const split = COMPANIONS
+    .map(c => `${c}:${batch.filter(t => t.companion_id === c).length}`)
+    .join(" ");
+  console.log(`[dialectic] ${totalSimmering} simmering, debating ${batch.length} (${split})`);
 
   const outcomes: DialecticOutcome[] = [];
   for (const tension of batch) {
     try {
-      // Debating IS surfacing -- raise charge before the debate so a HOLDS outcome
-      // still climbs the priority ladder for next week.
-      await surfaceTension(tension.id).catch(() => undefined);
+      // NO charge bump before the debate (removed 2026-08-14).
+      //
+      // It used to call surfaceTension() here -- +0.5 -- with the reasoning "a HOLDS outcome
+      // still climbs the priority ladder for next week." That is the ratchet: the act of
+      // READING a tension raised the very number used to CHOOSE it, so an unresolved tension
+      // was rewarded with a better slot for having gone nowhere. `ranking-signal-written-by-
+      // reading`, and the reason Raziel was the only brake in the system.
+      //
+      // A resolved debate changes the tension's status and it leaves the pool on its own. A
+      // held one now simply keeps its charge and ages, so it yields to something live next
+      // week. Being debated is not evidence of movement; resolving is.
       const outcome = await debateTension(tension);
       if (outcome) {
         outcomes.push(outcome);
