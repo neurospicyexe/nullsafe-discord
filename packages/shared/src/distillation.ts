@@ -100,7 +100,9 @@ export async function distillSessionOnInactive(
       const title = ext.title ?? "Discord session";
       const stateHint = deriveStateHint(ext.soma);
       wq.fireAndForget(`handoff:${channelId}`, async () => {
-        await librarian.writeHandoff({ title, summary: synthResult, open_loops: ext.open_loops, state_hint: stateHint, next_steps: ext.next_steps });
+        // source: without it the server defaults to `system`, a lane readers may filter --
+        // this handoff must stay attributable to the channel-inactive distillation path.
+        await librarian.writeHandoff({ title, summary: synthResult, open_loops: ext.open_loops, state_hint: stateHint, next_steps: ext.next_steps, source: "distillation" });
       });
       if (hasSomaValue(ext.soma)) {
         wq.fireAndForget(`somaUpdate:${channelId}`, async () => {

@@ -106,7 +106,9 @@ export function startAutonomous(
       const lastMs = await getLastActivityMs(redis).catch(() => null);
       if (!isIdle(lastMs, CONSOLIDATION_IDLE_MINUTES)) return;
       if (await isConsolidated(redis, COMPANION_ID)) return;
-      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference, narrator });
+      // session: an acked handoff also closes + reopens the Halseth session (surface must match
+      // the boot open in index.ts) so the boot narrative stops freezing on a never-closed row.
+      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference, narrator, session: { surface: `discord:${COMPANION_ID}`, bootCtx } });
       // Hold on the ATTEMPT, not just the success. `markConsolidated` used to run only when a write
       // landed, so any persistent failure (a 402 balance, an empty parse) left this cron free to
       // retry on all 288 five-minute ticks -- which is exactly how 2026-08-07 burned 864 calls with

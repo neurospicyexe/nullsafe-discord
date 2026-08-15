@@ -171,6 +171,20 @@ describe("refreshBotState", () => {
     expect(h.refs.activeModelRef.key).toBe("deepseek-chat");
   });
 
+  it("keeps the cached recent context when botOrient resolves NULL (its own error swallow)", async () => {
+    // botOrient() catches internally and RESOLVES null rather than rejecting, so the
+    // "fulfilled" branch used to format null to "" and erase the last good context.
+    const h = refreshHarness({
+      getState: async () => ({ prompt_context: "front: tense" }),
+      botOrient: async () => null,
+      getSetting: async () => null,
+    });
+    await refreshBotState({ ...h.opts, ...h.refs });
+    expect(h.refs.recentContextRef.value).toBe("seeded recent");
+    // The recomposed prompt must still carry the cached context, not a hole where it was.
+    expect(h.bootCtx.systemPrompt).toContain("seeded recent");
+  });
+
   it("is fail-soft: rejecting librarian calls do not throw and leave refs intact", async () => {
     const h = refreshHarness({
       getState: async () => { throw new Error("down"); },

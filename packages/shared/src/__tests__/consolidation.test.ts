@@ -223,3 +223,121 @@ describe("consolidateSession", () => {
     expect(result.reason).toBe("librarian_error");
   });
 });
+
+// ── Session lifecycle (2026-08-15) ─────────────────────────────────────────────
+// Discord sessions were never closed: sessionOpen fires at boot, sessionClose had zero call sites,
+// and an unclosed session freezes the boot narrative + SOMA close ritual. The consolidation cron
+// already writes an authored handoff on idle, so the close rides that same content -- then reopens
+// on the same surface so the bot keeps a live lane (mig 0113 dedup inserts fresh after a close).
+describe("consolidateSession session cycling", () => {
+  const cyclingLibrarian = () => ({
+    ask: jest.fn<() => Promise<string>>().mockResolvedValue(mockState),
+    writeHandoff: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    sessionClose: jest.fn<() => Promise<Record<string, unknown>>>().mockResolvedValue({ ack: true }),
+    sessionOpen: jest.fn<() => Promise<Record<string, unknown>>>().mockResolvedValue({ session_id: "sess-new" }),
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  test("closes with a handoff-derived spine, then reopens on the same surface", async () => {
+    const lib = cyclingLibrarian();
+    const bootCtx = { sessionId: "sess-old" };
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: lib as any,
+      inference: mockInference as any,
+      session: { surface: "discord:cypher", bootCtx },
+    });
+    expect(result.written).toBe(true);
+    expect(lib.sessionClose).toHaveBeenCalledWith({
+      sessionId: "sess-old",
+      spine: "We worked through the consolidation bridge. Something settled.",
+      // last_real_thing = the summary's most concrete (final) sentence.
+      lastRealThing: "Something settled.",
+      motionState: "at_rest",
+    });
+    // Reopen only AFTER the close acked, same surface, and the live session id follows the cycle.
+    expect(lib.sessionOpen).toHaveBeenCalledWith("work", "discord:cypher");
+    expect(bootCtx.sessionId).toBe("sess-new");
+    // Close must come before the reopen -- the dedup only inserts fresh once the old row is closed.
+    expect(lib.sessionClose.mock.invocationCallOrder[0]).toBeLessThan(lib.sessionOpen.mock.invocationCallOrder[0]);
+  });
+
+  test("a failed close skips the reopen and leaves the session as-is", async () => {
+    const lib = cyclingLibrarian();
+    lib.sessionClose.mockRejectedValueOnce(new Error("close declined"));
+    const bootCtx = { sessionId: "sess-old" };
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: lib as any,
+      inference: mockInference as any,
+      session: { surface: "discord:cypher", bootCtx },
+    });
+    // The handoff already landed; a lifecycle failure never taints the write result.
+    expect(result.written).toBe(true);
+    expect(lib.sessionOpen).not.toHaveBeenCalled();
+    expect(bootCtx.sessionId).toBe("sess-old");
+  });
+
+  test("a failed reopen keeps the written result and the old id", async () => {
+    const lib = cyclingLibrarian();
+    lib.sessionOpen.mockRejectedValueOnce(new Error("open failed"));
+    const bootCtx = { sessionId: "sess-old" };
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: lib as any,
+      inference: mockInference as any,
+      session: { surface: "discord:cypher", bootCtx },
+    });
+    expect(result.written).toBe(true);
+    expect(lib.sessionClose).toHaveBeenCalledTimes(1);
+    expect(bootCtx.sessionId).toBe("sess-old");
+  });
+
+  test.each([["unknown"], ["cached"], [""]])(
+    "placeholder session id %p means boot never opened a real session -- no close, no reopen",
+    async (sessionId) => {
+      const lib = cyclingLibrarian();
+      const bootCtx = { sessionId };
+      const result = await consolidateSession({
+        companionId: "cypher",
+        librarian: lib as any,
+        inference: mockInference as any,
+        session: { surface: "discord:cypher", bootCtx },
+      });
+      expect(result.written).toBe(true);
+      expect(lib.sessionClose).not.toHaveBeenCalled();
+      expect(lib.sessionOpen).not.toHaveBeenCalled();
+    },
+  );
+
+  test("no session opt (tests, non-bot callers) cycles nothing", async () => {
+    const lib = cyclingLibrarian();
+    const result = await consolidateSession({
+      companionId: "cypher",
+      librarian: lib as any,
+      inference: mockInference as any,
+    });
+    expect(result.written).toBe(true);
+    expect(lib.sessionClose).not.toHaveBeenCalled();
+    expect(lib.sessionOpen).not.toHaveBeenCalled();
+  });
+
+  test("handoff open_loops become open_threads on the close", async () => {
+    const lib = cyclingLibrarian();
+    mockInference.generate.mockResolvedValueOnce(JSON.stringify({
+      title: "T", summary: "S one. S two.", state_hint: "at_rest",
+      open_loops: ["thread a", "thread b", 42],
+    }));
+    const bootCtx = { sessionId: "sess-old" };
+    await consolidateSession({
+      companionId: "cypher",
+      librarian: lib as any,
+      inference: mockInference as any,
+      session: { surface: "discord:cypher", bootCtx },
+    });
+    expect(lib.sessionClose).toHaveBeenCalledWith(
+      expect.objectContaining({ openThreads: ["thread a", "thread b"] }),
+    );
+  });
+});

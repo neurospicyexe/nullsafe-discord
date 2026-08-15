@@ -15,12 +15,24 @@ export interface ConsolidationOpts {
    * Absent or unusable, we fall back to `inference` -- more expensive, still correct.
    */
   narrator?: InferenceAdapter | null;
+  /**
+   * Session lifecycle. When present, a successful handoff write also CLOSES the companion's open
+   * Halseth session (spine = the handoff, so the boot narrative and SOMA close ritual unfreeze --
+   * an unclosed session pins both) and reopens on the same surface so the bot keeps a live lane.
+   * `bootCtx.sessionId` is read for the close and updated in place with the reopened id; the id
+   * must be explicit because close resolution without one matches on companion alone and can land
+   * on a session Raziel has open elsewhere.
+   */
+  session?: {
+    surface: string;
+    bootCtx: { sessionId: string };
+  };
 }
 
 export async function consolidateSession(
   opts: ConsolidationOpts,
 ): Promise<{ written: boolean; reason?: string }> {
-  const { companionId, librarian, inference, narrator } = opts;
+  const { companionId, librarian, inference, narrator, session } = opts;
 
   // 2026-08-03 flow audit. Two defects here, one causing the other, live since 2026-06-30:
   //
@@ -109,7 +121,7 @@ export async function consolidateSession(
     // No 5th arg: a direct provider call has no gateway session, so there is no lane to name and
     // nothing accumulates between calls. That is the whole point.
     const raw = await narrator.generate(narratorPrompt, [userTurn], 0.3, 1024);
-    return await finishHandoff(raw, companionId, librarian, "narrator");
+    return await finishHandoff(raw, companionId, librarian, "narrator", session);
   }
 
   console.warn(
@@ -144,7 +156,7 @@ export async function consolidateSession(
     // instant than every other date-keyed thing in the suite.
     `consolidation:${companionId}:${new Date().toISOString().slice(0, 10)}`,
   );
-  return await finishHandoff(raw, companionId, librarian, "hermes");
+  return await finishHandoff(raw, companionId, librarian, "hermes", session);
 }
 
 /**
@@ -157,13 +169,14 @@ async function finishHandoff(
   companionId: string,
   librarian: LibrarianClient,
   via: "narrator" | "hermes",
+  session?: ConsolidationOpts["session"],
 ): Promise<{ written: boolean; reason?: string }> {
   if (!raw) return { written: false, reason: "inference_empty" };
   // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded
   // JSON despite the ONLY-JSON instruction. Never throw here -- a raw JSON.parse crash
   // was losing the whole idle-session handoff write (2026-06-30/07-01).
   const parsed = extractJson(raw);
-  const handoff = parsed as { title?: string; summary?: string; state_hint?: string } | null;
+  const handoff = parsed as { title?: string; summary?: string; state_hint?: string; open_loops?: unknown } | null;
   if (!handoff || typeof handoff.title !== "string" || !handoff.title ||
       typeof handoff.summary !== "string" || !handoff.summary) {
     console.warn(`[consolidation] ${companionId}: no usable handoff JSON in output (via ${via}), skipping -- raw: ${rawPreview(raw)}`);
@@ -189,9 +202,65 @@ async function finishHandoff(
       source: "consolidation",
     });
     console.log(`[consolidation] ${companionId}: handoff written via ${via}`);
+    // Close-then-reopen rides only on a LANDED handoff: the close spine is this handoff's content,
+    // so without the write there is nothing authored to close on. Failures here never taint the
+    // handoff result -- the write already happened.
+    if (session) {
+      await cycleSession(session, handoff as { title: string; summary: string; open_loops?: unknown }, companionId, librarian);
+    }
     return { written: true };
   } catch (e) {
     console.error(`[consolidation] ${companionId}: librarian write error`, e);
     return { written: false, reason: "librarian_error" };
+  }
+}
+
+/**
+ * Close the bot's open session with a spine derived from the handoff just written, then reopen on
+ * the same surface so the lifecycle continues (mig 0113 dedup finds no open session after a close,
+ * so the open inserts fresh). Order is load-bearing: reopen ONLY after an acked close -- a failed
+ * close leaves the session as-is, because opening a second lane onto an unclosed session is the
+ * duplicate-session defect this whole path exists to prevent.
+ */
+async function cycleSession(
+  session: NonNullable<ConsolidationOpts["session"]>,
+  handoff: { title: string; summary: string; open_loops?: unknown },
+  companionId: string,
+  librarian: LibrarianClient,
+): Promise<void> {
+  const sessionId = session.bootCtx.sessionId;
+  // Placeholder ids ("unknown", "cached") mean boot never opened a real session; nothing to close.
+  if (!sessionId || sessionId === "unknown" || sessionId === "cached") return;
+
+  // last_real_thing = the handoff's most concrete line: the final sentence of the summary,
+  // falling back to the title when the summary doesn't split.
+  const sentences = handoff.summary.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+  const lastRealThing = sentences[sentences.length - 1] || handoff.title;
+  const openThreads = Array.isArray(handoff.open_loops)
+    ? handoff.open_loops.filter((l): l is string => typeof l === "string" && l.length > 0)
+    : [];
+
+  try {
+    await librarian.sessionClose({
+      sessionId,
+      spine: handoff.summary,
+      lastRealThing,
+      motionState: "at_rest",
+      ...(openThreads.length ? { openThreads } : {}),
+    });
+  } catch (e) {
+    console.warn(`[consolidation] ${companionId}: session close failed -- leaving session ${sessionId} open`, e);
+    return;
+  }
+
+  try {
+    const state = await librarian.sessionOpen("work", session.surface);
+    const newId = String(state["session_id"] ?? "");
+    if (newId && newId !== "unknown") session.bootCtx.sessionId = newId;
+    console.log(`[consolidation] ${companionId}: session cycled ${sessionId} -> ${newId || "?"} on ${session.surface}`);
+  } catch (e) {
+    // Closed but not reopened: the next boot or the next successful open re-establishes the lane;
+    // the close itself is the valuable half and already landed.
+    console.error(`[consolidation] ${companionId}: session reopen failed after close of ${sessionId}`, e);
   }
 }

@@ -62,12 +62,15 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     ctx.unexaminedDreamIds = (orient.unexamined_dreams ?? []).map(d => d.id).filter(Boolean);
     ctx.pressureFlags = (orient.pressure_flags ?? []).map(s => s.trim()).filter(Boolean);
   } else {
-    console.warn(`[${ctx.companionId}/orient] botOrient returned null -- proceeding with empty context`);
-    ctx.orientSummary = "";
+    // The summary must carry the degradation in-band: a bare "" reads downstream as "nothing was
+    // recent", and every write the run makes becomes unattributable to the missing context.
+    console.warn(`[${ctx.companionId}/orient] botOrient returned null -- proceeding degraded`);
+    ctx.orientSummary = "[orient unavailable -- memory substrate unreachable; this run proceeds without recent context]";
     ctx.recentGrowth = [];
     ctx.activePatterns = [];
     ctx.unexaminedDreamIds = [];
     ctx.pressureFlags = [];
+    await appendLog(ctx.runId, "orient:degraded", "botOrient null -- run proceeding without recent context");
   }
 
   const peerSummaryLen = ctx.peerActivity?.peer_summary?.length ?? 0;

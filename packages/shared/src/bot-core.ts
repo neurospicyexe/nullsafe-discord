@@ -179,12 +179,18 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
     const freshPromptCtx = stateResult.status === "fulfilled" && stateResult.value["prompt_context"]
       ? String(stateResult.value["prompt_context"])
       : null;
-    const freshRecentCtx = orientResult.status === "fulfilled"
+    // botOrient() swallows its own errors and resolves null, so "fulfilled" alone does not mean
+    // orient succeeded. A null orient formats to "" and would erase the last good context.
+    const orientOk = orientResult.status === "fulfilled" && orientResult.value !== null;
+    const freshRecentCtx = orientOk
       ? formatRecentContext(orientResult.value)
       : recentContextRef.value;
+    if (!orientOk) {
+      console.warn(`[${companionId}] refresh: orient unavailable, keeping cached recent context (${recentContextRef.value.length} chars)`);
+    }
 
     recentContextRef.value = freshRecentCtx;
-    if (orientResult.status === "fulfilled") {
+    if (orientOk) {
       setArmedTriggers(companionId, orientResult.value?.armed_triggers ?? []);
     }
 
@@ -781,12 +787,30 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       console.log(`[${companionId}] flushing ${pendingClosures.size} active channel(s)...`);
       await Promise.allSettled([...pendingClosures]);
     }
+    // Close the Halseth session before the write queue stops. An unclosed session freezes the
+    // boot narrative and the SOMA close ritual; a machine spine is the floor, not the ceiling.
+    // Bounded: shutdown must not hang on an unreachable Halseth. Placeholder ids ("unknown",
+    // "cached") mean boot never opened a real session, so there is no row to close.
+    if (bootCtx.sessionId && bootCtx.sessionId !== "unknown" && bootCtx.sessionId !== "cached") {
+      try {
+        await Promise.race([
+          librarian.sessionClose({
+            sessionId: bootCtx.sessionId,
+            spine: `[auto] ${companionId} bot shutdown -- process received a stop signal`,
+            lastRealThing: "[auto] graceful shutdown; queued writes flushed before close",
+            motionState: "floating",
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("session close timed out (5s)")), 5000)),
+        ]);
+        console.log(`[${companionId}] session ${bootCtx.sessionId} closed at shutdown`);
+      } catch (e) {
+        console.warn(`[${companionId}] session close at shutdown failed:`, e);
+      }
+    }
     writeQueue.stop();
     if (presenceInterval) clearInterval(presenceInterval);
     clearInterval(dayDistillInterval);
     if (cleanupEventSubs) await cleanupEventSubs();
-    // No session_close on shutdown: a placeholder spine here would overwrite real
-    // session activity in the canonical record. Sessions age out via synthesis worker.
     client.destroy();
     process.exit(0);
   }

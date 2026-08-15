@@ -1917,11 +1917,28 @@ export function formatRecentContext(orient: {
   const rest = parts.filter(p => !isForage(p)).join("\n\n");
 
   const restBudget = RECENT_CONTEXT_BUDGET - (pinned ? pinned.length + 2 : 0);
-  if (rest.length > restBudget) {
-    // Never truncate silently: a dropped block reads downstream as "nothing was there".
-    console.warn(`[librarian] recent context truncated: ${rest.length - restBudget} chars dropped (forage pinned)`);
+  if (rest.length <= restBudget) {
+    return [rest, pinned].filter(Boolean).join("\n\n");
   }
-  return [rest.slice(0, Math.max(0, restBudget)), pinned].filter(Boolean).join("\n\n");
+
+  // Never truncate silently: a dropped block reads downstream as "nothing was there". The console
+  // warning alone is invisible to the one reader that matters -- the model -- so the notice goes
+  // IN-BAND, with room reserved for it inside the budget.
+  console.warn(`[librarian] recent context truncated: ${rest.length - restBudget} chars dropped (forage pinned)`);
+  const restParts = parts.filter(p => !isForage(p));
+  const totalSections = parts.length;
+  // Reserve fixed room for the notice line before cutting, so the notice itself never overflows.
+  const cutLen = Math.max(0, restBudget - 64);
+  // A section is dropped when none of it survives the cut (a partially cut section still shows).
+  let offset = 0;
+  let visible = 0;
+  for (const p of restParts) {
+    if (offset < cutLen) visible++;
+    offset += p.length + 2;
+  }
+  const dropped = restParts.length - visible;
+  const notice = `[context clipped: ${dropped} of ${totalSections} sections dropped for budget]`;
+  return [`${rest.slice(0, cutLen)}\n${notice}`, pinned].filter(Boolean).join("\n\n");
 }
 
 function sleep(ms: number) {

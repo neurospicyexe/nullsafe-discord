@@ -145,6 +145,43 @@ describe("LibrarianClient.botOrient()", () => {
     expect(block.length).toBeLessThanOrEqual(RECENT_CONTEXT_BUDGET);
   });
 
+  it("announces the tail cut IN-BAND when sections are dropped for budget", () => {
+    // A console.warn is invisible to the one reader that matters. When the budget cut drops
+    // sections, the model must see a clipped notice inside the returned block itself.
+    const block = formatRecentContext({
+      synthesis_summary: "recent things",
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      // One fat un-sliced section (conclusions render full text) pushes everything after it
+      // past the budget, so the later sections are dropped whole.
+      active_conclusions: Array.from({ length: 20 }, (_, i) => ({
+        text: `belief ${i} ${"x".repeat(300)}`, belief_type: "self", confidence: 0.5, subject: null,
+      })),
+      flagged_beliefs: [],
+      preferences: [{ domain: "general", preference: "long walks in the graph", strength: "firm" }],
+      standing_refusals: [{ subject_text: "no cheerleading", reason: null }],
+      motifs: [{ label: "blade", display: "the blade recurs", recurrence_count: 3, trust: 0.7 }],
+      forage_finds: [{ id: "f1", title: "Axelrod tournaments", domain: "logic problems", summary: "s", gathered_at: "2026-07-08T09:00:00Z" }],
+    });
+    expect(block).toMatch(/\[context clipped: \d+ of \d+ sections dropped for budget\]/);
+    // The notice must live INSIDE the budget, and the pinned forage still survives the cut.
+    expect(block.length).toBeLessThanOrEqual(RECENT_CONTEXT_BUDGET);
+    expect(block).toContain("[Forage pool");
+  });
+
+  it("appends no clipped notice when everything fits", () => {
+    const block = formatRecentContext({
+      synthesis_summary: "a short recent",
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      active_conclusions: [],
+      flagged_beliefs: [],
+    });
+    expect(block).not.toContain("[context clipped");
+  });
+
   it("returns null on missing data field", async () => {
     const mockFetch = jest.fn().mockResolvedValue({
       ok: true,
