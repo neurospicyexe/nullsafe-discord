@@ -247,6 +247,10 @@ export const PULSE_FLOAT_THRESHOLD = parseFloat(process.env["PULSE_FLOAT_THRESHO
 export const PULSE_MIN_GAP_MS = parseInt(process.env["PULSE_MIN_GAP_MS"] ?? String(20 * 3600 * 1000), 10);
 export const PULSE_EAGER_GAP_MS = parseInt(process.env["PULSE_EAGER_GAP_MS"] ?? String(12 * 3600 * 1000), 10);
 export const PULSE_MAX_RUNS_PER_DAY = parseInt(process.env["PULSE_MAX_RUNS_PER_DAY"] ?? "2", 10);
+// Felt-need rest gate (mig 0101): when rest_need runs at/above this, the pulse votes
+// for rest instead of firing. rest_need decays on quiet (fermentation tick sheds it),
+// so this is a brake that releases itself -- not a ratchet.
+export const PULSE_REST_NEED_THRESHOLD = parseFloat(process.env["PULSE_REST_NEED_THRESHOLD"] ?? "0.75");
 
 // Weekly tension dialectic -- Wednesday 4AM (staggered from Wed 2AM signal audit).
 // Three lenses on each simmering tension, then an honest synthesis.

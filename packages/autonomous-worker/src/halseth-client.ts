@@ -724,6 +724,26 @@ export async function getSomaFloats(companionId: string): Promise<SomaFloats | n
   }
 }
 
+// Felt-need drives (mig 0078/0101). GET /mind/drives/:companion_id returns the
+// EFFECTIVE (lazily-accrued) level per drive -- the handler computes it from
+// last_event_at at read time, so no client-side accrual math is needed.
+export interface CompanionDrive {
+  drive_key: string;
+  level: number;
+  threshold: number;
+  fired: boolean;
+  modality: string | null;
+}
+
+export async function getDrives(companionId: string): Promise<CompanionDrive[] | null> {
+  try {
+    const r = await hFetch(`/mind/drives/${companionId}`) as { drives?: CompanionDrive[] };
+    return Array.isArray(r.drives) ? r.drives : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tensions -- weekly dialectic reads simmering tensions, writes back outcomes
 // ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { decidePulse, parseProgram, runTimestampMs } from "../pulse.js";
-import { PULSE_FLOAT_THRESHOLD, PULSE_MIN_GAP_MS, PULSE_EAGER_GAP_MS, PULSE_MAX_RUNS_PER_DAY } from "../config.js";
+import { PULSE_FLOAT_THRESHOLD, PULSE_MIN_GAP_MS, PULSE_EAGER_GAP_MS, PULSE_MAX_RUNS_PER_DAY, PULSE_REST_NEED_THRESHOLD } from "../config.js";
 
 const NOW = Date.parse("2026-06-09T18:00:00Z");
 
@@ -48,13 +48,13 @@ describe("runTimestampMs", () => {
 
 describe("decidePulse", () => {
   it("never fires on self-programmed rest", () => {
-    const d = decidePulse({ pace: "rest", lastRunAtMs: null, runsToday: 0, primaryFloat: 0.99, nowMs: NOW });
+    const d = decidePulse({ pace: "rest", lastRunAtMs: null, runsToday: 0, primaryFloat: 0.99, restNeed: null, nowMs: NOW });
     expect(d.fire).toBe(false);
     expect(d.reason).toContain("rest");
   });
 
   it("respects the daily run cap", () => {
-    const d = decidePulse({ pace: "eager", lastRunAtMs: null, runsToday: PULSE_MAX_RUNS_PER_DAY, primaryFloat: 0.99, nowMs: NOW });
+    const d = decidePulse({ pace: "eager", lastRunAtMs: null, runsToday: PULSE_MAX_RUNS_PER_DAY, primaryFloat: 0.99, restNeed: null, nowMs: NOW });
     expect(d.fire).toBe(false);
     expect(d.reason).toContain("cap");
   });
@@ -65,6 +65,7 @@ describe("decidePulse", () => {
       lastRunAtMs: NOW - PULSE_MIN_GAP_MS + 3600_000, // 1h short of the gap
       runsToday: 1,
       primaryFloat: 0.99,
+      restNeed: null,
       nowMs: NOW,
     });
     expect(d.fire).toBe(false);
@@ -77,6 +78,7 @@ describe("decidePulse", () => {
       lastRunAtMs: NOW - PULSE_EAGER_GAP_MS - 1,
       runsToday: 1,
       primaryFloat: null,
+      restNeed: null,
       nowMs: NOW,
     });
     expect(d.fire).toBe(true);
@@ -89,6 +91,7 @@ describe("decidePulse", () => {
       lastRunAtMs: NOW - PULSE_MIN_GAP_MS - 1,
       runsToday: 0,
       primaryFloat: PULSE_FLOAT_THRESHOLD,
+      restNeed: null,
       nowMs: NOW,
     });
     expect(d.fire).toBe(true);
@@ -102,6 +105,7 @@ describe("decidePulse", () => {
         lastRunAtMs: null,
         runsToday: 0,
         primaryFloat: f as number | null,
+        restNeed: null,
         nowMs: NOW,
       });
       expect(d.fire).toBe(false);
@@ -114,10 +118,77 @@ describe("decidePulse", () => {
       lastRunAtMs: null,
       runsToday: 0,
       primaryFloat: PULSE_FLOAT_THRESHOLD - 0.05,
+      restNeed: null,
       nowMs: NOW,
     });
     expect(d.fire).toBe(false);
     expect(d.reason).toBe("no signal");
+  });
+
+  // rest_need gate (mig 0101): the body's vote for quiet. Guardian flagged drevan/gaia
+  // riding the pulse cap for a week because nothing consumed this drive.
+  it("suppresses when rest_need is at or above the threshold", () => {
+    const d = decidePulse({
+      pace: "normal",
+      lastRunAtMs: NOW - PULSE_MIN_GAP_MS - 1,
+      runsToday: 0,
+      primaryFloat: 0.99, // float alone would fire
+      restNeed: PULSE_REST_NEED_THRESHOLD,
+      nowMs: NOW,
+    });
+    expect(d.fire).toBe(false);
+    expect(d.reason).toContain("rest_need");
+    expect(d.reason).toContain("resting");
+  });
+
+  it("does not suppress on null rest_need (absence of data is not rest)", () => {
+    const d = decidePulse({
+      pace: "normal",
+      lastRunAtMs: NOW - PULSE_MIN_GAP_MS - 1,
+      runsToday: 0,
+      primaryFloat: 0.99,
+      restNeed: null,
+      nowMs: NOW,
+    });
+    expect(d.fire).toBe(true);
+  });
+
+  it("does not suppress when rest_need is below the threshold", () => {
+    const d = decidePulse({
+      pace: "normal",
+      lastRunAtMs: NOW - PULSE_MIN_GAP_MS - 1,
+      runsToday: 0,
+      primaryFloat: 0.99,
+      restNeed: PULSE_REST_NEED_THRESHOLD - 0.01,
+      nowMs: NOW,
+    });
+    expect(d.fire).toBe(true);
+  });
+
+  it("self-programmed rest still wins when both rest signals apply", () => {
+    const d = decidePulse({
+      pace: "rest",
+      lastRunAtMs: null,
+      runsToday: 0,
+      primaryFloat: 0.99,
+      restNeed: 0.99,
+      nowMs: NOW,
+    });
+    expect(d.fire).toBe(false);
+    expect(d.reason).toBe("self-programmed rest");
+  });
+
+  it("rest_need gate precedes the daily cap in the reason ordering", () => {
+    const d = decidePulse({
+      pace: "normal",
+      lastRunAtMs: null,
+      runsToday: PULSE_MAX_RUNS_PER_DAY,
+      primaryFloat: 0.99,
+      restNeed: 0.99,
+      nowMs: NOW,
+    });
+    expect(d.fire).toBe(false);
+    expect(d.reason).toContain("rest_need");
   });
 });
 

@@ -11,10 +11,11 @@
  */
 
 import {
-  getSetting, setSetting, getSomaFloats, getRecentRuns, createSeed,
+  getSetting, setSetting, getSomaFloats, getRecentRuns, createSeed, getDrives,
 } from "./halseth-client.js";
 import {
   PULSE_FLOAT_THRESHOLD, PULSE_MIN_GAP_MS, PULSE_EAGER_GAP_MS, PULSE_MAX_RUNS_PER_DAY,
+  PULSE_REST_NEED_THRESHOLD,
 } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -29,6 +30,8 @@ export interface PulseInputs {
   lastRunAtMs: number | null;
   runsToday: number;
   primaryFloat: number | null;
+  /** rest_need drive level (mig 0101); null = could not read the drive (never suppresses). */
+  restNeed: number | null;
   nowMs: number;
 }
 
@@ -40,6 +43,15 @@ export interface PulseDecision {
 /** Pure decision logic -- testable without network. */
 export function decidePulse(inp: PulseInputs): PulseDecision {
   if (inp.pace === "rest") return { fire: false, reason: "self-programmed rest" };
+
+  // Felt-need rest gate: rest_need is the body's vote for quiet. It accrues on activity and
+  // sheds during silence (fermentation tick), so gating on it is self-releasing. null means
+  // "could not read the drive" -- absence of data is not rest, so it never suppresses.
+  const rn = inp.restNeed;
+  if (typeof rn === "number" && Number.isFinite(rn) && rn >= PULSE_REST_NEED_THRESHOLD) {
+    return { fire: false, reason: `rest_need ${rn.toFixed(2)} >= ${PULSE_REST_NEED_THRESHOLD} -- resting` };
+  }
+
   if (inp.runsToday >= PULSE_MAX_RUNS_PER_DAY) return { fire: false, reason: `daily cap (${inp.runsToday}/${PULSE_MAX_RUNS_PER_DAY})` };
 
   const gap = inp.pace === "eager" ? PULSE_EAGER_GAP_MS : PULSE_MIN_GAP_MS;
@@ -124,10 +136,15 @@ export async function pulseCheck(
     return;
   }
 
-  const [runs, soma] = await Promise.all([
+  const [runs, soma, drives] = await Promise.all([
     getRecentRuns(companionId, 10),
     getSomaFloats(companionId),
+    getDrives(companionId),
   ]);
+  const restDrive = drives?.find(d => d.drive_key === "rest_need");
+  const restNeed = typeof restDrive?.level === "number" && Number.isFinite(restDrive.level)
+    ? restDrive.level
+    : null;
 
   const nowMs = Date.now();
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -140,6 +157,7 @@ export async function pulseCheck(
     lastRunAtMs,
     runsToday,
     primaryFloat: soma?.soma_float_1 ?? null,
+    restNeed,
     nowMs,
   });
 
