@@ -1577,6 +1577,45 @@ export class LibrarianClient {
       return res.ok;
     } catch (e) { console.warn("[librarian] convoFade failed:", String(e)); return false; }
   }
+
+  /**
+   * Resolve a Discord message id to the ledger turn that recorded it (2026-08-15 floor
+   * rework): the DURABLE half of reply-to detection. The in-process sentIds set is capped
+   * at 500 and dies with the process; the thread ledger already holds every companion
+   * reply's sent message id in tracked channels. null means "unknown" -- either nothing
+   * recorded it (untracked channel, human message before spine) or the lookup failed --
+   * and the caller falls back to the old sentIds-only behaviour. A fallback must degrade
+   * toward the pre-existing behaviour, never toward a new failure mode.
+   */
+  async convoByMessage(messageId: string): Promise<{ author: string; thread_id: string; channel_id: string } | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/conversations/message/${encodeURIComponent(messageId)}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) { console.warn(`[librarian] convoByMessage ${res.status}`); return null; }
+      const data = await res.json() as { turn: { author: string; thread_id: string; channel_id: string } | null };
+      return data.turn ?? null;
+    } catch (e) { console.warn("[librarian] convoByMessage failed:", String(e)); return null; }
+  }
+
+  /**
+   * Upsert a WebMind mind-thread for THIS companion (2026-08-15 floor rework: Discord
+   * threads map to Halseth thread_keys). thread_key must be an identifier (halseth rejects
+   * prose keys at the boundary); the Discord-thread convention is `discord:<thread_id>`.
+   * Warn-only: continuity bookkeeping must never break a reply that already sent.
+   */
+  async wmThreadUpsert(params: { thread_key: string; title: string; context?: string; status?: string; lane?: string }): Promise<void> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/thread`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+        body: JSON.stringify({ agent_id: this.companionId, ...params }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) console.warn(`[librarian] wmThreadUpsert ${res.status}`);
+    } catch (e) { console.warn("[librarian] wmThreadUpsert failed:", String(e)); }
+  }
 }
 
 /**

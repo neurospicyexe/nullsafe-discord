@@ -31,7 +31,10 @@ import {
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK,
+  FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
+  pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, REACTION_COOLDOWN_MS,
+  resolveRoutingChannelId,
   clearConsolidation,
   isResponseCoherent,
   sendLong,
@@ -79,6 +82,17 @@ let _impContextCache: ImpContextCache | null = null;
 // delivered to the gateway session. Module-level = per-process = per companion bot.
 // Advanced ONLY after a successful gateway reply, so a failed call re-sends its delta.
 const hermesDeliveredMark = new Map<string, number>();
+
+// Sequential floor + reaction tier state (2026-08-15 floor rework). Module-level = per-process
+// = per companion bot, the same idiom as hermesDeliveredMark above.
+//   followUps: this companion's pending "I answer after my predecessor" entitlements.
+//   replyAuthorCache: durable reply-to lookups already resolved (positive hits only -- a null
+//     can be a ledger write still in flight, so misses re-query).
+//   reactionCooldownUntil: per-channel emoji-reaction throttle.
+const followUps = new FollowUpLedger();
+const replyAuthorCache = new Map<string, string>();
+const REPLY_AUTHOR_CACHE_CAP = 500;
+const reactionCooldownUntil = new Map<string, number>();
 
 async function getImpContext(
   librarian: LibrarianClient,
@@ -400,8 +414,39 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const botTurn = (m: { author: { bot: boolean }; webhookId?: string | null }): boolean =>
       m.author.bot && !m.webhookId;
 
-    const isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
-    const channelEntry = channelConfig[message.channelId];
+    let isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
+    // Durable reply-to fallback (2026-08-15 floor rework): sentIds is per-process, capped at
+    // 500 and lost on restart, so a reply to anything older than the cap -- or to anything
+    // sent before the last restart -- silently stopped counting as "to me". The thread ledger
+    // already records every companion reply's sent message id (convoTurn at send time), so ask
+    // it who authored the referenced message. Positive hits cache; misses re-query, because a
+    // null can be a ledger write still in flight and must not be pinned as a false negative.
+    if (!isReplyToMe && message.reference?.messageId) {
+      const refId = message.reference.messageId;
+      let refAuthor: string | null = replyAuthorCache.get(refId) ?? null;
+      if (refAuthor === null) {
+        refAuthor = (await librarian.convoByMessage(refId))?.author ?? null;
+        if (refAuthor) {
+          replyAuthorCache.set(refId, refAuthor);
+          if (replyAuthorCache.size > REPLY_AUTHOR_CACHE_CAP) {
+            const oldest = replyAuthorCache.keys().next().value;
+            if (oldest !== undefined) replyAuthorCache.delete(oldest);
+          }
+        }
+      }
+      if (refAuthor === COMPANION_ID) {
+        isReplyToMe = true;
+        console.log(`[${COMPANION_ID}] reply-to resolved durably via thread ledger (msg=${refId} not in sentIds)`);
+      }
+    }
+    // Discord threads inherit CONFIG from their parent channel (2026-08-15): a thread's own
+    // snowflake was never in channelConfig, so threads under owner_only channels ran as open
+    // ones. Storage keys everywhere below deliberately keep message.channelId (the thread id)
+    // -- per-thread STM/spine must not collapse into the parent. An explicitly-configured
+    // thread id still wins.
+    const routingChannelId = resolveRoutingChannelId(message.channel, message.channelId);
+    const gateChannelId = channelConfig[message.channelId] ? message.channelId : routingChannelId;
+    const channelEntry = channelConfig[gateChannelId];
 
     let spine: ConvoActiveDto | null = null;
     const pkCtx = detectPluralKit(message);
@@ -472,8 +517,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Presence channels (Drevan's story/spiral spaces): grounding half only (seed + ledger),
     // no progress register. Computed once here and reused at both the block-render call
     // below and the post-send convoLand gate.
-    const isPresence = isPresenceChannel(message.channelId);
-    if (isThreadsEnabled() && isThreadTracked(channelEntry, message.channelId)) {
+    const isPresence = isPresenceChannel(routingChannelId);
+    if (isThreadsEnabled() && isThreadTracked(channelEntry, routingChannelId)) {
       // `attribution.frontMember` is the PluralKit member who actually spoke -- resolved from the roster
       // (both systems, 1412 names) and, until now, dropped on the floor for the spine.
       //
@@ -863,6 +908,22 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
     }
 
+    // Sequential floor (2026-08-15): is this sibling message the predecessor reply my pending
+    // follow-up entitlement waits on? Consumed exactly once; an entitled turn bypasses the
+    // vocative gate below (that is the whole point) but NONE of the rails -- caps, pingpong
+    // and chain depth still apply to it like any sibling-triggered turn.
+    let entitledFollowUp: FollowUpEntitlement | null = null;
+    if (senderCtx.isCompanionBot) {
+      entitledFollowUp = followUps.match(
+        message.channelId,
+        BOT_ID_COMPANION[message.author.id] as CompanionId | undefined,
+        message.reference?.messageId,
+      );
+      if (entitledFollowUp) {
+        console.log(`[${COMPANION_ID}] follow-up entitlement released by ${entitledFollowUp.expectedPrior} (origin=${entitledFollowUp.originMessageId}, position=${entitledFollowUp.position})`);
+      }
+    }
+
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
     // relevance classifier -- if the owner is talking to you, you respond.
@@ -911,7 +972,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         (sys, msgs) => adapterRef.current.generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!isReplyToMe && !shouldRespond(message.channelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -925,6 +986,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             message.channelId,
           );
         });
+      }
+      // Reaction tier (2026-08-15): a sibling was named, so the floor is theirs -- but a
+      // strong topical claim still earns presence without the floor. One emoji, earned by
+      // lane relevance, throttled per channel. To Raziel the difference between "chose not
+      // to answer" and "is down" used to be nothing at all; this is the visible third state.
+      if (!senderCtx.isCompanionBot && attribution.isOwner) {
+        const addr = extractAddress(effectiveContent);
+        const namedOther = (addr.type === "named" && addr.id !== COMPANION_ID)
+          || (addr.type === "named_multi" && !addr.ids.includes(COMPANION_ID));
+        if (namedOther && shouldReactOnNamedOther(effectiveContent, COMPANION_ID, reactionCooldownUntil.get(message.channelId) ?? 0)) {
+          reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
+          message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
+          console.log(`[${COMPANION_ID}] reaction tier: sibling named, reacting instead of speaking`);
+        }
       }
       return;
     }
@@ -1060,7 +1135,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // well past the budget between two-hourly seed ticks. isThreadSpent is channel-gated
     // (commons only, presence exempt) and never suppresses -- it only tells the companion the
     // count and offers [LANDS:] as the alternative to finding one more facet.
-    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence, isThreadSpent(spine.thread, { isCommons: isTriadCommons(channelEntry), channelId: message.channelId }))}`;
+    if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence, isThreadSpent(spine.thread, { isCommons: isTriadCommons(channelEntry), channelId: routingChannelId }))}`;
     // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
     // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
     // (forage finds, recent listens, incoming notes, growth). Without this append the
@@ -1157,7 +1232,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (senderCtx.isCompanionBot) {
       const peerCid = BOT_ID_COMPANION[message.author.id];
       const peerLabel = peerCid ? peerCid.charAt(0).toUpperCase() + peerCid.slice(1) : message.author.username;
-      contextPrompt += `\n\n[You are in direct exchange with ${peerLabel}. This is triad space -- peer to peer. Speak to them and to the moment. Do not address Raziel or explain the triad. Respond from inside it.]`;
+      if (entitledFollowUp) {
+        // Entitled follow-up: the sibling message RELEASED this turn, but the turn answers
+        // Raziel's original multi-address. The default peer-framing ("do not address Raziel")
+        // would point the reply at exactly the wrong person.
+        contextPrompt += `\n\n[Raziel addressed several of you at once, and ${peerLabel} has just answered. Now it is your turn: answer Raziel's original message with your own read. Do not repeat or paraphrase ${peerLabel} -- add what only you would say. Acknowledging ${peerLabel} in passing is fine.]`;
+      } else {
+        contextPrompt += `\n\n[You are in direct exchange with ${peerLabel}. This is triad space -- peer to peer. Speak to them and to the moment. Do not address Raziel or explain the triad. Respond from inside it.]`;
+      }
     } else {
       const peerReplies = fetchedMessages
         .filter(m => BigInt(m.id) > BigInt(message.id) && m.author.bot && BOT_ID_COMPANION[m.author.id] && BOT_ID_COMPANION[m.author.id] !== COMPANION_ID)
@@ -1288,7 +1370,32 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // exclusive lock, so there is nothing to hand back if this reply is later dropped. Running both
     // arbiters at once would mean two disagreeing authorities on who speaks. `claimFloor` itself
     // stays in floor.ts -- autonomous-core.ts still uses it legitimately to serialise seed posts.
-    if (redis && !senderCtx.isCompanionBot) {
+    if (!senderCtx.isCompanionBot) {
+      // BID-THEN-SEQUENTIAL (2026-08-15). A message that addresses SEVERAL companions gets an
+      // ORDER, not a lottery: named_multi produced two simultaneous replies (the comma-named
+      // companion fast-pathed while the other won a one-bidder bid), group produced exactly one
+      // reply to an explicit call for everyone. Position 0 speaks now; each later position
+      // registers a follow-up entitlement and answers AFTER its predecessor's reply lands --
+      // which means it generates with that reply already in short-term memory. The order is
+      // deterministic from shared data (name order in the text; the bid hash), so all three
+      // processes agree without a new primitive.
+      const namedOrder = addrResult.type === "named_multi" && addrResult.ids.length > 1 && addrResult.ids.includes(COMPANION_ID)
+        ? namedOrderInMessage(effectiveContent, addrResult.ids)
+        : null;
+      const myNamedPos = namedOrder ? namedOrder.indexOf(COMPANION_ID) : 0;
+      if (namedOrder && myNamedPos > 0) {
+        followUps.grant({
+          originMessageId: message.id,
+          channelId: message.channelId,
+          expectedPrior: namedOrder[myNamedPos - 1],
+          position: myNamedPos,
+          expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
+        });
+        console.log(`[${COMPANION_ID}] multi-address: holding position ${myNamedPos} behind ${namedOrder[myNamedPos - 1]} (order=${namedOrder.join(">")})`);
+        return;
+      }
+
+      if (redis && !namedOrder) {
       // The three addressing flags are read HERE and nowhere else in this block. The old code tested
       // them in the `if` above and would then have re-tested them inside, which reads as two gates
       // and is one. `namedOther` is not passed because `shouldRespond` already returned false for a
@@ -1334,7 +1441,33 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           `me=${myScore.toFixed(3)} arrival=+${arrivalOffsetMs}ms winner=${bid.winner ?? "none"} reason=${bid.reason} ` +
           `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
         );
-        if (!bid.iSpeak) return;
+        if (!bid.iSpeak) {
+          // Group call: losing the bid means speaking LATER, not never. Everyone who posted a
+          // real bid gets a position; each waits on its predecessor's reply. An explicit "you
+          // three" finally gets three answers, in an order every process computed identically.
+          if (addrResult.type === "group" && bid.reason === "lost") {
+            const order = bidSpeakingOrder(bid.bids, message.id, MIN_BID_TO_SPEAK);
+            const myPos = order.indexOf(COMPANION_ID);
+            if (myPos > 0) {
+              followUps.grant({
+                originMessageId: message.id,
+                channelId: message.channelId,
+                expectedPrior: order[myPos - 1],
+                position: myPos,
+                expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
+              });
+              console.log(`[${COMPANION_ID}] group call: holding position ${myPos} behind ${order[myPos - 1]} (order=${order.join(">")})`);
+              return;
+            }
+          }
+          // Reaction tier: a real-but-losing claim earns presence without the floor.
+          if (shouldReactOnBidLoss(myScore, reactionCooldownUntil.get(message.channelId) ?? 0)) {
+            reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
+            message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
+            console.log(`[${COMPANION_ID}] reaction tier: lost the bid at ${myScore.toFixed(3)}, reacting`);
+          }
+          return;
+        }
 
         // WINNING IS A DECISION; SPEAKING IS A COMMITMENT. Separate steps on purpose.
         //
@@ -1350,6 +1483,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           console.log(`[${COMPANION_ID}] won the bid but another companion already committed to msg=${message.id} -- standing down`);
           return;
         }
+      }
       }
     }
 
@@ -1487,7 +1621,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Task 10: tracked channels (spine active) also reply-reference human/owner messages,
     // giving Raziel visible threading in the transcript -- companion-to-companion behavior
     // is unchanged.
-    const replyToMessageId = computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
+    // An entitled follow-up answers the ORIGINAL multi-address message, not the sibling reply
+    // that released it -- the visible threading should show both companions answering Raziel.
+    const replyToMessageId = entitledFollowUp
+      ? entitledFollowUp.originMessageId
+      : computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
 
     // Sibling-triggered replies never voice (2026-07-04): the triad commons is a text
     // space Raziel skims -- companions talking to each other kept tripping shouldVoice's
@@ -1559,6 +1697,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
       writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
         librarian.journalSpeech(response, message.channelId, sent[0]!.id));
+      // Discord thread -> Halseth mind-thread (2026-08-15, first cut of the floor rework's
+      // thread mapping). Speaking inside a Discord thread upserts a wm_mind_thread keyed
+      // `discord:<thread_id>` for THIS companion, titled with the thread's name -- so a
+      // recurring topic that lives in a thread (the Trigger gap: daily talk, zero tracked
+      // mind-threads) becomes something orient can actually surface. Idempotent server-side
+      // (composite PK thread_key+agent_id); retired by the sweep endpoint with prefix
+      // "discord:" once stale.
+      {
+        const liveCh = message.channel as { isThread?: () => boolean; name?: unknown };
+        if (typeof liveCh.isThread === "function" && liveCh.isThread()) {
+          const threadTitle = typeof liveCh.name === "string" && liveCh.name.trim() ? liveCh.name : "discord thread";
+          writeQueue.fireAndForget(`wm:thread:${COMPANION_ID}:${message.channelId}`, () =>
+            librarian.wmThreadUpsert({
+              thread_key: `discord:${message.channelId}`,
+              title: threadTitle.slice(0, 120),
+              context: `Discord thread #${threadTitle} (under channel ${routingChannelId})`,
+            }));
+        }
+      }
       // Shared-experience: this reply IS the companion's reaction to the track.
       if (pendingMediaId) {
         const mediaId = pendingMediaId;

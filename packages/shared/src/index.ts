@@ -2,6 +2,8 @@ import "./net-tuning.js"; // side-effect: must run before any fetch (VPS->Cloudf
 export * from "./types.js";
 export * from "./floor.js";
 export * from "./fit-bid.js";
+export * from "./sequential-floor.js";
+export * from "./reaction-tier.js";
 export * from "./events.js";
 export * from "./librarian.js";
 export * from "./pluralkit.js";

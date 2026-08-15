@@ -403,6 +403,33 @@ export async function judgeAmbientRelevance(
 }
 
 /**
+ * Which channel id decides CONFIG for a message (2026-08-15, floor rework: Discord threads).
+ *
+ * A message inside a Discord thread carries the THREAD's snowflake as channelId, so
+ * `channelConfig[channelId]` missed for every thread under a configured channel and the
+ * thread silently fell to the default ["open","inter_companion"] -- a thread under an
+ * owner_only channel behaved as an open one, and spine tracking never engaged.
+ *
+ * Resolution: config/gating inherit from the PARENT channel; storage keys (STM, spine,
+ * journals, counters) keep the thread's own id -- they must stay separate or per-thread
+ * memory collapses into the parent. An explicitly-configured thread id still wins: the
+ * caller checks `config[message.channelId]` first and only falls back to this.
+ *
+ * Duck-typed rather than importing discord.js types so pure tests can pass a plain object.
+ */
+export function resolveRoutingChannelId(
+  channel: { isThread?: () => boolean; parentId?: string | null } | null | undefined,
+  channelId: string,
+): string {
+  try {
+    if (channel && typeof channel.isThread === "function" && channel.isThread() && channel.parentId) {
+      return channel.parentId;
+    }
+  } catch { /* a mock without thread support routes as itself */ }
+  return channelId;
+}
+
+/**
  * How long a companion "holds the thread" for unaddressed follow-ups. Matches
  * NEW_THREAD_GAP_MS: the same 5 minutes every other rail uses to decide a conversation has
  * gone quiet. After it, an unaddressed message is open to whoever it fits again.

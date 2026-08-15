@@ -1344,7 +1344,14 @@ export async function sweepStaleThreads(companionId: string): Promise<number> {
     older_than_days: 14,
     prefix: "auto:",
   }) as { swept?: number };
-  return r.swept ?? 0;
+  // discord:* threads (2026-08-15 floor rework: Discord threads map to wm_mind_threads) get a
+  // longer leash -- a Discord thread revived after two weeks is normal, after 30 days it's done.
+  const rd = await hFetch("/mind/threads/sweep", "POST", {
+    agent_id: companionId,
+    older_than_days: 30,
+    prefix: "discord:",
+  }).catch(() => ({})) as { swept?: number };
+  return (r.swept ?? 0) + (rd.swept ?? 0);
 }
 
 // ── Relational deltas (2026-07-21, Wave 3) ────────────────────────────────────
