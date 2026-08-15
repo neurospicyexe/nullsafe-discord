@@ -62,6 +62,8 @@ export interface BootSessionOptions {
   identityCache: { system_prompt: string } | null;
   /** Injectable LibrarianClient (tests). Defaults to a freshly constructed client. */
   librarian?: LibrarianClient;
+  /** Halseth mig 0113: surface identifier for session dedup. E.g., "discord:cypher". */
+  surface?: string;
 }
 
 export interface BootSessionResult {
@@ -79,7 +81,7 @@ export interface BootSessionResult {
  * parameterized off `companionId` (which is already lowercase, e.g. `[cypher]`).
  */
 export async function bootSession(opts: BootSessionOptions): Promise<BootSessionResult> {
-  const { companionId, halsethUrl, halsethSecret, prefix, fallbackPrompt, identityCache } = opts;
+  const { companionId, halsethUrl, halsethSecret, prefix, fallbackPrompt, identityCache, surface } = opts;
   const tag = `[${companionId}]`;
   const cache = identityCache;
 
@@ -87,7 +89,7 @@ export async function bootSession(opts: BootSessionOptions): Promise<BootSession
     opts.librarian ?? new LibrarianClient({ url: halsethUrl, secret: halsethSecret, companionId });
 
   try {
-    const state = await librarian.sessionOpen("work");
+    const state = await librarian.sessionOpen("work", surface);
     const sessionId = String(state["session_id"] ?? "unknown");
     const rawPrompt = String(state["prompt_context"] ?? state["ready_prompt"] ?? "").trim();
     const baseIdentity = cache?.system_prompt || fallbackPrompt;
@@ -289,6 +291,8 @@ export interface RunBotConfig {
     auditTriggers: string[];
     auditModeInjection: string;
   };
+  /** Halseth mig 0113: surface identifier for session dedup. E.g., "discord:cypher" */
+  surface?: string;
 }
 
 /**
@@ -305,7 +309,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
     modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, watchTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
-    autonomous, auditConfig,
+    autonomous, auditConfig, surface,
   } = brc;
 
   // Dormancy is announced, not implied: "mode: hermes" alone doesn't tell a reader that the whole
@@ -351,6 +355,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     prefix: discordPrefix,
     fallbackPrompt: inCharacterFallback,
     identityCache,
+    surface,
   });
 
   let cleanupEventSubs: (() => Promise<void>) | null = null;

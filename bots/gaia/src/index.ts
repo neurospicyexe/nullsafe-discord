@@ -49,4 +49,5 @@ runBot(loadBotConfig(), {
   mistralTtsModel: MISTRAL_TTS_MODEL,
   mistralSttModel: MISTRAL_STT_MODEL,
   autonomous: { start: startAutonomous, stop: stopAutonomous, resetCycleGuard, pushRazielMessage },
+  surface: "discord:gaia",
 }).catch(e => { console.error("[gaia] fatal:", e); process.exit(1); });

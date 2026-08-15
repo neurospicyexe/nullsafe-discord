@@ -50,4 +50,5 @@ runBot(loadBotConfig(), {
   mistralSttModel: MISTRAL_STT_MODEL,
   autonomous: { start: startAutonomous, stop: stopAutonomous, resetCycleGuard, pushRazielMessage },
   auditConfig: { auditTriggers: AUDIT_TRIGGERS, auditModeInjection: AUDIT_MODE_INJECTION },
+  surface: "discord:cypher",
 }).catch(e => { console.error("[cypher] fatal:", e); process.exit(1); });

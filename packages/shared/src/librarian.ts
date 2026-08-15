@@ -161,8 +161,13 @@ export class LibrarianClient {
     return assertWriteAck(await this.ask(request, context, sessionType), label);
   }
 
-  async sessionOpen(sessionType: "work" | "checkin" | "hangout" | "ritual" = "work") {
-    return this.ask("open my session", undefined, sessionType);
+  /**
+   * Open a Halseth session. Halseth mig 0113: surface parameter enables dedup by (companion, surface)
+   * so Discord sessions don't collide with Claude.ai or autonomous worker sessions.
+   * E.g., `discord:#general`, `autonomous:worker`, `claude:code-session`
+   */
+  async sessionOpen(sessionType: "work" | "checkin" | "hangout" | "ritual" = "work", surface?: string) {
+    return this.ask("open my session", undefined, sessionType, surface);
   }
 
   async sessionClose(params: {
