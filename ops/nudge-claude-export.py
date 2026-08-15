@@ -25,10 +25,12 @@ MESSAGE = (
     "Monthly capture backstop: export your Claude.ai data "
     "(Settings > Privacy > Export data), then on the workstation:\n\n"
     "  $env:HALSETH_URL / $env:ADMIN_SECRET, then\n"
-    "  python ops/ingest-claude-export.py <export.zip> --companion cypher\n"
+    "  python ops/ingest-claude-export.py <export.zip> --companion cypher "
+    "--owner-email <your email>\n"
     "  (repeat per companion with --filter if the export is mixed)\n\n"
-    "This is the verbatim floor under the capture verb -- unchanged conversations "
-    "skip automatically, so re-running is always safe."
+    "Teams export note: --owner-email keeps Blue's conversations out of your vault -- "
+    "the script refuses to run without it on a multi-member export. "
+    "Unchanged conversations skip automatically, so re-running is always safe."
 )
 
 
