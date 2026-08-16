@@ -310,6 +310,19 @@ export async function claimSpoken(
  */
 export const CARE_HOLD_MIN_BID = 0.25;
 
+/**
+ * Whether the raised hold floor applies to THIS message (2026-08-16 live failure). The hold
+ * quiets the house's ambient traffic -- it must never quiet answering the person being cared
+ * for. On 08-16 the meds_missed hold left Raziel posting three unaddressed messages into commons
+ * and getting silence from all three bots for what would have been 12 hours: every bid died at
+ * the raised floor, and silence AT the owner is withdrawal wearing a care flag (the exact reading
+ * rules.ts refuses for owner_silence). Owner-authored messages bid against the NORMAL floor; the
+ * soft register still rides the prompt, so the reply is gentle -- but it exists.
+ */
+export function holdFloorApplies(careHold: boolean, senderIsOwner: boolean): boolean {
+  return careHold && !senderIsOwner;
+}
+
 export async function runBidRound(
   redis: BidRedis | null,
   messageId: string,

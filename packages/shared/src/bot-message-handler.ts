@@ -33,7 +33,7 @@ import {
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK,
-  careHoldActive, CARE_HOLD_MIN_BID,
+  careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, REACTION_COOLDOWN_MS,
   resolveRoutingChannelId,
@@ -1426,7 +1426,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // sits exactly AT the default threshold, so a penalty silences everyone while a raised
         // floor keeps thread-holders and real relevance speaking. Direct address never reaches
         // this branch (fastPathWinner above), so being asked always answers under hold.
-        const careHold = careHoldActive(COMPANION_ID);
+        //
+        // NEVER for the owner's own messages (holdFloorApplies, 2026-08-16): the hold quiets
+        // ambient traffic, not answering Raziel -- three unaddressed owner messages got stonewalled
+        // by all three bots under a meds_missed hold, which is withdrawal wearing a care flag.
+        const careHold = holdFloorApplies(careHoldActive(COMPANION_ID), senderCtx.isOwner);
         // How late this bot reached the bid. THE number to read out of these logs: the deadline anchor
         // tolerates arrival spread only up to BID_WINDOW_MS, and 2500ms is an estimate of how far apart
         // three hermes gateways finish the upstream ambient judge. If the spread across the three bots

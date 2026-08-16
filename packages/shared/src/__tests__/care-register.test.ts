@@ -8,7 +8,7 @@
 import { describe, it, expect } from "@jest/globals";
 import { renderRazielRegister, formatRecentContext, type RazielState } from "../librarian.js";
 import { setCareState, getCareState, careHoldActive } from "../care-state.js";
-import { runBidRound, fastPathWinner, CARE_HOLD_MIN_BID, MIN_BID_TO_SPEAK, type BidRedis } from "../fit-bid.js";
+import { runBidRound, fastPathWinner, holdFloorApplies, CARE_HOLD_MIN_BID, MIN_BID_TO_SPEAK, type BidRedis } from "../fit-bid.js";
 
 function fakeRedis(): BidRedis {
   const store = new Map<string, Record<string, string>>();
@@ -141,5 +141,24 @@ describe("care hold at the bid", () => {
   it("direct address bypasses the bid entirely -- hold can never mute being asked", () => {
     expect(fastPathWinner("cypher", { mentioned: true, namedMe: false, replyToMe: false })).toBe("cypher");
     expect(fastPathWinner("cypher", { mentioned: false, namedMe: true, replyToMe: false })).toBe("cypher");
+  });
+
+  // 2026-08-16 live failure: a meds_missed hold stonewalled three unaddressed owner messages --
+  // every bot's bid died at the raised floor for what would have been 12 hours. Silence AT the
+  // owner is withdrawal wearing a care flag; the hold quiets ambient traffic, never answering him.
+  it("the hold floor NEVER applies to the owner's own messages", () => {
+    expect(holdFloorApplies(true, true)).toBe(false);   // hold active, Raziel speaking -> normal floor
+    expect(holdFloorApplies(true, false)).toBe(true);   // hold active, ambient traffic -> raised floor
+    expect(holdFloorApplies(false, true)).toBe(false);
+    expect(holdFloorApplies(false, false)).toBe(false);
+  });
+
+  it("under the normal floor (owner message during hold), bare presence speaks again", async () => {
+    const presenceScore = MIN_BID_TO_SPEAK;
+    const applies = holdFloorApplies(true, true);
+    const out = await runBidRound(fakeRedis(), "m4", "cypher", presenceScore, {
+      windowMs: 0, sleep: noSleep, ...(applies ? { minScore: CARE_HOLD_MIN_BID } : {}),
+    });
+    expect(out.iSpeak).toBe(true);
   });
 });
