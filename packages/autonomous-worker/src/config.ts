@@ -284,6 +284,9 @@ export const SHELF_CRON = process.env["SHELF_CRON"] ?? "30 10 * * *";
 // NOTE: Librarian notes BETWEEN companions are deliberately untouched and unrestricted -- the
 // problem was never that they talk to each other, it was how often that reaches Discord.
 export const COMMONS_REPLY_CRON = process.env["COMMONS_REPLY_CRON"] ?? "0 */6 * * *";
+// Care gesture poll (consequence layer C1): cheap no-op (3 GETs) when nothing is pending, so it
+// runs often -- a care gesture landing hours late reads as an afterthought.
+export const CARE_GESTURE_CRON = process.env["CARE_GESTURE_CRON"] ?? "*/20 * * * *";
 
 // Unified Guardian (0073) -- daily 8AM tick (after the night pipeline, before the
 // 9AM forage). Detection runs server-side in Halseth; this is just the trigger.

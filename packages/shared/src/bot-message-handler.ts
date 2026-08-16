@@ -33,6 +33,7 @@ import {
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK,
+  careHoldActive, CARE_HOLD_MIN_BID,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, REACTION_COOLDOWN_MS,
   resolveRoutingChannelId,
@@ -1421,6 +1422,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             })),
         });
         const myScore = scoreFit(signals);
+        // Care hold (C1): raise the bid floor instead of penalizing the score -- bare presence
+        // sits exactly AT the default threshold, so a penalty silences everyone while a raised
+        // floor keeps thread-holders and real relevance speaking. Direct address never reaches
+        // this branch (fastPathWinner above), so being asked always answers under hold.
+        const careHold = careHoldActive(COMPANION_ID);
         // How late this bot reached the bid. THE number to read out of these logs: the deadline anchor
         // tolerates arrival spread only up to BID_WINDOW_MS, and 2500ms is an estimate of how far apart
         // three hermes gateways finish the upstream ambient judge. If the spread across the three bots
@@ -1432,6 +1438,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // gateway) can no longer decide the winner by returning first.
         const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore, {
           deadlineAt: message.createdTimestamp + BID_WINDOW_MS,
+          ...(careHold ? { minScore: CARE_HOLD_MIN_BID } : {}),
         });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
         // they have to be tuned against the real score distribution, and this line is the only place
@@ -1439,7 +1446,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // bots ignoring him -- the one failure mode that reads as broken rather than as tact.
         console.log(
           `[${COMPANION_ID}] fit-bid ch=${message.channelId} msg=${message.id} ` +
-          `me=${myScore.toFixed(3)} arrival=+${arrivalOffsetMs}ms winner=${bid.winner ?? "none"} reason=${bid.reason} ` +
+          `me=${myScore.toFixed(3)} arrival=+${arrivalOffsetMs}ms winner=${bid.winner ?? "none"} reason=${bid.reason}${careHold ? " care_hold=1" : ""} ` +
           `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
         );
         if (!bid.iSpeak) {

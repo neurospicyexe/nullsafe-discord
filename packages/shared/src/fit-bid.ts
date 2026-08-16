@@ -301,6 +301,15 @@ export async function claimSpoken(
  * the channel going silent because a cache is down. A missing coordination layer should degrade to
  * "possibly two answers", never to "nobody answers" -- the second is indistinguishable from broken.
  */
+/**
+ * The bid floor while a care hold is active (consequence layer C1). Raised, not silenced: bare
+ * presence (0.10) no longer clears, so ambient chiming-in quiets, but a real claim -- holding the
+ * thread (+0.45) or genuine lane relevance -- still speaks. Direct address never reaches the bid
+ * at all (fastPathWinner), so being asked always answers regardless of hold. 0.25 deliberately
+ * matches REACT_MIN_BID_SCORE's "bare presence earns nothing" line.
+ */
+export const CARE_HOLD_MIN_BID = 0.25;
+
 export async function runBidRound(
   redis: BidRedis | null,
   messageId: string,

@@ -1397,3 +1397,33 @@ export async function postRelationalDelta(companionId: string, deltaText: string
     throw new Error(`Halseth POST /librarian (delta_log) → ${res.status}: ${text.slice(0, 200)}`);
   }
 }
+
+// ── Care loop (consequence layer C1, mig 0121) ────────────────────────────────
+// The rider in halseth detects (rules-first) and assigns each firing to ONE companion; the
+// worker's gesture tick polls the pending slot and acts. The ack is the falsifiability half:
+// every gesture -- including a held one -- lands back in care_actions with what was done.
+
+export interface PendingCareAction {
+  id: string;
+  rule: string;
+  detail: string;
+  detected_at: string;
+}
+
+export async function getPendingCare(companionId: string): Promise<PendingCareAction | null> {
+  const r = await hFetch(`/mind/care/pending/${companionId}`) as { pending: PendingCareAction | null };
+  return r.pending ?? null;
+}
+
+export async function ackCareGesture(
+  id: string,
+  companionId: string,
+  gesture: string,
+  note?: string,
+): Promise<void> {
+  await hFetch(`/mind/care/${id}/acted`, "POST", {
+    companion_id: companionId,
+    gesture,
+    ...(note ? { note } : {}),
+  });
+}

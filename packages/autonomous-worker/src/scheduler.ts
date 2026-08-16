@@ -21,9 +21,10 @@ import { runCreaturesTick } from "./creatures.js";
 import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
 import { runShelfReactTick, runCommonsReplyTick } from "./commons-social.js";
+import { runCareGestureTick } from "./care.js";
 import { runBriefingTick } from "./briefing.js";
 import { runVibeCheckTick } from "./vibecheck.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON } from "./config.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -264,6 +265,14 @@ export function startScheduler(): void {
   console.log(`[scheduler] commons-reply → cron "${COMMONS_REPLY_CRON}"`);
   cron.schedule(COMMONS_REPLY_CRON, () => {
     runCommonsReplyTick().catch(e => console.error("[scheduler] commons-reply failed:", e));
+  });
+
+  // Care gestures (consequence layer C1): if halseth's rider assigned this companion a pending
+  // care firing, make the small act and ack it. Cheap no-op when nothing is pending; writes to
+  // Halseth commons only, no floor lock. The one-companion-per-firing rail is server-side.
+  console.log(`[scheduler] care-gesture → cron "${CARE_GESTURE_CRON}"`);
+  cron.schedule(CARE_GESTURE_CRON, () => {
+    runCareGestureTick().catch(e => console.error("[scheduler] care-gesture failed:", e));
   });
 
   // ND daily-rhythm briefing (accessibility / executive-function layer). Three thin triggers;

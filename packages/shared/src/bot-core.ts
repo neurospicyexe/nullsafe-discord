@@ -13,6 +13,7 @@
 
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { setArmedTriggers } from "./triggers.js";
+import { setCareState } from "./care-state.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
@@ -109,6 +110,7 @@ export async function bootSession(opts: BootSessionOptions): Promise<BootSession
       const orient = await librarian.botOrient();
       recentContext = formatRecentContext(orient);
       setArmedTriggers(companionId, orient?.armed_triggers ?? []);
+      setCareState(companionId, orient?.raziel_state);
       if (recentContext) console.log(`${tag} botOrient: ${recentContext.length} chars loaded`);
     } catch { console.warn(`${tag} botOrient failed at boot, starting cold`); }
 
@@ -193,6 +195,9 @@ export async function refreshBotState(opts: RefreshBotStateOptions): Promise<voi
     recentContextRef.value = freshRecentCtx;
     if (orientOk) {
       setArmedTriggers(companionId, orientResult.value?.armed_triggers ?? []);
+      // Care register (C1): refreshed with orient, kept on failure -- a stale hold beats a
+      // dropped one for the same reason the recent context above keeps its cached value.
+      setCareState(companionId, orientResult.value?.raziel_state);
     }
 
     bootCtx.systemPrompt = composePrompt({ identityCore: identityBase, promptContext: freshPromptCtx ?? undefined, companionId, recentContext: freshRecentCtx });

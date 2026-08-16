@@ -931,6 +931,14 @@ export class LibrarianClient {
     continuity_notes?: string[];
     // Imp read-back (2026-07-02): which fragment operators rode with this companion this week.
     imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+    // Sources that FAILED server-side during this load (coherence review D11). Mapped here because
+    // formatRecentContext already typed + rendered it while this mapping silently dropped it -- an
+    // accepted-and-ignored field is worse than a rejected one.
+    degraded?: string[];
+    // The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
+    // server-side. care_hold is read by fit-bid to soften stakes; pending_care is a gesture
+    // assigned to THIS companion (one at most, day-parity assignment server-side).
+    raziel_state?: RazielState | null;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -970,6 +978,8 @@ export class LibrarianClient {
         club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
         continuity_notes?: string[];
         imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+        degraded?: string[];
+        raziel_state?: RazielState | null;
       } | undefined;
       if (!data) return null;
       return {
@@ -1018,6 +1028,8 @@ export class LibrarianClient {
         club_round: data.club_round ?? null,
         continuity_notes: Array.isArray(data.continuity_notes) ? data.continuity_notes : [],
         imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
+        degraded: Array.isArray(data.degraded) ? data.degraded : [],
+        raziel_state: data.raziel_state ?? null,
       };
     } catch {
       return null;
@@ -1643,6 +1655,56 @@ export async function isMyAutonomousTurn(
 /** Character budget for the assembled recent-context block. Forage is pinned inside it. */
 export const RECENT_CONTEXT_BUDGET = 4800;
 
+/**
+ * The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
+ * server-side in halseth (mind/blocks/care.ts). Staleness is part of the shape on purpose -- a
+ * renderer that shows a three-day-old "2 spoons" as current is misinforming, not caring.
+ */
+export interface RazielState {
+  spoons: number | null;
+  mood: string | null;
+  pain: number | null;
+  energy: number | null;
+  meds_taken: number | null;
+  recorded_at: string | null;
+  staleness_hours: number | null;
+  front_state: string | null;
+  /** True while a low reading is inside its hold window. fit-bid reads this to soften stakes. */
+  care_hold: boolean;
+  /** A gesture assigned to THIS companion, un-acted. One at most. */
+  pending_care: { id: string; rule: string; detail: string; detected_at: string } | null;
+}
+
+/**
+ * Pure renderer for the register line (exported for tests). One compact block: readings + age,
+ * front, hold, pending gesture. Empty string when there is nothing to show.
+ */
+export function renderRazielRegister(rs: RazielState | null | undefined): string {
+  if (!rs) return "";
+  const readings: string[] = [];
+  if (rs.spoons !== null) readings.push(`spoons ${rs.spoons}/12`);
+  if (rs.mood) readings.push(`mood "${rs.mood}"`);
+  if (rs.pain !== null) readings.push(`pain ${rs.pain}/10`);
+  if (rs.energy !== null) readings.push(`energy ${rs.energy}/10`);
+  if (rs.meds_taken !== null) readings.push(rs.meds_taken === 1 ? "meds taken" : "meds not logged");
+  const age = rs.staleness_hours !== null
+    ? (rs.staleness_hours <= 36
+        ? ` (logged ${Math.round(rs.staleness_hours)}h ago)`
+        : ` (STALE -- ${Math.round(rs.staleness_hours / 24)}d old, weigh lightly)`)
+    : "";
+  const lines: string[] = [];
+  if (readings.length > 0) lines.push(readings.join(", ") + age);
+  if (rs.front_state) lines.push(`Fronting: ${rs.front_state}`);
+  if (rs.care_hold) {
+    lines.push("Care hold is ON -- a low reading fired recently. Soften stakes: lighter register, defer heavy threads, presence over production.");
+  }
+  if (rs.pending_care) {
+    lines.push(`You hold a pending care gesture (${rs.pending_care.rule}: ${rs.pending_care.detail}). A small act, not a fix -- a short note, a commons drop, presence.`);
+  }
+  if (lines.length === 0) return "";
+  return `[Raziel -- register]\n${lines.join("\n")}`;
+}
+
 export function formatRecentContext(orient: {
   synthesis_summary: string | null;
   ground_threads: string[];
@@ -1691,6 +1753,9 @@ export function formatRecentContext(orient: {
   // Sources that FAILED server-side during this orient's state load (coherence review D11).
   // Rendered as an early health line so the companion reads missing blocks as broken, not empty.
   degraded?: string[];
+  // The care register (consequence layer C1): rendered near the top so register calibration
+  // lands before content, and so the tail cut can never drop it.
+  raziel_state?: RazielState | null;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -1712,6 +1777,12 @@ export function formatRecentContext(orient: {
   if (orient.degraded?.length) {
     parts.push(`[State load degraded -- these sources failed just now: ${orient.degraded.join(", ")}. Their sections are MISSING below, not empty; do not read absence as "nothing there".]`);
   }
+
+  // The care register (C1): right after the health line, above every content block. Register
+  // calibration has to land before the companion reads anything else, and early placement means
+  // the 4800-char tail cut can never drop it (same protection as the degraded line).
+  const registerLine = renderRazielRegister(orient.raziel_state);
+  if (registerLine) parts.push(registerLine);
 
   // WATCHING (mig 0111). Placed near the top AND pinned against truncation below, because it is one
   // short line carrying a fact that is otherwise unanswerable: Raziel asked Drevan where they were in
