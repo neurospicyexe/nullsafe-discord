@@ -23,7 +23,8 @@ import type { BotConfig, BootContext, CompanionId } from "./types.js";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { Readable } from "stream";
-import { Client, GatewayIntentBits, Events, type Message, type VoiceBasedChannel } from "discord.js";
+import { Client, GatewayIntentBits, Events, Partials, type Message, type VoiceBasedChannel } from "discord.js";
+import { describeReactor } from "./reaction-tier.js";
 import {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   VoiceConnectionStatus, EndBehaviorType,
@@ -550,7 +551,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildVoiceStates,
+      // Reaction READING (2026-08-16): the floor rework's reaction tier gave companions an emoji
+      // OUTPUT; without this intent they could never see one -- their own or anyone else's.
+      GatewayIntentBits.GuildMessageReactions,
     ],
+    // Reactions on messages older than the process (or simply uncached) arrive as partials;
+    // without these the MessageReactionAdd event for them is silently never emitted.
+    partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User],
   });
 
   client.once(Events.ClientReady, (c) => {
@@ -715,6 +722,49 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const inbox = new ChannelInbox({
     isCommandShaped: (content) => commandGuard?.test(content) ?? false,
     log: (m) => console.log(`[${companionId}] ${m}`),
+  });
+
+  // Reaction READING (2026-08-16, the floor rework's named next cut). The reaction tier made
+  // an emoji the third output; this is the matching INPUT: when someone reacts to THIS
+  // companion's message, the fact lands in the channel's STM, so the next generation sees
+  // "Drevan marked that with 🔥" instead of the reaction not existing anywhere in the mind.
+  // Only reactions to the companion's OWN messages -- watching every reaction in the channel
+  // would be surveillance, not presence. Unrecognized bot reactors are dropped (describeReactor
+  // returns null), same fail-closed shape as the unconfirmed-webhook muzzle.
+  const seenReactions = new Set<string>();
+  client.on(Events.MessageReactionAdd, async (reaction, user) => {
+    try {
+      if (user.id === client.user?.id) return; // own glyphs are not news
+      const r = reaction.partial ? await reaction.fetch() : reaction;
+      const msg = r.message.partial ? await r.message.fetch() : r.message;
+      if (msg.author?.id !== client.user?.id) return; // only reactions to MY messages
+      const emoji = r.emoji.name ?? "☑";
+      const key = `${msg.id}:${user.id}:${emoji}`;
+      if (seenReactions.has(key)) return; // add/remove/add churn is one fact, not three
+      seenReactions.add(key);
+      while (seenReactions.size > 500) {
+        const oldest = seenReactions.values().next().value;
+        if (oldest === undefined) break;
+        seenReactions.delete(oldest);
+      }
+      const who = describeReactor(
+        { id: user.id, bot: user.bot ?? false, username: user.username ?? null },
+        companionId,
+        env.ownerDiscordId,
+        env.ownerDisplayName,
+      );
+      if (!who) return;
+      const snippet = (msg.content ?? "").replace(/\s+/g, " ").slice(0, 80);
+      stmStore.append(msg.channelId, {
+        role: "user",
+        authorName: "channel",
+        content: `[reaction] ${who} reacted ${emoji} to your message "${snippet}"`,
+        timestamp: Date.now(),
+      });
+      console.log(`[${companionId}] reaction seen: ${who} ${emoji} on ${msg.id}`);
+    } catch (e) {
+      console.warn(`[${companionId}] reaction read failed:`, e instanceof Error ? e.message : String(e));
+    }
   });
 
   client.on(Events.MessageCreate, (message: Message) => {

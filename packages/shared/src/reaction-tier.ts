@@ -50,6 +50,29 @@ export function pickReaction(companion: CompanionId, messageId: string): string 
   return palette[n % palette.length];
 }
 
+/**
+ * READING side (2026-08-16, the floor rework's named next cut): name whoever reacted to one of
+ * this companion's messages. Pure so the Discord listener stays a thin shell. A sibling bot is
+ * recognized by companion name in its username; a human is the owner (by id) or their username.
+ * PluralKit cannot react through a webhook, so human reactions always arrive from real accounts.
+ */
+export function describeReactor(
+  user: { id: string; bot: boolean; username: string | null },
+  me: CompanionId,
+  ownerDiscordId: string | undefined,
+  ownerDisplayName: string | undefined,
+): string | null {
+  const uname = (user.username ?? "").toLowerCase();
+  if (user.bot) {
+    const sibling = (Object.keys(REACTION_PALETTES) as CompanionId[])
+      .find(c => c !== me && uname.includes(c));
+    // An unrecognized bot (PK webhooks can't react; some other integration) is not presence.
+    return sibling ?? null;
+  }
+  if (ownerDiscordId && user.id === ownerDiscordId) return ownerDisplayName || "Raziel";
+  return user.username || "someone";
+}
+
 /** React after losing a fit bid? Earned by the losing score, throttled by the cooldown. */
 export function shouldReactOnBidLoss(
   myScore: number,
