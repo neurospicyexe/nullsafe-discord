@@ -1688,6 +1688,9 @@ export function formatRecentContext(orient: {
   supersede_candidates?: Array<{ new_id: string; older_id: string; score: number; newer: string; older: string }>;
   continuity_notes?: string[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+  // Sources that FAILED server-side during this orient's state load (coherence review D11).
+  // Rendered as an early health line so the companion reads missing blocks as broken, not empty.
+  degraded?: string[];
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -1702,6 +1705,13 @@ export function formatRecentContext(orient: {
     hour: 'numeric', minute: '2-digit', hour12: true,
     timeZoneName: 'short',
   }).format(_now)}]`);
+
+  // Degraded-load notice (D11): placed at the very top, before any block whose absence it explains.
+  // Early placement also means the 4800-char tail cut can never drop it -- the one line that says
+  // "missing, not empty" is the last line that should ever be truncated away.
+  if (orient.degraded?.length) {
+    parts.push(`[State load degraded -- these sources failed just now: ${orient.degraded.join(", ")}. Their sections are MISSING below, not empty; do not read absence as "nothing there".]`);
+  }
 
   // WATCHING (mig 0111). Placed near the top AND pinned against truncation below, because it is one
   // short line carrying a fact that is otherwise unanswerable: Raziel asked Drevan where they were in
