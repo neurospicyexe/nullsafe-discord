@@ -15,6 +15,7 @@
 
 import type { ChatMessage } from "./types.js";
 import type { WriteQueue } from "./write-queue.js";
+import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 
 export const STM_BUFFER_SIZE = 100;
 
@@ -122,6 +123,8 @@ export class StmStore {
       this.writeQueue.fireAndForget(
         `stm:${channelId}`,
         () => this.writeFn(channelId, message),
+        // Append-shaped: a chat turn 40 minutes late still belongs in the transcript.
+        { maxAgeMs: APPEND_MAX_AGE_MS },
       );
     } else {
       this.writeFn(channelId, message).catch((e) => {

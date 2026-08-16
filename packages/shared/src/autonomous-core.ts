@@ -1203,6 +1203,12 @@ export async function runNotesPoll(ctx: AutonomousContext): Promise<void> {
   if (sessionWindows.isAnyActive()) return; // Don't deliver notes mid-conversation
   try {
     const { items } = await librarian.notesPoll();
+    // Ack ONLY what was actually spoken (coherence review, Tranche 1 backlog). The old
+    // ack-everything-after-the-loop marked notes read that the cooldown `break` skipped, or that
+    // inference returned empty for -- receipt-stamped unseen, the same consumed-not-delivered
+    // shape as broadcast first-reader-wins. An undelivered note stays unread and the next poll
+    // re-serves it; the cooldown bounds any regeneration cost.
+    const delivered: string[] = [];
     for (const note of items) {
       if (isOnCooldown(ctx, interCompanionChannelId)) break;
       const from = note.from_id ?? "a companion";
@@ -1211,13 +1217,18 @@ export async function runNotesPoll(ctx: AutonomousContext): Promise<void> {
           bootCtx.systemPrompt,
           [{ role: "user", content: prompts.notesReply(from, note.content) }],
         );
-        if (response) await sendAutonomousMessage(ctx, interCompanionChannelId!, response, "notes_poll");
+        if (response) {
+          await sendAutonomousMessage(ctx, interCompanionChannelId!, response, "notes_poll");
+          delivered.push(note.id);
+        }
       });
     }
-    // Ack all notes after processing (mark-on-ack pattern)
-    if (items.length > 0) {
-      await librarian.notesAck(items.map(n => n.id)).catch((e: unknown) =>
+    if (delivered.length > 0) {
+      await librarian.notesAck(delivered).catch((e: unknown) =>
         console.warn(`[${companionId}/autonomous] notesAck failed:`, e));
+    }
+    if (delivered.length < items.length) {
+      console.log(`[${companionId}/autonomous] notesPoll delivered ${delivered.length}/${items.length}; the rest stay unread for the next poll`);
     }
   } catch (e) {
     console.warn(`[${companionId}/autonomous] notesPoll failed:`, e);

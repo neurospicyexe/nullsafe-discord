@@ -29,11 +29,28 @@ export interface QueuedWrite {
   label: string;
   fn: () => Promise<void>;
   queuedAt: number;
+  /** Per-entry retry TTL. Absent = MAX_AGE_MS. See enqueue/fireAndForget opts. */
+  maxAgeMs?: number;
 }
 
-const MAX_BUFFER = 100;
+export interface WriteOpts {
+  /**
+   * How long this write may sit buffered before it is dropped as stale (coherence review,
+   * WriteQueue loss modes). Two classes exist and they must not share a TTL:
+   * - STATE-shaped writes (settings:model, drives, pulse) keep the short default -- replaying an
+   *   OLD value after a NEWER one succeeded would revert live state, so late is worse than lost.
+   * - APPEND-shaped, idempotent writes (journal:speech has external_id for exactly this; notes;
+   *   thread upserts) pass APPEND_MAX_AGE_MS -- a journal entry 40 minutes late is still the
+   *   entry; for appends, lost is worse than late.
+   */
+  maxAgeMs?: number;
+}
+
+export const MAX_BUFFER = 300;
 const RETRY_INTERVAL_MS = 30_000;
-const MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes; don't retry stale writes
+const MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes; don't retry stale STATE writes
+/** TTL for append-shaped idempotent writes -- late beats lost. */
+export const APPEND_MAX_AGE_MS = 60 * 60 * 1000;
 
 export class WriteQueue {
   private buffer: QueuedWrite[] = [];
@@ -66,11 +83,11 @@ export class WriteQueue {
    * Execute a write. If it fails, log and buffer it for retry.
    * Never throws; callers can fire-and-forget safely.
    */
-  async enqueue(label: string, fn: () => Promise<void>): Promise<void> {
+  async enqueue(label: string, fn: () => Promise<void>, opts?: WriteOpts): Promise<void> {
     try {
       await fn();
     } catch (e) {
-      this.bufferFailure(label, fn, e);
+      this.bufferFailure(label, fn, e, opts);
     }
   }
 
@@ -78,15 +95,15 @@ export class WriteQueue {
    * Fire-and-forget variant. Returns immediately, runs the write async.
    * On failure, logs and buffers for retry. Never blocks, never throws.
    */
-  fireAndForget(label: string, fn: () => Promise<void>): void {
-    fn().catch((e) => this.bufferFailure(label, fn, e));
+  fireAndForget(label: string, fn: () => Promise<void>, opts?: WriteOpts): void {
+    fn().catch((e) => this.bufferFailure(label, fn, e, opts));
   }
 
   /** Log the failure (so it's never silent) and buffer the write for retry. */
-  private bufferFailure(label: string, fn: () => Promise<void>, err: unknown): void {
+  private bufferFailure(label: string, fn: () => Promise<void>, err: unknown, opts?: WriteOpts): void {
     const reason = err instanceof Error ? err.message : String(err);
     console.warn(`[${this.name}] write failed, buffering for retry: ${label} -- ${reason}`);
-    this.addToBuffer({ label, fn, queuedAt: Date.now() });
+    this.addToBuffer({ label, fn, queuedAt: Date.now(), maxAgeMs: opts?.maxAgeMs });
   }
 
   private addToBuffer(entry: QueuedWrite): void {
@@ -108,10 +125,11 @@ export class WriteQueue {
     // Drop stale writes -- but loudly: a continuity write aging out is permanent data loss.
     const fresh: QueuedWrite[] = [];
     for (const entry of this.buffer) {
-      if (now - entry.queuedAt < MAX_AGE_MS) {
+      const ttl = entry.maxAgeMs ?? MAX_AGE_MS;
+      if (now - entry.queuedAt < ttl) {
         fresh.push(entry);
       } else {
-        console.error(`[${this.name}] write aged out after ${MAX_AGE_MS / 60000}min unsaved, DATA LOSS: ${entry.label}`);
+        console.error(`[${this.name}] write aged out after ${Math.round(ttl / 60000)}min unsaved, DATA LOSS: ${entry.label}`);
       }
     }
     this.buffer = fresh;

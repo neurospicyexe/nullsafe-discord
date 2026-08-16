@@ -130,7 +130,9 @@ describe("the close is scoped away from live human sessions", () => {
     // is frequently the Claude Code session Raziel is working in this minute. Without the unattended
     // scope, an autonomous job writes its own close over a live human session.
     const { readFileSync } = await import("node:fs");
-    const src = readFileSync("src/halseth-client.ts", "utf8");
+    // Normalize CRLF: on a Windows checkout the "\n}\n" sentinel below never matches CRLF
+    // endings, so the slice degenerated to two characters and the test failed only on Windows.
+    const src = readFileSync("src/halseth-client.ts", "utf8").replace(/\r\n/g, "\n");
     const fn = src.slice(src.indexOf("export async function authoredSessionClose"));
     const body = fn.slice(0, fn.indexOf("\n}\n") + 3);
     expect(body).toContain('session_scope: "unattended"');

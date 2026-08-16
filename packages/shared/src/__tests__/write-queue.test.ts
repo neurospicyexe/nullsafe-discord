@@ -1,5 +1,5 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { WriteQueue, onWriteError } from "../write-queue.js";
+import { MAX_BUFFER, WriteQueue, onWriteError } from "../write-queue.js";
 
 describe("onWriteError — fire-and-forget writes outside the queue must not be silent", () => {
   it("returns a handler that logs the failure with both the companion tag and the label", () => {
@@ -54,10 +54,10 @@ describe("WriteQueue observability — failures and data loss must be loud", () 
 
   it("buffer overflow evicts the oldest unsaved write and logs it as data loss (error)", async () => {
     const wq = new WriteQueue("cypher");
-    for (let i = 0; i < 101; i++) {
+    for (let i = 0; i < MAX_BUFFER + 1; i++) {
       await wq.enqueue(`w${i}`, async () => { throw new Error("down"); });
     }
-    expect(wq.pending).toBe(100); // still bounded
+    expect(wq.pending).toBe(MAX_BUFFER); // still bounded
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("w0")); // oldest was dropped → logged
   });
 

@@ -17,6 +17,7 @@
 //
 // Identity stays per-bot: prompt prefix lives in bootCtx, framings/keywords/audit in config.
 
+import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
 import { VoiceConnectionStatus, createAudioResource, type VoiceConnection, type AudioPlayer } from "@discordjs/voice";
 import { Readable } from "stream";
@@ -985,7 +986,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             `[witnessed, did not respond] ${senderName}: ${snippet}`,
             message.channelId,
           );
-        });
+        }, { maxAgeMs: APPEND_MAX_AGE_MS });
       }
       // Reaction tier (2026-08-15): a sibling was named, so the floor is theirs -- but a
       // strong topical claim still earns presence without the floor. One emoji, earned by
@@ -1560,7 +1561,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             librarian.setSetting("active_model", switchKey));
           writeQueue.fireAndForget(`journal:model-switch:${message.channelId}`, async () => {
             await librarian.addCompanionNote(`self-switched to ${entry.label}`, message.channelId);
-          });
+          }, { maxAgeMs: APPEND_MAX_AGE_MS });
           // Post follow-up after main response
           setImmediate(() => {
             (message.channel as TextChannel).send(`[switching to ${entry.label} for this]`).catch(() => {});
@@ -1696,7 +1697,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
       // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
       writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
-        librarian.journalSpeech(response, message.channelId, sent[0]!.id));
+        librarian.journalSpeech(response, message.channelId, sent[0]!.id), { maxAgeMs: APPEND_MAX_AGE_MS });
       // Discord thread -> Halseth mind-thread (2026-08-15, first cut of the floor rework's
       // thread mapping). Speaking inside a Discord thread upserts a wm_mind_thread keyed
       // `discord:<thread_id>` for THIS companion, titled with the thread's name -- so a
@@ -1713,14 +1714,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               thread_key: `discord:${message.channelId}`,
               title: threadTitle.slice(0, 120),
               context: `Discord thread #${threadTitle} (under channel ${routingChannelId})`,
-            }));
+            }), { maxAgeMs: APPEND_MAX_AGE_MS });
         }
       }
       // Shared-experience: this reply IS the companion's reaction to the track.
       if (pendingMediaId) {
         const mediaId = pendingMediaId;
         writeQueue.fireAndForget(`media:react:${COMPANION_ID}:${mediaId}`, () =>
-          reactToExperience(mediaId, COMPANION_ID, response, cfg.halsethSecret));
+          reactToExperience(mediaId, COMPANION_ID, response, cfg.halsethSecret), { maxAgeMs: APPEND_MAX_AGE_MS });
       }
     }
 
@@ -1785,13 +1786,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         }
         else if (wb.type === "witness_log") await librarian.witnessLog(wb.content, message.channelId);
         else if (wb.type === "thread_open") await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
-      });
+      }, { maxAgeMs: APPEND_MAX_AGE_MS });
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeWriteback failed:`, e));
 
     if (attribution.source === "fallback") {
       const who = attribution.isOwner ? "owner (via dedup)" : `user ${attribution.discordUserId}`;
       writeQueue.fireAndForget(`note:pk-fallback:${message.channelId}`, async () => {
         await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
-      });
+      }, { maxAgeMs: APPEND_MAX_AGE_MS });
     }
 }
