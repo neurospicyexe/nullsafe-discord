@@ -1,4 +1,4 @@
-import { writeJournalEntry, writePattern, writeMarker, writeWmNote, examineDream, appendLog } from "../halseth-client.js";
+import { writeJournalEntry, writePattern, writeMarker, writeWmNote, examineDream, appendLog, logProjectWork } from "../halseth-client.js";
 import { SECOND_BRAIN_URL, SECOND_BRAIN_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
 
@@ -45,6 +45,11 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   // Stamp run_id and thread_id onto all artifacts before writing.
   ctx.journalEntry.run_id = ctx.runId;
   if (ctx.threadId) ctx.journalEntry.thread_id = ctx.threadId;
+  // C2 (mig 0122): a project-day entry CITES its project -- the verification gate for the whole
+  // phase is "journal entry cites the project id", and a tag is the citation that survives search.
+  if (ctx.project) {
+    ctx.journalEntry.tags = [...(ctx.journalEntry.tags ?? []), `project:${ctx.project.id}`];
+  }
   for (const p of ctx.newPatterns) p.run_id = ctx.runId;
   for (const m of ctx.newMarkers) {
     m.run_id = ctx.runId;
@@ -74,6 +79,24 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
   // Ingest to second-brain CouchDB corpus (non-fatal, requires SECOND_BRAIN_URL).
   // Makes this exploration retrievable in future Librarian semantic searches.
   await ingestToSecondBrain(ctx.companionId, seedTopic, ctx.journalEntry.content);
+
+  // C2 (mig 0122): a project-day run logs its work to project_log -- this write is what stamps
+  // last_worked_at, so skipping it silently would leave the project reading as untouched and the
+  // 30-day "release or resume?" question firing on a project that IS being worked. Loud on failure.
+  if (ctx.project) {
+    try {
+      await logProjectWork(
+        ctx.project.id,
+        ctx.companionId,
+        `[worker run ${ctx.runId}]${ctx.journalEntryId ? ` journal ${ctx.journalEntryId}:` : ""} ${ctx.journalEntry.content.slice(0, 1200)}`,
+      );
+      await appendLog(ctx.runId, "write:project-log-ok", `project ${ctx.project.id} "${ctx.project.title.slice(0, 60)}"`);
+    } catch (e) {
+      console.warn(`[${ctx.companionId}/write] project log failed:`, e);
+      await appendLog(ctx.runId, "write:project-log-FAILED",
+        `project ${ctx.project.id} -- last_worked_at NOT stamped; the stale question may misfire: ${String(e).slice(0, 160)}`);
+    }
+  }
 
   // Write any patterns identified during synthesis/reflect.
   // writePattern returns { id, action } where action is 'insert' (new row) or

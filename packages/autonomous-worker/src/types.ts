@@ -124,6 +124,9 @@ export interface PipelineContext {
   recentConclusions: Array<{ id: string; companion_id: string; conclusion_text: string; belief_type: string | null; confidence: number | null; created_at: string }>;
   seed: Seed | null;
   seedDecisionReason: string | null; // reasoning from orient-aware decision
+  /** C2 (mig 0122): set when this run works a held project instead of a seed. Write phase logs
+   *  the work to project_log and tags the journal entry with project:<id>. */
+  project: { id: string; title: string; intention: string } | null;
   threadId: string | null;           // set when continuing or starting a thread
   threadPosition: number | null;
   searchResults: TavilyResult[];

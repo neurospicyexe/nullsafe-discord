@@ -915,6 +915,9 @@ export class LibrarianClient {
     preferences?: Array<{ domain: string; preference: string; strength: string }>;
     standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
     open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
+    // Self-directed projects (C2, contract 0.8.0): intentions the companion owns across weeks.
+    // Oldest-touched first server-side -- the same order the worker picks from.
+    projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
     open_questions?: string[];
   open_question_ids?: string[];
     // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
@@ -969,6 +972,7 @@ export class LibrarianClient {
         preferences?: Array<{ domain: string; preference: string; strength: string }>;
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
+        projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
         open_questions?: string[];
   open_question_ids?: string[];
         sol_block?: string | null;
@@ -1019,6 +1023,7 @@ export class LibrarianClient {
         preferences: Array.isArray(data.preferences) ? data.preferences : [],
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
+        projects: Array.isArray(data.projects) ? data.projects : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
         open_question_ids: Array.isArray(data.open_question_ids) ? data.open_question_ids : [],
         sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
@@ -1740,6 +1745,9 @@ export function formatRecentContext(orient: {
   preferences?: Array<{ domain: string; preference: string; strength: string }>;
   standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
   open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
+  // Self-directed projects (C2, contract 0.8.0). Rendered with the affordance implied by the
+  // stale question -- the orient prompt on the claude surface carries the full verb affordance.
+  projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
   // Fresh-material surfaces: the server has returned these for the live bot path since 0068/0071,
   // but until now formatRecentContext silently dropped them -- the companions fetched their forage
   // pool and recent listens every message and never saw either. Rendered with relative-time stamps
@@ -1971,6 +1979,18 @@ export function formatRecentContext(orient: {
   if (orient.open_drifts?.length) {
     const driftLines = orient.open_drifts.map(d => `${d.drift_text}${d.witness_count > 0 ? ` (witnessed ${d.witness_count}x)` : ""}`).join("\n");
     parts.push(`[Your drifts -- sanctioned becoming, witnessed not judged]\n${driftLines}`);
+  }
+  // Self-directed projects (C2, contract 0.8.0): intentions the companion owns across weeks. The
+  // worker works the oldest-touched one on project days; the live presence should speak of them
+  // as its own held work, not as tasks assigned to it.
+  if (orient.projects?.length) {
+    const projLines = orient.projects.map(p => {
+      const idle = p.days_idle === 0 ? "worked today" : `idle ${p.days_idle}d`;
+      const flags = [p.status === "paused" ? "paused" : null, idle].filter(Boolean).join(", ");
+      const ask = p.stale ? ` -- untouched ${p.days_idle}d: release or resume? Your call.` : "";
+      return `"${p.title}" -- ${p.intention.slice(0, 140)} (${flags})${ask}`;
+    }).join("\n");
+    parts.push(`[Your projects -- intentions you hold across weeks]\n${projLines}`);
   }
   // Imp read-back (2026-07-02): the fragment operators Drevan gave Raziel are part of the
   // household, not disposable tint -- the companion should remember who rode with it.

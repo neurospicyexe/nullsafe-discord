@@ -48,6 +48,7 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     recentConclusions: [],
     seed: null,
     seedDecisionReason: null,
+    project: null,
     threadId: null,
     threadPosition: null,
     searchResults: [],

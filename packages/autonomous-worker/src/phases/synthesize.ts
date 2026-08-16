@@ -44,6 +44,14 @@ import type { PipelineContext, GrowthJournalEntry, Evidence } from "../types.js"
  * follows in the userMessage (exploration through evidence hint).
  */
 export function buildSynthesisBlocks(ctx: PipelineContext): { contextBlock: string } {
+  // C2 (mig 0122): on a project day the run is working the companion's OWN held intention, and
+  // the entry should be written as work on it -- not as a detached exploration that happens to
+  // share a title. The intention rides here because the seed content carries only the title
+  // (the Tavily query stays sharp; this is where the fuller frame lands).
+  const projectBlock = ctx.project
+    ? `\nThis run works YOUR held project "${ctx.project.title}" -- your stated intention: ${ctx.project.intention.slice(0, 300)}\nWrite the entry as work on that intention: what moved, what resisted, what the next session should pick up.`
+    : "";
+
   const explorationBlock = ctx.explorationSummary
     ? `\nWhat you explored:\n${ctx.explorationSummary}`
     : "";
@@ -123,7 +131,7 @@ export function buildSynthesisBlocks(ctx: PipelineContext): { contextBlock: stri
     : "";
 
   return {
-    contextBlock: [explorationBlock, peerBlock, swarmContextBlock, ownPatternsBlock, openLoopsBlock, recentGrowthBlock, evidenceHint].join("\n"),
+    contextBlock: [projectBlock, explorationBlock, peerBlock, swarmContextBlock, ownPatternsBlock, openLoopsBlock, recentGrowthBlock, evidenceHint].join("\n"),
   };
 }
 

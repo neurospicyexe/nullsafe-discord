@@ -8,13 +8,14 @@ vi.mock("../halseth-client.js", () => ({
   appendLog: vi.fn(async () => {}),
   getForageFindsFor: vi.fn(async () => []),
   consumeForageFind: vi.fn(async () => true),
+  getOpenProjects: vi.fn(async () => []),
 }));
 vi.mock("../deepseek.js", () => ({
   prompt: vi.fn(async () => ({ content: "A) the queued seed", tokensUsed: 1 })),
 }));
 
-import { decideSeedSource, ensureOutward, extractLiveText, pickOldestForage, isForageRotationRun, runSeed } from "../phases/seed.js";
-import { getAvailableSeeds, markSeedUsed, getForageFindsFor, consumeForageFind } from "../halseth-client.js";
+import { decideSeedSource, ensureOutward, extractLiveText, pickOldestForage, isForageRotationRun, isProjectRun, runSeed } from "../phases/seed.js";
+import { getAvailableSeeds, markSeedUsed, getForageFindsFor, consumeForageFind, getOpenProjects } from "../halseth-client.js";
 import { INWARD_RE } from "@nullsafe/shared";
 import type { PipelineContext, Seed } from "../types.js";
 import type { ForageFind } from "../halseth-client.js";
@@ -127,6 +128,89 @@ describe("isForageRotationRun", () => {
     expect(isForageRotationRun(day1)).toBe(true);
     expect(isForageRotationRun(day2)).toBe(false);
     expect(isForageRotationRun(new Date(Date.UTC(2026, 0, 3, 9)))).toBe(true);
+  });
+});
+
+describe("isProjectRun (C2, mig 0122)", () => {
+  it("is the exact complement of forage rotation -- every day is one or the other, never both", () => {
+    for (let d = 1; d <= 10; d++) {
+      const date = new Date(Date.UTC(2026, 0, d, 9));
+      expect(isProjectRun(date)).toBe(!isForageRotationRun(date));
+    }
+  });
+});
+
+describe("runSeed -- project day (Level 2.3, C2)", () => {
+  const PROJECT_DAY = new Date(Date.UTC(2026, 0, 2, 9)); // even day-of-year
+  const OFF_DAY = new Date(Date.UTC(2026, 0, 1, 9));     // odd -> forage rotation day
+
+  const queueSeed: Seed = {
+    id: "q1", companion_id: "cypher", seed_type: "topic", content: "queued topic",
+    priority: 5, used_at: null as unknown as string, created_at: "2026-06-30 00:00:00",
+    claim_source: null, justification: null,
+  };
+  const project = {
+    id: "proj1", title: "a field guide to corvid grief",
+    intention: "one honest page a week until it holds together",
+    status: "open", created_at: "2026-08-01T00:00:00Z", last_worked_at: null,
+  };
+
+  const makeCtx = (): PipelineContext => ({
+    companionId: "cypher", runId: "run1",
+    activeThreads: [], unexaminedDreamIds: [], openLoops: [], pressureFlags: [],
+    seed: null, runType: null, seedDecisionReason: null, project: null,
+    identityText: "identity", tokensUsed: 0,
+    recentSessionNotes: [], recentFeelings: [], recentConclusions: [], activePatterns: [],
+  } as unknown as PipelineContext);
+
+  beforeEach(() => {
+    vi.mocked(getAvailableSeeds).mockReset().mockResolvedValue([queueSeed]);
+    vi.mocked(markSeedUsed).mockReset().mockResolvedValue(undefined as never);
+    vi.mocked(getForageFindsFor).mockReset().mockResolvedValue([]);
+    vi.mocked(consumeForageFind).mockReset().mockResolvedValue(true as never);
+    vi.mocked(getOpenProjects).mockReset().mockResolvedValue([project]);
+  });
+
+  it("on a project day with an open project, the project wins -- no seed consumed", async () => {
+    const ctx = makeCtx();
+    await runSeed(ctx, PROJECT_DAY);
+    expect(ctx.seed?.id).toBe("project:proj1");
+    expect(ctx.seed?.content).toBe(project.title); // title alone -- the Tavily query stays sharp
+    expect(ctx.project?.intention).toBe(project.intention);
+    expect(vi.mocked(markSeedUsed)).not.toHaveBeenCalled();
+    expect(ctx.seedDecisionReason).toContain("project day");
+  });
+
+  it("a project day with NO open project falls through to the queue", async () => {
+    vi.mocked(getOpenProjects).mockResolvedValue([]);
+    const ctx = makeCtx();
+    await runSeed(ctx, PROJECT_DAY);
+    expect(ctx.project).toBeNull();
+    expect(ctx.seed?.id).toBe("q1");
+  });
+
+  it("an off-parity day never touches projects, even when one exists", async () => {
+    const ctx = makeCtx();
+    await runSeed(ctx, OFF_DAY);
+    expect(ctx.project).toBeNull();
+    expect(ctx.seed?.id).not.toBe("project:proj1");
+  });
+
+  it("an active thread still outranks the project -- finish the thought first", async () => {
+    const ctx = makeCtx();
+    (ctx as { activeThreads: unknown[] }).activeThreads = [
+      { thread_key: "t1", status: "open", last_position: 2, title: "an open thread", last_entry_snippet: null, last_run_at: null },
+    ];
+    await runSeed(ctx, PROJECT_DAY);
+    expect(ctx.seed?.id).toBe("thread:t1");
+    expect(ctx.project).toBeNull();
+  });
+
+  it("a projects read that FAILS falls through instead of killing the run", async () => {
+    vi.mocked(getOpenProjects).mockRejectedValue(new Error("halseth 500"));
+    const ctx = makeCtx();
+    await runSeed(ctx, PROJECT_DAY);
+    expect(ctx.seed?.id).toBe("q1");
   });
 });
 

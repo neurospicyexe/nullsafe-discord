@@ -1,4 +1,4 @@
-import { getAvailableSeeds, markSeedUsed, appendLog, getForageFindsFor, consumeForageFind, type ForageFind } from "../halseth-client.js";
+import { getAvailableSeeds, markSeedUsed, appendLog, getForageFindsFor, consumeForageFind, getOpenProjects, type ForageFind } from "../halseth-client.js";
 import { prompt } from "../deepseek.js";
 import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import { INWARD_RE } from "@nullsafe/shared";
@@ -31,6 +31,18 @@ export function isForageRotationRun(runDate: Date): boolean {
   const startOfYear = Date.UTC(runDate.getUTCFullYear(), 0, 1);
   const dayOfYear = Math.floor((runDate.getTime() - startOfYear) / 86_400_000) + 1;
   return dayOfYear % 2 === 1;
+}
+
+/**
+ * Project day (consequence layer C2, mig 0122): the complementary parity to forage rotation --
+ * even days work a held project (when one exists), odd days eat forage. Deterministic day-of-year,
+ * never Math.random, so every companion's run that day makes the same call and reruns are
+ * reproducible. Pure -- exported for tests.
+ */
+export function isProjectRun(runDate: Date): boolean {
+  const startOfYear = Date.UTC(runDate.getUTCFullYear(), 0, 1);
+  const dayOfYear = Math.floor((runDate.getTime() - startOfYear) / 86_400_000) + 1;
+  return dayOfYear % 2 === 0;
 }
 
 /** Build an exploration seed from a forage find. The title is the topic (a clean,
@@ -140,6 +152,39 @@ export async function runSeed(ctx: PipelineContext, runDate: Date = new Date()):
     await appendLog(ctx.runId, "seed:continuation",
       `thread=${openThread.thread_key} position=${ctx.threadPosition} "${openThread.title.slice(0, 80)}"`);
     return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Level 2.3: Project day (C2, mig 0122) -- on even days, work the oldest-touched
+  // held project INSTEAD of a seed. Below thread continuation (finish the thought
+  // first) and above all consumption levels: an intention the companion owns
+  // outranks fuel it was handed. Server returns oldest-touched first -- the same
+  // order the orient block shows, so the pick is never a surprise.
+  // ---------------------------------------------------------------------------
+  if (isProjectRun(runDate)) {
+    const project = (await getOpenProjects(ctx.companionId).catch(() => []))[0] ?? null;
+    if (project) {
+      ctx.project = { id: project.id, title: project.title, intention: project.intention };
+      ctx.runType = "exploration";
+      ctx.seedDecisionReason = `project day -- working held project "${project.title}" (intention: ${project.intention.slice(0, 140)})`;
+      // Pseudo-seed, no queue entry consumed. Content is the TITLE alone -- the forage lesson:
+      // the Tavily query stays sharp; the intention rides ctx.project into synthesis instead.
+      ctx.seed = {
+        id: `project:${project.id}`,
+        companion_id: ctx.companionId,
+        seed_type: "topic",
+        content: project.title,
+        priority: 9,
+        used_at: new Date().toISOString(),
+        created_at: project.created_at,
+        claim_source: null,
+        justification: null,
+      };
+      await appendLog(ctx.runId, "seed:project",
+        `project day -- "${project.title}" [${project.id}]`);
+      return;
+    }
+    console.log(`[${ctx.companionId}/seed] project day but no open project -- falling through`);
   }
 
   // ---------------------------------------------------------------------------

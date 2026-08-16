@@ -106,6 +106,36 @@ export async function createSeed(
 }
 
 // ---------------------------------------------------------------------------
+// Self-directed projects (consequence layer C2, mig 0122)
+// ---------------------------------------------------------------------------
+
+export interface OpenProject {
+  id: string;
+  title: string;
+  intention: string;
+  status: string;
+  created_at: string;
+  last_worked_at: string | null;
+}
+
+/** Open projects, oldest-touched first (server orders by COALESCE(last_worked_at, created_at) ASC
+ *  -- the same order the orient block shows, so the pick is never a surprise). */
+export async function getOpenProjects(companionId: string): Promise<OpenProject[]> {
+  const r = await hFetch(`/mind/projects/${companionId}?status=open`) as { projects: OpenProject[] };
+  return r.projects ?? [];
+}
+
+/** Log a work session against a project. Server-side this is one atomic batch: the log row plus
+ *  the last_worked_at stamp (and a paused project re-opens -- resuming is done by working). */
+export async function logProjectWork(projectId: string, companionId: string, entry: string): Promise<void> {
+  await hFetch(`/mind/projects/${projectId}/log`, "POST", {
+    companion_id: companionId,
+    entry,
+    source: "worker",
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Forage pool (migration 0068)
 // ---------------------------------------------------------------------------
 
