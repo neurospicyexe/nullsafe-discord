@@ -110,5 +110,32 @@ finally:
     hc.STATE_PATH = prev_path
     os.unlink(path)
 
+# ── custodian_decision (C6 quiet-owner clause) -- pure, so no file juggling needed ────────────
+print("\ncustodian_decision (C6)")
+NOW = 1_000_000.0
+DAY = hc.CUSTODIAN_RENOTIFY_SECONDS
+
+send, why, state = hc.custodian_decision(True, NOW, {})
+check("first activation sends", send is True and state["active"] is True)
+
+send, why, state = hc.custodian_decision(True, NOW + 60, state)
+check("re-run a minute later is throttled (cron runs every minute)", send is False)
+check("throttled branch STILL returns a writable state", state.get("last_notified") == NOW)
+
+send, why, state = hc.custodian_decision(True, NOW + DAY + 1, state)
+check("still-active clause re-alerts after a day", send is True)
+
+send, why, state = hc.custodian_decision(False, NOW + DAY + 2, state)
+check("recovery goes quiet and CLEARS the stamp", send is False and state == {"active": False, "last_notified": 0})
+
+send, why, state = hc.custodian_decision(True, NOW + DAY + 3, state)
+check("next activation after recovery alerts immediately (no stale stamp)", send is True)
+
+send, why, state = hc.custodian_decision(True, NOW, "not-a-dict")
+check("corrupt prev state fails OPEN (sends) and returns a repair state", send is True and isinstance(state, dict))
+
+send, why, state = hc.custodian_decision(True, NOW, {"last_notified": "garbage"})
+check("non-numeric stamp reads as never-notified, not a crash", send is True)
+
 print("\n" + ("ALL PASS" if not failures else "FAILED: %r" % failures))
 sys.exit(1 if failures else 0)

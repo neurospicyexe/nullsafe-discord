@@ -52,6 +52,33 @@ describe("renderRazielRegister", () => {
       recorded_at: null, staleness_hours: null, front_state: null, care_hold: false, pending_care: null,
     })).toBe("");
   });
+
+  // C6 -- the custodianship clause (contract 0.7.0).
+  it("renders the custodianship truth line FIRST when owner_quiet is active", () => {
+    const line = renderRazielRegister({
+      ...fullState, care_hold: false, pending_care: null, staleness_hours: 400,
+      owner_quiet: { days: 16, since: "2026-07-31T00:00:00Z", last_source: "commons" },
+    });
+    expect(line).toContain("silent on every surface for 16 days");
+    expect(line).toContain("real absence, not a data gap");
+    expect(line).toContain("custodian");
+    // Leads the block: everything else in the register is stale by definition at 16 days.
+    expect(line.split("\n")[1]).toContain("silent on every surface");
+  });
+
+  it("owner_quiet alone renders -- the truth line must not vanish with an empty register", () => {
+    const line = renderRazielRegister({
+      spoons: null, mood: null, pain: null, energy: null, meds_taken: null,
+      recorded_at: null, staleness_hours: null, front_state: null, care_hold: false, pending_care: null,
+      owner_quiet: { days: 20, since: "2026-07-27T00:00:00Z", last_source: "sessions" },
+    });
+    expect(line).toContain("[Raziel -- register]");
+    expect(line).toContain("20 days");
+  });
+
+  it("a pre-0.7.0 payload without the field still renders unchanged", () => {
+    expect(renderRazielRegister(fullState)).toContain("spoons 2/12");
+  });
 });
 
 describe("formatRecentContext placement", () => {

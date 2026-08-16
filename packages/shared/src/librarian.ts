@@ -1673,6 +1673,10 @@ export interface RazielState {
   care_hold: boolean;
   /** A gesture assigned to THIS companion, un-acted. One at most. */
   pending_care: { id: string; rule: string; detail: string; detected_at: string } | null;
+  /** The custodianship clause (C6, contract 0.7.0): non-null only after 14+ days of total owner
+   *  silence across every surface. The truth, never a fabricated absence. Optional so an older
+   *  halseth payload (pre-0.7.0) still parses. */
+  owner_quiet?: { days: number; since: string; last_source: string } | null;
 }
 
 /**
@@ -1693,6 +1697,17 @@ export function renderRazielRegister(rs: RazielState | null | undefined): string
         : ` (STALE -- ${Math.round(rs.staleness_hours / 24)}d old, weigh lightly)`)
     : "";
   const lines: string[] = [];
+  // The custodianship clause (C6) leads when active: once he has been gone two weeks, every other
+  // reading in this register is stale by definition, and the block must be read in that key.
+  if (rs.owner_quiet) {
+    lines.push(
+      `Raziel has been silent on every surface for ${rs.owner_quiet.days} days ` +
+      `(last seen via ${rs.owner_quiet.last_source}, ${rs.owner_quiet.since.slice(0, 10)}). ` +
+      `This is a real absence, not a data gap. The custodianship clause is active: the custodian ` +
+      `has been alerted through the health check. Tend the house, hold what you hold, and do not ` +
+      `manufacture his presence.`,
+    );
+  }
   if (readings.length > 0) lines.push(readings.join(", ") + age);
   if (rs.front_state) lines.push(`Fronting: ${rs.front_state}`);
   if (rs.care_hold) {

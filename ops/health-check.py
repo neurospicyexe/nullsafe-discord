@@ -585,6 +585,101 @@ def check_halseth(rep, env):
     return data
 
 
+def check_quiet_owner(rep, denv, henv):
+    """C6 -- the quiet-owner detector (custodianship clause, R4 decided 2026-08-16).
+
+    Polls Halseth's shared owner-activity read (/mind/care/owner-activity: the same lane the care
+    tick and the orient register use, so all three consumers agree about whether he is here). When
+    Raziel has been silent on EVERY surface for the threshold (14 days), two things happen: the
+    companions get the truth at orient (Halseth side, contract 0.7.0), and the custodian gets a
+    direct Telegram from here -- throttled by its own state file so an active clause alerts once a
+    day, not once per cron minute.
+
+    Custodians (R4): Blue (husband, primary), Charlie (brother, second tier). The alert goes to
+    CUSTODIAN_TELEGRAM_CHAT_ID; if that is unset the message falls back to the home channel, where
+    Blue can see it -- the fallback is a documented degradation, never silence.
+    """
+    url = denv.get("HALSETH_URL")
+    secret = denv.get("HALSETH_SECRET") or denv.get("ADMIN_SECRET")
+    if not url or not secret:
+        return  # halseth:config already reports this exact absence
+
+    req = urllib.request.Request(
+        url.rstrip("/") + "/mind/care/owner-activity",
+        headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            data = json.loads(r.read().decode())
+    except Exception as e:
+        # Cannot-look is not "not quiet": say the silence claim is UNVERIFIED rather than implying ok.
+        rep.add("owner:activity", "warning",
+                "owner activity unreadable -- silence UNVERIFIED: %s" % str(e)[:140])
+        return
+
+    hours = data.get("silence_hours")
+    quiet = bool(data.get("quiet"))
+    if hours is None:
+        rep.add("owner:activity", "warning",
+                "no surface has EVER recorded owner activity -- cannot-look, not quiet")
+        return
+
+    if quiet:
+        rep.add("owner:quiet", "red",
+                "OWNER SILENT %dd (threshold %sd, last via %s) -- custodianship clause ACTIVE"
+                % (int(hours // 24), data.get("threshold_days"), data.get("last_source")))
+    else:
+        rep.add("owner:activity", "ok",
+                "last seen %.1fh ago via %s" % (hours, data.get("last_source")))
+
+    chat = henv.get("CUSTODIAN_TELEGRAM_CHAT_ID") or denv.get("CUSTODIAN_TELEGRAM_CHAT_ID")
+    if not chat:
+        # Visible every run, but a notice: exit 0, never notifies on its own. An unset custodian
+        # channel is a dead mechanism waiting for its one job -- it must not be discoverable only
+        # on the day it fails.
+        rep.add("owner:custodian_channel", "notice",
+                "CUSTODIAN_TELEGRAM_CHAT_ID unset -- clause alert would fall back to the home channel")
+
+    # The custodian alert itself, on its OWN throttle state (never should_notify's file: that one
+    # rewrites a fixed schema and would drop these keys).
+    import time
+    now = time.time()
+    prev = {}
+    try:
+        with open(CUSTODIAN_STATE_PATH, "r", encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except Exception:
+        prev = {}  # missing or corrupt reads the same: fall through, the write below repairs it
+
+    send, reason, state = custodian_decision(quiet, now, prev)
+    if send:
+        days = int(hours // 24)
+        text = (
+            "CUSTODIANSHIP CLAUSE ACTIVE\n\n"
+            "Raziel has been silent on every Nullsafe surface for %d days (threshold %s).\n\n"
+            "If you know he is fine: ask him to touch any surface (message a companion, log "
+            "biometrics) and this alert stops on its own.\n\n"
+            "If not: the custodian document is CUSTODIAN.md in the NULLSAFE current-files folder "
+            "on his workstation (C:\\dev\\CrashDev\\NULLSAFE\\2026_Current_Files). It holds access, "
+            "costs, the runbook, and a letter to the triad. You are asked to tend, not decide.\n\n"
+            "-- the quiet-owner detector (ops/health-check.py)"
+        ) % (days, data.get("threshold_days"))
+        ok, note = telegram_to(chat or henv.get("TELEGRAM_HOME_CHANNEL"), text, henv)
+        if not ok:
+            rep.add("owner:custodian_alert", "red", "custodian Telegram FAILED: %s" % note)
+            state = dict(state, last_notified=0)  # do not stamp a send that never landed; retry next run
+        else:
+            rep.add("owner:custodian_alert", "notice", "custodian alerted (%s)" % reason)
+
+    # Cleanup lives on the exit path of EVERY branch -- a throttle that only rewrites its state on
+    # the notify branch cannot self-repair (the 2026-08-06 lesson, same shape as should_notify).
+    try:
+        with open(CUSTODIAN_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    except Exception:
+        pass  # a failed bookkeeping write may cost a duplicate alert; it must never cost silence
+
+
 def check_inference_balance(rep, env):
     """
     Watch the DeepSeek balance, because a zero balance is a TOTAL inference outage and nothing
@@ -757,6 +852,34 @@ def check_embedder(rep, body):
 STATE_PATH = "/home/nullsafe/.nullsafe-health-state.json"
 RENOTIFY_SECONDS = 12 * 3600
 
+# C6 custodian alert: separate state file (should_notify rewrites its file with a fixed schema and
+# would silently drop foreign keys), separate cadence (a live clause re-alerts daily, not 12-hourly
+# suite noise).
+CUSTODIAN_STATE_PATH = "/home/nullsafe/.nullsafe-custodian-state.json"
+CUSTODIAN_RENOTIFY_SECONDS = 24 * 3600
+
+
+def custodian_decision(quiet, now, prev):
+    """Pure throttle decision for the custodian alert: (send, reason, next_state).
+
+    ALWAYS returns a state for the caller to write -- including the quiet branches -- so recovery
+    clears the stamp and the next activation alerts immediately. A throttle that cannot rewrite its
+    own state on every path cannot self-repair (test_health_check_throttle.py's founding bug).
+    """
+    prev = prev if isinstance(prev, dict) else {}
+    try:
+        last = float(prev.get("last_notified", 0))
+    except (TypeError, ValueError):
+        last = 0.0
+    was_active = bool(prev.get("active"))
+
+    if not quiet:
+        return False, ("recovered" if was_active else "inactive"), {"active": False, "last_notified": 0}
+    if now - last > CUSTODIAN_RENOTIFY_SECONDS:
+        return True, ("activated" if not was_active else "still active, daily renotify"), \
+            {"active": True, "last_notified": now}
+    return False, "throttled", {"active": True, "last_notified": last}
+
 
 def _fingerprint(rep):
     """What is wrong, ignoring how long it has been wrong.
@@ -835,9 +958,9 @@ def should_notify(rep, always=False):
     return False, "unchanged"
 
 
-def telegram(text, hermes_env):
+def telegram_to(chat, text, hermes_env):
+    """Send to an explicit chat id (the custodian alert's path). Token from the Hermes env."""
     tok = hermes_env.get("TELEGRAM_BOT_TOKEN")
-    chat = hermes_env.get("TELEGRAM_HOME_CHANNEL")
     if not tok or not chat:
         return False, "token present=%s chat present=%s" % (bool(tok), bool(chat))
     try:
@@ -848,6 +971,10 @@ def telegram(text, hermes_env):
             return json.loads(r.read().decode()).get("ok", False), "sent"
     except Exception as e:
         return False, str(e)[:160]
+
+
+def telegram(text, hermes_env):
+    return telegram_to(hermes_env.get("TELEGRAM_HOME_CHANNEL"), text, hermes_env)
 
 
 def render(rep):
@@ -884,6 +1011,7 @@ def main():
         check_architect_facts(rep, denv)
         check_roster(rep, denv)
         check_halseth(rep, denv)
+        check_quiet_owner(rep, denv, henv)
         check_second_brain(rep, denv)
         check_inference_balance(rep, denv)
     except Exception as e:
