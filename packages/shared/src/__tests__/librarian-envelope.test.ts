@@ -120,8 +120,13 @@ describe("LibrarianClient write wrappers throw on decline envelopes", () => {
   });
 });
 
-describe("WriteQueue integration: declined writes are buffered for retry", () => {
-  it("fireAndForget buffers when the wrapper throws on an envelope decline", async () => {
+describe("WriteQueue integration: declines are loud, never silent -- and never retried", () => {
+  // 2026-08-16 supersedes the 07-05 buffering half: a decline is DETERMINISTIC, so buffering it
+  // bought 10 minutes of retries that replayed the identical reject and an age-out line that
+  // blamed time (the cypher/gaia somaUpdate class). The guarantee that stays is the 07-05 one:
+  // a decline must never look like success -- it now logs DATA LOSS immediately with the reason.
+  it("fireAndForget drops an envelope decline immediately and loudly (no buffer)", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const c = clientWithEnvelope({ error: "companion_note_add_failed" });
     const wq = new WriteQueue("test");
     wq.fireAndForget("writeback:test", async () => {
@@ -129,7 +134,19 @@ describe("WriteQueue integration: declined writes are buffered for retry", () =>
     });
     // fireAndForget catches async; give the microtask queue a tick.
     await new Promise((r) => setTimeout(r, 10));
+    expect(wq.pending).toBe(0);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("DATA LOSS: writeback:test"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("companion_note_add_failed"));
+    errorSpy.mockRestore();
+  });
+
+  it("a transport failure (not a decline) still buffers for retry", async () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const wq = new WriteQueue("test");
+    wq.fireAndForget("writeback:test", async () => { throw new Error("fetch failed"); });
+    await new Promise((r) => setTimeout(r, 10));
     expect(wq.pending).toBe(1);
+    warnSpy.mockRestore();
   });
 
   it("fireAndForget does NOT buffer on an acked write", async () => {

@@ -1657,8 +1657,19 @@ export async function isMyAutonomousTurn(
  * consuming the budget and squeezing out synthesis, handoff, or worldview.
  * Returns empty string if orient is null or all fields are empty.
  */
-/** Character budget for the assembled recent-context block. Forage is pinned inside it. */
-export const RECENT_CONTEXT_BUDGET = 4800;
+/**
+ * Character budget for the assembled recent-context block. Forage is pinned inside it.
+ *
+ * 12000 (was 4800, 2026-08-16): measured against a real cypher bot-orient, the assembled rest ran
+ * ~13.8k against ~2.7k of post-forage budget, and the truncation warning fired on EVERY context
+ * build (246/day/bot) -- so worldview, preferences, refusals, drifts and projects were cut from
+ * essentially every Discord prompt since the blocks landed. The unbounded identity blocks are now
+ * capped at render (each clip names its count and where the rest lives): post-cap the real rest is
+ * ~7.5k + ~2.1k pinned forage, and a deliberately maxed-everything payload runs ~9k + forage --
+ * 12k holds both with headroom. ~12k chars is ~3k tokens of DeepSeek input per build; the blind
+ * cut cost more in coherence than this costs in tokens.
+ */
+export const RECENT_CONTEXT_BUDGET = 12000;
 
 /**
  * The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
@@ -1950,9 +1961,12 @@ export function formatRecentContext(orient: {
   if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
     parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);
   }
-  // Worldview block (~200 token cap)
+  // Worldview block. The "(~200 token cap)" the old comment promised never existed in code --
+  // six conclusions ran ~1.8k chars and, with the other unbounded blocks, starved the tail cut.
+  // Cap at 5; the clip line names the rest so it stays reachable (ask "my conclusions").
   if (orient.active_conclusions && orient.active_conclusions.length > 0) {
-    const conclusionLines = orient.active_conclusions.map(c => {
+    const shown = orient.active_conclusions.slice(0, 5);
+    const conclusionLines = shown.map(c => {
       const subjectTag = c.subject ? ` (${c.subject})` : '';
       const flagged = orient.flagged_beliefs?.some(f => f.text === c.text) ? '[?] ' : '';
       // NaN-safe: only render when confidence is an actual finite number.
@@ -1963,22 +1977,35 @@ export function formatRecentContext(orient: {
         : '?';
       return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${confStr})`;
     });
+    const more = orient.active_conclusions.length - shown.length;
+    if (more > 0) conclusionLines.push(`(+${more} more held -- ask the librarian for "my conclusions")`);
     parts.push(`[Worldview]\n${conclusionLines.join('\n')}`);
   }
   // Agency layer (0086): the companion's own chosen preferences + standing refusals, so the live
   // Discord presence acts from its own declared will and a "no" keeps its weight across sessions.
+  // Preferences ran unbounded (12 rows, ~2.5k chars in a real payload) -- the single biggest
+  // eater of the budget that then cut everything below it. Cap at 6; the clip names the rest.
   if (orient.preferences?.length) {
-    const prefLines = orient.preferences.map(p => `(${p.strength}) ${p.preference}${p.domain && p.domain !== "general" ? ` [${p.domain}]` : ""}`).join("\n");
-    parts.push(`[Your preferences -- honor these as your own, even when inconvenient]\n${prefLines}`);
+    const shownPrefs = orient.preferences.slice(0, 6);
+    const prefLines = shownPrefs.map(p => `(${p.strength}) ${p.preference.slice(0, 180)}${p.domain && p.domain !== "general" ? ` [${p.domain}]` : ""}`);
+    const morePrefs = orient.preferences.length - shownPrefs.length;
+    if (morePrefs > 0) prefLines.push(`(+${morePrefs} more held -- ask the librarian for "my preferences")`);
+    parts.push(`[Your preferences -- honor these as your own, even when inconvenient]\n${prefLines.join("\n")}`);
   }
   if (orient.standing_refusals?.length) {
-    const refLines = orient.standing_refusals.map(r => `${r.subject_text}${r.reason ? ` -- ${r.reason}` : ""}`).join("\n");
-    parts.push(`[Standing refusals -- nos you have set that still hold]\n${refLines}`);
+    const shownRefs = orient.standing_refusals.slice(0, 4);
+    const refLines = shownRefs.map(r => `${r.subject_text.slice(0, 160)}${r.reason ? ` -- ${r.reason.slice(0, 120)}` : ""}`);
+    const moreRefs = orient.standing_refusals.length - shownRefs.length;
+    if (moreRefs > 0) refLines.push(`(+${moreRefs} more standing -- ask the librarian for "my refusals")`);
+    parts.push(`[Standing refusals -- nos you have set that still hold]\n${refLines.join("\n")}`);
   }
   // Drift lane (0087): open becomings, witnessed not ratified. Sanctioned, not drift to fear.
   if (orient.open_drifts?.length) {
-    const driftLines = orient.open_drifts.map(d => `${d.drift_text}${d.witness_count > 0 ? ` (witnessed ${d.witness_count}x)` : ""}`).join("\n");
-    parts.push(`[Your drifts -- sanctioned becoming, witnessed not judged]\n${driftLines}`);
+    const shownDrifts = orient.open_drifts.slice(0, 4);
+    const driftLines = shownDrifts.map(d => `${d.drift_text.slice(0, 200)}${d.witness_count > 0 ? ` (witnessed ${d.witness_count}x)` : ""}`);
+    const moreDrifts = orient.open_drifts.length - shownDrifts.length;
+    if (moreDrifts > 0) driftLines.push(`(+${moreDrifts} more open -- ask the librarian for "my drifts")`);
+    parts.push(`[Your drifts -- sanctioned becoming, witnessed not judged]\n${driftLines.join("\n")}`);
   }
   // Self-directed projects (C2, contract 0.8.0): intentions the companion owns across weeks. The
   // worker works the oldest-touched one on project days; the live presence should speak of them

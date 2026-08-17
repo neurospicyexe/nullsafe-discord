@@ -25,6 +25,23 @@ export function onWriteError(tag: string, label: string): (e: unknown) => void {
   return (e) => console.warn(`[${tag}] write failed (fire-and-forget): ${label} -- ${e instanceof Error ? e.message : String(e)}`);
 }
 
+/**
+ * A librarian decline is DETERMINISTIC: the executor rejected the payload, and replaying the
+ * identical payload replays the identical reject. Buffering one gives 10 minutes of retries that
+ * can never succeed, then an age-out log that reads like a transient outage ate the write --
+ * which is exactly how the cypher/gaia somaUpdate word-payload bug hid for six weeks (the real
+ * defect was "no valid fields provided", visible in the FIRST failure line, not the age-out).
+ * These markers are the three assertWriteAck throw shapes (librarian.ts): application decline,
+ * ack:false, and silent reject/misroute. Transport errors (fetch failed, timeouts, 5xx) do NOT
+ * match and stay retryable.
+ */
+export function isPermanentWriteError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return / declined: /.test(msg)
+    || msg.includes("write not applied (ack=false)")
+    || msg.includes("no ack (silent reject/misroute)");
+}
+
 export interface QueuedWrite {
   label: string;
   fn: () => Promise<void>;
@@ -102,6 +119,12 @@ export class WriteQueue {
   /** Log the failure (so it's never silent) and buffer the write for retry. */
   private bufferFailure(label: string, fn: () => Promise<void>, err: unknown, opts?: WriteOpts): void {
     const reason = err instanceof Error ? err.message : String(err);
+    if (isPermanentWriteError(err)) {
+      // Deterministic reject: retrying replays it. Say DATA LOSS now, with the REAL reason,
+      // instead of a 10-minute retry loop ending in an age-out line that blames time.
+      console.error(`[${this.name}] write rejected (deterministic, not retried), DATA LOSS: ${label} -- ${reason}`);
+      return;
+    }
     console.warn(`[${this.name}] write failed, buffering for retry: ${label} -- ${reason}`);
     this.addToBuffer({ label, fn, queuedAt: Date.now(), maxAgeMs: opts?.maxAgeMs });
   }

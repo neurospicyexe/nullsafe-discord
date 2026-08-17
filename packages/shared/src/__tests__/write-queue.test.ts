@@ -1,5 +1,6 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { MAX_BUFFER, WriteQueue, onWriteError } from "../write-queue.js";
+import { MAX_BUFFER, WriteQueue, onWriteError, isPermanentWriteError } from "../write-queue.js";
+import { assertWriteAck } from "../librarian.js";
 
 describe("onWriteError — fire-and-forget writes outside the queue must not be silent", () => {
   it("returns a handler that logs the failure with both the companion tag and the label", () => {
@@ -50,6 +51,29 @@ describe("WriteQueue observability — failures and data loss must be loud", () 
     await new Promise((r) => setImmediate(r)); // let the rejection settle
     expect(wq.pending).toBe(1);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("soma:123"));
+  });
+
+  // 2026-08-16: cypher/gaia somaUpdate declines ("no valid fields provided") were buffered and
+  // retried for 10 minutes -- a deterministic executor reject replays identically, so the retries
+  // could never succeed, and the age-out line blamed time instead of the payload. Six weeks of
+  // recurring DATA LOSS lines. A decline is now dropped immediately, loudly, with the REAL reason.
+  it("a deterministic librarian decline is dropped immediately with the real reason -- never buffered", async () => {
+    const wq = new WriteQueue("cypher");
+    await wq.enqueue("somaUpdate:123", async () => {
+      assertWriteAck({ error: "state_update_failed", reason: "no valid fields provided" }, "soma update");
+    });
+    expect(wq.pending).toBe(0); // not buffered -- retrying replays the reject
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("DATA LOSS: somaUpdate:123"));
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("no valid fields provided"));
+  });
+
+  it("transport failures stay retryable -- only assertWriteAck reject shapes are permanent", () => {
+    expect(isPermanentWriteError(new Error("librarian soma update declined: state_update_failed -- no valid fields provided"))).toBe(true);
+    expect(isPermanentWriteError(new Error("librarian handoff: write not applied (ack=false)"))).toBe(true);
+    expect(isPermanentWriteError(new Error("librarian note: no ack (silent reject/misroute) -- witness text"))).toBe(true);
+    expect(isPermanentWriteError(new Error("fetch failed"))).toBe(false);
+    expect(isPermanentWriteError(new Error("HTTP 502"))).toBe(false);
+    expect(isPermanentWriteError(new Error("librarian soma update: empty response"))).toBe(false);
   });
 
   it("buffer overflow evicts the oldest unsaved write and logs it as data loss (error)", async () => {

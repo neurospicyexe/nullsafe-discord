@@ -153,11 +153,10 @@ describe("LibrarianClient.botOrient()", () => {
       ground_threads: [],
       ground_handoff: null,
       rag_excerpts: [],
-      // One fat un-sliced section (conclusions render full text) pushes everything after it
-      // past the budget, so the later sections are dropped whole.
-      active_conclusions: Array.from({ length: 20 }, (_, i) => ({
-        text: `belief ${i} ${"x".repeat(300)}`, belief_type: "self", confidence: 0.5, subject: null,
-      })),
+      // Tensions are deliberately not render-capped (the server sends top-2); a pathological
+      // payload through that lane still overflows, which is exactly what the safety net is for.
+      active_tensions: Array.from({ length: 40 }, (_, i) => `tension ${i} ${"x".repeat(300)}`),
+      active_conclusions: [],
       flagged_beliefs: [],
       preferences: [{ domain: "general", preference: "long walks in the graph", strength: "firm" }],
       standing_refusals: [{ subject_text: "no cheerleading", reason: null }],
@@ -168,6 +167,52 @@ describe("LibrarianClient.botOrient()", () => {
     // The notice must live INSIDE the budget, and the pinned forage still survives the cut.
     expect(block.length).toBeLessThanOrEqual(RECENT_CONTEXT_BUDGET);
     expect(block).toContain("[Forage pool");
+  });
+
+  // 2026-08-16: measured against a real cypher payload, the assembled context overflowed the old
+  // 4800 budget on EVERY build (246 warns/day/bot) -- worldview, preferences, refusals, drifts and
+  // projects were silently cut from essentially every Discord prompt. The identity blocks are now
+  // bounded at render (each clip names its count and where the rest lives) so the whole fits.
+  it("a real-shaped fat payload (12 prefs, 8 conclusions, drifts, projects) fits WITHOUT clipping, and clips name their remainder", () => {
+    const block = formatRecentContext({
+      synthesis_summary: "s".repeat(2500),
+      ground_threads: ["t1", "t2", "t3"],
+      ground_handoff: "h".repeat(700),
+      rag_excerpts: ["r".repeat(300), "r".repeat(300), "r".repeat(300)],
+      history_excerpts: ["v".repeat(300), "v".repeat(300)],
+      continuity_notes: ["n".repeat(200), "n".repeat(200), "n".repeat(200)],
+      active_conclusions: Array.from({ length: 8 }, (_, i) => ({
+        text: `belief ${i} ${"c".repeat(200)}`, belief_type: "self", confidence: 0.5, subject: null,
+      })),
+      flagged_beliefs: [],
+      preferences: Array.from({ length: 12 }, (_, i) => ({
+        domain: "general", preference: `preference ${i} ${"p".repeat(180)}`, strength: "firm",
+      })),
+      standing_refusals: Array.from({ length: 6 }, (_, i) => ({ subject_text: `refusal ${i} ${"q".repeat(140)}`, reason: "because" })),
+      open_drifts: Array.from({ length: 6 }, (_, i) => ({ id: `d${i}`, drift_text: `drift ${i} ${"w".repeat(180)}`, witness_count: 1 })),
+      projects: Array.from({ length: 4 }, (_, i) => ({
+        id: `p${i}`, title: `project ${i}`, intention: "i".repeat(140), status: "open", days_idle: 2, stale: false,
+      })),
+      recent_growth: [{ type: "insight", content: "g".repeat(600) }],
+      forage_finds: [
+        { id: "f1", title: "Axelrod tournaments", domain: "logic problems", summary: "s", gathered_at: "2026-07-08T09:00:00Z" },
+        { id: "f2", title: "corvid caching", domain: "ecology", summary: "s", gathered_at: "2026-07-08T09:00:00Z" },
+      ],
+    } as any);
+    expect(block).not.toContain("[context clipped");
+    expect(block.length).toBeLessThanOrEqual(RECENT_CONTEXT_BUDGET);
+    // Bounded blocks are all PRESENT (pre-fix these were the sections silently dropped).
+    expect(block).toContain("[Worldview]");
+    expect(block).toContain("[Your preferences");
+    expect(block).toContain("[Standing refusals");
+    expect(block).toContain("[Your drifts");
+    expect(block).toContain("[Your projects");
+    expect(block).toContain("[Forage pool");
+    // Every clip names its remainder and where the rest lives -- a clipped list must stay reachable.
+    expect(block).toContain("(+6 more held -- ask the librarian for \"my preferences\")");
+    expect(block).toContain("(+3 more held -- ask the librarian for \"my conclusions\")");
+    expect(block).toContain("(+2 more standing -- ask the librarian for \"my refusals\")");
+    expect(block).toContain("(+2 more open -- ask the librarian for \"my drifts\")");
   });
 
   it("appends no clipped notice when everything fits", () => {
