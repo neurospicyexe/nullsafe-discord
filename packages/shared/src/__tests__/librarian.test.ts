@@ -275,6 +275,20 @@ describe("LibrarianClient.botOrient()", () => {
     expect(failedRead).not.toContain("[Your week's budget]");
   });
 
+  // Deploy change-notes (contract 0.10.0): announced system changes render as a status block;
+  // an empty window renders nothing (no changes is normal, not a gap to name).
+  it("renders deploy change-notes with age; empty renders nothing", () => {
+    const base = { synthesis_summary: null, ground_threads: [], ground_handoff: null, rag_excerpts: [] };
+    const withNotes = formatRecentContext({
+      ...base,
+      change_notes: [{ id: "chg_0.10.0", body: "System change (contract 0.10.0): this lane.", created_at: new Date(Date.now() - 3600_000).toISOString() }],
+    } as any);
+    expect(withNotes).toContain("[System changes");
+    expect(withNotes).toContain("this lane");
+    const without = formatRecentContext({ ...base, change_notes: [] } as any);
+    expect(without).not.toContain("[System changes");
+  });
+
   it("appends no clipped notice when everything fits", () => {
     const block = formatRecentContext({
       synthesis_summary: "a short recent",

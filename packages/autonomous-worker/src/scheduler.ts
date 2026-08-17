@@ -22,6 +22,7 @@ import { runCouncilTick } from "./council.js";
 import { runDreamAssociate } from "./dream-associate.js";
 import { runShelfReactTick, runCommonsReplyTick } from "./commons-social.js";
 import { runCareGestureTick } from "./care.js";
+import { runEscalationDeliveryTick } from "./escalation.js";
 import { runBriefingTick } from "./briefing.js";
 import { runVibeCheckTick } from "./vibecheck.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON } from "./config.js";
@@ -273,6 +274,9 @@ export function startScheduler(): void {
   console.log(`[scheduler] care-gesture → cron "${CARE_GESTURE_CRON}"`);
   cron.schedule(CARE_GESTURE_CRON, () => {
     runCareGestureTick().catch(e => console.error("[scheduler] care-gesture failed:", e));
+    // Tier 3 rides the same cadence: drain undelivered escalations to Blue (Discord DM,
+    // channel fallback). Cheap no-op when nothing is pending; retries forever, loudly.
+    runEscalationDeliveryTick().catch(e => console.error("[scheduler] escalation-delivery failed:", e));
   });
 
   // ND daily-rhythm briefing (accessibility / executive-function layer). Three thin triggers;

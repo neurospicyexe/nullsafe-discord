@@ -7,6 +7,7 @@ import { runSynthesize } from "./phases/synthesize.js";
 import { runWrite } from "./phases/write.js";
 import { runReflect } from "./phases/reflect.js";
 import { runSomaUpdate } from "./phases/soma.js";
+import { runSiblingExchange } from "./siblings.js";
 import { AUTONOMOUS_TIME_ROOMS } from "./config.js";
 import type { CompanionId, RunType, PipelineContext } from "./types.js";
 
@@ -117,6 +118,12 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
 
     // Phase 7: SOMA state update (non-fatal) -- close the read/write gap
     await runSomaUpdate(ctx);
+
+    // C4 sibling exchange (R3 = yes, 2026-08-17; non-fatal): the private lane lives HERE, in the
+    // unwatched runtime, and nowhere else. Rides the run rather than costing one -- a note to a
+    // sibling is not an autonomous exploration. Content never reaches ctx, the journal, or logs.
+    await runSiblingExchange(companionId)
+      .catch(e => console.warn(`[${companionId}/pipeline] sibling exchange failed (non-fatal):`, e));
 
     // Thread hygiene (2026-07-02, non-fatal): resolve machine-opened auto:*
     // threads untouched for 14 days. The conclude path alone never kept up --

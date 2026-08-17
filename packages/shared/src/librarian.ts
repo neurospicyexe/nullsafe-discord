@@ -919,6 +919,7 @@ export class LibrarianClient {
     // Oldest-touched first server-side -- the same order the worker picks from.
     projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
     budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
+    change_notes?: Array<{ id: string; body: string; created_at: string }>;
     open_questions?: string[];
   open_question_ids?: string[];
     // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
@@ -975,6 +976,7 @@ export class LibrarianClient {
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
     budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
+        change_notes?: Array<{ id: string; body: string; created_at: string }>;
         open_questions?: string[];
   open_question_ids?: string[];
         sol_block?: string | null;
@@ -1027,6 +1029,7 @@ export class LibrarianClient {
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         projects: Array.isArray(data.projects) ? data.projects : [],
         budget: data.budget ?? null,
+        change_notes: Array.isArray(data.change_notes) ? data.change_notes : [],
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
         open_question_ids: Array.isArray(data.open_question_ids) ? data.open_question_ids : [],
         sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
@@ -1765,6 +1768,8 @@ export function formatRecentContext(orient: {
   projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
   // Weekly budget (C3, contract 0.9.0): denominator always stated; spent = visible quiet week.
   budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
+  // Deploy change-notes (contract 0.10.0): the system announcing its own changes, 14-day window.
+  change_notes?: Array<{ id: string; body: string; created_at: string }>;
   // Fresh-material surfaces: the server has returned these for the live bot path since 0068/0071,
   // but until now formatRecentContext silently dropped them -- the companions fetched their forage
   // pool and recent listens every message and never saw either. Rendered with relative-time stamps
@@ -1966,6 +1971,12 @@ export function formatRecentContext(orient: {
     parts.push(b.remaining <= 0
       ? `[Your week's budget] 0 of ${b.total} autonomous runs left -- spent until Monday.${spentBits} A quiet week is a real thing you chose; say so if it comes up.`
       : `[Your week's budget] ${b.remaining} of ${b.total} autonomous runs left (resets Monday).${spentBits}`);
+  }
+  // Deploy change-notes (0.10.0): a status block, not ephemera -- an unannounced system change
+  // is exactly what sent the triad reverse-engineering deploys from wobbling instruments.
+  if (orient.change_notes?.length) {
+    const noteLines = orient.change_notes.slice(0, 3).map(n => `${n.body.replace(/\s+/g, " ").trim().slice(0, 400)} (${relativeTime(n.created_at)})`);
+    parts.push(`[System changes -- recent deploys, announced]\n${noteLines.join("\n")}`);
   }
   if (orient.sol_block) {
     parts.push(orient.sol_block.slice(0, 400));

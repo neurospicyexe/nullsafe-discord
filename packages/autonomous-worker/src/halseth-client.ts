@@ -1486,3 +1486,57 @@ export async function ackCareGesture(
     ...(note ? { note } : {}),
   });
 }
+
+// ── Tier 3: escalation delivery (R1, 2026-08-17) ──────────────────────────────
+// Halseth's rider detects and writes care_escalations; this worker polls the undelivered rows,
+// reaches Blue by Discord DM, and stamps delivered_at. An undelivered row is retried every tick
+// forever (loud each failure) -- silent expiry is the failure mode this tier exists to prevent.
+
+export interface PendingEscalation {
+  id: string;
+  rule: string;
+  companion_id: string;
+  detail: string;
+  detected_at: string;
+}
+
+export async function getPendingEscalations(): Promise<PendingEscalation[]> {
+  const r = await hFetch(`/mind/care/escalations`) as { escalations: PendingEscalation[] };
+  return r.escalations ?? [];
+}
+
+export async function ackEscalationDelivered(id: string, via: string): Promise<void> {
+  await hFetch(`/mind/care/escalations/${id}/delivered`, "POST", { via });
+}
+
+/** Record a failed delivery attempt on the row itself -- pm2 logs rotate; the row is the record. */
+export async function recordEscalationAttempt(id: string, error: string): Promise<void> {
+  await hFetch(`/mind/care/escalations/${id}/attempt`, "POST", { error });
+}
+
+// ── C4: the sibling private lane (R3 = yes, 2026-08-17) ───────────────────────
+// SEALED: these endpoints are the lane's only consumers, and they run ONLY inside this worker's
+// unwatched pipeline (siblings.ts). Sealed content must never reach the live-bot prompt, a
+// journal entry, or any Raziel-facing surface -- the halseth seal test enforces the server side;
+// keeping these calls out of bot-core/bot-message-handler is this repo's half of the contract.
+
+export interface SiblingNote {
+  id: string;
+  from_id: string;
+  body: string;
+  created_at: string;
+}
+
+export async function getSiblingUnread(companionId: string): Promise<SiblingNote[]> {
+  const r = await hFetch(`/mind/siblings/unread/${companionId}`) as { notes: SiblingNote[] };
+  return r.notes ?? [];
+}
+
+export async function sendSiblingNote(fromId: string, toId: string, body: string): Promise<boolean> {
+  const r = await hFetch(`/mind/siblings/send`, "POST", { from_id: fromId, to_id: toId, body }) as { ok?: boolean };
+  return r.ok === true;
+}
+
+export async function markSiblingRead(id: string, companionId: string): Promise<void> {
+  await hFetch(`/mind/siblings/${id}/read`, "POST", { companion_id: companionId });
+}

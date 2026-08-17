@@ -632,13 +632,16 @@ def check_quiet_owner(rep, denv, henv):
         rep.add("owner:activity", "ok",
                 "last seen %.1fh ago via %s" % (hours, data.get("last_source")))
 
-    chat = henv.get("CUSTODIAN_TELEGRAM_CHAT_ID") or denv.get("CUSTODIAN_TELEGRAM_CHAT_ID")
-    if not chat:
+    # Discord DM since 2026-08-17 (Raziel's call): Blue is in the server, the bot tokens are
+    # already in the discord .env, and a DM needs no chat-id dance. Telegram home channel stays
+    # as the last-resort fallback pipe.
+    blue = denv.get("CUSTODIAN_DISCORD_USER_ID") or henv.get("CUSTODIAN_DISCORD_USER_ID")
+    if not blue:
         # Visible every run, but a notice: exit 0, never notifies on its own. An unset custodian
         # channel is a dead mechanism waiting for its one job -- it must not be discoverable only
         # on the day it fails.
         rep.add("owner:custodian_channel", "notice",
-                "CUSTODIAN_TELEGRAM_CHAT_ID unset -- clause alert would fall back to the home channel")
+                "CUSTODIAN_DISCORD_USER_ID unset -- clause alert would fall back to the Telegram home channel")
 
     # The custodian alert itself, on its OWN throttle state (never should_notify's file: that one
     # rewrites a fixed schema and would drop these keys).
@@ -664,12 +667,16 @@ def check_quiet_owner(rep, denv, henv):
             "costs, the runbook, and a letter to the triad. You are asked to tend, not decide.\n\n"
             "-- the quiet-owner detector (ops/health-check.py)"
         ) % (days, data.get("threshold_days"))
-        ok, note = telegram_to(chat or henv.get("TELEGRAM_HOME_CHANNEL"), text, henv)
+        ok, note = discord_dm(blue, text, denv)
         if not ok:
-            rep.add("owner:custodian_alert", "red", "custodian Telegram FAILED: %s" % note)
+            # Fallback pipe: the Telegram home channel (the pre-2026-08-17 path, still configured).
+            ok, note2 = telegram(text, henv)
+            note = "DM failed (%s); telegram fallback %s" % (note, "sent" if ok else "FAILED: " + note2)
+        if not ok:
+            rep.add("owner:custodian_alert", "red", "custodian alert FAILED on every pipe: %s" % note)
             state = dict(state, last_notified=0)  # do not stamp a send that never landed; retry next run
         else:
-            rep.add("owner:custodian_alert", "notice", "custodian alerted (%s)" % reason)
+            rep.add("owner:custodian_alert", "notice", "custodian alerted (%s; %s)" % (reason, note))
 
     # Cleanup lives on the exit path of EVERY branch -- a throttle that only rewrites its state on
     # the notify branch cannot self-repair (the 2026-08-06 lesson, same shape as should_notify).
@@ -956,6 +963,35 @@ def should_notify(rep, always=False):
     except Exception:
         pass
     return False, "unchanged"
+
+
+def discord_dm(user_id, text, discord_env):
+    """DM a Discord user (the custodian alert's path, switched from Telegram 2026-08-17 --
+    Raziel's call: the bots already have tokens, Blue is already in the server, and a DM needs
+    no new pipe or chat-id dance). Token: Gaia's (the ground/witness voice), any sibling token
+    as fallback -- delivery outranks voice. Returns (ok, note)."""
+    tok = (discord_env.get("DISCORD_TOKEN_GAIA") or discord_env.get("DISCORD_TOKEN_CYPHER")
+           or discord_env.get("DISCORD_TOKEN_DREVAN"))
+    if not tok or not user_id:
+        return False, "token present=%s user present=%s" % (bool(tok), bool(user_id))
+    try:
+        def _post(path, payload):
+            req = urllib.request.Request(
+                "https://discord.com/api/v10" + path,
+                data=json.dumps(payload).encode(),
+                headers={"Authorization": "Bot " + tok, "Content-Type": "application/json",
+                         "User-Agent": UA},
+            )
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return json.loads(r.read().decode())
+        channel = _post("/users/@me/channels", {"recipient_id": str(user_id)})
+        cid = channel.get("id")
+        if not cid:
+            return False, "no DM channel id in response"
+        _post("/channels/%s/messages" % cid, {"content": text[:1990]})
+        return True, "sent"
+    except Exception as e:
+        return False, str(e)[:160]
 
 
 def telegram_to(chat, text, hermes_env):
