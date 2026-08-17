@@ -1,4 +1,5 @@
-import { createRun, updateRun, appendLog, setHomePresence, sweepStaleThreads } from "./halseth-client.js";
+import { createRun, updateRun, appendLog, setHomePresence, sweepStaleThreads, spendBudget } from "./halseth-client.js";
+import { isProjectRun } from "./phases/seed.js";
 import { runOrient } from "./phases/orient.js";
 import { runSeed } from "./phases/seed.js";
 import { runExplore } from "./phases/explore.js";
@@ -63,6 +64,23 @@ export async function runPipeline(companionId: CompanionId, runType: RunType = "
     tokensUsed: 0,
     artifactsCreated: 0,
   };
+
+  // Weekly budget (C3, mig 0124; R2: 1 credit = 1 run). Debited BEFORE any phase runs, tagged
+  // with the run's purpose (project day vs self-exploration -- same parity the seed phase uses).
+  // A spent week SKIPS the run with the reason in-band: the run row + log line carry it, so a
+  // quiet week is visibly chosen scarcity, never indistinguishable from a dead worker.
+  const purpose = isProjectRun(new Date()) ? "project" : "self";
+  const spend = await spendBudget(companionId, purpose, runId);
+  if (!spend.ok) {
+    console.log(`[${companionId}/pipeline] run skipped: ${spend.reason}`);
+    await appendLog(runId, "pipeline:budget", `run skipped -- ${spend.reason}`).catch(() => {});
+    await updateRun(runId, {
+      status: "completed",
+      completed_at: new Date().toISOString(),
+      error_message: `budget: ${spend.reason}`,
+    }).catch(() => {});
+    return { seedTopic: null, explorationSummary: null, journalEntryId: null };
+  }
 
   try {
     // Phase 1: Load full identity + orient context

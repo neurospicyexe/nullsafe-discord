@@ -255,6 +255,26 @@ describe("LibrarianClient.botOrient()", () => {
     expect(line).toContain("…");
   });
 
+  // C3 (contract 0.9.0): the budget block always states its denominator, and a spent week is
+  // rendered as chosen quiet -- never absent (absent is a failed read, which renders nothing).
+  it("renders the week's budget with its denominator; zero renders as a sayable quiet week", () => {
+    const base = { synthesis_summary: null, ground_threads: [], ground_handoff: null, rag_excerpts: [] };
+    const some = formatRecentContext({
+      ...base,
+      budget: { remaining: 5, total: 7, week: "2026-08-10", spent: [{ purpose: "project", count: 1 }, { purpose: "gift:raziel", count: 1 }] },
+    } as any);
+    expect(some).toContain("5 of 7 autonomous runs left");
+    expect(some).toContain("1 on gift:raziel");
+    const spent = formatRecentContext({
+      ...base,
+      budget: { remaining: 0, total: 7, week: "2026-08-10", spent: [{ purpose: "self", count: 7 }] },
+    } as any);
+    expect(spent).toContain("0 of 7");
+    expect(spent).toContain("spent until Monday");
+    const failedRead = formatRecentContext({ ...base, budget: null } as any);
+    expect(failedRead).not.toContain("[Your week's budget]");
+  });
+
   it("appends no clipped notice when everything fits", () => {
     const block = formatRecentContext({
       synthesis_summary: "a short recent",

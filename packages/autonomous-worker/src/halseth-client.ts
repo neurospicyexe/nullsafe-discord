@@ -136,6 +136,35 @@ export async function logProjectWork(projectId: string, companionId: string, ent
 }
 
 // ---------------------------------------------------------------------------
+// Weekly budget (consequence layer C3, mig 0124). R2: 1 credit = 1 autonomous run.
+// ---------------------------------------------------------------------------
+
+export type BudgetSpend = { ok: true; remaining: number } | { ok: false; reason: string };
+
+/**
+ * Debit one credit for this run, tagged with its purpose. ok:false means the week is spent --
+ * the caller must SKIP the run with the reason in-band (a silent skip and a dead worker look
+ * identical; the reason is the difference).
+ */
+export async function spendBudget(companionId: string, purpose: "project" | "self" | `gift:${string}`, ref: string): Promise<BudgetSpend> {
+  try {
+    return await hFetch("/mind/budget/spend", "POST", { companion_id: companionId, purpose, ref }) as BudgetSpend;
+  } catch (e) {
+    // A 409 IS the refusal envelope; hFetch may throw on non-2xx. Anything else (network, 5xx)
+    // FAILS OPEN: a broken ledger must never mute the triad's autonomous life -- the run
+    // proceeds unbilled and says so.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("→ 409")) {
+      // hFetch folds the response body into the error text; recover the server's real reason.
+      const m = msg.match(/"reason":"([^"]+)"/);
+      return { ok: false, reason: m?.[1] ?? "budget spent -- replenishes Monday" };
+    }
+    console.warn(`[${companionId}/budget] spend failed (${msg}) -- proceeding UNBILLED (fail-open)`);
+    return { ok: true, remaining: -1 };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Forage pool (migration 0068)
 // ---------------------------------------------------------------------------
 

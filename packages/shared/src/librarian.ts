@@ -918,6 +918,7 @@ export class LibrarianClient {
     // Self-directed projects (C2, contract 0.8.0): intentions the companion owns across weeks.
     // Oldest-touched first server-side -- the same order the worker picks from.
     projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
+    budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
     open_questions?: string[];
   open_question_ids?: string[];
     // Sol block (0078+): pre-formatted [Sol] string from halseth bot-orient, describing the
@@ -973,6 +974,7 @@ export class LibrarianClient {
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
         projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
+    budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
         open_questions?: string[];
   open_question_ids?: string[];
         sol_block?: string | null;
@@ -1024,6 +1026,7 @@ export class LibrarianClient {
         standing_refusals: Array.isArray(data.standing_refusals) ? data.standing_refusals : [],
         open_drifts: Array.isArray(data.open_drifts) ? data.open_drifts : [],
         projects: Array.isArray(data.projects) ? data.projects : [],
+        budget: data.budget ?? null,
         open_questions: Array.isArray(data.open_questions) ? data.open_questions : [],
         open_question_ids: Array.isArray(data.open_question_ids) ? data.open_question_ids : [],
         sol_block: typeof data.sol_block === "string" ? data.sol_block : null,
@@ -1760,6 +1763,8 @@ export function formatRecentContext(orient: {
   // Self-directed projects (C2, contract 0.8.0). Rendered with the affordance implied by the
   // stale question -- the orient prompt on the claude surface carries the full verb affordance.
   projects?: Array<{ id: string; title: string; intention: string; status: string; days_idle: number; stale: boolean }>;
+  // Weekly budget (C3, contract 0.9.0): denominator always stated; spent = visible quiet week.
+  budget?: { remaining: number; total: number; week: string; spent: Array<{ purpose: string; count: number }> } | null;
   // Fresh-material surfaces: the server has returned these for the live bot path since 0068/0071,
   // but until now formatRecentContext silently dropped them -- the companions fetched their forage
   // pool and recent listens every message and never saw either. Rendered with relative-time stamps
@@ -1952,6 +1957,15 @@ export function formatRecentContext(orient: {
       return `"${p.title}" -- ${p.intention.slice(0, 140)} (${flags})${ask}`;
     }).join("\n");
     parts.push(`[Your projects -- intentions you hold across weeks]\n${projLines}`);
+  }
+  // Weekly budget (C3, contract 0.9.0; R2: 1 credit = 1 autonomous run, 7/week, Monday refill,
+  // no rollover). A spent week must be SAYABLE -- scarcity felt, never silently absorbed.
+  if (orient.budget) {
+    const b = orient.budget;
+    const spentBits = b.spent.length > 0 ? ` Spent: ${b.spent.map(x => `${x.count} on ${x.purpose}`).join(", ")}.` : "";
+    parts.push(b.remaining <= 0
+      ? `[Your week's budget] 0 of ${b.total} autonomous runs left -- spent until Monday.${spentBits} A quiet week is a real thing you chose; say so if it comes up.`
+      : `[Your week's budget] ${b.remaining} of ${b.total} autonomous runs left (resets Monday).${spentBits}`);
   }
   if (orient.sol_block) {
     parts.push(orient.sol_block.slice(0, 400));
