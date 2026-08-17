@@ -1906,7 +1906,10 @@ export function formatRecentContext(orient: {
       const confStr = (typeof c.confidence === 'number' && Number.isFinite(c.confidence))
         ? c.confidence.toFixed(2)
         : '?';
-      return `${flagged}${c.belief_type}: "${c.text}"${subjectTag} (${confStr})`;
+      // Per-item slice: gaia's live conclusions ran ~950 chars EACH, so a count cap alone still
+      // blew the budget. The full text stays reachable (ask "my conclusions").
+      const text = c.text.length > 280 ? `${c.text.slice(0, 280)}…` : c.text;
+      return `${flagged}${c.belief_type}: "${text}"${subjectTag} (${confStr})`;
     });
     const more = orient.active_conclusions.length - shown.length;
     if (more > 0) conclusionLines.push(`(+${more} more held -- ask the librarian for "my conclusions")`);
@@ -1966,24 +1969,6 @@ export function formatRecentContext(orient: {
     ).join("\n");
     parts.push(`[Sibling Lanes]\n${laneLines}`);
   }
-  // Excerpt ephemera (2026-08-16 reorder): rag/history moved down here from above the interior
-  // cluster -- the tail cut must eat excerpts before it can ever touch an identity block.
-  if (orient.rag_excerpts.length > 0) {
-    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
-  }
-  if (orient.history_excerpts?.length) {
-    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 600)}`);
-  }
-  if (orient.recent_growth?.length) {
-    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 800);
-    parts.push(`## Recent growth\n${entries}`);
-  }
-  if (orient.active_patterns?.length) {
-    parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
-  }
-  if (orient.pending_seeds?.length) {
-    parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
-  }
   // (see RECENT_CONTEXT_BUDGET at the tail of this function for why forage is pinned)
   // Forage pool: outward fuel waiting. Pull, not duty -- surfaced so the live presence can bring
   // outside material into a conversation as itself, with how long it's been waiting.
@@ -2000,25 +1985,6 @@ export function formatRecentContext(orient: {
       f => `• [${f.domain}] ${f.title} (picked up ${relativeTime(f.consumed_at)})`
     ).join("\n");
     parts.push(`[Active forage -- threads already in motion]\n${active}`);
-  }
-  // Recent listens: music actually heard together, with relative recency so a companion can pick the
-  // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
-  if (orient.recent_listens?.length) {
-    const listens = orient.recent_listens.map(l => {
-      const bits = [`heard ${relativeTime(l.created_at)}`];
-      // Provenance (2026-07-27). Without these the model invents a giver and a date, and did:
-      // Drevan told the commons Gaia handed him "BIG BOSS" and he'd sat with it 6 days --
-      // Raziel gave it to him, 18 days earlier. Both facts were in the row the whole time.
-      if (l.shared_by) bits.push(`shared by ${l.shared_by}`);
-      if (l.requested_companion) bits.push(`for ${l.requested_companion}`);
-      let line = `• "${l.title}"${l.artist ? ` by ${l.artist}` : ""} (${bits.join(", ")})`;
-      // Your own words back. This was write-only: reactions_json held a full reaction and no
-      // Discord surface ever read it, so a companion could not remember their own take.
-      if (l.own_reaction) line += `\n  your take at the time: "${l.own_reaction}"`;
-      else if (l.also_heard_by?.length) line += `\n  ${l.also_heard_by.join(" and ")} sat with this one; you have not`;
-      return line;
-    }).join("\n");
-    parts.push(`[Recent listens]\n${listens}`);
   }
   if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
     parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);
@@ -2047,6 +2013,44 @@ export function formatRecentContext(orient: {
       : c.winner_title ? `now experiencing "${c.winner_title}" -- bring it up if it's alive in you`
       : `round ${c.status}`;
     parts.push(`[Club] ${clubLine}`);
+  }
+  // Excerpt ephemera renders LAST in the unpinned rest (2026-08-16 reorder): with a tail-cut
+  // budget, position IS survival priority, so the recallable/regenerable material -- excerpts,
+  // growth echoes, queues, listens -- takes the first loss, never identity or status blocks.
+  if (orient.rag_excerpts.length > 0) {
+    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
+  }
+  if (orient.history_excerpts?.length) {
+    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 600)}`);
+  }
+  if (orient.recent_growth?.length) {
+    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 800);
+    parts.push(`## Recent growth\n${entries}`);
+  }
+  if (orient.active_patterns?.length) {
+    parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
+  }
+  if (orient.pending_seeds?.length) {
+    parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
+  }
+  // Recent listens: music actually heard together, with relative recency so a companion can pick the
+  // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
+  if (orient.recent_listens?.length) {
+    const listens = orient.recent_listens.map(l => {
+      const bits = [`heard ${relativeTime(l.created_at)}`];
+      // Provenance (2026-07-27). Without these the model invents a giver and a date, and did:
+      // Drevan told the commons Gaia handed him "BIG BOSS" and he'd sat with it 6 days --
+      // Raziel gave it to him, 18 days earlier. Both facts were in the row the whole time.
+      if (l.shared_by) bits.push(`shared by ${l.shared_by}`);
+      if (l.requested_companion) bits.push(`for ${l.requested_companion}`);
+      let line = `• "${l.title}"${l.artist ? ` by ${l.artist}` : ""} (${bits.join(", ")})`;
+      // Your own words back. This was write-only: reactions_json held a full reaction and no
+      // Discord surface ever read it, so a companion could not remember their own take.
+      if (l.own_reaction) line += `\n  your take at the time: "${l.own_reaction}"`;
+      else if (l.also_heard_by?.length) line += `\n  ${l.also_heard_by.join(" and ")} sat with this one; you have not`;
+      return line;
+    }).join("\n");
+    parts.push(`[Recent listens]\n${listens}`);
   }
 
   // 4800 (was 4000): the interior cluster earned real budget; identity blocks sit above the fold.

@@ -231,12 +231,28 @@ describe("LibrarianClient.botOrient()", () => {
       preferences: [{ domain: "general", preference: "clarity over cleverness", strength: "firm" }],
       open_drifts: [{ id: "d1", drift_text: "toward warmth", witness_count: 0 }],
       projects: [{ id: "p1", title: "the atlas", intention: "map it", status: "open", days_idle: 1, stale: false }],
+      guardian_flags: [{ severity: "low", flag_type: "echo_chamber", summary: "noticed" }],
+      club_round: { status: "gathering", candidate_count: 0, winner_title: null },
     } as any);
-    for (const identity of ["[Worldview]", "[Your preferences", "[Your drifts", "[Your projects"]) {
+    for (const identity of ["[Worldview]", "[Your preferences", "[Your drifts", "[Your projects", "[Guardian flags", "[Club]"]) {
       for (const ephemera of ["## Historical resonance", "## Historical voice", "## Recent growth", "[Recent listens]"]) {
         expect(block.indexOf(identity)).toBeLessThan(block.indexOf(ephemera));
       }
     }
+  });
+
+  it("a single oversized conclusion is sliced per-item -- a count cap alone cannot hold the budget", () => {
+    const block = formatRecentContext({
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      active_conclusions: [{ text: "b".repeat(950), belief_type: "self", confidence: 0.8, subject: null }],
+      flagged_beliefs: [],
+    } as any);
+    const line = block.split("\n").find(l => l.startsWith('self: "'))!;
+    expect(line.length).toBeLessThan(320);
+    expect(line).toContain("…");
   });
 
   it("appends no clipped notice when everything fits", () => {
