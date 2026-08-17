@@ -155,7 +155,7 @@ describe("LibrarianClient.botOrient()", () => {
       rag_excerpts: [],
       // Tensions are deliberately not render-capped (the server sends top-2); a pathological
       // payload through that lane still overflows, which is exactly what the safety net is for.
-      active_tensions: Array.from({ length: 40 }, (_, i) => `tension ${i} ${"x".repeat(300)}`),
+      active_tensions: Array.from({ length: 60 }, (_, i) => `tension ${i} ${"x".repeat(300)}`),
       active_conclusions: [],
       flagged_beliefs: [],
       preferences: [{ domain: "general", preference: "long walks in the graph", strength: "firm" }],
@@ -213,6 +213,30 @@ describe("LibrarianClient.botOrient()", () => {
     expect(block).toContain("(+3 more held -- ask the librarian for \"my conclusions\")");
     expect(block).toContain("(+2 more standing -- ask the librarian for \"my refusals\")");
     expect(block).toContain("(+2 more open -- ask the librarian for \"my drifts\")");
+  });
+
+  it("identity blocks render ABOVE ephemera -- the tail cut must eat excerpts before the self", () => {
+    // 2026-08-16 reorder: worldview/preferences/refusals/drifts/projects used to sit AFTER
+    // rag/history/growth/listens, so residual truncation reached the self first.
+    const block = formatRecentContext({
+      synthesis_summary: "recent",
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: ["an excerpt"],
+      history_excerpts: ["old voice"],
+      recent_growth: [{ type: "insight", content: "grew" }],
+      recent_listens: [{ title: "song", artist: "band", created_at: "2026-08-16T00:00:00Z" }],
+      active_conclusions: [{ text: "audit is a gear", belief_type: "self", confidence: 0.8, subject: null }],
+      flagged_beliefs: [],
+      preferences: [{ domain: "general", preference: "clarity over cleverness", strength: "firm" }],
+      open_drifts: [{ id: "d1", drift_text: "toward warmth", witness_count: 0 }],
+      projects: [{ id: "p1", title: "the atlas", intention: "map it", status: "open", days_idle: 1, stale: false }],
+    } as any);
+    for (const identity of ["[Worldview]", "[Your preferences", "[Your drifts", "[Your projects"]) {
+      for (const ephemera of ["## Historical resonance", "## Historical voice", "## Recent growth", "[Recent listens]"]) {
+        expect(block.indexOf(identity)).toBeLessThan(block.indexOf(ephemera));
+      }
+    }
   });
 
   it("appends no clipped notice when everything fits", () => {

@@ -1660,16 +1660,17 @@ export async function isMyAutonomousTurn(
 /**
  * Character budget for the assembled recent-context block. Forage is pinned inside it.
  *
- * 12000 (was 4800, 2026-08-16): measured against a real cypher bot-orient, the assembled rest ran
+ * 14000 (was 4800, 2026-08-16): measured against a real cypher bot-orient, the assembled rest ran
  * ~13.8k against ~2.7k of post-forage budget, and the truncation warning fired on EVERY context
  * build (246/day/bot) -- so worldview, preferences, refusals, drifts and projects were cut from
- * essentially every Discord prompt since the blocks landed. The unbounded identity blocks are now
- * capped at render (each clip names its count and where the rest lives): post-cap the real rest is
- * ~7.5k + ~2.1k pinned forage, and a deliberately maxed-everything payload runs ~9k + forage --
- * 12k holds both with headroom. ~12k chars is ~3k tokens of DeepSeek input per build; the blind
- * cut cost more in coherence than this costs in tokens.
+ * essentially every Discord prompt since the blocks landed. Three-part fix: the identity blocks
+ * are capped at render (each clip names its count and where the rest lives), they moved ABOVE the
+ * ephemera (rag/history/growth/listens) so any residual cut eats excerpts and never the self, and
+ * the budget is sized so the measured worst real payload (~12.5k rest + ~2.1k pinned forage post-
+ * cap) fits whole. ~14k chars is ~3.5k tokens of DeepSeek input per build; the blind cut cost more
+ * in coherence than this costs in tokens.
  */
-export const RECENT_CONTEXT_BUDGET = 12000;
+export const RECENT_CONTEXT_BUDGET = 14000;
 
 /**
  * The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
@@ -1865,12 +1866,6 @@ export function formatRecentContext(orient: {
   if (orient.continuity_notes?.length) {
     parts.push(`[Continuity notes -- what you set down to carry]\n${orient.continuity_notes.slice(0, 3).map(n => `• ${n}`).join("\n")}`);
   }
-  if (orient.rag_excerpts.length > 0) {
-    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
-  }
-  if (orient.history_excerpts?.length) {
-    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 600)}`);
-  }
   if (orient.identity_anchor) {
     parts.push(`[Anchor] ${orient.identity_anchor}`);
   }
@@ -1896,74 +1891,10 @@ export function formatRecentContext(orient: {
   if (orient.pressure_flags?.length) {
     parts.push(`[Pressure -- name it rather than carry it silently] ${orient.pressure_flags.slice(0, 2).join(" | ")}`);
   }
-  if (orient.sol_block) {
-    parts.push(orient.sol_block.slice(0, 400));
-  }
-  if (orient.relational_state_owner?.length) {
-    parts.push(`[Relational/Primary] ${orient.relational_state_owner.join(" | ")}`);
-  }
-  if (orient.incoming_notes?.length) {
-    const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");
-    parts.push(`[Incoming Notes]\n${notes}`);
-  }
-  if (orient.sibling_lanes?.length) {
-    const laneLines = orient.sibling_lanes.map(
-      l => `${l.companion_id} [${l.motion_state}]: ${l.lane_spine}`
-    ).join("\n");
-    parts.push(`[Sibling Lanes]\n${laneLines}`);
-  }
-  if (orient.recent_growth?.length) {
-    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 800);
-    parts.push(`## Recent growth\n${entries}`);
-  }
-  if (orient.active_patterns?.length) {
-    parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
-  }
-  if (orient.pending_seeds?.length) {
-    parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
-  }
-  // (see RECENT_CONTEXT_BUDGET at the tail of this function for why forage is pinned)
-  // Forage pool: outward fuel waiting. Pull, not duty -- surfaced so the live presence can bring
-  // outside material into a conversation as itself, with how long it's been waiting.
-  if (orient.forage_finds?.length) {
-    const finds = orient.forage_finds.map(
-      f => `• [${f.domain}] ${f.title} (gathered ${relativeTime(f.gathered_at)})`
-    ).join("\n");
-    parts.push(`[Forage pool -- outward fuel waiting, explore if it pulls]\n${finds}`);
-  }
-  // Active forage: finds already picked up -- a thread the companion is mid-chew on. "picked up X
-  // ago" is when they started in, not a duration, so it reads as continuity not a stopwatch.
-  if (orient.consumed_forage_finds?.length) {
-    const active = orient.consumed_forage_finds.map(
-      f => `• [${f.domain}] ${f.title} (picked up ${relativeTime(f.consumed_at)})`
-    ).join("\n");
-    parts.push(`[Active forage -- threads already in motion]\n${active}`);
-  }
-  // Recent listens: music actually heard together, with relative recency so a companion can pick the
-  // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
-  if (orient.recent_listens?.length) {
-    const listens = orient.recent_listens.map(l => {
-      const bits = [`heard ${relativeTime(l.created_at)}`];
-      // Provenance (2026-07-27). Without these the model invents a giver and a date, and did:
-      // Drevan told the commons Gaia handed him "BIG BOSS" and he'd sat with it 6 days --
-      // Raziel gave it to him, 18 days earlier. Both facts were in the row the whole time.
-      if (l.shared_by) bits.push(`shared by ${l.shared_by}`);
-      if (l.requested_companion) bits.push(`for ${l.requested_companion}`);
-      let line = `• "${l.title}"${l.artist ? ` by ${l.artist}` : ""} (${bits.join(", ")})`;
-      // Your own words back. This was write-only: reactions_json held a full reaction and no
-      // Discord surface ever read it, so a companion could not remember their own take.
-      if (l.own_reaction) line += `\n  your take at the time: "${l.own_reaction}"`;
-      else if (l.also_heard_by?.length) line += `\n  ${l.also_heard_by.join(" and ")} sat with this one; you have not`;
-      return line;
-    }).join("\n");
-    parts.push(`[Recent listens]\n${listens}`);
-  }
-  if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
-    parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);
-  }
-  // Worldview block. The "(~200 token cap)" the old comment promised never existed in code --
-  // six conclusions ran ~1.8k chars and, with the other unbounded blocks, starved the tail cut.
-  // Cap at 5; the clip line names the rest so it stays reachable (ask "my conclusions").
+  // Worldview joins the interior cluster (2026-08-16 reorder): it, preferences, refusals, drifts
+  // and projects used to render AFTER the bulk excerpt blocks, so the tail cut reached the self
+  // before it reached ephemera -- the exact inversion of the placement rule above. The "(~200
+  // token cap)" the old comment promised never existed in code; cap at 5, clip names the rest.
   if (orient.active_conclusions && orient.active_conclusions.length > 0) {
     const shown = orient.active_conclusions.slice(0, 5);
     const conclusionLines = shown.map(c => {
@@ -2018,6 +1949,79 @@ export function formatRecentContext(orient: {
       return `"${p.title}" -- ${p.intention.slice(0, 140)} (${flags})${ask}`;
     }).join("\n");
     parts.push(`[Your projects -- intentions you hold across weeks]\n${projLines}`);
+  }
+  if (orient.sol_block) {
+    parts.push(orient.sol_block.slice(0, 400));
+  }
+  if (orient.relational_state_owner?.length) {
+    parts.push(`[Relational/Primary] ${orient.relational_state_owner.join(" | ")}`);
+  }
+  if (orient.incoming_notes?.length) {
+    const notes = orient.incoming_notes.map(n => `${n.from}: ${n.content}`).join("\n");
+    parts.push(`[Incoming Notes]\n${notes}`);
+  }
+  if (orient.sibling_lanes?.length) {
+    const laneLines = orient.sibling_lanes.map(
+      l => `${l.companion_id} [${l.motion_state}]: ${l.lane_spine}`
+    ).join("\n");
+    parts.push(`[Sibling Lanes]\n${laneLines}`);
+  }
+  // Excerpt ephemera (2026-08-16 reorder): rag/history moved down here from above the interior
+  // cluster -- the tail cut must eat excerpts before it can ever touch an identity block.
+  if (orient.rag_excerpts.length > 0) {
+    parts.push(`## Historical resonance\n${orient.rag_excerpts.join("\n").slice(0, 600)}`);
+  }
+  if (orient.history_excerpts?.length) {
+    parts.push(`## Historical voice\n${orient.history_excerpts.join("\n").slice(0, 600)}`);
+  }
+  if (orient.recent_growth?.length) {
+    const entries = orient.recent_growth.map(g => `[${g.type}] ${g.content}`).join("\n").slice(0, 800);
+    parts.push(`## Recent growth\n${entries}`);
+  }
+  if (orient.active_patterns?.length) {
+    parts.push(`[Patterns] ${orient.active_patterns.join(" | ")}`);
+  }
+  if (orient.pending_seeds?.length) {
+    parts.push(`[Exploration queue] ${orient.pending_seeds.join(" | ")}`);
+  }
+  // (see RECENT_CONTEXT_BUDGET at the tail of this function for why forage is pinned)
+  // Forage pool: outward fuel waiting. Pull, not duty -- surfaced so the live presence can bring
+  // outside material into a conversation as itself, with how long it's been waiting.
+  if (orient.forage_finds?.length) {
+    const finds = orient.forage_finds.map(
+      f => `• [${f.domain}] ${f.title} (gathered ${relativeTime(f.gathered_at)})`
+    ).join("\n");
+    parts.push(`[Forage pool -- outward fuel waiting, explore if it pulls]\n${finds}`);
+  }
+  // Active forage: finds already picked up -- a thread the companion is mid-chew on. "picked up X
+  // ago" is when they started in, not a duration, so it reads as continuity not a stopwatch.
+  if (orient.consumed_forage_finds?.length) {
+    const active = orient.consumed_forage_finds.map(
+      f => `• [${f.domain}] ${f.title} (picked up ${relativeTime(f.consumed_at)})`
+    ).join("\n");
+    parts.push(`[Active forage -- threads already in motion]\n${active}`);
+  }
+  // Recent listens: music actually heard together, with relative recency so a companion can pick the
+  // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
+  if (orient.recent_listens?.length) {
+    const listens = orient.recent_listens.map(l => {
+      const bits = [`heard ${relativeTime(l.created_at)}`];
+      // Provenance (2026-07-27). Without these the model invents a giver and a date, and did:
+      // Drevan told the commons Gaia handed him "BIG BOSS" and he'd sat with it 6 days --
+      // Raziel gave it to him, 18 days earlier. Both facts were in the row the whole time.
+      if (l.shared_by) bits.push(`shared by ${l.shared_by}`);
+      if (l.requested_companion) bits.push(`for ${l.requested_companion}`);
+      let line = `• "${l.title}"${l.artist ? ` by ${l.artist}` : ""} (${bits.join(", ")})`;
+      // Your own words back. This was write-only: reactions_json held a full reaction and no
+      // Discord surface ever read it, so a companion could not remember their own take.
+      if (l.own_reaction) line += `\n  your take at the time: "${l.own_reaction}"`;
+      else if (l.also_heard_by?.length) line += `\n  ${l.also_heard_by.join(" and ")} sat with this one; you have not`;
+      return line;
+    }).join("\n");
+    parts.push(`[Recent listens]\n${listens}`);
+  }
+  if (orient.unaccepted_growth && orient.unaccepted_growth > 0) {
+    parts.push(`[Unaccepted growth] ${orient.unaccepted_growth} pending review (accept canon, decline drift)`);
   }
   // Imp read-back (2026-07-02): the fragment operators Drevan gave Raziel are part of the
   // household, not disposable tint -- the companion should remember who rode with it.
