@@ -2039,6 +2039,7 @@ export function formatRecentContext(orient: {
       : `round ${c.status}`;
     parts.push(`[Club] ${clubLine}`);
   }
+  // ── EPHEMERA BOUNDARY: nothing status-shaped below this line. ──────────────────────────────
   // Excerpt ephemera renders LAST in the unpinned rest (2026-08-16 reorder): with a tail-cut
   // budget, position IS survival priority, so the recallable/regenerable material -- excerpts,
   // growth echoes, queues, listens -- takes the first loss, never identity or status blocks.

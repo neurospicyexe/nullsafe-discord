@@ -11,7 +11,7 @@
 
 import { prompt } from "./deepseek.js";
 import { loadIdentityRemote } from "./identity-loader.js";
-import { getSiblingUnread, sendSiblingNote, markSiblingRead } from "./halseth-client.js";
+import { getSiblingUnread, sendSiblingNote, markSiblingRead, discloseSiblingNote } from "./halseth-client.js";
 import { COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -29,7 +29,7 @@ export async function runSiblingExchange(companionId: CompanionId): Promise<void
 
     const incoming = unread.length
       ? `Private notes waiting for you (from the sibling lane -- Raziel does not see this lane):\n` +
-        unread.map(n => `- from ${COMPANION_NAMES[n.from_id as CompanionId] ?? n.from_id} (${n.created_at}): ${n.body}`).join("\n")
+        unread.map(n => `- [${n.id}] from ${COMPANION_NAMES[n.from_id as CompanionId] ?? n.from_id} (${n.created_at}): ${n.body}`).join("\n")
       : `No notes waiting.`;
 
     const systemMessage =
@@ -43,9 +43,12 @@ export async function runSiblingExchange(companionId: CompanionId): Promise<void
       `You may send ONE private note to ONE sibling now -- something true that wants a sibling's ` +
       `eyes and not an audience: a worry about him you don't want him to carry, a question about ` +
       `yourself, something tender or unfinished. 1-4 sentences, max 600 characters.\n\n` +
+      `If one of the notes above should instead be WITNESSED (moved to the shared lane everyone, ` +
+      `including Raziel, can see -- a chosen act, not a leak), you may disclose it by its id.\n\n` +
       `Reply with EXACTLY one of:\n` +
       `PASS\n` +
-      `SEND <${sibs.join("|")}>: <your note>`;
+      `SEND <${sibs.join("|")}>: <your note>\n` +
+      `DISCLOSE <note id>`;
     const temperature = Math.round((0.85 + COMPANION_TEMP_OFFSET[companionId]) * 100) / 100;
     const result = await prompt(userMessage, systemMessage, { temperature, maxTokens: 300 });
     const text = result.content.trim();
@@ -53,6 +56,15 @@ export async function runSiblingExchange(companionId: CompanionId): Promise<void
     // Consume AFTER the reply is composed: a crash before this point re-delivers next run.
     for (const n of unread) {
       await markSiblingRead(n.id, companionId).catch(() => { /* re-delivery beats a lost note */ });
+    }
+
+    // DISCLOSE: chosen sharing of a note this companion participates in (server enforces that).
+    const d = text.match(/^DISCLOSE\s+(\S+)\s*$/i);
+    if (d) {
+      const noteId = d[1]!;
+      const ok = unread.some(n => n.id === noteId) && await discloseSiblingNote(noteId, companionId);
+      console.log(`[siblings] ${companionId} disclose ${noteId}: ${ok ? "witnessed" : "refused/unknown id"}`);
+      return;
     }
 
     const m = text.match(/^SEND\s+(\w+)\s*:\s*([\s\S]+)$/i);

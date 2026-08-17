@@ -1540,3 +1540,9 @@ export async function sendSiblingNote(fromId: string, toId: string, body: string
 export async function markSiblingRead(id: string, companionId: string): Promise<void> {
   await hFetch(`/mind/siblings/${id}/read`, "POST", { companion_id: companionId });
 }
+
+/** Chosen sharing: copy a sealed note into the witnessed lane (participants only, server-enforced). */
+export async function discloseSiblingNote(id: string, companionId: string): Promise<boolean> {
+  const r = await hFetch(`/mind/siblings/${id}/disclose`, "POST", { companion_id: companionId }) as { ok?: boolean };
+  return r.ok === true;
+}

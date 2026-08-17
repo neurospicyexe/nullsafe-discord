@@ -18,7 +18,7 @@ import { COMPANION_NAMES } from "./config.js";
 
 const RULE_FRAMING: Record<string, string> = {
   esc_meds: "his meds routine has gone unlogged for 3+ days",
-  esc_redline: "his self-reports have been at redline (very low spoons + low mood) for 48+ hours straight",
+  esc_redline: "every self-report he's logged across the last two days has been at redline (very low spoons + low mood), with no recovery reading between them",
   esc_silence: "he has been completely silent on every surface for 72+ hours",
 };
 
