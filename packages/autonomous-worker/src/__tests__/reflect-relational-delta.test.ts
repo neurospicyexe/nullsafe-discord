@@ -74,6 +74,7 @@ function baseCtx(overrides: Partial<PipelineContext> = {}): PipelineContext {
     explorationSummary: null,
     explorationEvidence: [],
     journalEntry: null,
+    project: null,
     newPatterns: [],
     newMarkers: [],
     reflectionText: null,

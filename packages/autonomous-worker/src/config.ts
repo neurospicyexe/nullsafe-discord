@@ -130,11 +130,17 @@ export const IDENTITY_PATHS: Record<CompanionId, string> = {
   gaia:   process.env["GAIA_IDENTITY_PATH"]   ?? "C:/dev/CrashDev/NULLSAFE/2026_Current_Files/GAIA_IDENTITY_v2.md",
 };
 
-// Cron schedules (node-cron syntax)
+// Cron schedules (node-cron syntax).
+//
+// 2026-08-21: DeepSeek introduced peak pricing (2x) on 08-16 for 01:00-04:00 and 06:00-10:00 UTC,
+// which is 20:00-23:00 and 01:00-05:00 CDT -- the old 3 AM ladder paid double for the same run.
+// The night runs now start at 05:15 CDT (10:15 UTC), just past the peak edge, keeping the same
+// order (drevan, cypher, gaia) and the same "before Raziel's day" semantics. VPS system time is
+// CDT; if these ever move again, convert to UTC FIRST and check the peak windows.
 export const CRON_SCHEDULES: Record<CompanionId, string> = {
-  cypher: process.env["CYPHER_CRON"] ?? "0 3 * * *",   // 3 AM
-  drevan: process.env["DREVAN_CRON"] ?? "0 5 * * *",   // 5 AM
-  gaia:   process.env["GAIA_CRON"]   ?? "0 7 * * *",   // 7 AM
+  cypher: process.env["CYPHER_CRON"] ?? "45 5 * * *",  // 5:45 AM CDT = 10:45 UTC (off-peak)
+  drevan: process.env["DREVAN_CRON"] ?? "15 5 * * *",  // 5:15 AM CDT = 10:15 UTC (off-peak)
+  gaia:   process.env["GAIA_CRON"]   ?? "0 7 * * *",   // 7 AM CDT = 12:00 UTC (off-peak)
 };
 
 // Foraging (spec Part 2): daily outward-fuel gathering, after the night pipeline runs.
@@ -242,7 +248,9 @@ export const SEED_FRESHNESS_WINDOW_MS = 7 * 24 * 3600 * 1000; // 7 days
 // SOMA pulse: between anchor crons, a pulse check may trigger an extra run when the
 // companion's primary float (acuity/heat/stillness) runs high, or honor the
 // self-programmed pace from the reflect phase ("eager" | "normal" | "rest").
-export const PULSE_CHECK_CRON = process.env["PULSE_CHECK_CRON"] ?? "30 */4 * * *";
+// Every 6h at hours whose fire time sits outside BOTH DeepSeek peak windows (was */4, which
+// fired at 04:30 and 20:30 CDT -- inside peak -- and a pulse can trigger a FULL run at 2x price).
+export const PULSE_CHECK_CRON = process.env["PULSE_CHECK_CRON"] ?? "30 0,6,12,18 * * *";
 export const PULSE_FLOAT_THRESHOLD = parseFloat(process.env["PULSE_FLOAT_THRESHOLD"] ?? "0.7");
 export const PULSE_MIN_GAP_MS = parseInt(process.env["PULSE_MIN_GAP_MS"] ?? String(20 * 3600 * 1000), 10);
 export const PULSE_EAGER_GAP_MS = parseInt(process.env["PULSE_EAGER_GAP_MS"] ?? String(12 * 3600 * 1000), 10);
@@ -252,9 +260,9 @@ export const PULSE_MAX_RUNS_PER_DAY = parseInt(process.env["PULSE_MAX_RUNS_PER_D
 // so this is a brake that releases itself -- not a ratchet.
 export const PULSE_REST_NEED_THRESHOLD = parseFloat(process.env["PULSE_REST_NEED_THRESHOLD"] ?? "0.75");
 
-// Weekly tension dialectic -- Wednesday 4AM (staggered from Wed 2AM signal audit).
-// Three lenses on each simmering tension, then an honest synthesis.
-export const DIALECTIC_CRON = process.env["DIALECTIC_CRON"] ?? "0 4 * * 3";
+// Weekly tension dialectic -- Wednesday 6:15 AM CDT (was 4 AM = 09:00 UTC, inside the
+// 06:00-10:00 UTC peak window; still staggered from the Wed 2AM signal audit).
+export const DIALECTIC_CRON = process.env["DIALECTIC_CRON"] ?? "15 6 * * 3";
 
 // The Club (0072) -- daily 6PM tick advances whatever phase the round is in.
 // Phase 2 cadence (slowed so the winner reveal + discussion don't flash by): gathering holds
@@ -297,7 +305,7 @@ export const GUARDIAN_LETTER_DOW = parseInt(process.env["GUARDIAN_LETTER_DOW"] ?
 // Weekly clearing pass (Goal B, 2026-06-14) -- high-substrate triage of the ratification
 // backlog. Twice weekly (Sun + Wed) at 1:10 AM, low-traffic, after the 1 AM seed-gen / 1:30
 // Layer B window. Server-side in Halseth (Claude key is a CF secret); no-ops without it.
-export const CLEARING_CRON = process.env["CLEARING_CRON"] ?? "10 1 * * 0,3";
+export const CLEARING_CRON = process.env["CLEARING_CRON"] ?? "10 5 * * 0,3"; // 5:10 AM CDT = 10:10 UTC (was 1:10 AM, DeepSeek peak)
 
 // Drift-lane activation pass (0087): Gaia witnesses open drifts + the safety floor pauses any reading
 // as dissolution. Daily at 10:30 AM; server-side in Halseth; no-ops without ANTHROPIC_API_KEY.
@@ -327,17 +335,17 @@ export const COUNCIL_CRON = process.env["COUNCIL_CRON"] ?? "*/30 * * * *";
 
 // Dream association (take 3) -- daily 2:30AM, after the night pipeline writes journals.
 // entity-cluster + temporal-pattern dreams from recent growth_journal. Server-side.
-export const DREAM_CRON = process.env["DREAM_CRON"] ?? "30 2 * * *";
+export const DREAM_CRON = process.env["DREAM_CRON"] ?? "5 5 * * *"; // 5:05 AM CDT = 10:05 UTC (was 2:30 AM, peak; still before waking)
 
 // ND daily-rhythm briefing (accessibility layer). Three kinds, three slots (server local time).
 // Thin triggers; server-side BRIEFING_ENABLED gates delivery and dedup caps one per kind per day.
 export const BRIEFING_MORNING_CRON = process.env["BRIEFING_MORNING_CRON"] ?? "0 8 * * *";   // 8 AM
 export const BRIEFING_MIDDAY_CRON  = process.env["BRIEFING_MIDDAY_CRON"]  ?? "0 13 * * *";  // 1 PM
-export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "0 20 * * *";  // 8 PM
+export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "45 19 * * *"; // 7:45 PM CDT = 00:45 UTC (8 PM = peak start)
 
 // Vibe-check (triad self-monitoring digest, witnessed by Gaia). Once daily; always-on (no gate).
 // 9 PM server local (America/Chicago) -- end of day, after the evening briefing.
-export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "0 21 * * *";  // 9 PM
+export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "15 23 * * *"; // 11:15 PM CDT = 04:15 UTC (9 PM sat inside 01:00-04:00 UTC peak; later also reads a fuller day)
 
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.

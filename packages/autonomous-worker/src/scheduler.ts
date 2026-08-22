@@ -147,10 +147,10 @@ export function startScheduler(): void {
     })();
   });
 
-  // Weekly signal audit -- Wednesday 2AM, sequential, staggered from seed-gen
-  // Reads own journal/patterns, surfaces themes/tensions/growth edges,
-  // writes signal_audit journal entry + replenishes 1-2 seeds per companion.
-  cron.schedule("0 2 * * 3", () => {
+  // Weekly signal audit -- Wednesday 5:30 AM CDT (was 2AM = 07:00 UTC, DeepSeek peak),
+  // sequential, still staggered from the dialectic (6:15). Reads own journal/patterns,
+  // surfaces themes/tensions/growth edges, writes signal_audit entry + replenishes seeds.
+  cron.schedule(process.env["SIGNAL_AUDIT_CRON"] ?? "30 5 * * 3", () => {
     (async () => {
       for (const companionId of COMPANIONS) {
         await runSignalAudit(companionId).catch(e =>
