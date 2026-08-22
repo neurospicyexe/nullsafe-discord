@@ -34,7 +34,10 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // Model ids MUST match LM Studio's /v1/models ids exactly (JIT-loaded on request).
   "gemma-local":       { provider: "lmstudio",  model: "google/gemma-4-e4b",                   label: "Gemma 4 E4B (local)" },
   "nemo-local":        { provider: "lmstudio",  model: "mistralai/mistral-nemo-instruct-2407", label: "Mistral Nemo (local)" },
-  "qwen-local":        { provider: "lmstudio",  model: "qwen/qwen3.5-9b",                      label: "Qwen 3.5 9B (local)" },
+  // 2026-08-21: Qwen3.5-9B is a THINKING model -- on the 4GB-VRAM laptop it spent 2m19s in
+  // reasoning_content and returned empty content (finish_reason=length). Qwen2.5-7B-Instruct is
+  // non-thinking, mostly fits VRAM, and answered a Gaia-register prompt in <10s cold.
+  "qwen-local":        { provider: "lmstudio",  model: "qwen2.5-7b-instruct",                  label: "Qwen2.5 7B (local)" },
   "lfm-local":         { provider: "lmstudio",  model: "liquid/lfm2-1.2b",                     label: "LFM2 1.2B (local)" },
   // Mistral (La Plateforme API -- set MISTRAL_API_KEY)
   "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
