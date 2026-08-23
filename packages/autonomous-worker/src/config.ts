@@ -84,9 +84,11 @@ export const SYNTHESIZE_MAX_TOKENS = envInt("SYNTHESIZE_MAX_TOKENS", 2000);
  */
 export const REASONING_HEADROOM = envInt("DEEPSEEK_REASONING_HEADROOM", 3000);
 
-/** Both v4 tiers reason. Matches the family, not a hardcoded pair, so v5 inherits the guard. */
+/** Both v4 tiers reason. Matches the family, not a hardcoded pair, so v5 inherits the guard.
+ * `morph-ds*` is Morph's serving of the same DeepSeek weights (morph-dsv4flash) -- same
+ * reasoning architecture, so it needs the same headroom or reasoning starves content. */
 export function isReasoningModel(model: string = DEEPSEEK_MODEL): boolean {
-  return /^deepseek-(v[4-9]|r)/i.test(model.trim());
+  return /^(deepseek-(v[4-9]|r)|morph-ds)/i.test(model.trim());
 }
 
 /** Turn a caller's intended CONTENT ceiling into a wire `max_tokens`. */

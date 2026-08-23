@@ -212,6 +212,17 @@ module.exports = {
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: {
         ...shared,
+        // Morph trial lane (2026-08-23): the worker's spend is output-shaped (journal entries +
+        // reasoning tokens) where Morph's flat $0.28/M beats DeepSeek's $0.66 off-peak; the BOTS
+        // stay on DeepSeek direct because their traffic is cache-hit-input-shaped ($0.007/M).
+        // These three point ONLY the worker at another OpenAI-compatible vendor; unset = DeepSeek
+        // direct, so the trial is three .env lines and the revert is deleting them:
+        //   WORKER_INFERENCE_BASE_URL=https://api.morphllm.com/v1
+        //   WORKER_INFERENCE_API_KEY=<morph key>
+        //   WORKER_INFERENCE_MODEL=morph-dsv4flash
+        DEEPSEEK_BASE_URL:     process.env.WORKER_INFERENCE_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
+        DEEPSEEK_API_KEY:      process.env.WORKER_INFERENCE_API_KEY  ?? process.env.DEEPSEEK_API_KEY,
+        DEEPSEEK_MODEL:        process.env.WORKER_INFERENCE_MODEL    ?? process.env.DEEPSEEK_MODEL,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,
         // Sol the crow posts its own heartbeat-channel moments via this webhook (CREATURE_CRON).
         // Worker-only -- the bots never post as Sol, so it stays out of the shared env (least privilege).
