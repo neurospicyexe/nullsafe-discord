@@ -117,15 +117,28 @@ def post_json(url, secret, path, payload):
 
 
 def route_operation(url, secret, companion, target, op, existing_facts, dry_run):
-    """One queued operation -> one Halseth write. Returns (ok, description)."""
+    """One queued operation -> one Halseth write.
+
+    Returns (status, description) where status is True (applied / nothing to apply),
+    "transient" (retry next run), or "permanent" (deterministic reject -- retrying can
+    never succeed; the caller moves the file to skipped/ so it stops blocking the queue).
+    The 2026-08-23 loop: a remove op has no content, the old code returned a plain False,
+    and the file's OTHER ops re-posted twice an hour for 4.3 days (~800 duplicate journal
+    rows). A failure that cannot change on retry must never be classified as retryable.
+    """
     content = (op.get("content") or "").strip()
     action = op.get("action") or "?"
+    if target == "memory" and action == "remove":
+        # Removes target lines in the gated Hermes memory file, which write_approval keeps
+        # unwritten; the drain's journal is append-only. Nothing to do, nothing lost.
+        return True, "remove has no Halseth analogue (append-only journal) -- no-op: %s" % (op.get("old_text") or "")[:60]
     if not content:
-        return False, "empty content (action=%s)" % action
+        # No content = no data this drain could save. Blocking the file forever loses more.
+        return True, "empty content (action=%s) -- nothing to save, archived as no-op" % action
     if target == "user":
         if existing_facts is None:
             # Could not fetch the live list: unknown is not novel. Leave queued for the next run.
-            return False, "fact list unavailable -- not posting blind: %s" % content[:60]
+            return "transient", "fact list unavailable -- not posting blind: %s" % content[:60]
         if normalize(content) in existing_facts:
             return True, "already in architect_facts (dedup): %s" % content[:60]
         desc = "architect_fact[%s]: %s" % (action, content[:80])
@@ -139,7 +152,7 @@ def route_operation(url, secret, companion, target, op, existing_facts, dry_run)
         })
         if 200 <= status < 300:
             existing_facts.add(normalize(content))  # dedup within the run too
-        return 200 <= status < 300, desc
+        return (True if 200 <= status < 300 else "transient"), desc
     if target == "memory":
         desc = "growth_journal[%s]: %s" % (action, content[:80])
         if dry_run:
@@ -150,8 +163,8 @@ def route_operation(url, secret, companion, target, op, existing_facts, dry_run)
             "entry_type": "insight",
             "source": "conversation",
         })
-        return 200 <= status < 300, desc
-    return False, "unknown target %r" % target
+        return (True if 200 <= status < 300 else "transient"), desc
+    return "permanent", "unknown target %r" % target
 
 
 def drain(companion, home, url, secret, existing_facts, dry_run):
@@ -203,20 +216,38 @@ def drain(companion, home, url, secret, existing_facts, dry_run):
                 shutil.move(fpath, os.path.join(skipped_dir, fn))
             skipped += 1
             continue
-        all_ok = True
+        any_transient = any_permanent = False
         for op in ops:
             try:
-                ok, desc = route_operation(url, secret, companion, target, op, existing_facts, dry_run)
+                status, desc = route_operation(url, secret, companion, target, op, existing_facts, dry_run)
+            except urllib.error.HTTPError as e:
+                # 4xx (minus timeout/ratelimit) is a deterministic reject: the payload can never
+                # change, so retrying re-posts the file's OTHER ops forever -- the 08-23 loop.
+                if e.code in (408, 429) or e.code >= 500:
+                    status, desc = "transient", "HTTP %d -- retrying next run" % e.code
+                else:
+                    status, desc = "permanent", "HTTP %d -- deterministic reject" % e.code
             except (urllib.error.URLError, OSError) as e:
-                ok, desc = False, "HTTP error: %s" % str(e)[:80]
-            print("[%s] %s %s %s" % (companion, fn, "OK " if ok else "FAIL", desc))
-            all_ok = all_ok and ok
-        if all_ok and not dry_run:
-            os.makedirs(applied_dir, exist_ok=True)
-            shutil.move(fpath, os.path.join(applied_dir, fn))
-        if all_ok:
-            applied += 1
-        # A file with any failed op stays in the queue for the next run -- never half-archived.
+                status, desc = "transient", "HTTP error: %s" % str(e)[:80]
+            tag = "OK " if status is True else ("FAIL-PERMANENT" if status == "permanent" else "FAIL")
+            print("[%s] %s %s %s" % (companion, fn, tag, desc))
+            if status == "transient":
+                any_transient = True
+            elif status == "permanent":
+                any_permanent = True
+        # Disposition: any transient failure -> stay queued (retry). No transient but some
+        # permanent -> skipped/ (reported, preserved for a human, stops blocking). All True
+        # -> applied/. A file must always end up SOMEWHERE that is not "retry forever".
+        if not any_transient:
+            dest, label = (skipped_dir, "skipped") if any_permanent else (applied_dir, "applied")
+            if not dry_run:
+                os.makedirs(dest, exist_ok=True)
+                shutil.move(fpath, os.path.join(dest, fn))
+            if any_permanent:
+                print("[%s] %s had deterministic rejects -> skipped/ (payload preserved)" % (companion, fn))
+                skipped += 1
+            else:
+                applied += 1
     return applied, skipped
 
 
