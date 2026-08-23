@@ -55,6 +55,14 @@ const shared = {
   // reflect 400ed on required fields. Code default is 3000; listed here so it is tunable from
   // .env without a deploy (an unlisted knob is a dead knob -- third time in this file).
   DEEPSEEK_REASONING_HEADROOM: process.env.DEEPSEEK_REASONING_HEADROOM,
+  // 2026-08-22: FIFTH instance. C1 tier-3 escalation delivery (autonomous-worker escalation.ts)
+  // reads the human's Discord id + fallback channel from env; the hand-step said "add to .env"
+  // but nothing listed them here, so the worker could never see them and every escalation would
+  // have taken the fallback path. CUSTODIAN_DISCORD_USER_ID rides along for symmetry (the health
+  // check reads .env directly, but any future worker-side custodian logic must not re-hit this).
+  ESCALATION_DISCORD_USER_ID:   process.env.ESCALATION_DISCORD_USER_ID,
+  ESCALATION_FALLBACK_CHANNEL_ID: process.env.ESCALATION_FALLBACK_CHANNEL_ID,
+  CUSTODIAN_DISCORD_USER_ID:    process.env.CUSTODIAN_DISCORD_USER_ID,
   // 2026-08-07: FOURTH instance of the trap this file keeps documenting. The consolidation
   // narrator reads the companion's identity file to write a session close handoff in voice
   // (packages/shared/src/consolidation-narrator.ts). These vars were already in .env -- the
