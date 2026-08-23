@@ -223,6 +223,13 @@ module.exports = {
         DEEPSEEK_BASE_URL:     process.env.WORKER_INFERENCE_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
         DEEPSEEK_API_KEY:      process.env.WORKER_INFERENCE_API_KEY  ?? process.env.DEEPSEEK_API_KEY,
         DEEPSEEK_MODEL:        process.env.WORKER_INFERENCE_MODEL    ?? process.env.DEEPSEEK_MODEL,
+        // Fallback lane, armed ONLY while a vendor override is active: on the override vendor's
+        // 401/403/429/5xx/network failure, chat() fails over mid-call to direct DeepSeek using
+        // the .env DEEPSEEK_API_KEY (NOT the mapped-away one above). Morph 401'd valid keys for
+        // 4 hours on its first morning (2026-08-23) and all three night runs died; with this,
+        // a vendor flap costs a warn line instead of the night.
+        WORKER_FALLBACK_BASE_URL: process.env.WORKER_INFERENCE_BASE_URL ? "https://api.deepseek.com/v1" : undefined,
+        WORKER_FALLBACK_API_KEY:  process.env.WORKER_INFERENCE_BASE_URL ? process.env.DEEPSEEK_API_KEY : undefined,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,
         // Sol the crow posts its own heartbeat-channel moments via this webhook (CREATURE_CRON).
         // Worker-only -- the bots never post as Sol, so it stays out of the shared env (least privilege).

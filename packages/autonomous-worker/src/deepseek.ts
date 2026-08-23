@@ -2,10 +2,34 @@ import {
   DEEPSEEK_API_KEY,
   DEEPSEEK_BASE_URL,
   DEEPSEEK_MODEL,
+  FALLBACK_API_KEY,
+  FALLBACK_BASE_URL,
+  FALLBACK_MODEL,
   REASONING_HEADROOM,
   contentBudget,
   isReasoningModel,
 } from "./config.js";
+
+interface Vendor {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  label: string;
+}
+
+const PRIMARY: Vendor = { baseUrl: DEEPSEEK_BASE_URL, apiKey: DEEPSEEK_API_KEY, model: DEEPSEEK_MODEL, label: "primary" };
+// Same base URL would mean "fall back to the vendor that just failed" -- refuse to arm that.
+const FALLBACK: Vendor | null =
+  FALLBACK_BASE_URL && FALLBACK_API_KEY && FALLBACK_BASE_URL !== DEEPSEEK_BASE_URL
+    ? { baseUrl: FALLBACK_BASE_URL, apiKey: FALLBACK_API_KEY, model: FALLBACK_MODEL, label: "fallback" }
+    : null;
+
+/** A status the SAME payload might survive on another vendor: auth flaps (Morph 401'd valid
+ * keys for 4h on 2026-08-23), rate limits, and server errors. A 400 is deterministic -- the
+ * payload is wrong on every vendor -- so it stays fatal and visible. */
+function vendorFailover(status: number): boolean {
+  return status === 401 || status === 403 || status === 429 || status >= 500;
+}
 
 export interface Message {
   role: "system" | "user" | "assistant";
@@ -48,24 +72,49 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
   // sterile output ("0 finds gathered"), which is how it went unnoticed for a full day.
   let attemptBudget = contentBudget(contentTokens);
   let lastTokens = 0;
+  let vendor = PRIMARY;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetch(`${DEEPSEEK_BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: DEEPSEEK_MODEL,
-        messages,
-        temperature: opts.temperature ?? 0.7,
-        max_tokens: attemptBudget,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${vendor.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${vendor.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: vendor.model,
+          messages,
+          temperature: opts.temperature ?? 0.7,
+          max_tokens: attemptBudget,
+        }),
+      });
+    } catch (e) {
+      // Network-level failure (DNS, TLS, timeout): the other vendor may still be up.
+      if (vendor === PRIMARY && FALLBACK) {
+        console.warn(
+          `[deepseek] primary vendor unreachable (${e instanceof Error ? e.message : String(e)}) -- ` +
+          `failing over to ${FALLBACK.model} at ${FALLBACK.baseUrl} for the rest of this call`,
+        );
+        vendor = FALLBACK;
+        attempt--; // redo this attempt on the fallback vendor, not spend it
+        continue;
+      }
+      throw e;
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
+      if (vendorFailover(res.status) && vendor === PRIMARY && FALLBACK) {
+        console.warn(
+          `[deepseek] primary vendor error ${res.status} (${text.slice(0, 120)}) -- ` +
+          `failing over to ${FALLBACK.model} at ${FALLBACK.baseUrl} for the rest of this call`,
+        );
+        vendor = FALLBACK;
+        attempt--; // redo this attempt on the fallback vendor, not spend it
+        continue;
+      }
       throw new Error(`DeepSeek API error ${res.status}: ${text.slice(0, 200)}`);
     }
 
@@ -91,7 +140,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
         const willRetry = opts.retryOnTruncate === true && attempt === 0;
         console.warn(
           `[deepseek] TRUNCATED CONTENT: finish_reason="length" after ${content.length} chars ` +
-          `(model=${DEEPSEEK_MODEL}, content budget ${contentTokens}, reasoning ${reasoningTokens}). ` +
+          `(model=${vendor.model}, content budget ${contentTokens}, reasoning ${reasoningTokens}). ` +
           (willRetry
             ? `Retrying once at content budget ${contentTokens * 2}.`
             : `Returning as-is -- if the caller PARSES this, expect a parse failure.`),
@@ -110,7 +159,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
     if (finish !== "length") {
       console.warn(
         `[deepseek] empty content with finish_reason="${finish}" ` +
-        `(model=${DEEPSEEK_MODEL} budget=${attemptBudget} reasoning=${reasoningTokens}) -- not retrying`,
+        `(model=${vendor.model} budget=${attemptBudget} reasoning=${reasoningTokens}) -- not retrying`,
       );
       return { content, tokensUsed: lastTokens };
     }
@@ -119,7 +168,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
       const retryBudget = contentTokens + REASONING_HEADROOM * 2;
       console.warn(
         `[deepseek] REASONING STARVED CONTENT: burned ${reasoningTokens} reasoning tokens of ` +
-        `${attemptBudget} and emitted nothing (model=${DEEPSEEK_MODEL}, content budget ` +
+        `${attemptBudget} and emitted nothing (model=${vendor.model}, content budget ` +
         `${contentTokens}). Retrying at ${retryBudget}. If this recurs, raise ` +
         `DEEPSEEK_REASONING_HEADROOM (currently ${REASONING_HEADROOM}).`,
       );
@@ -129,7 +178,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
 
     console.error(
       `[deepseek] EMPTY CONTENT AFTER RETRY at max_tokens=${attemptBudget} ` +
-      `(model=${DEEPSEEK_MODEL}, reasoning=${reasoningTokens}). Caller will see "" -- expect a ` +
+      `(model=${vendor.model}, reasoning=${reasoningTokens}). Caller will see "" -- expect a ` +
       `downstream validation failure. Raise DEEPSEEK_REASONING_HEADROOM.`,
     );
     return { content, tokensUsed: lastTokens };

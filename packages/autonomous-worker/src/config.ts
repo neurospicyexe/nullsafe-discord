@@ -95,6 +95,18 @@ export function isReasoningModel(model: string = DEEPSEEK_MODEL): boolean {
 export function contentBudget(contentTokens: number, model: string = DEEPSEEK_MODEL): number {
   return isReasoningModel(model) ? contentTokens + REASONING_HEADROOM : contentTokens;
 }
+/**
+ * Vendor-flap fallback (2026-08-23). When the worker runs on an overridden vendor
+ * (WORKER_INFERENCE_* -> Morph), an auth/availability flap on that vendor must degrade to
+ * direct DeepSeek instead of losing the night: Morph 401'd every call from 05:15 to 09:00 CDT
+ * on its first morning (key valid before and after -- their side), and all three night runs
+ * died with zero life produced. Armed by ecosystem.config.js ONLY when a vendor override is
+ * active; empty when the worker already talks to DeepSeek direct (same vendor = no fallback).
+ */
+export const FALLBACK_BASE_URL = process.env["WORKER_FALLBACK_BASE_URL"] ?? "";
+export const FALLBACK_API_KEY = process.env["WORKER_FALLBACK_API_KEY"] ?? "";
+export const FALLBACK_MODEL = process.env["WORKER_FALLBACK_MODEL"] ?? "deepseek-v4-flash";
+
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";
 // Hard cap on Tavily calls per calendar day -- protects free tier (1000/month)
 // Default 5: 3 scheduled + 2 headroom for manual test runs
