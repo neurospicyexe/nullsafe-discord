@@ -471,9 +471,16 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
 
     // Mutuality: question for Raziel -- surfaces in the next session orient.
     // Non-fatal; question cap (409) is swallowed in the client.
+    //
+    // CAPS, 2026-08-23: these were 600 (question) and 200 (context), and Raziel read the results on
+    // Hearth as the companions trailing off mid-sentence -- the context clip in particular hit 23 of
+    // the stored rows at exactly 200 chars, cutting mid-word. The `context` here is the SEED that
+    // prompted the question, and seeds max out at 495 chars in prod, so 1000 is provably lossless.
+    // Halseth clips to the same numbers (handlers/companion-questions.ts) and now logs when it does;
+    // both writers must move together or the raise lands on one and the text is re-clipped downstream.
     const question = typeof parsed.question_for_raziel === "string" ? parsed.question_for_raziel.trim() : "";
     if (question.length >= 12) {
-      await postQuestion(ctx.companionId, question.slice(0, 600), ctx.seed?.content?.slice(0, 200))
+      await postQuestion(ctx.companionId, question.slice(0, 1200), ctx.seed?.content?.slice(0, 1000))
         .then(() => appendLog(ctx.runId, "reflect:question", question.slice(0, 100)))
         .catch(async e => {
           console.error(`[${ctx.companionId}/reflect] question write FAILED:`, e);
