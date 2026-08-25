@@ -39,7 +39,15 @@ const UA = "nullsafe-triad/1.0 (companion listening pipeline)";
  * fallback still shows the real last line, so drift degrades to "less friendly", never to "silent".
  */
 export function diagnoseYtDlp(stderr: string): string {
-  const s = stderr.toLowerCase();
+  // Classify the FATAL line, not the whole log. yt-dlp currently emits challenge-solver WARNINGs on
+  // every single YouTube extraction -- including the four that downloaded fine in testing -- so any
+  // unrelated YouTube failure (network drop, disk full, ffmpeg missing) carries them too. Matching
+  // "challenge" anywhere in stderr would answer "that's ours to fix, not yours" to failures that are
+  // neither. A warning is not a cause; the line that killed the run is.
+  const lines = stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const fatal = [...lines].reverse().find(l => l.toUpperCase().startsWith("ERROR:"));
+  const s = (fatal ?? stderr).toLowerCase();
+  const whole = stderr.toLowerCase();
   // Permanent, and each needs a different next action from him -- that is why they are separate.
   // Matched on yt-dlp's own markers, not a bare "drm": stderr echoes the URL and video title, and a
   // track called "DRM" would otherwise be misdiagnosed forever.
@@ -54,16 +62,24 @@ export function diagnoseYtDlp(stderr: string): string {
   if (s.includes("not a bot") || s.includes("sign in to confirm"))
     return "YouTube is asking this box to prove it isn't a bot. It needs cookies before that link will play.";
   // Transient / fixable on our side.
-  if (s.includes("challenge") || s.includes("signature solving") || s.includes("nsig") || s.includes("js runtime"))
-    return "YouTube changed its player and this box couldn't solve the new challenge -- that's ours to fix, not yours.";
-  if (s.includes("requested format is not available"))
-    return "YouTube offered no audio-only format this box could take.";
   if (s.includes("timed out") || s.includes("etimedout") || s.includes("connection reset"))
     return "the download timed out. Worth one more try.";
-  // Fallback: the LAST meaningful line, which is where yt-dlp puts the actual error.
-  const lines = stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const err = [...lines].reverse().find(l => l.startsWith("ERROR:")) ?? lines[lines.length - 1];
-  return err ? err.replace(/^ERROR:\s*/, "").slice(0, 220) : "yt-dlp failed without saying why.";
+  // The challenge warnings only ever EXPLAIN this fatal line; pairing the two is what keeps the
+  // "ours to fix" answer honest, because the warnings alone fire on perfectly healthy runs.
+  if (s.includes("requested format is not available")) {
+    const challengeFailed = whole.includes("signature solving failed")
+      || whole.includes("challenge solving failed")
+      || whole.includes("nsig");
+    return challengeFailed
+      ? "YouTube changed its player and this box couldn't solve the new challenge -- that's ours to fix, not yours."
+      : "YouTube offered no audio-only format this box could take.";
+  }
+  // A fatal line that names the challenge outright (yt-dlp does this in some releases).
+  if (s.includes("challenge") || s.includes("signature solving") || s.includes("js runtime"))
+    return "YouTube changed its player and this box couldn't solve the new challenge -- that's ours to fix, not yours.";
+  // Fallback: the fatal line itself, which is where yt-dlp puts the actual error.
+  const err = fatal ?? lines[lines.length - 1];
+  return err ? err.replace(/^ERROR:\s*/i, "").slice(0, 220) : "yt-dlp failed without saying why.";
 }
 
 export interface TrackMeta {
@@ -441,7 +457,16 @@ export async function runListenPipeline(
       await execFileP(HEAR_MUSIC, ["analyze", audioPath, "--out-dir", outDir],
         { timeout: 180_000, maxBuffer: 64 * 1024 * 1024 });
     } catch (err) {
-      throw new Error(`analysis failed (hear-music): ${String(err).slice(0, 300)}`);
+      // Same defect as the download step, one stage later: `String(err).slice(0, 300)` is the
+      // hear-music command line, and he would have hit it on the very next track that downloaded
+      // cleanly. Log the tail with the track it died on; tell him the download worked and the
+      // listening did not, which is a different thing to be told.
+      const stderr = String((err as { stderr?: string }).stderr ?? "");
+      console.error(`[media] hear-music failed for ${url} (${meta.title})\n${stderr.slice(-2000) || String(err)}`);
+      const tail = stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean).pop();
+      throw new Error(
+        `I got the audio but couldn't analyze it${tail ? ` -- ${tail.slice(0, 200)}` : ""}. That one's on this box, not your link.`,
+      );
     }
     const fullAnalysis = JSON.parse(await readFile(path.join(outDir, "analysis.json"), "utf8")) as Record<string, unknown>;
     const analysis = compactAnalysis(fullAnalysis);

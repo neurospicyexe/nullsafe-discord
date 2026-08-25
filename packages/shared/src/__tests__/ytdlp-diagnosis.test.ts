@@ -50,6 +50,28 @@ describe("diagnoseYtDlp -- the failures Raziel can act on", () => {
     expect(diagnoseYtDlp(CHALLENGE)).toContain("ours to fix");
   });
 
+  it("does NOT blame the challenge for an unrelated failure that merely carries its warnings", () => {
+    // The line that would have lied. yt-dlp emits these WARNINGs on every YouTube extraction right
+    // now, including ones that download fine -- so matching them anywhere in stderr answers "that's
+    // ours to fix, not yours" to disk-full, ffmpeg-missing and network failures alike. Only the
+    // FATAL line may decide, and the warnings may only qualify the format failure they explain.
+    const diskFull = `WARNING: [youtube] abc: Signature solving failed: Some formats may be missing.
+WARNING: [youtube] abc: n challenge solving failed: Some formats may be missing.
+ERROR: unable to write data: [Errno 28] No space left on device`;
+    const msg = diagnoseYtDlp(diskFull);
+    expect(msg).not.toContain("ours to fix");
+    expect(msg).toContain("No space left on device");
+  });
+
+  it("reports a plain format failure as a format failure when the challenge solved fine", () => {
+    const noFormat = `[youtube] abc: Downloading player e937390a-main
+[youtube] [jsc:node] Solving JS challenges using node
+ERROR: [youtube] abc: Requested format is not available`;
+    const msg = diagnoseYtDlp(noFormat);
+    expect(msg).toContain("no audio-only format");
+    expect(msg).not.toContain("ours to fix");
+  });
+
   it("puts age-gating ahead of the generic sign-in message, since both say 'sign in to confirm'", () => {
     expect(diagnoseYtDlp("ERROR: Sign in to confirm your age. This video may be inappropriate")).toContain("age-gated");
   });
