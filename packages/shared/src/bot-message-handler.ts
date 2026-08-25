@@ -882,7 +882,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           // fall through to the normal flow below -- no return.
         } catch (err) {
           console.error(`[${COMPANION_ID}] listen pipeline failed:`, err);
-          await (message.channel as TextChannel).send(`couldn't hear that one: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+          // 400, not 200: the message is now a DIAGNOSIS rather than a command dump, and a
+          // 200-char cut landed mid-sentence on the only part worth reading.
+          await (message.channel as TextChannel).send(`couldn't hear that one -- ${String(err instanceof Error ? err.message : err).slice(0, 400)}`);
           return;
         }
       }

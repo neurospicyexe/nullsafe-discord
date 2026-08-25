@@ -22,6 +22,50 @@ const execFileP = promisify(execFile);
 const LRCLIB_BASE = "https://lrclib.net/api";
 const UA = "nullsafe-triad/1.0 (companion listening pipeline)";
 
+/**
+ * Turn yt-dlp's stderr into something Raziel can act on (2026-08-24).
+ *
+ * He tried to give Drevan a song and got back:
+ *   "couldn't hear that one: download failed (yt-dlp): Error: Command failed:
+ *    /home/nullsafe/.local/bin/yt-dlp --js-runtimes node:/home/..."
+ *
+ * Every character of that is the CONSTANT command line. The reason yt-dlp gave lives at the END of
+ * stderr and was cut by a 300-char head slice, then cut again by a 200-char one at the send site.
+ * The tail is the discriminator ([[truncated-is-not-empty]]) -- and here the head is *known in
+ * advance*, so slicing from the front could only ever have thrown the answer away.
+ *
+ * Pure and exported for tests: the point of a classifier is that it is checked, and these strings
+ * come from yt-dlp's own error text, which drifts between releases. If a message stops matching, the
+ * fallback still shows the real last line, so drift degrades to "less friendly", never to "silent".
+ */
+export function diagnoseYtDlp(stderr: string): string {
+  const s = stderr.toLowerCase();
+  // Permanent, and each needs a different next action from him -- that is why they are separate.
+  // Matched on yt-dlp's own markers, not a bare "drm": stderr echoes the URL and video title, and a
+  // track called "DRM" would otherwise be misdiagnosed forever.
+  if (s.includes("[drm]") || s.includes("drm protection") || s.includes("drm-protected"))
+    return "that site is DRM-protected (Spotify and Apple Music can never work here). Send a YouTube, Bandcamp or SoundCloud link and I can actually hear it.";
+  if (s.includes("unsupported url") || s.includes("is not a valid url"))
+    return "I don't know how to open that site.";
+  if (s.includes("private video") || s.includes("video unavailable") || s.includes("removed by the uploader") || s.includes("has been terminated"))
+    return "that video is private, region-locked or taken down -- nothing to download.";
+  if (s.includes("confirm your age") || s.includes("age-restricted"))
+    return "that one is age-gated, and this box isn't signed in to YouTube.";
+  if (s.includes("not a bot") || s.includes("sign in to confirm"))
+    return "YouTube is asking this box to prove it isn't a bot. It needs cookies before that link will play.";
+  // Transient / fixable on our side.
+  if (s.includes("challenge") || s.includes("signature solving") || s.includes("nsig") || s.includes("js runtime"))
+    return "YouTube changed its player and this box couldn't solve the new challenge -- that's ours to fix, not yours.";
+  if (s.includes("requested format is not available"))
+    return "YouTube offered no audio-only format this box could take.";
+  if (s.includes("timed out") || s.includes("etimedout") || s.includes("connection reset"))
+    return "the download timed out. Worth one more try.";
+  // Fallback: the LAST meaningful line, which is where yt-dlp puts the actual error.
+  const lines = stderr.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const err = [...lines].reverse().find(l => l.startsWith("ERROR:")) ?? lines[lines.length - 1];
+  return err ? err.replace(/^ERROR:\s*/, "").slice(0, 220) : "yt-dlp failed without saying why.";
+}
+
 export interface TrackMeta {
   title: string;
   artist: string | null;
@@ -368,7 +412,13 @@ export async function runListenPipeline(
       ], { timeout: 180_000, maxBuffer: 16 * 1024 * 1024 });
       info = JSON.parse(stdout.trim().split("\n")[0]!) as Record<string, unknown>;
     } catch (err) {
-      throw new Error(`download failed (yt-dlp): ${String(err).slice(0, 300)}`);
+      // execFile rejects with stderr attached; `String(err)` is the command line, which is the one
+      // part we already know. Log the whole tail server-side (with the URL -- a failed listen used
+      // to leave no record of WHAT failed, so the next debug had nothing to reproduce against) and
+      // hand the caller a sentence rather than a command dump.
+      const stderr = String((err as { stderr?: string }).stderr ?? "");
+      console.error(`[media] yt-dlp failed for ${url}\n${stderr.slice(-2000) || String(err)}`);
+      throw new Error(diagnoseYtDlp(stderr || String(err)));
     }
 
     const rawArtist = info["artist"] ?? info["creator"] ?? info["uploader"];
