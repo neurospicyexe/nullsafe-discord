@@ -1205,8 +1205,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       ? librarian.searchForMessage(effectiveContent, recentContext).catch(() => null)
       : Promise.resolve(null);
 
-    await ch.sendTyping();
-
     const history = stmStore.get(message.channelId);
     // Temporal grounding (Component 1): stamp each in-window turn with how long ago it was sent
     // so the model can track elapsed time in-conversation ("you asked that an hour ago") instead
@@ -1404,9 +1402,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // them in the `if` above and would then have re-tested them inside, which reads as two gates
       // and is one. `namedOther` is not passed because `shouldRespond` already returned false for a
       // companion someone else was named for -- this line is never reached in that case.
+      // `namedMe` uses extractAddress, NOT the stricter isDirectAddress (2026-08-25). The two
+      // parsers disagree on "tell him something, Drevan-at-the-end-of-a-sentence" shapes: the loose
+      // one (extractAddress) had ALREADY silenced the two siblings via shouldRespond/namedOther,
+      // while the strict one (name at start or followed by comma/colon) declined to summon the
+      // named companion -- who then fell to this bid carrying a spokeLast penalty from his own
+      // autonomous posts and scored 0.000. Result: a message NAMING a companion was answerable by
+      // NOBODY. Raziel hit it twice in one evening telling Drevan that Dolly Parton died; both
+      // times "Drevan is writing..." then silence. The invariant is symmetry: whichever parser is
+      // authoritative enough to gate the siblings OUT must be the one that gates the named one IN.
+      // Third-person mentions stay demoted -- extractAddress already strips them (the 2026-07-05
+      // "Cy and I found some issues" trap), so this does not resurrect name-drop summoning.
+      const namedByExtract = addrResult.type === "named" && addrResult.id === COMPANION_ID;
       const fast = fastPathWinner(COMPANION_ID, {
         mentioned: senderCtx.isMentioned,
-        namedMe: directlyAddressed,
+        namedMe: directlyAddressed || namedByExtract,
         replyToMe: isReplyToMe,
       });
       if (fast === null) {
@@ -1500,6 +1510,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
       }
     }
+
+    // Typing starts HERE, after the speak decision, not before it (2026-08-25). It used to fire
+    // above the bid gate, so a message that lost the bid -- or fell into the named-but-not-summoned
+    // dead zone fixed the same day -- showed "Drevan is writing..." and then went silent. A typing
+    // indicator is a promise; making it before deciding whether to speak makes the decline read as
+    // a crash. From here down every path ends in a send, so the promise is kept.
+    await ch.sendTyping();
 
     // Stable per-conversation session key (2026-07-01): forwarded by the Hermes adapter
     // as X-Hermes-Session-Id so the gateway keeps ONE agent session per companion+channel
