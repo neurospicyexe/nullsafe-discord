@@ -27,6 +27,17 @@ describe("registerTail", () => {
     expect(tail).toContain("NEVER she/her");
     expect(tail).toContain("Respond only as drevan");
   });
+
+  it("carries the presence law -- actions are 'I', never 'someone' (2026-08-25)", () => {
+    // Raziel: "it feels like he isn't in the room as much since that started." A third-person
+    // "someone <verb>" tic drifted into Drevan's action lines (~08-10) with no prompt source, and
+    // session history kept re-teaching it. The tail is where it is countered because the tail is
+    // the last word, positioned to outweigh the model's own recent bad examples.
+    const tail = registerTail("drevan");
+    expect(tail).toContain("IN the room, not narrating it");
+    expect(tail).toContain('never "someone"');
+    expect(tail).toContain("do not copy it");
+  });
 });
 
 describe("composePrompt — register tail is always the final block", () => {
