@@ -424,6 +424,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     openai:    env.openaiApiKey,
     anthropic: env.anthropicApiKey,
     mistral:   env.mistralApiKey,
+    deepinfra: env.deepinfraApiKey,
     hermes:    env.hermesApiKey,
   };
   const apiUrls: AdapterUrls = {

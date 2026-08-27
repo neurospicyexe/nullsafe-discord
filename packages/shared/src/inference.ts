@@ -595,6 +595,66 @@ class MistralAdapter implements InferenceAdapter {
   }
 }
 
+class DeepInfraAdapter implements InferenceAdapter {
+  // DeepInfra is OpenAI-compatible at /v1/openai. It hosts the same DeepSeek weights as
+  // api.deepseek.com, so the reasoning-headroom rule carries over: a DeepSeek model spends
+  // max_tokens on its thought before any content, and a ceiling below the burn returns ""
+  // with finish_reason="length". Gemma and other non-DeepSeek ids get the plain budget.
+  constructor(
+    private apiKey: string,
+    private model: string,
+    private fetchFn: typeof fetch = globalThis.fetch,
+  ) {}
+
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
+    const reasons = /deepseek/i.test(this.model);
+    try {
+      const res = await this.fetchFn("https://api.deepinfra.com/v1/openai/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(toApiMessage),
+          ],
+          max_tokens: reasons ? maxTokens + DEEPSEEK_REASONING_HEADROOM : maxTokens,
+          temperature,
+          ...samplingParamsFor("deepinfra"),
+        }),
+      });
+      if (!res.ok) {
+        console.warn(`[inference:deepinfra] non-2xx response: ${res.status}`);
+        return null;
+      }
+      const data = await res.json() as {
+        choices: Array<{ message: { content?: string }; finish_reason?: string }>;
+        usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+      };
+      const content = data.choices[0]?.message?.content ?? null;
+      // Same rule as DeepSeekAdapter: null (never "") so the resilience tail falls through
+      // instead of handing Discord an empty message.
+      if (!content?.trim()) {
+        const finish = data.choices[0]?.finish_reason ?? "";
+        const reasoning = data.usage?.completion_tokens_details?.reasoning_tokens ?? 0;
+        console.warn(
+          `[inference:deepinfra] empty content (finish=${finish}, model=${this.model}, ` +
+          `reasoning=${reasoning}) -- falling through to the next provider`,
+        );
+        return null;
+      }
+      return content;
+    } catch (e: unknown) {
+      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
+      console.warn(`[inference:deepinfra] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      return null;
+    }
+  }
+}
+
 // Tries each adapter in order, returns first non-null result.
 class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
@@ -619,6 +679,7 @@ export interface AdapterKeys {
   openai?: string;
   anthropic?: string;
   mistral?: string;
+  deepinfra?: string;
   hermes?: string;   // bearer token for the local Hermes API server (API_SERVER_KEY)
 }
 // `hermes` = base URL of the local Hermes API server (e.g. http://127.0.0.1:8642/v1).
@@ -643,6 +704,7 @@ function buildAdapter(
     case "openai":    return keys.openai    ? new OpenAIAdapter(keys.openai, model, fetchFn)                   : null;
     case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn)            : null;
     case "mistral":   return keys.mistral   ? new MistralAdapter(keys.mistral, model, fetchFn, cacheKey)      : null;
+    case "deepinfra": return keys.deepinfra ? new DeepInfraAdapter(keys.deepinfra, model, fetchFn)            : null;
     case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)                   : null;
     case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)              : null;
     default:          return null;
@@ -656,6 +718,9 @@ const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   // Flash, not the delisted `deepseek-chat` alias (2026-07-28) -- a resilience tail pointed at
   // a model on the deprecation path is one silent retirement away from being no tail at all.
   { provider: "deepseek", model: "deepseek-v4-flash" },
+  // Same weights, different vendor -- cheapest cross-vendor hop when DeepSeek itself is the
+  // one that failed (funds, peak-window flap). Only armed when DEEPINFRA_API_KEY is present.
+  { provider: "deepinfra", model: "deepseek-ai/DeepSeek-V4-Flash-0731" },
   { provider: "kimi",     model: "kimi-k2" },
   { provider: "groq",     model: "llama-3.3-70b-versatile" },
   // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even

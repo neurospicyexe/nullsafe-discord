@@ -8,6 +8,7 @@ export type InferenceProvider =
   | "openai"
   | "anthropic"
   | "mistral"
+  | "deepinfra"
   | "ollama";
 
 export interface ModelEntry {
@@ -42,6 +43,11 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // Mistral (La Plateforme API -- set MISTRAL_API_KEY)
   "mistral-large":     { provider: "mistral",   model: "mistral-large-latest",      label: "Mistral Large (API)" },
   "mistral-small":     { provider: "mistral",   model: "mistral-small-latest",      label: "Mistral Small (API)" },
+  // DeepInfra (OpenAI-compatible; set DEEPINFRA_API_KEY). Flat pricing, no peak window --
+  // the answer to the 2026-08 DeepSeek repricing. Model ids are DeepInfra's full HF-style ids;
+  // verify against GET /v1/openai/models before trusting a new one (aliases have burned us).
+  "flash-di":          { provider: "deepinfra", model: "deepseek-ai/DeepSeek-V4-Flash-0731", label: "DeepSeek Flash (DeepInfra)" },
+  "gemma-di":          { provider: "deepinfra", model: "google/gemma-4-31B-it-turbo",        label: "Gemma 4 31B Turbo (DeepInfra)" },
   // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
   "kimi-k2.5":         { provider: "kimi",      model: "kimi-k2.5",                 label: "Kimi K2.5" },

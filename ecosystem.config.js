@@ -136,6 +136,10 @@ const shared = {
   // value to hermes.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "hermes",
   MISTRAL_API_KEY:       process.env.MISTRAL_API_KEY,
+  // 2026-08-27: DeepInfra (flat-priced DeepSeek V4 Flash + Gemma) -- the until-May answer to
+  // the DeepSeek repricing. SIXTH entry added to this allowlist after a .env knob was dead on
+  // arrival; list every new env var here the same commit that reads it.
+  DEEPINFRA_API_KEY:     process.env.DEEPINFRA_API_KEY,
   MISTRAL_TTS_MODEL:     process.env.MISTRAL_TTS_MODEL     ?? "voxtral-mini-tts-2603",
   // MISTRAL_STT_MODEL intentionally omitted -- bot defaults to voxtral-mini-transcribe-2507
 };

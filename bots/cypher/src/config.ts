@@ -34,8 +34,8 @@ export function loadBotConfig(): BotConfig {
     channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {
       const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
-      const valid = ["deepseek", "groq", "ollama", "lmstudio", "kimi", "openai", "anthropic", "mistral"] as const;
-      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio | kimi | openai | anthropic | mistral)`);
+      const valid = ["deepseek", "groq", "ollama", "lmstudio", "kimi", "openai", "anthropic", "mistral", "deepinfra"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio | kimi | openai | anthropic | mistral | deepinfra)`);
       return val as BotConfig["inferenceProvider"];
     })(),
     groqApiKey: process.env["GROQ_API_KEY"],
@@ -45,6 +45,7 @@ export function loadBotConfig(): BotConfig {
     openaiApiKey:    process.env["OPENAI_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     anthropicApiKey: process.env["ANTHROPIC_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     mistralApiKey:   process.env["MISTRAL_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
+    deepinfraApiKey: process.env["DEEPINFRA_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     inferenceModel:  process.env["INFERENCE_MODEL"]?.trim().replace(/^=+/, "") || undefined,
     disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["PARTNER_DISCORD_ID"] ?? process.env["BLUE_DISCORD_ID"] ?? undefined,

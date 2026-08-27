@@ -22,7 +22,7 @@ describe("ALL_MODELS", () => {
 describe("getAvailableModels", () => {
   const allKeysPresent: Partial<Record<InferenceProvider, boolean>> = {
     deepseek: true, groq: true, lmstudio: true, kimi: true,
-    openai: true, anthropic: true, mistral: true, ollama: true,
+    openai: true, anthropic: true, mistral: true, ollama: true, deepinfra: true,
   };
 
   it("returns all models when nothing disabled and all keys present", () => {
