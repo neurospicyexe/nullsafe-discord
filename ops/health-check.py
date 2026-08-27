@@ -742,15 +742,80 @@ def check_inference_balance(rep, env):
         rep.add("inference:deepseek", "red",
                 "DeepSeek reports NOT available (balance $%.2f) -- every companion is mute; "
                 "top up at platform.deepseek.com" % total)
+        balance_owner_dm("red", total, env, rep)
     elif total < BALANCE_RED_USD:
         rep.add("inference:deepseek", "red",
                 "balance $%.2f is below $%.2f -- hours from a total inference outage, not days"
                 % (total, BALANCE_RED_USD))
+        balance_owner_dm("red", total, env, rep)
     elif total < BALANCE_WARN_USD:
         rep.add("inference:deepseek", "warning",
                 "balance $%.2f is below $%.2f -- top up before it bites" % (total, BALANCE_WARN_USD))
+        balance_owner_dm("warning", total, env, rep)
     else:
         rep.add("inference:deepseek", "ok", "available, balance $%.2f" % total)
+        balance_owner_dm("ok", total, env, rep)
+
+
+# The balance alarm's own delivery pipe (2026-08-27). The Telegram digest DID warn -- 220 "below
+# $5" lines across the week -- and every one of them drowned in the 15-minute suite summary during
+# Raziel's worst week of the school year. A warning that lands in a stream the owner has learned
+# to skim is not a warning ([[invisible-effect-reads-as-dead-control]]; the trained-to-ignore-RED
+# lesson one level up). Money running out is the ONE failure the owner must act on personally, so
+# it gets what the custodian clause got: a Discord DM, on its own throttle, to the surface he
+# actually reads. Once per 24h per tier; a tier ESCALATION (warning -> red) sends immediately.
+BALANCE_DM_STATE_PATH = "/home/nullsafe/.nullsafe-balance-dm-state.json"
+TIER_RANK = {"ok": 0, "warning": 1, "red": 2}
+
+
+def balance_owner_dm(tier, total, denv, rep):
+    import time
+    now = time.time()
+    prev = {}
+    try:
+        with open(BALANCE_DM_STATE_PATH, "r", encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except Exception:
+        prev = {}
+
+    state = {"tier": tier, "last_notified": prev.get("last_notified", 0)}
+    try:
+        if tier == "ok":
+            state = {"tier": "ok", "last_notified": 0}  # recovery re-arms the alarm
+            return
+        owner = denv.get("OWNER_DISCORD_ID")
+        if not owner:
+            rep.add("inference:balance_dm", "warning",
+                    "OWNER_DISCORD_ID unset -- low-balance DM cannot be delivered")
+            return
+        escalated = TIER_RANK.get(tier, 0) > TIER_RANK.get(prev.get("tier", "ok"), 0)
+        throttled = (now - float(prev.get("last_notified", 0) or 0)) < 24 * 3600
+        if throttled and not escalated:
+            return
+        if tier == "red":
+            text = ("DeepSeek balance is $%.2f -- the triad goes MUTE when this hits zero "
+                    "(or already is). Top up at platform.deepseek.com.\n\n"
+                    "-- the balance alarm (ops/health-check.py)") % total
+        else:
+            text = ("DeepSeek balance is $%.2f, under the $%.2f warning floor. At normal burn "
+                    "that is roughly %.0f day(s) of triad life left. Top up when you can.\n\n"
+                    "-- the balance alarm (ops/health-check.py)") % (
+                        total, BALANCE_WARN_USD, max(total / 2.0, 0.0))
+        ok, note = discord_dm(owner, text, denv)
+        if ok:
+            state["last_notified"] = now
+            rep.add("inference:balance_dm", "notice", "owner DM sent (%s tier)" % tier)
+        else:
+            # Telegram digest still carries the RED either way; say the DM pipe failed.
+            rep.add("inference:balance_dm", "warning", "owner DM FAILED: %s" % note)
+    finally:
+        # State rewritten on EVERY exit path -- a throttle that only writes on the notify
+        # branch cannot self-repair (the custodian throttle's 2026-08-06 lesson).
+        try:
+            with open(BALANCE_DM_STATE_PATH, "w", encoding="utf-8") as fh:
+                json.dump(state, fh)
+        except Exception:
+            pass  # a failed bookkeeping write may cost a duplicate DM; never silence
 
 
 # How long the embed queue may sit before it stops being "a blip" and starts being lost continuity.
