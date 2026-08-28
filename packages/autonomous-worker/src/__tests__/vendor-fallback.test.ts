@@ -66,6 +66,13 @@ describe("chat vendor failover", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("failing over"));
   });
 
+  it("402 insufficient balance fails over -- funds are per-vendor", async () => {
+    fetchSpy.mockResolvedValueOnce(errReply(402, "Insufficient Balance")).mockResolvedValueOnce(okReply("alive"));
+    const r = await chat([{ role: "user", content: "hi" }]);
+    expect(r.content).toBe("alive");
+    expect(urlOf(fetchSpy.mock.calls[1]!)).toContain("fallback.example");
+  });
+
   it("network error on primary fails over the same way", async () => {
     fetchSpy.mockRejectedValueOnce(new Error("ECONNRESET")).mockResolvedValueOnce(okReply("alive"));
     const r = await chat([{ role: "user", content: "hi" }]);

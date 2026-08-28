@@ -25,10 +25,12 @@ const FALLBACK: Vendor | null =
     : null;
 
 /** A status the SAME payload might survive on another vendor: auth flaps (Morph 401'd valid
- * keys for 4h on 2026-08-23), rate limits, and server errors. A 400 is deterministic -- the
- * payload is wrong on every vendor -- so it stays fatal and visible. */
+ * keys for 4h on 2026-08-23), an empty balance (DeepSeek 402'd for days on 2026-08-27 while
+ * DeepInfra sat healthy -- funds are per-vendor, so this is the CANONICAL failover case),
+ * rate limits, and server errors. A 400 is deterministic -- the payload is wrong on every
+ * vendor -- so it stays fatal and visible. */
 function vendorFailover(status: number): boolean {
-  return status === 401 || status === 403 || status === 429 || status >= 500;
+  return status === 401 || status === 402 || status === 403 || status === 429 || status >= 500;
 }
 
 export interface Message {
