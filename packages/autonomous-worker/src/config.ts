@@ -4,13 +4,25 @@ export const COMPANIONS: CompanionId[] = ["cypher", "drevan", "gaia"];
 
 export const HALSETH_URL = (process.env["HALSETH_URL"] ?? "http://localhost:8787").replace(/\/$/, "");
 export const HALSETH_SECRET = process.env["HALSETH_SECRET"] ?? "";
-export const DEEPSEEK_API_KEY = process.env["DEEPSEEK_API_KEY"] ?? "";
-export const DEEPSEEK_BASE_URL = process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1";
+/**
+ * Worker-scoped vendor override (2026-08-23 Morph trial; 2026-08-27 DeepInfra cutover).
+ * WORKER_INFERENCE_* points ONLY the worker at another OpenAI-compatible vendor; unset =
+ * DeepSeek direct. The precedence is resolved HERE, at the single consumer -- not in
+ * ecosystem.config.js -- because env.ts reloads the raw .env with file-wins override
+ * (the 06-27 stale-pm2-secret fix), which stomped an exec-time DEEPSEEK_API_KEY mapping
+ * back to the real DeepSeek key and 401'd every DeepInfra call on cutover night (08-27).
+ */
+const VENDOR_OVERRIDE_BASE_URL = process.env["WORKER_INFERENCE_BASE_URL"] ?? "";
+export const DEEPSEEK_API_KEY = (VENDOR_OVERRIDE_BASE_URL ? process.env["WORKER_INFERENCE_API_KEY"] : undefined)
+    ?? process.env["DEEPSEEK_API_KEY"] ?? "";
+export const DEEPSEEK_BASE_URL = VENDOR_OVERRIDE_BASE_URL
+    || (process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1");
 // 2026-07-27: DeepSeek retired "deepseek-chat" (supported: deepseek-v4-pro /
 // deepseek-v4-flash) and it began 400ing intermittently -- ~37% of runs failed for a day
 // before anyone noticed. Live value is set in the VPS .env (deepseek-v4-pro); this default
 // only matters for a fresh checkout, so it points at a name that actually exists.
-export const DEEPSEEK_MODEL = process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash";
+export const DEEPSEEK_MODEL = (VENDOR_OVERRIDE_BASE_URL ? process.env["WORKER_INFERENCE_MODEL"] : undefined)
+    ?? process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash";
 
 /**
  * Output ceilings for the phases that actually THINK (2026-07-27, Raziel: "cut off thoughts
@@ -100,11 +112,15 @@ export function contentBudget(contentTokens: number, model: string = DEEPSEEK_MO
  * (WORKER_INFERENCE_* -> Morph), an auth/availability flap on that vendor must degrade to
  * direct DeepSeek instead of losing the night: Morph 401'd every call from 05:15 to 09:00 CDT
  * on its first morning (key valid before and after -- their side), and all three night runs
- * died with zero life produced. Armed by ecosystem.config.js ONLY when a vendor override is
- * active; empty when the worker already talks to DeepSeek direct (same vendor = no fallback).
+ * died with zero life produced. Armed HERE whenever a vendor override is active (falls back
+ * to direct DeepSeek with the raw .env DEEPSEEK_API_KEY -- the one the override mapped away);
+ * empty when the worker already talks to DeepSeek direct (same vendor = no fallback).
+ * WORKER_FALLBACK_* remain as explicit overrides for pointing the lane somewhere else.
  */
-export const FALLBACK_BASE_URL = process.env["WORKER_FALLBACK_BASE_URL"] ?? "";
-export const FALLBACK_API_KEY = process.env["WORKER_FALLBACK_API_KEY"] ?? "";
+export const FALLBACK_BASE_URL = process.env["WORKER_FALLBACK_BASE_URL"]
+    ?? (VENDOR_OVERRIDE_BASE_URL ? "https://api.deepseek.com/v1" : "");
+export const FALLBACK_API_KEY = process.env["WORKER_FALLBACK_API_KEY"]
+    ?? (VENDOR_OVERRIDE_BASE_URL ? process.env["DEEPSEEK_API_KEY"] ?? "" : "");
 export const FALLBACK_MODEL = process.env["WORKER_FALLBACK_MODEL"] ?? "deepseek-v4-flash";
 
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";

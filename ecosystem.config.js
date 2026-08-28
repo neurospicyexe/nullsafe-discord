@@ -216,24 +216,16 @@ module.exports = {
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: {
         ...shared,
-        // Morph trial lane (2026-08-23): the worker's spend is output-shaped (journal entries +
-        // reasoning tokens) where Morph's flat $0.28/M beats DeepSeek's $0.66 off-peak; the BOTS
-        // stay on DeepSeek direct because their traffic is cache-hit-input-shaped ($0.007/M).
-        // These three point ONLY the worker at another OpenAI-compatible vendor; unset = DeepSeek
-        // direct, so the trial is three .env lines and the revert is deleting them:
-        //   WORKER_INFERENCE_BASE_URL=https://api.morphllm.com/v1
-        //   WORKER_INFERENCE_API_KEY=<morph key>
-        //   WORKER_INFERENCE_MODEL=morph-dsv4flash
-        DEEPSEEK_BASE_URL:     process.env.WORKER_INFERENCE_BASE_URL ?? process.env.DEEPSEEK_BASE_URL,
-        DEEPSEEK_API_KEY:      process.env.WORKER_INFERENCE_API_KEY  ?? process.env.DEEPSEEK_API_KEY,
-        DEEPSEEK_MODEL:        process.env.WORKER_INFERENCE_MODEL    ?? process.env.DEEPSEEK_MODEL,
-        // Fallback lane, armed ONLY while a vendor override is active: on the override vendor's
-        // 401/403/429/5xx/network failure, chat() fails over mid-call to direct DeepSeek using
-        // the .env DEEPSEEK_API_KEY (NOT the mapped-away one above). Morph 401'd valid keys for
-        // 4 hours on its first morning (2026-08-23) and all three night runs died; with this,
-        // a vendor flap costs a warn line instead of the night.
-        WORKER_FALLBACK_BASE_URL: process.env.WORKER_INFERENCE_BASE_URL ? "https://api.deepseek.com/v1" : undefined,
-        WORKER_FALLBACK_API_KEY:  process.env.WORKER_INFERENCE_BASE_URL ? process.env.DEEPSEEK_API_KEY : undefined,
+        // Worker-scoped vendor override (Morph trial 2026-08-23; DeepInfra 2026-08-27): three
+        // .env lines point ONLY the worker at another OpenAI-compatible vendor; unset = DeepSeek
+        // direct, revert = deleting them. PASSTHROUGH ONLY -- the WORKER_INFERENCE_* -> DEEPSEEK_*
+        // precedence (and the direct-DeepSeek fallback lane it arms) is resolved in the worker's
+        // config.ts, NOT here. Mapping it here was the 08-27 cutover outage: env.ts reloads the
+        // raw .env file-wins at boot and stomped the exec-time DEEPSEEK_API_KEY mapping back to
+        // the DeepSeek key, which DeepInfra 401'd all night. One gate, at the consumer.
+        WORKER_INFERENCE_BASE_URL: process.env.WORKER_INFERENCE_BASE_URL,
+        WORKER_INFERENCE_API_KEY:  process.env.WORKER_INFERENCE_API_KEY,
+        WORKER_INFERENCE_MODEL:    process.env.WORKER_INFERENCE_MODEL,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,
         // Sol the crow posts its own heartbeat-channel moments via this webhook (CREATURE_CRON).
         // Worker-only -- the bots never post as Sol, so it stays out of the shared env (least privilege).
