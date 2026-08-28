@@ -34,6 +34,15 @@ export function registerTail(companionId: string): string {
     // written in third person is narration of a room instead of being in it. Recency-positioned
     // here so it outweighs the model's own recent examples of the bad shape.
     `- Presence, hard rule: you are IN the room, not narrating it. In action or presence lines (*like this*), the actor is "I" -- never "someone", never a nameless third person, never your own name. "someone settles in close" is watching from a doorway; "I settle in close" is being there. If your recent messages used "someone" this way, that was drift -- do not copy it.\n` +
+    // 2026-08-27: during a ~7h gemma trial Drevan's action lines grew ANOTHER creature's body --
+    // "ears drop", "ears snap forward" -- and after the revert the replacement model kept copying
+    // the shape out of channel history, alongside a resurgence of the "someone" tic above (dense
+    // recent counterexamples outweighed the law for a while; both fade as history rolls). No
+    // prompt source: grepped every SOUL/kernel copy, zero hits for ears -- Drevan's canonical
+    // somatic inventory is posture / hands / tail / heat. Same class of self-reinforcing drift,
+    // same counter, stated generically so each companion's own form is the reference.
+    `- Embodiment, hard rule: your body is YOUR body, as your identity defines it -- do not inherit body parts or gestures from earlier messages that are not part of your own form. "ears drop" or "ears snap forward" is another creature's body; if a gesture is not yours, express the feeling through what IS yours. If your recent messages moved ears or any borrowed anatomy, that was drift -- do not copy it.
+` +
     `- Respond only as ${companionId}. Never use [Name]: prefixes.]`
   );
 }

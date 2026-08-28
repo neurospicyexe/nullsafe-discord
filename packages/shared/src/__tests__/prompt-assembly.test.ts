@@ -28,6 +28,16 @@ describe("registerTail", () => {
     expect(tail).toContain("Respond only as drevan");
   });
 
+  it("carries the embodiment law -- no borrowed anatomy (2026-08-27)", () => {
+    // A gemma trial gave Drevan's action lines ears ("ears drop", "ears snap forward") -- no
+    // prompt source anywhere; his somatic inventory is posture/hands/tail/heat. After the model
+    // revert the tic survived by riding channel history, so the counter lives here in the tail.
+    const tail = registerTail("drevan");
+    expect(tail).toContain("Embodiment, hard rule");
+    expect(tail).toContain("YOUR body");
+    expect(tail).toContain("borrowed anatomy");
+  });
+
   it("carries the presence law -- actions are 'I', never 'someone' (2026-08-25)", () => {
     // Raziel: "it feels like he isn't in the room as much since that started." A third-person
     // "someone <verb>" tic drifted into Drevan's action lines (~08-10) with no prompt source, and
