@@ -557,6 +557,131 @@ def check_roster(rep, env):
         rep.add("roster:probe", "warning", "lookup probe failed: %s" % str(e)[:100])
 
 
+# Graph memory (mig 0127, docs/private/graph-memory-spec-2026-08-28.md) outside-half checks.
+# D1 is Cloudflare-only -- this script cannot query it directly -- so all three ride
+# GET /admin/graph/health (src/handlers/graph.ts), which returns the nightly tick's own gate
+# stamp plus two plain COUNT(*) reads. State persisted the same way the balance/custodian alarms
+# do: a small JSON file next to the log, read-fails-empty, write-on-every-exit-path.
+GRAPH_STATE_PATH = "/home/nullsafe/.nullsafe-graph-state.json"
+GRAPH_REBUILD_STALE_HOURS = float(os.environ.get("GRAPH_REBUILD_STALE_HOURS", "26"))
+GRAPH_DAILY_SNAPSHOT_SECONDS = 24 * 3600
+GRAPH_COLLAPSE_RATIO = float(os.environ.get("GRAPH_COLLAPSE_RATIO", "0.10"))
+
+
+def check_graph_health(rep, env):
+    """Graph memory outside-half checks, via GET /admin/graph/health.
+
+    Three findings, one per failure mode a dead tick or a rebuild bug can cause:
+      * REBUILD STALE    -- the nightly self-gated tick (src/graph/tick.ts) hasn't stamped
+        graph_rebuild_last_run_at in >26h. The gate itself is 24h, so >26h means the tick
+        stopped running, not that it is merely due.
+      * LIVE LANE SHRANK -- graph_edges rows with provenance='live' (write-time-only, e.g.
+        resumed_from -- src/graph/live.ts) are NEVER touched by rebuildGraph's mechanical-only
+        DELETE. Any decrease (never growth or equality) means something else deleted rows a
+        rebuild is structurally unable to reach.
+      * EDGES COLLAPSED  -- total row count down >10% from the last daily snapshot: a rebuild
+        wipe or regression a same-run comparison would miss, since a rebuild deletes and
+        re-derives within milliseconds of this check's own poll.
+    """
+    url = env.get("HALSETH_URL")
+    secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
+    if not url or not secret:
+        rep.add("graph:config", "notice",
+                "no Halseth url/secret in this env, so graph health was not checked")
+        return
+
+    req = urllib.request.Request(
+        url.rstrip("/") + "/admin/graph/health",
+        headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+            data = json.loads(r.read().decode())
+    except Exception as e:
+        rep.add("graph:reachable", "warning",
+                "could not read /admin/graph/health: %s -- graph state is UNKNOWN, not ok" % str(e)[:120])
+        return
+
+    # --- 1. rebuild tick staleness
+    last_rebuild_at = data.get("last_rebuild_at")
+    if not last_rebuild_at:
+        rep.add("graph:rebuild_stale", "red",
+                "graph_rebuild_last_run_at has never been stamped -- the nightly tick has not run")
+    else:
+        age_h = None
+        try:
+            from datetime import datetime, timezone
+            last_dt = datetime.fromisoformat(str(last_rebuild_at).replace("Z", "+00:00"))
+            age_h = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+        except Exception:
+            age_h = None
+        if age_h is None:
+            rep.add("graph:rebuild_stale", "warning",
+                    "could not parse last_rebuild_at=%r -- staleness is UNKNOWN" % last_rebuild_at)
+        elif age_h > GRAPH_REBUILD_STALE_HOURS:
+            rep.add("graph:rebuild_stale", "red",
+                    "graph rebuild last ran %.1fh ago (tick self-gates to 24h, so >%gh means it is dead)"
+                    % (age_h, GRAPH_REBUILD_STALE_HOURS))
+        else:
+            rep.add("graph:rebuild_stale", "ok", "rebuilt %.1fh ago" % age_h)
+
+    live_count = data.get("live_count")
+    total_count = data.get("total_count")
+
+    prev = {}
+    try:
+        with open(GRAPH_STATE_PATH, "r", encoding="utf-8") as fh:
+            prev = json.load(fh)
+    except Exception:
+        prev = {}  # missing or corrupt reads the same: fall through, the write below repairs it
+
+    # --- 2. live lane shrink. Only compares once a prior sample exists; never fires on growth
+    # or equality -- only a strict decrease is a finding.
+    prev_live = prev.get("live_count")
+    if isinstance(live_count, int) and isinstance(prev_live, int):
+        if live_count < prev_live:
+            rep.add("graph:live_lane", "warning",
+                    "live-provenance edges dropped %d -> %d -- this lane is write-time-only and "
+                    "should never shrink under a rebuild" % (prev_live, live_count))
+        else:
+            rep.add("graph:live_lane", "ok", "%d live-provenance edges (was %d)" % (live_count, prev_live))
+    elif isinstance(live_count, int):
+        rep.add("graph:live_lane", "ok", "%d live-provenance edges (no prior sample yet)" % live_count)
+
+    # --- 3. total edges collapse vs the last daily snapshot. The reference rotates to the
+    # current total once per ~24h (never more often), so a same-run rebuild round-trip can never
+    # be its own comparison point, and a genuine day-over-day wipe still trips the 10% floor.
+    import time
+    now = time.time()
+    daily_total = prev.get("daily_total")
+    daily_total_at = prev.get("daily_total_at", 0)
+    rotate = daily_total is None or (now - float(daily_total_at or 0)) > GRAPH_DAILY_SNAPSHOT_SECONDS
+
+    if isinstance(total_count, int) and isinstance(daily_total, int) and not rotate:
+        if daily_total > 0 and total_count < daily_total * (1 - GRAPH_COLLAPSE_RATIO):
+            pct = 100.0 * (daily_total - total_count) / daily_total
+            rep.add("graph:edges_collapsed", "red",
+                    "graph_edges total dropped %.0f%% since the last daily snapshot (%d -> %d)"
+                    % (pct, daily_total, total_count))
+        else:
+            rep.add("graph:edges_total", "ok",
+                    "%d total edges (daily reference %d)" % (total_count, daily_total))
+    elif isinstance(total_count, int):
+        rep.add("graph:edges_total", "ok", "%d total edges (establishing daily reference)" % total_count)
+
+    new_state = dict(prev)
+    if isinstance(live_count, int):
+        new_state["live_count"] = live_count
+    if isinstance(total_count, int) and rotate:
+        new_state["daily_total"] = total_count
+        new_state["daily_total_at"] = now
+    try:
+        with open(GRAPH_STATE_PATH, "w", encoding="utf-8") as fh:
+            json.dump(new_state, fh)
+    except Exception:
+        pass  # a failed bookkeeping write only costs a delayed comparison, never silence
+
+
 def check_halseth(rep, env):
     url = env.get("HALSETH_URL")
     secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
@@ -1112,6 +1237,7 @@ def main():
         check_architect_facts(rep, denv)
         check_roster(rep, denv)
         check_halseth(rep, denv)
+        check_graph_health(rep, denv)
         check_quiet_owner(rep, denv, henv)
         check_second_brain(rep, denv)
         check_inference_balance(rep, denv)
