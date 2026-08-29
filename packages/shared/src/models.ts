@@ -48,6 +48,9 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // verify against GET /v1/openai/models before trusting a new one (aliases have burned us).
   "flash-di":          { provider: "deepinfra", model: "deepseek-ai/DeepSeek-V4-Flash-0731", label: "DeepSeek Flash (DeepInfra)" },
   "gemma-di":          { provider: "deepinfra", model: "google/gemma-4-31B-it-turbo",        label: "Gemma 4 31B Turbo (DeepInfra)" },
+  // 2026-08-29: expressive/conversational trial for Drevan (Raziel's call -- flash is Cypher/Gaia's
+  // register, not his). Id verified against GET /v1/openai/models same day.
+  "minimax-m3":        { provider: "deepinfra", model: "MiniMaxAI/MiniMax-M3",               label: "MiniMax M3 (DeepInfra)" },
   // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
   "kimi-k2.5":         { provider: "kimi",      model: "kimi-k2.5",                 label: "Kimi K2.5" },
