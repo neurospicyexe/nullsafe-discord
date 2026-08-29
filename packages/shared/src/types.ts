@@ -41,7 +41,8 @@ export interface ChatMessage {
   // Epoch ms the message was sent. Set on live append (Discord createdTimestamp) and on
   // Discord-history seeding so the bot can stamp relative time onto history before inference,
   // giving a sense of elapsed time in-conversation. Optional: STM rows restored from the DB
-  // (Halseth persists only role/content/author) lack it and degrade to no time prefix.
+  // carry it too as of 2026-08-29 (parsed from Halseth's `created_at`, bot-core.ts stmLoad) --
+  // only an unparseable/missing value degrades to no time prefix now.
   timestamp?: number;
 }
 

@@ -46,7 +46,7 @@ import {
   detectSelfLoop, loopBreakDirective,
   consumeTripwires, tripwireBlock,
   runDistillation,
-  isListenEnabled, runListenPipeline, reactToExperience,
+  isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
   commandUsage, COMMAND_PREFIX, listenCommandTarget,
   handleClubCommand,
   handleLogCommand,
@@ -57,7 +57,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, WriteQueue, StmStore, SessionWindowManager,
+  LibrarianClient, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -564,6 +564,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Turn-scoped injections must not persist into STM (2026-08-29). The [HEARD]/[NOT HEARD]
+    // blocks appended to effectiveContent below are built for THIS inference call only -- a
+    // standing imperative ("respond to the music itself") plus the full track analysis/lyrics
+    // dump. Storing that verbatim into history meant every later turn re-fed the imperative and
+    // the whole write-up, so the model re-answered the same song each turn (tonight: Drevan
+    // replied to one track 3 times). stmContent starts equal to effectiveContent -- already the
+    // STT transcript on the voice path, since this sits after that block -- and diverges only at
+    // the HEARD/NOT-HEARD appends further down. Every DURABLE write of this message's content
+    // (STM history, live SB ingest, the autonomous worker's recent-Raziel-messages feed) uses
+    // stmContent; effectiveContent (inference, gates, address extraction) keeps the full block.
+    let stmContent = effectiveContent;
+
     // ── Record on arrival (2026-07-30) ────────────────────────────────────────
     //
     // Every message this bot can see goes into short-term memory HERE, before any gate can decline
@@ -603,7 +615,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (!isOwnerCommand) {
       stmStore.appendInboundOnce(message.channelId, message.id, {
         role: "user",
-        content: effectiveContent,
+        content: stmContent,
         authorName: pkMemberName
           ? `${pkMemberName} (via PK)`
           : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
@@ -722,7 +734,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // messageCreate is skipped), so it literally could not discuss what it just found.
         // appendInboundOnce, not append: record-on-arrival already stored this message, and a plain
         // append here would duplicate the search query in the transcript.
-        stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: effectiveContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
+        stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: stmContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
         stmStore.append(message.channelId, { role: "assistant", content: search.reply, timestamp: Date.now() });
         if (search.results.length > 0) {
           try {
@@ -879,6 +891,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           });
           pendingMediaId = listen.experienceId;
           effectiveContent = `${effectiveContent.trim()}\n\n[HEARD -- the track was downloaded and analyzed; you actually listened to it. Respond to the music itself.]\n${listen.heardBlock}`;
+          // STM gets a short past-tense marker instead of the full block above -- see the
+          // stmContent divergence note near the top of this handler.
+          stmContent = `${stmContent.trim()}\n${heardStmMarker(listen.meta)}`;
           // fall through to the normal flow below -- no return.
         } catch (err) {
           console.error(`[${COMPANION_ID}] listen pipeline failed:`, err);
@@ -910,6 +925,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         && /https?:\/\//i.test(effectiveContent) && /\blisten\b/i.test(effectiveContent)) {
       const p = COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID;
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
+      // STM marker instead of the full block above -- see the stmContent divergence note.
+      stmContent = `${stmContent.trim()}\n${notHeardStmMarker()}`;
     }
 
     // Sequential floor (2026-08-15): is this sibling message the predecessor reply my pending
@@ -1076,18 +1093,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // No-op when the early record-on-arrival above already stored this message. Kept as a second call
     // rather than deleted so the command branches (search, listen) that reach this point by their own
     // route still record, and so a future refactor that moves the early call cannot silently drop it.
-    stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: effectiveContent, authorName: memberLabel, timestamp: message.createdTimestamp });
-    if (attribution.isOwner) pushRazielMessage(effectiveContent);
+    stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: stmContent, authorName: memberLabel, timestamp: message.createdTimestamp });
+    if (attribution.isOwner) pushRazielMessage(stmContent);
 
     // Streaming indexer: index the inbound message into Second Brain's vector store
     // right now (gated by SB_LIVE_INGEST). SB dedups by message_id, so all three bots
     // calling this for the same message costs one embed. Companion-bot messages are
-    // skipped here -- each bot indexes its OWN replies at send time instead.
+    // skipped here -- each bot indexes its OWN replies at send time instead. Uses
+    // stmContent (2026-08-29) for the same reason as the STM writes above -- a vault
+    // recall surfacing the full [HEARD] block later would re-inject the same standing
+    // imperative into a future prompt's [Memory] section.
     if (!senderCtx.isCompanionBot) {
       liveIngest({
         companion: null,
         author: memberLabel,
-        content: effectiveContent,
+        content: stmContent,
         channel_id: message.channelId,
         message_id: message.id,
       });
@@ -1328,6 +1348,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       contextPrompt += floorHandbackDirective(isTriadCommons(channelEntry));
       console.log(`[${COMPANION_ID}] floor-handback directive injected (${botTurnsSinceHuman}/${botMsgsSinceHumanMax(isTriadCommons(channelEntry))} bot turns since human)`);
     }
+
+    // Absolute-time anchor, recomputed at reply time (2026-08-29). contextPrompt carries a
+    // [Now: ...] line either from bootCtx.systemPrompt (direct/brain path, baked in at boot or
+    // the 5-min SOMA refresh) or from recentContextRef.value appended above (hermes path, same
+    // cache). Either way it can be stale by up to the refresh interval, or indefinitely stale if
+    // orient has been failing -- refreshNowLine stamps a fresh one over it (or adds one if
+    // somehow absent) so the model's one absolute-time anchor is never more than milliseconds old.
+    contextPrompt = refreshNowLine(contextPrompt);
 
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
     // Raziel's logged state. Gaia exempt + disabled-gate live inside selectImp. Never the voice.

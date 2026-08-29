@@ -12,6 +12,7 @@
 // bot-side via botDir — those paths resolve against the bot's own module location.
 
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
+import { parseCreatedAtTimestamp } from "./relative-time.js";
 import { setArmedTriggers } from "./triggers.js";
 import { setCareState } from "./care-state.js";
 import { loadSharedContext } from "./shared-context.js";
@@ -489,7 +490,16 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
     async (channelId) => {
       const rows = await librarian.stmLoad(channelId);
-      return rows.map(r => ({ role: r.role, content: r.content, authorName: r.author_name ?? undefined }));
+      // created_at -> timestamp (2026-08-29): without this, history restored after a pm2
+      // restart carried no timestamp at all, so stampRelative() silently no-oped on every
+      // row and a reload of yesterday's conversation read as freshly-arrived. Parsed
+      // defensively -- an unparseable/missing value just omits `timestamp`, same as before.
+      return rows.map(r => ({
+        role: r.role,
+        content: r.content,
+        authorName: r.author_name ?? undefined,
+        timestamp: parseCreatedAtTimestamp(r.created_at),
+      }));
     },
     writeQueue,
   );

@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { LibrarianClient, formatRecentContext, RECENT_CONTEXT_BUDGET } from "../librarian.js";
+import { LibrarianClient, formatRecentContext, RECENT_CONTEXT_BUDGET, nowLine, refreshNowLine } from "../librarian.js";
 
 describe("LibrarianClient.ask()", () => {
   it("returns data on 200 response", async () => {
@@ -674,5 +674,50 @@ describe("LibrarianClient.formatSbRecall — 2026-07-05 vault-recall legibility 
     ] });
     const out = LibrarianClient.formatSbRecall(raw)!;
     expect(out.split("\n")).toHaveLength(4);
+  });
+});
+
+// nowLine / refreshNowLine (2026-08-29): the [Now: ...] anchor is the only absolute date the
+// model sees, cached in recentContextRef.value and refreshed only every 5min (indefinitely
+// stale on an orient failure). refreshNowLine recomputes it at reply time so the cached copy
+// can never reach the model unstamped-fresh.
+describe("nowLine", () => {
+  it("renders the Chicago-zoned weekday/date/time/zone-abbreviation format", () => {
+    const line = nowLine(new Date("2026-08-29T20:42:00.000Z")); // 3:42 PM CDT
+    expect(line).toMatch(/^\[Now: Saturday, August 29, 2026 at 3:42 PM CDT\]$/);
+  });
+
+  it("defaults to the current time when called with no argument", () => {
+    expect(nowLine()).toMatch(/^\[Now: .+\]$/);
+  });
+});
+
+describe("refreshNowLine", () => {
+  const fresh = new Date("2026-08-29T20:42:00.000Z");
+
+  it("replaces a stale [Now: ...] line with a freshly computed one", () => {
+    const stale = "[Now: Friday, August 28, 2026 at 11:00 AM CDT]\n\n## Recent\nsome context";
+    const out = refreshNowLine(stale, fresh);
+    expect(out).toContain(nowLine(fresh));
+    expect(out).not.toContain("August 28");
+    expect(out).toContain("## Recent\nsome context"); // rest of the block untouched
+  });
+
+  it("prepends a fresh line when the context has no [Now: ...] at all", () => {
+    const noAnchor = "## Recent\nsome context";
+    const out = refreshNowLine(noAnchor, fresh);
+    expect(out.startsWith(nowLine(fresh))).toBe(true);
+    expect(out).toContain("## Recent\nsome context");
+  });
+
+  it("prepends a bare fresh line for an empty context (no dangling separator)", () => {
+    expect(refreshNowLine("", fresh)).toBe(nowLine(fresh));
+  });
+
+  it("only touches the [Now: ...] line, never a stray bracket elsewhere in the block", () => {
+    const stale = "[Now: Friday, August 28, 2026 at 11:00 AM CDT]\n\n[Active model] flash";
+    const out = refreshNowLine(stale, fresh);
+    expect(out).toContain("[Active model] flash");
+    expect(out.match(/\[Now:/g)?.length).toBe(1);
   });
 });

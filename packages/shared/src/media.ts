@@ -189,6 +189,23 @@ export function buildHeardBlock(
   return lines.join("\n");
 }
 
+// STM-scoped markers (2026-08-29): the [HEARD]/[NOT HEARD] blocks appended to
+// effectiveContent (bot-message-handler.ts) are a THIS-TURN injection -- a standing
+// imperative ("respond to the music itself") plus the full analysis/lyrics dump. That
+// text is fine for the one inference call it's built for, but it must never persist into
+// STM history: every later turn would re-feed the imperative and the whole song write-up,
+// and the model re-answers the same song each time (tonight: Drevan replied to one track
+// 3 times). These build the short past-tense line STM gets INSTEAD, once the moment has
+// passed.
+export function heardStmMarker(meta: TrackMeta): string {
+  const label = meta.artist ? `${meta.title} -- ${meta.artist}` : meta.title;
+  return `[shared a track you listened to at the time: ${label}]`;
+}
+
+export function notHeardStmMarker(): string {
+  return "[shared a link; the listen pipeline did not run]";
+}
+
 async function fetchLyrics(meta: TrackMeta): Promise<string | null> {
   const title = cleanTrackTitle(meta.title ?? "");
   const artist = meta.artist ? cleanArtist(meta.artist) : null;

@@ -1,6 +1,7 @@
 import {
   buildHeardBlock, pickLyrics, compactAnalysis, cleanTrackTitle, cleanArtist, extractWebLyrics,
-  lyricsSearchQuery, lyricsContextTokens, pickWebLyricsResult, type TrackMeta,
+  lyricsSearchQuery, lyricsContextTokens, pickWebLyricsResult, heardStmMarker, notHeardStmMarker,
+  type TrackMeta,
 } from "../media.js";
 
 describe("compactAnalysis", () => {
@@ -197,6 +198,26 @@ describe("buildHeardBlock", () => {
     );
     expect(block).toContain("X");
     expect(block).not.toContain("null");
+  });
+});
+
+describe("heardStmMarker / notHeardStmMarker (2026-08-29 STM-defusing markers)", () => {
+  it("names the track and artist in past tense, no standing imperative", () => {
+    const marker = heardStmMarker({ title: "Hurt", artist: "Johnny Cash", duration_sec: 218 });
+    expect(marker).toContain("Hurt");
+    expect(marker).toContain("Johnny Cash");
+    expect(marker).not.toMatch(/respond to the music/i);
+    expect(marker).not.toMatch(/tempo|bpm|key:/i);
+  });
+  it("omits the artist separator when there is no artist", () => {
+    const marker = heardStmMarker({ title: "Tone", artist: null, duration_sec: 5 });
+    expect(marker).toContain("Tone");
+    expect(marker).not.toContain("--");
+  });
+  it("notHeardStmMarker is a short factual note, not the full grounding paragraph", () => {
+    const marker = notHeardStmMarker();
+    expect(marker).toMatch(/did not run/i);
+    expect(marker.length).toBeLessThan(80);
   });
 });
 

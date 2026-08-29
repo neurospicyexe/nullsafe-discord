@@ -30,6 +30,21 @@ export function stampRelative<T extends { content: string; timestamp?: number }>
 // src/webmind/relative-time.ts (fixed there 2026-07-01) -- keep the twins in sync.
 const SQLITE_UTC = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)$/;
 
+/**
+ * Parse a `created_at` string (SQLite-bare or proper ISO 8601) into an epoch-ms number, or
+ * `undefined` if missing/unparseable (2026-08-29). Used by stmLoad's DB-restore path: a pm2
+ * restart reloads STM from Halseth, and without a timestamp on the restored rows,
+ * `stampRelative` above silently no-ops on every one of them -- history read as freshly-arrived
+ * instead of carrying its real age. Shares the same bare-SQLite normalization as `relativeTime`
+ * so the two never drift on how they read the same column.
+ */
+export function parseCreatedAtTimestamp(createdAt: string | null | undefined): number | undefined {
+  if (!createdAt) return undefined;
+  const m = SQLITE_UTC.exec(createdAt);
+  const then = Date.parse(m ? `${m[1]}T${m[2]}Z` : createdAt);
+  return Number.isFinite(then) ? then : undefined;
+}
+
 export function relativeTime(iso: string | null | undefined, now: number = Date.now()): string {
   if (!iso) return "recently";
   const m = SQLITE_UTC.exec(iso);

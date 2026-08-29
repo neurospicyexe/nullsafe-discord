@@ -1,4 +1,4 @@
-import { relativeTime, stampRelative } from "../relative-time.js";
+import { relativeTime, stampRelative, parseCreatedAtTimestamp } from "../relative-time.js";
 
 const NOW = Date.parse("2026-06-17T12:00:00.000Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -78,5 +78,31 @@ describe("stampRelative", () => {
     expect(input[0].content).toBe("keep raw");
     expect(out[0]).not.toBe(input[0]);
     expect(out[0].content).toBe("[2 days ago] keep raw");
+  });
+});
+
+// stmLoad mapping (2026-08-29): bot-core.ts maps Halseth's `created_at` onto ChatMessage.timestamp
+// via this function -- restored-from-DB STM history had NO timestamp at all before this, so a
+// pm2 restart made stampRelative() above silently no-op on every reloaded row (a reload of
+// yesterday's conversation read as freshly-arrived, "still Friday" the night after).
+describe("parseCreatedAtTimestamp", () => {
+  it("parses a proper ISO 8601 created_at into epoch ms", () => {
+    const iso = "2026-08-29T23:21:44.000Z";
+    expect(parseCreatedAtTimestamp(iso)).toBe(Date.parse(iso));
+  });
+
+  it("parses a bare SQLite stamp as UTC (matches relativeTime's normalization)", () => {
+    const bare = "2026-08-29 23:21:44";
+    expect(parseCreatedAtTimestamp(bare)).toBe(Date.parse("2026-08-29T23:21:44Z"));
+  });
+
+  it("returns undefined for null/undefined/empty", () => {
+    expect(parseCreatedAtTimestamp(null)).toBeUndefined();
+    expect(parseCreatedAtTimestamp(undefined)).toBeUndefined();
+    expect(parseCreatedAtTimestamp("")).toBeUndefined();
+  });
+
+  it("returns undefined (never throws/NaN) on a garbage value -- the bad-date guard", () => {
+    expect(parseCreatedAtTimestamp("not a date")).toBeUndefined();
   });
 });
