@@ -214,6 +214,12 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1497789114517553193": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
   "1531255244212928702": { companions: ["drevan", "cypher", "gaia"],    modes: ["autonomous", "inter_companion"] }, // triad commons (2026-07-27: fresh channel, old 1503385639779963020 retired -- looped history was the largest single input to the seed prompt)
   "1503385706310008975": { companions: ["drevan", "cypher", "gaia"],    modes: ["open"] },
+  // #fargo-watch-party (2026-08-29): co-watching cadence. Raziel watches a stretch, then
+  // types -- routinely past the 5-min default hold, so Drevan's thread kept re-opening to
+  // the fit-bid and Gaia kept (legitimately) winning it, which is where her register drift
+  // started. 2h covers an episode + pauses. Named/group addresses still override the hold,
+  // so "Hi Gaia and Cy!!" brings the others in exactly like it did today.
+  "1531431567430385754": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 2 * 60 * 60 * 1000 },
 };
 
 interface ResponderContext {
@@ -447,9 +453,10 @@ export const ACTIVE_EXCHANGE_WINDOW_MS = NEW_THREAD_GAP_MS;
 export function activeExchangeHolder(
   recent: Array<{ companionId?: CompanionId | null; authorIsBot: boolean; createdTimestamp?: number }>,
   now: number = Date.now(),
+  windowMs: number = ACTIVE_EXCHANGE_WINDOW_MS,
 ): CompanionId | null {
   for (const m of recent) {
-    if (typeof m.createdTimestamp === "number" && now - m.createdTimestamp > ACTIVE_EXCHANGE_WINDOW_MS) {
+    if (typeof m.createdTimestamp === "number" && now - m.createdTimestamp > windowMs) {
       return null; // walked back past the window without finding a companion turn
     }
     if (m.authorIsBot && m.companionId && ALL_COMPANIONS.includes(m.companionId)) return m.companionId;

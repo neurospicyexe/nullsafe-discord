@@ -16,6 +16,12 @@ export interface ChannelEntry {
   companions?: CompanionId[];  // which companions are active; absent = all three
   modes?: ChannelMode[];       // absent = ["open"]
   voice?: boolean;             // enable voice note processing in this channel
+  /** Per-channel override of ACTIVE_EXCHANGE_WINDOW_MS: how long the last-speaking
+   *  companion holds unaddressed owner follow-ups. Co-watching channels need hours,
+   *  not chat-minutes -- the natural turn gap is an episode stretch (2026-08-29,
+   *  fargo-watch-party: the 5-min default kept re-auctioning Drevan's thread and Gaia
+   *  kept winning the auction). A named or group address always overrides the hold. */
+  exchangeWindowMs?: number;
 }
 
 export type ChannelConfig = Record<string, ChannelEntry>;

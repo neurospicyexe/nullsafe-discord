@@ -951,6 +951,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               authorIsBot: botTurn(m),
               createdTimestamp: m.createdTimestamp,
             })),
+          Date.now(),
+          channelEntry?.exchangeWindowMs,
         );
         if (senderCtx.activeExchangeWith && senderCtx.activeExchangeWith !== COMPANION_ID) {
           console.log(`[${COMPANION_ID}] unaddressed owner message -- ${senderCtx.activeExchangeWith} holds this exchange, standing down`);
