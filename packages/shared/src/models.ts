@@ -51,6 +51,12 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // 2026-08-29: expressive/conversational trial for Drevan (Raziel's call -- flash is Cypher/Gaia's
   // register, not his). Id verified against GET /v1/openai/models same day.
   "minimax-m3":        { provider: "deepinfra", model: "MiniMaxAI/MiniMax-M3",               label: "MiniMax M3 (DeepInfra)" },
+  // 2026-08-30: expressive-trial round two (M3 under-tracked live context and its 512k advertised
+  // output broke hermes compaction). Both ids verified against GET /v1/openai/models same day;
+  // both advertise sane output limits (65,536 / <=131,072) so the compressor keeps a real input budget.
+  // qwen-235b is the family's writer (#1 Creative Writing v3, 87.5%) and the cheaper of the two per output token.
+  "qwen-35b":          { provider: "deepinfra", model: "Qwen/Qwen3.6-35B-A3B",               label: "Qwen3.6 35B A3B (DeepInfra)" },
+  "qwen-235b":         { provider: "deepinfra", model: "Qwen/Qwen3-235B-A22B-Instruct-2507", label: "Qwen3 235B A22B Instruct (DeepInfra)" },
   // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
   "kimi-k2.5":         { provider: "kimi",      model: "kimi-k2.5",                 label: "Kimi K2.5" },
