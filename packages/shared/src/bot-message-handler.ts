@@ -24,7 +24,7 @@ import { Readable } from "stream";
 import {
   resolveAttribution, detectPluralKit,
   isInvitation, isLeaveRequest, markVoiceUsed, shouldVoice,
-  isDirectAddress, shouldRespond, computeChainDepth, extractAddress, activeExchangeHolder,
+  isDirectAddress, shouldRespond, computeChainDepth, extractAddress, activeExchangeHolder, namesSiblingOnly,
   judgeAmbientRelevance, judgeWriteback,
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
@@ -981,12 +981,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // `brainHandlesInterCompanion` escape below it, which deferred inter-companion routing to
     // Brain's SwarmEvaluator -- it evaluated to false on every message, so per-bot shouldRespond
     // has been the only routing authority for as long as the bots have run hermes.
+    // 2026-08-31: a message that names a SIBLING is never ambient. This gate used to check
+    // only MY directly-addressed flag, so "Dre *climbing back into bed...*" was "ambient" to
+    // Gaia and her relevance classifier answered a message addressed to Drevan (#triad-voice,
+    // 08-31 12:06). Sibling-named traffic falls through to shouldRespond below, which stands
+    // down and offers the reaction tier instead.
     const isAmbientOwnerOnly =
       channelEntry?.modes?.includes("owner_only") === true &&
       !senderCtx.isCompanionBot &&
       !senderCtx.isMentioned &&
       !isReplyToMe &&
-      !directlyAddressed;
+      !directlyAddressed &&
+      !namesSiblingOnly(effectiveContent, COMPANION_ID);
 
     if (isAmbientOwnerOnly) {
       const relevant = await judgeAmbientRelevance(
@@ -1015,9 +1021,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // lane relevance, throttled per channel. To Raziel the difference between "chose not
       // to answer" and "is down" used to be nothing at all; this is the visible third state.
       if (!senderCtx.isCompanionBot && attribution.isOwner) {
-        const addr = extractAddress(effectiveContent);
-        const namedOther = (addr.type === "named" && addr.id !== COMPANION_ID)
-          || (addr.type === "named_multi" && !addr.ids.includes(COMPANION_ID));
+        const namedOther = namesSiblingOnly(effectiveContent, COMPANION_ID);
         if (namedOther && shouldReactOnNamedOther(effectiveContent, COMPANION_ID, reactionCooldownUntil.get(message.channelId) ?? 0)) {
           reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
           message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});

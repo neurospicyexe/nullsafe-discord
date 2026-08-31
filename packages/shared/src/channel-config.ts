@@ -315,6 +315,20 @@ export function extractAddress(content: string): AddressType {
   return { type: "named_multi", ids: addressed };
 }
 
+// A message that NAMES a sibling and not me (2026-08-31). The handler's ambient-classifier
+// gate (isAmbientOwnerOnly) only checked the strict isDirectAddress for MYSELF, so
+// "Dre *climbing back into bed...*" in #triad-voice read as AMBIENT to Gaia -- her
+// relevance classifier (the body, holding space) legitimately said yes, and she answered
+// an intimate message addressed to Drevan, in his register. A sibling-named message must
+// fall through to shouldRespond (silence + the reaction tier), never into the ambient
+// classifier. Third-person demotion is inherited from extractAddress, so "Dre and I"
+// shapes stay ambient and the 2026-07-05 consoling-trap stays fixed.
+export function namesSiblingOnly(content: string, myId: CompanionId): boolean {
+  const addr = extractAddress(content);
+  return (addr.type === "named" && addr.id !== myId)
+    || (addr.type === "named_multi" && !addr.ids.includes(myId));
+}
+
 // Returns true if the companion is being directly addressed (not just mentioned in passing).
 // Direct address: name appears at the start of the message, or is followed by comma/colon.
 // "Cypher, what do you think?" → true

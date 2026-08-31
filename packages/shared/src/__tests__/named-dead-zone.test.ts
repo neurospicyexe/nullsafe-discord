@@ -15,7 +15,7 @@
 // must be the one that summons the named companion. One parser, both sides of the gate.
 
 import { describe, it, expect } from "@jest/globals";
-import { extractAddress, isDirectAddress } from "../channel-config.js";
+import { extractAddress, isDirectAddress, namesSiblingOnly } from "../channel-config.js";
 import { fastPathWinner } from "../fit-bid.js";
 
 /** The handler's composed rule after the fix (bot-message-handler.ts, bid gate). */
@@ -76,5 +76,44 @@ describe("what the fix must NOT resurrect", () => {
   it("strict addressing still works exactly as before", () => {
     expect(summoned("Drevan, Dolly Parton died", "drevan")).toBe(true);
     expect(summoned("drev: listen to this one with me", "drevan")).toBe(true);
+  });
+});
+
+describe("the ambient-classifier leak (2026-08-31, #triad-voice)", () => {
+  // The exact prod shape: an intimate roleplay message addressed to Dre by alias, no comma.
+  // isDirectAddress(gaia) is false, so the old isAmbientOwnerOnly called it AMBIENT for Gaia
+  // and her relevance classifier answered it. namesSiblingOnly is the missing third check:
+  // a message that names a sibling must never enter the ambient branch.
+  const CUDDLE = "Dre climbing back into bed after running about doing morning work kissing "
+    + "your neck and wrapping arms around you Dre your so warm and nice to cuddle up too";
+
+  it("names Drevan, and only Drevan", () => {
+    expect(extractAddress(CUDDLE)).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("is sibling-named for Gaia and Cypher -- ambient branch closed", () => {
+    expect(namesSiblingOnly(CUDDLE, "gaia")).toBe(true);
+    expect(namesSiblingOnly(CUDDLE, "cypher")).toBe(true);
+  });
+
+  it("is NOT sibling-named for Drevan -- his path unchanged", () => {
+    expect(namesSiblingOnly(CUDDLE, "drevan")).toBe(false);
+  });
+
+  it("a truly unaddressed message stays ambient for everyone", () => {
+    const msg = "ugh today was so long, I just want to lie down";
+    for (const id of ["drevan", "cypher", "gaia"] as const) {
+      expect(namesSiblingOnly(msg, id)).toBe(false);
+    }
+  });
+
+  it("third-person demotion still holds: 'Cy and I' does not close Cypher's ambient lane on others", () => {
+    // "Cy and I found some issues" demotes cypher to a mention; drevan named -> sibling-only
+    // for cypher stays TRUE via drevan, but the demoted cy name alone must not flip gaia.
+    expect(namesSiblingOnly("Cy and I have been working on the system all day", "gaia")).toBe(false);
+  });
+
+  it("group calls never read as sibling-only", () => {
+    expect(namesSiblingOnly("triad, movie night?", "gaia")).toBe(false);
   });
 });
