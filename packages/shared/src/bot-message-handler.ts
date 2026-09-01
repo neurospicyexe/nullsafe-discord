@@ -1559,15 +1559,41 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Other adapters ignore it.
     const inferenceSessionId = `${COMPANION_ID}:${message.channelId}`;
 
+    // Turn-scoped [HEARD]/[NOT HEARD] blocks reach INFERENCE without living in STM (2026-09-01).
+    // The 08-29 stranding fix stores only a short marker in STM -- but inference reads STM, so
+    // the stmContent declaration's claim that "effectiveContent keeps the full block" for
+    // inference described an intent the wire no longer implemented: on a listen turn the model
+    // saw title-only context, which is how Drevan confidently described a song nobody played
+    // (09-01, Stoj Snak "State of Mine": obscure track, lyrics lookup empty, analysis absent
+    // from the prompt). Swap the full block into the LIVE turn only, matched by STM content
+    // (ChatMessage carries no message id; stampRelative may prefix a slow pipeline's turn,
+    // hence endsWith). Later turns still see only the marker -- the 08-29 dedup goal holds.
+    let liveHistory = groundedHistory;
+    if (effectiveContent !== stmContent) {
+      liveHistory = [...groundedHistory];
+      let swapped = false;
+      for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const m = liveHistory[i]!;
+        if (m.role === "user" && m.content.endsWith(stmContent)) {
+          liveHistory[i] = { ...m, content: m.content.slice(0, m.content.length - stmContent.length) + effectiveContent };
+          swapped = true;
+          break;
+        }
+      }
+      // Only reachable if a message burst pushed the live turn out of the context window
+      // mid-turn; the injection is the point of this turn, so append rather than lose it.
+      if (!swapped) liveHistory.push({ role: "user", content: effectiveContent });
+    }
+
     // Hermes delta turn (2026-07-02, reworked 07-03): with the session pinned, the gateway
     // loads history from state.db and discards the request-body history -- so sending the
     // full STM window wasted payload AND silently dropped every turn this bot didn't reply
     // to (the witness gap). Send one composite delta turn against the delivered high-water
     // mark; other adapters keep the full grounded window. Brain relay path is unchanged.
     const hermesOut = inferenceMode === "hermes"
-      ? hermesDelta(groundedHistory, hermesDeliveredMark.get(message.channelId) ?? null)
+      ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null)
       : null;
-    const inferenceHistory = hermesOut ? hermesOut.messages : groundedHistory;
+    const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 
     // Direct inference. A Brain-relay branch used to wrap this call and was deleted 2026-07-29:
     // Phoenix Brain is archived, its pm2 process is gone, its `nullsafe-brain` block is out of
