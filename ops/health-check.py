@@ -827,10 +827,14 @@ def check_inference_balance(rep, env):
     402 counter -- by the time 402s appear in a log the outage has already started. `is_available`
     is DeepSeek's own verdict; the numeric floor is the part that gives warning instead of news.
 
-    Load-bearing: both inference paths bottom out here. The bots relay through Hermes, Hermes
-    routes to DeepSeek, and the consolidation narrator calls DeepSeek directly. There is no
-    fallback that survives this -- `narrator ?? inference` is a config fallback, not a 402
-    fallback. One dead key silences all three companions at once.
+    TOPOLOGY CHANGE 2026-09-01: DeepSeek is no longer load-bearing. DeepInfra has been primary
+    everywhere since the 08-28/08-31 cutover (gateway main models, hermes auxiliary pins,
+    Halseth classifier + synthesis, autonomous worker); DeepSeek is the EMERGENCY FALLBACK lane
+    hermes fails over to on a DeepInfra 429/402 mid-turn. An empty fallback wallet therefore
+    degrades resilience, not service -- the triad keeps thinking. Severity is capped at WARNING
+    so a dry fallback lane can't hold the whole suite RED for weeks and train the owner to skim
+    ([scheduled-restart-must-not-page]); the 08-05 outage story above stays as history of why
+    the check exists at all.
     """
     key = env.get("DEEPSEEK_API_KEY")
     if not key:
@@ -864,21 +868,22 @@ def check_inference_balance(rep, env):
         total = 0.0
 
     if not data.get("is_available", False):
-        rep.add("inference:deepseek", "red",
-                "DeepSeek reports NOT available (balance $%.2f) -- every companion is mute; "
-                "top up at platform.deepseek.com" % total)
-        balance_owner_dm("red", total, env, rep)
-    elif total < BALANCE_RED_USD:
-        rep.add("inference:deepseek", "red",
-                "balance $%.2f is below $%.2f -- hours from a total inference outage, not days"
-                % (total, BALANCE_RED_USD))
-        balance_owner_dm("red", total, env, rep)
-    elif total < BALANCE_WARN_USD:
         rep.add("inference:deepseek", "warning",
-                "balance $%.2f is below $%.2f -- top up before it bites" % (total, BALANCE_WARN_USD))
+                "FALLBACK lane dead: DeepSeek reports NOT available (balance $%.2f) -- primary "
+                "(DeepInfra) unaffected, but the next DeepInfra 429/402 has nowhere to fail over; "
+                "top up at platform.deepseek.com when convenient" % total)
         balance_owner_dm("warning", total, env, rep)
+    elif total < BALANCE_RED_USD:
+        rep.add("inference:deepseek", "warning",
+                "fallback lane nearly empty: balance $%.2f (floor $%.2f) -- triad unaffected, "
+                "resilience thin" % (total, BALANCE_RED_USD))
+        balance_owner_dm("warning", total, env, rep)
+    elif total < BALANCE_WARN_USD:
+        rep.add("inference:deepseek", "notice",
+                "fallback lane balance $%.2f is below $%.2f" % (total, BALANCE_WARN_USD))
+        balance_owner_dm("ok", total, env, rep)
     else:
-        rep.add("inference:deepseek", "ok", "available, balance $%.2f" % total)
+        rep.add("inference:deepseek", "ok", "fallback lane available, balance $%.2f" % total)
         balance_owner_dm("ok", total, env, rep)
 
 
