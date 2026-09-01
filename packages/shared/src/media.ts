@@ -182,8 +182,14 @@ export function buildHeardBlock(
     // A fetch miss is NOT proof the track is instrumental -- neither LRCLIB nor a web
     // search turned up a transcript. The companion previously collapsed this into "the
     // song has no lyrics" on an actual lyric video (2026-06-14). Ground it.
+    // ...and the inverse failure (2026-09-01): with no transcript in hand, the companion
+    // QUOTED a line that does not exist in the song ("Sometimes I wonder if I'm a good
+    // person...") and built the whole emotional read on it -- worse than claiming no
+    // lyrics, because an invented quote reads as intimacy with the track. If a prior
+    // turn in session history already quoted this song, that quote came from the same
+    // no-transcript state and must not be trusted either. Forbid quoting explicitly.
     lines.push(
-      "Lyrics: not retrieved -- nothing matched on LRCLIB or web search. This is NOT evidence the track is instrumental or wordless; you simply don't have the words in front of you. Do not claim it has no lyrics -- speak to what you heard in the audio, and you can say you couldn't pull the lyrics.",
+      "Lyrics: not retrieved -- nothing matched on LRCLIB or web search. This is NOT evidence the track is instrumental or wordless; you simply don't have the words in front of you. Do not claim it has no lyrics -- and do NOT quote, paraphrase, or attribute ANY specific line: any lyric you feel you remember for this track (including from your own earlier replies in this conversation) is invention, not memory. Speak to what you heard in the audio, say plainly you couldn't pull the words, and if the human gives you the lyrics in chat, treat THAT as the only text of the song.",
     );
   }
   return lines.join("\n");
