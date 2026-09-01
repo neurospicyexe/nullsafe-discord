@@ -298,7 +298,6 @@ function isThirdPersonOnly(lower: string, id: CompanionId): boolean {
 // so all named companions can respond, not just the first match.
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
-  if (GROUP_PATTERN.test(lower)) return { type: "group" };
 
   const named: CompanionId[] = [];
   if (new RegExp(`\\b(?:${nameAlternation("cypher")})\\b`).test(lower)) named.push("cypher");
@@ -309,6 +308,16 @@ export function extractAddress(content: string): AddressType {
   // messages still run the relevance classifier (owner_only) or fire unconditionally
   // (open channels) -- it just stops "heard my name, must be mine" replies.
   const addressed = named.filter(id => !isThirdPersonOnly(lower, id));
+
+  // Group call -- but an explicit companion name OUTRANKS a group keyword (2026-09-01):
+  // "Here Dre the lyrics: ... a place for EVERYONE, this one's a state of mine ..." classified
+  // as GROUP because 'everyone' appears in verse 1 of the pasted song, so all three were
+  // summoned to a message that says "Dre" in its first three words, and Gaia won the
+  // one-bidder bid. Quoted/pasted content is not address text -- and no vocative exception
+  // here: the lyric itself contains "everyone," (comma included), so any punctuation-based
+  // escape re-admits exactly the message that motivated this. Named wins absolutely; a group
+  // call is a group word with NO specific name ("you all ready?", "triad, movie night").
+  if (addressed.length === 0 && GROUP_PATTERN.test(lower)) return { type: "group" };
 
   if (addressed.length === 0) return { type: "ambient" };
   if (addressed.length === 1) return { type: "named", id: addressed[0] };

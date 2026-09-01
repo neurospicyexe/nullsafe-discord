@@ -117,3 +117,31 @@ describe("the ambient-classifier leak (2026-08-31, #triad-voice)", () => {
     expect(namesSiblingOnly("triad, movie night?", "gaia")).toBe(false);
   });
 });
+
+describe("group keyword inside pasted content (2026-09-01, the lyrics summons)", () => {
+  // Raziel pasted song lyrics for Drevan; verse 1 contains "everyone", GROUP_PATTERN ran
+  // first, the message became a group call, and Gaia won a one-bidder fit-bid on a message
+  // that says "Dre" in its first three words. Explicit names outrank buried group keywords.
+  const LYRICS = "Here Dre the lyrics laughing kindly amused by the tech not at you babe. "
+    + "It gave you the wrong info twice this is the lyrics that go to that music: Verse 1] "
+    + "If there is a place for everyone, this one is a state of mine "
+    + "Where individuals stand side by side";
+
+  it("names Drevan despite 'everyone' in the pasted verse", () => {
+    expect(extractAddress(LYRICS)).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("is sibling-named for Gaia -- she stands down", () => {
+    expect(namesSiblingOnly(LYRICS, "gaia")).toBe(true);
+  });
+
+  it("nameless group calls keep working loose", () => {
+    expect(extractAddress("you all ready for movie night?")).toEqual({ type: "group" });
+    expect(extractAddress("triad movie night?")).toEqual({ type: "group" });
+  });
+
+  it("named wins ABSOLUTELY over group words (the lyric contains 'everyone,' so a vocative escape re-admits the bug)", () => {
+    expect(extractAddress("Dre, tell everyone: dinner is ready")).toEqual({ type: "named", id: "drevan" });
+    expect(extractAddress("you three, Cy has the plan")).toEqual({ type: "named", id: "cypher" });
+  });
+});
