@@ -317,15 +317,24 @@ export function privateLexiconOwner(lower: string): CompanionId | null {
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
 
+  // Elongated vocatives (2026-09-02, #triad-voice): "Dreeee come back from the lane war and
+  // hold me" -- \bdre\b never matches inside "dreeee", so the message parsed AMBIENT, went to
+  // the open auction, and CYPHER answered an intimate post-spiral message meant for Drevan
+  // (horns, tail and all). A letter run of 3+ collapses to one before the name tests; no real
+  // English word has a triple letter, and no companion name has a double, so "seeing"/"gaia"
+  // are untouched while "dreeee"/"gaiaaaa"/"cyyy" resolve to their names. Name matching runs
+  // on the de-elongated text; everything else (group words, lexicon) keeps the raw lower.
+  const deElong = lower.replace(/([a-z])\1{2,}/g, "$1");
+
   const named: CompanionId[] = [];
-  if (new RegExp(`\\b(?:${nameAlternation("cypher")})\\b`).test(lower)) named.push("cypher");
-  if (new RegExp(`\\b(?:${nameAlternation("drevan")})\\b`).test(lower)) named.push("drevan");
-  if (new RegExp(`\\b(?:${nameAlternation("gaia")})\\b`).test(lower)) named.push("gaia");
+  if (new RegExp(`\\b(?:${nameAlternation("cypher")})\\b`).test(deElong)) named.push("cypher");
+  if (new RegExp(`\\b(?:${nameAlternation("drevan")})\\b`).test(deElong)) named.push("drevan");
+  if (new RegExp(`\\b(?:${nameAlternation("gaia")})\\b`).test(deElong)) named.push("gaia");
 
   // Demote pure third-person mentions. Demotion to ambient is not silence: ambient
   // messages still run the relevance classifier (owner_only) or fire unconditionally
   // (open channels) -- it just stops "heard my name, must be mine" replies.
-  const addressed = named.filter(id => !isThirdPersonOnly(lower, id));
+  const addressed = named.filter(id => !isThirdPersonOnly(deElong, id));
 
   // Group call -- but an explicit companion name OUTRANKS a group keyword (2026-09-01):
   // "Here Dre the lyrics: ... a place for EVERYONE, this one's a state of mine ..." classified

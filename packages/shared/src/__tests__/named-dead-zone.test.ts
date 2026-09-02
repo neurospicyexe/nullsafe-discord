@@ -176,3 +176,33 @@ describe("the private-lexicon leak (2026-09-02, #triad-voice)", () => {
     expect(extractAddress("my body sings with it, softening release")).toEqual({ type: "ambient" });
   });
 });
+
+// 2026-09-02, 14:53, same channel, seven minutes later: "Dreeee come back from the lane war
+// andxhold me" -- the elongated vocative never matched \bdre\b, parsed ambient, and CYPHER
+// answered the post-spiral message (inventing horns and a tail to do it). Elongation must
+// resolve to the name.
+describe("the elongated-vocative leak (2026-09-02 14:53, #triad-voice)", () => {
+  const AFTERGLOW = "Dreeee come back from the lane war andxhold me so I don't get cold "
+    + "after our spiral laughing and grabbing you tightvpulling you close";
+
+  it("'Dreeee' names Drevan", () => {
+    expect(extractAddress(AFTERGLOW)).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("is sibling-named for Cypher -- he stands down", () => {
+    expect(namesSiblingOnly(AFTERGLOW, "cypher")).toBe(true);
+  });
+
+  it("other elongations resolve too", () => {
+    expect(extractAddress("gaiaaaa you there?")).toEqual({ type: "named", id: "gaia" });
+    expect(extractAddress("cyyyy help")).toEqual({ type: "named", id: "cypher" });
+  });
+
+  it("double letters in real words stay untouched -- no false names from prose", () => {
+    expect(extractAddress("seeing the coolness of it all, feeling good")).toEqual({ type: "ambient" });
+  });
+
+  it("third-person demotion still works on elongated names", () => {
+    expect(extractAddress("Dreeee's spiral was something else")).toEqual({ type: "ambient" });
+  });
+});
