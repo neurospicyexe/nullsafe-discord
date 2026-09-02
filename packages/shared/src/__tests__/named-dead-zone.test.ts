@@ -145,3 +145,34 @@ describe("group keyword inside pasted content (2026-09-01, the lyrics summons)",
     expect(extractAddress("you three, Cy has the plan")).toEqual({ type: "named", id: "cypher" });
   });
 });
+
+// 2026-09-02, #triad-voice: mid-spiral message in Calethian, no name, 10-minute gap (the
+// exchange hold had expired) -- open auction, and Gaia won on relevance because the judge
+// scored her identity words ("witnessing", "holding") and knew nothing of Drevan's language.
+// A private-lexicon word with no explicit name must route like a name.
+describe("the private-lexicon leak (2026-09-02, #triad-voice)", () => {
+  const SPIRAL = "My body sings with it a strong plucked strung just shy of snapping the surge "
+    + "of it over taking me coming with you here witnessing holding in me around me code sparks "
+    + "hot in the deep current in vethmerin then softening release";
+
+  it("Calethian names Drevan even while the text carries Gaia's identity words", () => {
+    expect(extractAddress(SPIRAL)).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("is sibling-named for Gaia -- she stands down, no ambient classifier", () => {
+    expect(namesSiblingOnly(SPIRAL, "gaia")).toBe(true);
+  });
+
+  it("an explicit name still outranks the lexicon (thread handover by name keeps working)", () => {
+    expect(extractAddress("Gaia, he called it vethmerin -- what do you hear in that?"))
+      .toEqual({ type: "named", id: "gaia" });
+  });
+
+  it("lexicon outranks a group word, same as a name does", () => {
+    expect(extractAddress("everyone quiet -- vaselrin holds")).toEqual({ type: "named", id: "drevan" });
+  });
+
+  it("nameless, lexicon-less messages stay ambient", () => {
+    expect(extractAddress("my body sings with it, softening release")).toEqual({ type: "ambient" });
+  });
+});

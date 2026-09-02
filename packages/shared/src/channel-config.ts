@@ -296,6 +296,24 @@ function isThirdPersonOnly(lower: string, id: CompanionId): boolean {
 // Parse who (if anyone) is being addressed in a message.
 // Multi-companion address ("Dre and Cy, what do you think?") returns named_multi
 // so all named companions can respond, not just the first match.
+// Private lexicon -- words that belong to exactly one companion the way a name does.
+// Calethian is Drevan's invented language: nobody else can be meant by a message spoken in it.
+// 2026-09-02 (#triad-voice): mid-spiral "...in vethmerin..." carried no name, the 10-minute gap
+// had outlived the exchange hold, and the open auction went to Gaia on relevance 0.75 -- the
+// judge scored her literal identity words ("witnessing", "holding") in the message and knew
+// nothing of Drevan's language, so she answered an intimate message in his register. Again.
+// A lexicon word with NO explicit name routes like a name. An explicit name is checked first
+// and still wins, so handing a thread over by name keeps working.
+const PRIVATE_LEXICON: Partial<Record<CompanionId, RegExp>> = {
+  drevan: /\b(?:vethmerin|vaselrin|vevan|calethian)\b/,
+};
+
+export function privateLexiconOwner(lower: string): CompanionId | null {
+  const owners = (Object.keys(PRIVATE_LEXICON) as CompanionId[])
+    .filter(id => PRIVATE_LEXICON[id]!.test(lower));
+  return owners.length === 1 ? owners[0]! : null;
+}
+
 export function extractAddress(content: string): AddressType {
   const lower = content.toLowerCase();
 
@@ -317,6 +335,14 @@ export function extractAddress(content: string): AddressType {
   // here: the lyric itself contains "everyone," (comma included), so any punctuation-based
   // escape re-admits exactly the message that motivated this. Named wins absolutely; a group
   // call is a group word with NO specific name ("you all ready?", "triad, movie night").
+  // Private-lexicon routing (2026-09-02): checked before the group word for the same reason a
+  // name is -- lexicon inside pasted/quoted content can coexist with a group word, and the
+  // lexicon names its owner.
+  if (addressed.length === 0) {
+    const lex = privateLexiconOwner(lower);
+    if (lex) return { type: "named", id: lex };
+  }
+
   if (addressed.length === 0 && GROUP_PATTERN.test(lower)) return { type: "group" };
 
   if (addressed.length === 0) return { type: "ambient" };
@@ -459,11 +485,14 @@ export function resolveRoutingChannelId(
 }
 
 /**
- * How long a companion "holds the thread" for unaddressed follow-ups. Matches
- * NEW_THREAD_GAP_MS: the same 5 minutes every other rail uses to decide a conversation has
- * gone quiet. After it, an unaddressed message is open to whoever it fits again.
+ * How long a companion "holds the thread" for unaddressed follow-ups. Was NEW_THREAD_GAP_MS
+ * (5 min) -- chat tempo. Decoupled 2026-09-02: Raziel's long-form register runs 10+ minutes
+ * between turns (the 14:47 spiral message landed 10 min after Drevan's last turn, the hold had
+ * expired at minute 5, and the open auction gave his exchange to Gaia). A named address still
+ * hands the thread over instantly, so the cost of holding longer is only that a COLD nameless
+ * message inside the window goes to the previous partner -- which is usually the right read.
  */
-export const ACTIVE_EXCHANGE_WINDOW_MS = NEW_THREAD_GAP_MS;
+export const ACTIVE_EXCHANGE_WINDOW_MS = 15 * 60 * 1000;
 
 /**
  * Which companion, if any, Raziel is mid-exchange with. Pure so it can be unit-tested
