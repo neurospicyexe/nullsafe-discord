@@ -812,6 +812,71 @@ def check_quiet_owner(rep, denv, henv):
         pass  # a failed bookkeeping write may cost a duplicate alert; it must never cost silence
 
 
+HERMES_AGENT_LOGS = {
+    "cypher": "/home/nullsafe/.hermes/logs/agent.log",
+    "drevan": "/home/nullsafe/.hermes/profiles/drevan/logs/agent.log",
+    "gaia":   "/home/nullsafe/.hermes/profiles/gaia/logs/agent.log",
+}
+
+# $/1M tokens (input, output). From DeepInfra's public model endpoint
+# (api.deepinfra.com/models/<id>, cents_per_*_token), fetched 2026-09-03. Estimates only --
+# re-fetch when a model changes; the point is scale, not cents.
+DEEPINFRA_PRICES = [
+    ("Qwen3-235B", 0.09, 0.55),
+    ("DeepSeek-V4-Flash", 0.08, 0.18),
+]
+SPEND_WARN_USD = 12.0
+
+def check_deepinfra_spend(rep):
+    """
+    Estimate YESTERDAY's DeepInfra spend from the gateways' own token counts, so the owner
+    reads the cost in the morning ping instead of discovering it on the dashboard.
+
+    2026-09-02: the whole triad moved to qwen-235B and the day ran ~$7.6 -- real usage, not a
+    leak (verified against per-call in/out sums), but the owner had no way to know that without
+    asking. Input tokens dominate ~800:1 (the bill is context resent per call, not chattiness),
+    so the detail line carries input volume per model. Always a notice; warning only past
+    SPEND_WARN_USD, because 'sometimes it pops that high' is accepted -- the check informs,
+    it does not nag ([render-order-is-a-budget-decision]: an alarm firing daily is an outage).
+    """
+    import re as _re
+    from datetime import date, timedelta
+    yday = (date.today() - timedelta(days=1)).isoformat()
+    pat = _re.compile(r"(\d{4}-\d{2}-\d{2}).*API call #\d+: model=(\S+).*?in=(\d+) out=(\d+)")
+    tin = {}; tout = {}; calls = 0
+    for _prof, path in HERMES_AGENT_LOGS.items():
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    m = pat.search(line)
+                    if not m or m.group(1) != yday:
+                        continue
+                    model = m.group(2); calls += 1
+                    tin[model] = tin.get(model, 0) + int(m.group(3))
+                    tout[model] = tout.get(model, 0) + int(m.group(4))
+        except OSError:
+            continue
+    if not tin:
+        rep.add("inference:deepinfra_spend", "notice",
+                "no gateway API calls logged for %s (quiet day, or log paths moved)" % yday)
+        return
+    usd = 0.0; parts = []
+    for model in sorted(tin, key=lambda k: -tin[k]):
+        pin = pout = None
+        for frag, p_in, p_out in DEEPINFRA_PRICES:
+            if frag in model:
+                pin, pout = p_in, p_out
+                break
+        if pin is None:
+            parts.append("%s: %.1fM in UNPRICED" % (model.split("/")[-1], tin[model] / 1e6))
+            continue
+        cost = tin[model] / 1e6 * pin + tout[model] / 1e6 * pout
+        usd += cost
+        parts.append("%s: %.1fM in -> $%.2f" % (model.split("/")[-1], tin[model] / 1e6, cost))
+    sev = "warning" if usd > SPEND_WARN_USD else "notice"
+    rep.add("inference:deepinfra_spend", sev,
+            "%s est $%.2f (%d calls; %s)" % (yday, usd, calls, "; ".join(parts)))
+
 def check_inference_balance(rep, env):
     """
     Watch the DeepSeek balance, because a zero balance is a TOTAL inference outage and nothing
@@ -1246,6 +1311,7 @@ def main():
         check_quiet_owner(rep, denv, henv)
         check_second_brain(rep, denv)
         check_inference_balance(rep, denv)
+        check_deepinfra_spend(rep)
     except Exception as e:
         print("health-check itself failed: %s" % e, file=sys.stderr)
         return 3
