@@ -63,6 +63,8 @@ import {
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
   isThreadSpent,
   type ConvoActiveDto,
+  publishCommonsMessage, directorMode, isDirectorChannel,
+  commonsMessageFor, shouldDeferToDirector,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
@@ -84,6 +86,13 @@ let _impContextCache: ImpContextCache | null = null;
 // delivered to the gateway session. Module-level = per-process = per companion bot.
 // Advanced ONLY after a successful gateway reply, so a failed call re-sends its delta.
 const hermesDeliveredMark = new Map<string, number>();
+
+// Director liveness gate (2026-09-03 review): when in `live` mode but the worker's
+// `director:alive` key has lapsed, this bot must fall back to its own reply path rather than
+// silently deferring into a void. Module-level = per-process = per companion bot, so this warns
+// at most once every 60s regardless of how many messages land in that window.
+const DIRECTOR_NOT_ALIVE_WARN_MS = 60_000;
+let lastDirectorNotAliveWarnAt = 0;
 
 // Sequential floor + reaction tier state (2026-08-15 floor rework). Module-level = per-process
 // = per companion bot, the same idiom as hermesDeliveredMark above.
@@ -927,6 +936,31 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
       // STM marker instead of the full block above -- see the stmContent divergence note.
       stmContent = `${stmContent.trim()}\n${notHeardStmMarker()}`;
+    }
+
+    // Conversation Director (spec 2026-09-03): in director channels every message is published to the
+    // bus (all three bots do; the director dedupes on message id). A COMPANION turn is then the
+    // director's to route -- this bot does not self-select a reply. Human turns fall through unchanged.
+    // Owner command/listen traffic returned above this point by design (2026-09-03 review, finding
+    // 3): commands are not conversational turns and are never commons material.
+    if (directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
+      const senderCompanion = BOT_ID_COMPANION[message.author.id] as CompanionId | undefined;
+      publishCommonsMessage(redis, commonsMessageFor({
+        channelId: message.channelId, messageId: message.id, authorId: message.author.id,
+        isCompanionBot: senderCtx.isCompanionBot, webhookId: message.webhookId, senderCompanion,
+        content: effectiveContent, replyToMessageId: message.reference?.messageId ?? null,
+        createdTimestamp: message.createdTimestamp, publishedBy: COMPANION_ID, userTier,
+      })).catch(() => {});
+      // Liveness gate (2026-09-03 review): DIRECTOR_ENABLED=live means the config WANTS this
+      // routed to the director, but a dead worker (crash, redeploy gap) leaves no process to
+      // ever answer it. `director:alive` is a 60s-TTL key the worker refreshes every 20s; its
+      // absence means the worker is down, not merely idle.
+      const directorAlive = !!(await redis.get("director:alive").catch(() => null));
+      if (!directorAlive && Date.now() - lastDirectorNotAliveWarnAt > DIRECTOR_NOT_ALIVE_WARN_MS) {
+        lastDirectorNotAliveWarnAt = Date.now();
+        console.warn(`[${COMPANION_ID}] director not alive -- falling back to local reply path`);
+      }
+      if (shouldDeferToDirector({ isCompanionBot: senderCtx.isCompanionBot, mode: directorMode(), directorAlive })) return;
     }
 
     // Sequential floor (2026-08-15): is this sibling message the predecessor reply my pending

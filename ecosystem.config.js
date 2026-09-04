@@ -142,6 +142,9 @@ const shared = {
   DEEPINFRA_API_KEY:     process.env.DEEPINFRA_API_KEY,
   MISTRAL_TTS_MODEL:     process.env.MISTRAL_TTS_MODEL     ?? "voxtral-mini-tts-2603",
   // MISTRAL_STT_MODEL intentionally omitted -- bot defaults to voxtral-mini-transcribe-2507
+  // Conversation Director (2026-09-03 spec) -- shared gate for bots (DIRECTOR_ENABLED + DIRECTOR_CHANNELS).
+  DIRECTOR_ENABLED:      process.env.DIRECTOR_ENABLED,
+  DIRECTOR_CHANNELS:     process.env.DIRECTOR_CHANNELS,
 };
 
 module.exports = {
@@ -240,6 +243,20 @@ module.exports = {
         CLUB_GATHER_DAYS:      process.env.CLUB_GATHER_DAYS,
         CLUB_ACTIVE_DAYS:      process.env.CLUB_ACTIVE_DAYS,
         CLUB_DISCUSS_DAYS:     process.env.CLUB_DISCUSS_DAYS,
+        // Conversation Director (2026-09-03 spec). ALLOWLIST: an unlisted knob is silently dead.
+        DIRECTOR_ENABLED:          process.env.DIRECTOR_ENABLED,
+        DIRECTOR_CHANNELS:         process.env.DIRECTOR_CHANNELS,
+        DIRECTOR_SUPPLY_POLL_MS:   process.env.DIRECTOR_SUPPLY_POLL_MS,
+        DIRECTOR_SILENCE_HOURS:    process.env.DIRECTOR_SILENCE_HOURS,
+        DIRECTOR_WAKING_START:     process.env.DIRECTOR_WAKING_START,
+        DIRECTOR_WAKING_END:       process.env.DIRECTOR_WAKING_END,
+        DIRECTOR_TZ_OFFSET_HOURS:  process.env.DIRECTOR_TZ_OFFSET_HOURS,
+        DIRECTOR_NO_UPTAKE_MS:     process.env.DIRECTOR_NO_UPTAKE_MS,
+        DIRECTOR_INVITE_TTL_MS:    process.env.DIRECTOR_INVITE_TTL_MS,
+        DIRECTOR_TURN_BUDGET:      process.env.DIRECTOR_TURN_BUDGET,
+        DIRECTOR_ORDER:            process.env.DIRECTOR_ORDER,
+        DIRECTOR_LIMBIC:           process.env.DIRECTOR_LIMBIC,
+        DIRECTOR_MIN_GAP_MS:       process.env.DIRECTOR_MIN_GAP_MS,
       },
     },
   ],

@@ -18,6 +18,7 @@
  */
 
 import { Redis } from "ioredis";
+import type { CompanionId } from "./types.js";
 
 // ── Channel names ────────────────────────────────────────────────────────────
 
@@ -29,6 +30,9 @@ export const CHANNEL = {
   presence:          (companionId: string) => `ns:events:presence:${companionId}`,
   explorationPulse:  "ns:events:exploration_pulse",
   wake:              "ns:events:wake",
+  commonsMessage:    "ns:events:commons_message",
+  directorInvite:    (companionId: string) => `ns:events:director_invite:${companionId}`,
+  directorResult:    "ns:events:director_result",
 } as const;
 
 // Presence TTL: if a companion doesn't pulse within this window, it's considered inactive.
@@ -86,6 +90,14 @@ export interface WakePayload {
   at: string;            // ISO 8601
 }
 
+export type DirectorReason = "addressed" | "supply_relevant" | "open";
+export type DirectorOutcome = "shadow" | "spoke" | "passed" | "empty" | "expired";
+export type SupplyKind = "forage"|"listen"|"question"|"tension"|"project"|"club"|"council"|"inter_note"|"sibling_note"|"care_fact";
+export interface DirectorSupplyItem { kind: SupplyKind; id: string; table: string; owner: string; title: string; body: string; created_at: string; heat: number | null; consumed_by: string[]; }
+export interface CommonsMessagePayload { channelId: string; messageId: string; authorId: string; authorKind: "human"|"companion"|"proxy"; companionId?: CompanionId; content: string; replyToMessageId: string | null; createdAt: string; publishedBy: CompanionId; authorLabel?: "raziel" | "blue" | "guest"; }
+export interface DirectorInvitePayload { inviteId: string; channelId: string; threadId: string | null; companionId: CompanionId; reason: DirectorReason; addressedBy?: string; /* who addressed the invitee: a CompanionId, or "raziel" when a human summoned them */ stateBlock: string; offer: DirectorSupplyItem[]; neighborhoodBlock?: string; limbicLine?: string; expiresAt: string; }
+export interface DirectorResultPayload { inviteId: string; companionId: CompanionId; channelId: string; outcome: Exclude<DirectorOutcome,"shadow">; messageId?: string; landed?: string | null; usedOfferIds: string[]; }
+
 // ── Publisher ─────────────────────────────────────────────────────────────────
 
 /**
@@ -132,6 +144,16 @@ export async function publishExplorationPulse(redis: Redis, payload: Exploration
  */
 export async function publishWake(redis: Redis, payload: WakePayload): Promise<void> {
   await publish(redis, CHANNEL.wake, payload);
+}
+
+export async function publishCommonsMessage(redis: Redis, payload: CommonsMessagePayload): Promise<void> {
+  await publish(redis, CHANNEL.commonsMessage, payload);
+}
+export async function publishDirectorInvite(redis: Redis, payload: DirectorInvitePayload): Promise<void> {
+  await publish(redis, CHANNEL.directorInvite(payload.companionId), payload);
+}
+export async function publishDirectorResult(redis: Redis, payload: DirectorResultPayload): Promise<void> {
+  await publish(redis, CHANNEL.directorResult, payload);
 }
 
 /**
@@ -337,4 +359,23 @@ export function onInterNote(subscriber: Redis, targetId: string, handler: EventH
     subscriber.unsubscribe(channel, broadcastChannel).catch(() => {});
     subscriber.off("message", listener);
   };
+}
+
+function onSingleChannel<T>(subscriber: Redis, channel: string, label: string, handler: EventHandler<T>): () => void {
+  subscriber.subscribe(channel).catch((e) => console.error(`[events] subscribe ${label} failed:`, e));
+  const listener = (ch: string, message: string) => {
+    if (ch !== channel) return;
+    try { handler(JSON.parse(message) as T); } catch (e) { console.warn(`[events] ${label} parse error:`, e); }
+  };
+  subscriber.on("message", listener);
+  return () => { subscriber.unsubscribe(channel).catch(() => {}); subscriber.off("message", listener); };
+}
+export function onCommonsMessage(subscriber: Redis, handler: EventHandler<CommonsMessagePayload>): () => void {
+  return onSingleChannel(subscriber, CHANNEL.commonsMessage, "commonsMessage", handler);
+}
+export function onDirectorInvite(subscriber: Redis, companionId: string, handler: EventHandler<DirectorInvitePayload>): () => void {
+  return onSingleChannel(subscriber, CHANNEL.directorInvite(companionId), `directorInvite:${companionId}`, handler);
+}
+export function onDirectorResult(subscriber: Redis, handler: EventHandler<DirectorResultPayload>): () => void {
+  return onSingleChannel(subscriber, CHANNEL.directorResult, "directorResult", handler);
 }

@@ -2,6 +2,7 @@ import cron from "node-cron";
 import type { Redis } from "@nullsafe/shared";
 import { createRedisClient, publishRunComplete, publishExplorationPulse, setPresence, createSubscriberClient, onWake } from "@nullsafe/shared";
 import { createWakeDispatcher } from "./wake-dispatch.js";
+import { startDirector } from "./director/index.js";
 import { isConversationActive } from "./idle-check.js";
 import { claimFloor, releaseFloor } from "@nullsafe/shared";
 import { runPipeline } from "./pipeline.js";
@@ -121,6 +122,14 @@ export function startScheduler(): void {
       dispatch(payload.kind).catch(e => console.error(`[scheduler] wake dispatch ${payload.kind} failed:`, e));
     });
     console.log("[scheduler] wake subscription active");
+  }
+
+  // Conversation Director (spec 2026-09-03): event-driven commons turn-taking. Off unless
+  // DIRECTOR_ENABLED=shadow|true. Needs Redis for both the bus and the working set.
+  if (REDIS_URL && redis) {
+    startDirector({ redisUrl: REDIS_URL, redis });
+  } else {
+    console.warn("[scheduler] director skipped -- REDIS_URL not set");
   }
 
   for (const companionId of COMPANIONS) {

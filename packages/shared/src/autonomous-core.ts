@@ -58,6 +58,9 @@ export interface AutonomousPrompts {
   interCompanionSeed: (historyBlock: string) => string;
   notesReply: (from: string, noteContent: string) => string;
   bridgeReply: (event: unknown) => string;
+  /** Director invitation (spec 2026-09-03): the room as the director sees it, what you have from your
+   *  own life, and permission to pass. Reply "[PASS]" alone to decline. */
+  directorInvite: (invite: { stateBlock: string; offerBlock: string; reason: string; addressedBy?: string; neighborhoodBlock?: string }) => string;
 }
 
 /**
@@ -140,18 +143,25 @@ export function eventMatches(ctx: AutonomousContext, event: unknown): boolean {
   return ctx.interestKeywords.some(kw => str.includes(kw));
 }
 
+/**
+ * Returns whether the message was actually delivered (at least one chunk sent) -- false on
+ * cooldown, a non-text channel, or a send that throws. Existing fire-and-forget callers ignore
+ * the return value and keep compiling; `handleDirectorInvite` (2026-09-03 review) is the first
+ * caller that needs it, so an undelivered director reply is never reported as "spoke".
+ */
 export async function sendAutonomousMessage(
   ctx: AutonomousContext,
   channelId: string,
   content: string,
   trigger: string,
-): Promise<void> {
-  if (isOnCooldown(ctx, channelId)) return;
+  opts?: { onSent?: (id: string) => void },
+): Promise<boolean> {
+  if (isOnCooldown(ctx, channelId)) return false;
   try {
     const channel = await ctx.client.channels.fetch(channelId);
     if (channel?.isTextBased()) {
       const sent = await sendLong(channel as TextChannel, content);
-      for (const m of sent) ctx.registerSentId?.(m.id);
+      for (const m of sent) { ctx.registerSentId?.(m.id); opts?.onSent?.(m.id); }
       markCooldown(ctx, channelId);
       // Route the self-post through the SAME daily fold as conversation (2026-07-27).
       //
@@ -185,9 +195,12 @@ export async function sendAutonomousMessage(
         });
         reportVoiceScore(ctx.companionId as VoiceCompanionId, content, channelId, ctx.halsethSecret);
       }
+      return sent.length > 0;
     }
+    return false;
   } catch (e) {
     console.warn(`[${ctx.companionId}/autonomous] send failed for channel ${channelId}:`, e);
+    return false;
   }
 }
 

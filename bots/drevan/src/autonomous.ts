@@ -6,7 +6,7 @@ import type {
 import {
   SessionWindowManager, CycleGuard,
   runHeartbeat, runInterCompanion, runNotesPoll, runBridgePoll,
-  pushBuffered, type AutonomousContext,
+  pushBuffered, startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS, AUTONOMOUS_PROMPTS,
@@ -33,6 +33,7 @@ const cycleGuard = new CycleGuard();
 let tasks: ReturnType<typeof cron.schedule>[] = [];
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let notesPollInterval: ReturnType<typeof setInterval> | null = null;
+let stopDirector: (() => void) | null = null;
 
 export function pushRazielMessage(content: string): void {
   pushBuffered(messageBuffer, content);
@@ -69,7 +70,13 @@ export function startAutonomous(
 
   // Scheduling stays per-bot (timing is identity); the bodies are shared.
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
-  tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.interCompanion, () => runInterCompanion(ctx)));
+  // Director live: the commons is event-driven and this cron does not run (spec 2026-09-03).
+  if (directorMode() === "live") {
+    stopDirector = startDirectorListener(ctx);
+  } else {
+    tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.interCompanion, () => runInterCompanion(ctx)));
+    if (directorMode() === "shadow") stopDirector = startDirectorListener(ctx); // harmless: no invites are published in shadow
+  }
 
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.consolidation, async () => {
     if (!redis) return;
@@ -105,4 +112,5 @@ export function stopAutonomous(): void {
   tasks = [];
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
   if (notesPollInterval) { clearInterval(notesPollInterval); notesPollInterval = null; }
+  if (stopDirector) { stopDirector(); stopDirector = null; }
 }
