@@ -3,11 +3,13 @@ import { createSupplyPool } from "../director/supply.js";
 import type { DirectorSupplyItem } from "@nullsafe/shared";
 import type { Redis } from "@nullsafe/shared";
 
-const createFakeRedis = (): Redis => {
+const createFakeRedis = (): Redis & { setCalls: Array<{ key: string; value: string }> } => {
   const store = new Map<string, string>();
+  const setCalls: Array<{ key: string; value: string }> = [];
   return {
     get: async (key: string) => store.get(key) ?? null,
-    set: async (key: string, value: string) => { store.set(key, value); },
+    set: async (key: string, value: string) => { store.set(key, value); setCalls.push({ key, value }); },
+    setCalls,
   } as any;
 };
 
@@ -133,5 +135,37 @@ describe("supply pool", () => {
     const items = pool.items();
     expect(items).toHaveLength(2);
     expect(items.map((i) => i.id)).toEqual(expect.arrayContaining(["p1", "p2"]));
+  });
+
+  it("cursor equal to current -> no-op, third poll advances it", async () => {
+    const T = 1000;
+    let pollCount = 0;
+    const fetch = async () => {
+      pollCount++;
+      if (pollCount === 1) {
+        return {
+          items: [item("cypher", "p1", "2026-08-30")],
+          cursor: "2026-09-01T00:00:00.000Z",
+        };
+      }
+      if (pollCount === 2) {
+        return { items: [], cursor: "2026-09-01T00:00:00.000Z" }; // cursor unchanged
+      }
+      return { items: [], cursor: "2026-09-02T00:00:00.000Z" }; // cursor advances
+    };
+
+    const redis = createFakeRedis();
+    const pool = createSupplyPool({ fetch, redis, now: () => T });
+
+    await pool.poll();
+    expect(redis.setCalls).toHaveLength(1);
+    expect(redis.setCalls[0]).toEqual({ key: "director:supply:cursor", value: "2026-09-01T00:00:00.000Z" });
+
+    await pool.poll();
+    expect(redis.setCalls).toHaveLength(1); // no new call when cursor equal
+
+    await pool.poll();
+    expect(redis.setCalls).toHaveLength(2);
+    expect(redis.setCalls[1]).toEqual({ key: "director:supply:cursor", value: "2026-09-02T00:00:00.000Z" });
   });
 });

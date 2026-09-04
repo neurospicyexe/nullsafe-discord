@@ -30,4 +30,22 @@ describe("silence floor", () => {
     const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()) };
     expect(floorSelection({ ...base, nowMs: Date.parse("2026-09-03T08:00:00.000Z"), states: [s], supply: [item("cypher", "p2")] })).toBeNull();
   });
+  it("all owned items consumed by owner -> nobody is summoned", () => {
+    const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()) };
+    const supply = [
+      { ...item("cypher", "p2"), consumed_by: ["cypher"] },
+      { ...item("gaia", "p3"), consumed_by: ["gaia"] },
+    ];
+    expect(floorSelection({ ...base, states: [s], supply })).toBeNull();
+  });
+  it("owned items consumed by sibling -> still offered", () => {
+    const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()) };
+    const supply = [
+      { ...item("cypher", "p2"), consumed_by: ["drevan"] },
+      { ...item("gaia", "p3"), consumed_by: ["gaia"] },
+    ];
+    const r = floorSelection({ ...base, states: [s], supply });
+    expect(r).toMatchObject({ channelId: "c1", companionId: "cypher" });
+    expect(r!.offer.id).toBe("p2");
+  });
 });

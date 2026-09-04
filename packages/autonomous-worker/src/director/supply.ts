@@ -15,6 +15,7 @@ export function createSupplyPool(deps: { fetch: (since: string, limit: number) =
   const byId = () => new Map(pool.map((p) => [p.id, p] as const));
   return {
     items() {
+      // Evicts in place: items() prunes expired entries as a side effect of the read.
       const cutoff = new Date(now() - MAX_AGE_MS).toISOString();
       pool = pool.filter((p) => p.created_at >= cutoff);
       return pool;
