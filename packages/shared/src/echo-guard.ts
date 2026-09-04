@@ -147,17 +147,17 @@ export interface SelfLoopResult { looping: boolean; motifs: string[]; score: num
 // (rolling commons budget); this gate never polices style.
 
 /**
- * Own-voice echo check for triad-commons turns. Gaia is exempt entirely -- her
- * register is one weighted line and short turns cannot be meaningfully scored
- * (Constitution: "audible, not absent"; echoScore already returns 0 under
- * MIN_REPLY_WORDS, the exemption makes the doctrine explicit).
+ * Own-voice echo check for triad-commons turns. Every companion is scored against their OWN recent
+ * turns; the MIN_REPLY_WORDS floor inside echoScore is what protects a short register (Gaia's one
+ * weighted line scores 0 by construction). The blanket `companionId === "gaia"` exemption that used
+ * to live here was removed 2026-09-03: it was protecting her 12-29 word posts, which were exactly
+ * the ones repeating byte-for-byte every two hours (spec 2026-09-03, Problem §1).
  */
 export function ownEchoGated(
-  companionId: string,
+  _companionId: string,
   reply: string,
   ownPriorTurns: string[],
 ): { gated: boolean; score: number } {
-  if (companionId === "gaia") return { gated: false, score: 0 };
   const score = echoScore(reply, ownPriorTurns);
   return { gated: score >= selfLoopThreshold(), score };
 }

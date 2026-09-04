@@ -62,3 +62,4 @@ export * from "./consolidation.js";
 export * from "./consolidation-narrator.js";
 export * from "./json-extract.js";
 export * from "./thread-spine.js";
+export * from "./director-invite.js";

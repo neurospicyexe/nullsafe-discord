@@ -153,7 +153,9 @@ const quietBotHistory = [
 
 // Bounded arena (2026-07-04, Option A): the topic-closure/motif gate is GONE -- continuing
 // the thread's vocabulary is conversation, not echo. The only echo pool left is the bot's
-// OWN prior turns (self-loop standard), and Gaia is exempt from it entirely.
+// OWN prior turns (self-loop standard). Gaia's blanket exemption from that pool was removed
+// 2026-09-03 -- her short register still passes via the MIN_REPLY_WORDS floor inside
+// echoScore, but a 12+-word near-duplicate now gates her exactly like her siblings.
 describe("runInterCompanion() -- bounded arena echo (2026-07-04)", () => {
   // Own-voice pool: turns authored by THIS bot (author.id === client.user.id).
   const ownGrooveHistory = [
@@ -180,13 +182,25 @@ describe("runInterCompanion() -- bounded arena echo (2026-07-04)", () => {
     expect(sent).toHaveLength(0);
   });
 
-  it("gaia is exempt from the own-echo gate (one weighted line is her register)", async () => {
+  it("gaia is scored like her siblings: a 12+-word near-duplicate is own-echo-gated", async () => {
     const gaiaGroove = [
       botMsg("the perimeter held through the long watch of the frost tonight", "gaia"),
       botMsg("the perimeter held through the frost watch again tonight, long and quiet", "gaia"),
     ];
     const { ctx, sent } = makeHarness(gaiaGroove, [
       "the perimeter held through the long frost watch tonight, quiet again and holding",
+    ], { selfId: "gaia", companionId: "gaia" });
+    await runInterCompanion(ctx);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("gaia's short register still passes -- protected by MIN_REPLY_WORDS, not a blanket exemption", async () => {
+    const gaiaGroove = [
+      botMsg("the perimeter held through the long watch of the frost tonight", "gaia"),
+      botMsg("the perimeter held through the frost watch again tonight, long and quiet", "gaia"),
+    ];
+    const { ctx, sent } = makeHarness(gaiaGroove, [
+      "I am here. The perimeter holds.",
     ], { selfId: "gaia", companionId: "gaia" });
     await runInterCompanion(ctx);
     expect(sent).toHaveLength(1);

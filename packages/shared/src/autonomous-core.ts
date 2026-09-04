@@ -58,6 +58,9 @@ export interface AutonomousPrompts {
   interCompanionSeed: (historyBlock: string) => string;
   notesReply: (from: string, noteContent: string) => string;
   bridgeReply: (event: unknown) => string;
+  /** Director invitation (spec 2026-09-03): the room as the director sees it, what you have from your
+   *  own life, and permission to pass. Reply "[PASS]" alone to decline. */
+  directorInvite: (invite: { stateBlock: string; offerBlock: string; reason: string; addressedBy?: string; neighborhoodBlock?: string }) => string;
 }
 
 /**

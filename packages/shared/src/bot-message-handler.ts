@@ -63,6 +63,7 @@ import {
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
   isThreadSpent,
   type ConvoActiveDto,
+  publishCommonsMessage, directorMode, isDirectorChannel,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
@@ -927,6 +928,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
       // STM marker instead of the full block above -- see the stmContent divergence note.
       stmContent = `${stmContent.trim()}\n${notHeardStmMarker()}`;
+    }
+
+    // Conversation Director (spec 2026-09-03): in director channels every message is published to the
+    // bus (all three bots do; the director dedupes on message id). A COMPANION turn is then the
+    // director's to route -- this bot does not self-select a reply. Human turns fall through unchanged.
+    if (directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
+      const senderCompanion = BOT_ID_COMPANION[message.author.id] as CompanionId | undefined;
+      publishCommonsMessage(redis, {
+        channelId: message.channelId, messageId: message.id, authorId: message.author.id,
+        authorKind: senderCtx.isCompanionBot ? "companion" : (message.webhookId ? "proxy" : "human"),
+        companionId: senderCtx.isCompanionBot ? senderCompanion : undefined,
+        content: effectiveContent, replyToMessageId: message.reference?.messageId ?? null,
+        createdAt: new Date(message.createdTimestamp).toISOString(), publishedBy: COMPANION_ID,
+      }).catch(() => {});
+      if (senderCtx.isCompanionBot && directorMode() === "live") return;
     }
 
     // Sequential floor (2026-08-15): is this sibling message the predecessor reply my pending
