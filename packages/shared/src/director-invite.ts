@@ -2,11 +2,15 @@
 // says who and what; this file says HOW, in the companion's own voice, and reports back. Passing is
 // a legal move and is reported as one.
 import type { TextChannel } from "discord.js";
-import { publishDirectorResult, onDirectorInvite, type DirectorInvitePayload } from "./events.js";
+import {
+  publishDirectorResult, onDirectorInvite,
+  type DirectorInvitePayload, type CommonsMessagePayload,
+} from "./events.js";
 import { generateOutward } from "./outward.js";
 import { parseLandMarker } from "./thread-spine.js";
 import { ownEchoGated } from "./echo-guard.js";
 import { sendAutonomousMessage, type AutonomousContext } from "./autonomous-core.js";
+import type { CompanionId } from "./types.js";
 
 const PASS_RE = /^\s*\[?PASS\]?(\s|$)/i;
 export function isPass(text: string): boolean { return PASS_RE.test(text); }
@@ -15,12 +19,42 @@ function renderOffer(invite: DirectorInvitePayload): string {
   return invite.offer.map((o) => `- [${o.kind}] ${o.title}${o.body ? ` -- ${o.body.slice(0, 300)}` : ""}`).join("\n");
 }
 
+function escapeRegExp(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
 function usedOffers(text: string, invite: DirectorInvitePayload): string[] {
   const t = text.toLowerCase();
   return invite.offer.filter((o) => {
     const words = o.title.toLowerCase().split(/\W+/).filter((w) => w.length >= 5);
-    return words.length > 0 && words.filter((w) => t.includes(w)).length >= Math.min(2, words.length);
+    return words.length > 0 && words.filter((w) => new RegExp(`\\b${escapeRegExp(w)}\\b`).test(t)).length >= Math.min(2, words.length);
   }).map((o) => o.id);
+}
+
+/**
+ * Pure translation from a raw Discord message + this handler's local flags into the payload
+ * published to the commons bus. Extracted from bot-message-handler.ts (2026-09-03 review, finding
+ * 2) so the routing decision itself is unit-testable without a real discord.js Message.
+ */
+export function commonsMessageFor(input: {
+  channelId: string; messageId: string; authorId: string; isCompanionBot: boolean;
+  webhookId: string | null | undefined; senderCompanion: CompanionId | undefined;
+  content: string; replyToMessageId: string | null; createdTimestamp: number; publishedBy: CompanionId;
+}): CommonsMessagePayload {
+  return {
+    channelId: input.channelId, messageId: input.messageId, authorId: input.authorId,
+    authorKind: input.isCompanionBot ? "companion" : (input.webhookId ? "proxy" : "human"),
+    companionId: input.isCompanionBot ? input.senderCompanion : undefined,
+    content: input.content, replyToMessageId: input.replyToMessageId,
+    createdAt: new Date(input.createdTimestamp).toISOString(), publishedBy: input.publishedBy,
+  };
+}
+
+/**
+ * Whether THIS bot must stand down and let the director route the reply instead of self-selecting
+ * one. True only for a companion turn while the director is fully live -- a human turn always falls
+ * through unchanged, and shadow mode publishes to the bus without ever suppressing a bot's own path.
+ */
+export function shouldDeferToDirector(input: { isCompanionBot: boolean; mode: "off" | "shadow" | "live" }): boolean {
+  return input.isCompanionBot && input.mode === "live";
 }
 
 export async function handleDirectorInvite(ctx: AutonomousContext, invite: DirectorInvitePayload, deps: { now?: () => number } = {}): Promise<void> {
@@ -53,9 +87,7 @@ export async function handleDirectorInvite(ctx: AutonomousContext, invite: Direc
   if (echo.gated) { console.warn(`[${ctx.companionId}/director] own-echo-gated (score=${echo.score.toFixed(2)}) -- reporting empty`); await report("empty"); return; }
 
   let sentId: string | undefined;
-  const register = ctx.registerSentId;
-  ctx.registerSentId = (id: string) => { sentId ??= id; register?.(id); };
-  try { await sendAutonomousMessage(ctx, invite.channelId, text, "director"); } finally { ctx.registerSentId = register; }
+  await sendAutonomousMessage(ctx, invite.channelId, text, "director", { onSent: (id) => { sentId ??= id; } });
   const used = usedOffers(text, invite);
   await report("spoke", { messageId: sentId, landed: land.resolution, usedOfferIds: used });
   // Consume-on-use for the kinds whose stamp lives bot-side (post already landed above). Forage is
@@ -66,11 +98,22 @@ export async function handleDirectorInvite(ctx: AutonomousContext, invite: Direc
   }
 }
 
-/** Subscribe this bot to its own invite channel. Uses a duplicate of the command client as the subscriber. */
+/**
+ * Subscribe this bot to its own invite channel. Uses a duplicate of the command client as the
+ * subscriber. Invites are chained onto one promise so a bot never runs two `handleDirectorInvite`
+ * calls concurrently -- without this, two invites arriving close together could each swap in their
+ * own sent-id capture (now moot after the `onSent` fix) and, more importantly, could interleave
+ * echo-gate reads/writes and floor use in ways the single-companion model never has to reason about.
+ */
 export function startDirectorListener(ctx: AutonomousContext): () => void {
   if (!ctx.redis) { console.warn(`[${ctx.companionId}/director] no redis -- listener not started`); return () => {}; }
   const sub = ctx.redis.duplicate();
-  const off = onDirectorInvite(sub, ctx.companionId, (invite) => handleDirectorInvite(ctx, invite).catch((e) => console.error(`[${ctx.companionId}/director] invite failed:`, e)));
+  let chain: Promise<void> = Promise.resolve();
+  const off = onDirectorInvite(sub, ctx.companionId, (invite) => {
+    chain = chain
+      .then(() => handleDirectorInvite(ctx, invite))
+      .catch((e) => console.error(`[${ctx.companionId}/director] invite failed:`, e));
+  });
   console.log(`[${ctx.companionId}/director] listening for invitations`);
   return () => { off(); sub.quit().catch(() => {}); };
 }

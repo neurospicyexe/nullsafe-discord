@@ -64,6 +64,7 @@ import {
   isThreadSpent,
   type ConvoActiveDto,
   publishCommonsMessage, directorMode, isDirectorChannel,
+  commonsMessageFor, shouldDeferToDirector,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
@@ -933,16 +934,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Conversation Director (spec 2026-09-03): in director channels every message is published to the
     // bus (all three bots do; the director dedupes on message id). A COMPANION turn is then the
     // director's to route -- this bot does not self-select a reply. Human turns fall through unchanged.
+    // Owner command/listen traffic returned above this point by design (2026-09-03 review, finding
+    // 3): commands are not conversational turns and are never commons material.
     if (directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
       const senderCompanion = BOT_ID_COMPANION[message.author.id] as CompanionId | undefined;
-      publishCommonsMessage(redis, {
+      publishCommonsMessage(redis, commonsMessageFor({
         channelId: message.channelId, messageId: message.id, authorId: message.author.id,
-        authorKind: senderCtx.isCompanionBot ? "companion" : (message.webhookId ? "proxy" : "human"),
-        companionId: senderCtx.isCompanionBot ? senderCompanion : undefined,
+        isCompanionBot: senderCtx.isCompanionBot, webhookId: message.webhookId, senderCompanion,
         content: effectiveContent, replyToMessageId: message.reference?.messageId ?? null,
-        createdAt: new Date(message.createdTimestamp).toISOString(), publishedBy: COMPANION_ID,
-      }).catch(() => {});
-      if (senderCtx.isCompanionBot && directorMode() === "live") return;
+        createdTimestamp: message.createdTimestamp, publishedBy: COMPANION_ID,
+      })).catch(() => {});
+      if (shouldDeferToDirector({ isCompanionBot: senderCtx.isCompanionBot, mode: directorMode() })) return;
     }
 
     // Sequential floor (2026-08-15): is this sibling message the predecessor reply my pending

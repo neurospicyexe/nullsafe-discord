@@ -148,13 +148,14 @@ export async function sendAutonomousMessage(
   channelId: string,
   content: string,
   trigger: string,
+  opts?: { onSent?: (id: string) => void },
 ): Promise<void> {
   if (isOnCooldown(ctx, channelId)) return;
   try {
     const channel = await ctx.client.channels.fetch(channelId);
     if (channel?.isTextBased()) {
       const sent = await sendLong(channel as TextChannel, content);
-      for (const m of sent) ctx.registerSentId?.(m.id);
+      for (const m of sent) { ctx.registerSentId?.(m.id); opts?.onSent?.(m.id); }
       markCooldown(ctx, channelId);
       // Route the self-post through the SAME daily fold as conversation (2026-07-27).
       //
