@@ -3,6 +3,7 @@
 import type { DirectorSupplyItem } from "@nullsafe/shared";
 import type { ConversationState, CompanionId } from "./types.js";
 
+// "open" and "off_hours" are produced by floor.ts (Task 11), not by select().
 export type SelectReason = "addressed" | "supply_relevant" | "open";
 export type SilenceReason = "human_floor" | "budget" | "no_uptake" | "nothing_to_add" | "off_hours";
 export type Selection =
@@ -33,7 +34,7 @@ export function relevance(item: DirectorSupplyItem, state: ConversationState): n
 export function rankOffer(items: DirectorSupplyItem[], order: "heat" | "recency"): DirectorSupplyItem[] {
   return [...items].sort((a, b) => {
     if (order === "heat") { const dh = (b.heat ?? 0) - (a.heat ?? 0); if (dh !== 0) return dh; }
-    return a.created_at < b.created_at ? 1 : -1;
+    return a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0;
   });
 }
 
@@ -56,7 +57,7 @@ export function select(i: SelectInput): Selection {
   const botTurns = s.turns.filter((t) => !t.isHuman);
   const lastTwo = botTurns.slice(-2);
   const excluded = new Set<string>();
-  if (lastTwo.length === 2 && lastTwo[0]!.author === lastTwo[1]!.author) excluded.add(lastTwo[1]!.author);
+  if (lastTwo.length === 2 && lastTwo[0]!.companionId && lastTwo[0]!.companionId === lastTwo[1]!.companionId) excluded.add(lastTwo[1]!.companionId);
   // 5. Relevant supply owned by an eligible companion, not already offered in this thread.
   const offeredIds = new Set(s.offered.map((o) => o.id));
   const candidates = i.supply
@@ -69,7 +70,7 @@ export function select(i: SelectInput): Selection {
     return { kind: "invite", companionId: top.owner as CompanionId, reason: "supply_relevant", offer: [top] };
   }
   // 6. No uptake.
-  const distinct = new Set(botTurns.map((t) => t.author));
+  const distinct = new Set(botTurns.map((t) => t.companionId ?? t.author));
   if (s.turns.length >= 1 && distinct.size < 2 && s.lastBotAt && nowMs - Date.parse(s.lastBotAt) >= i.noUptakeMs) {
     return { kind: "silence", reason: "no_uptake" };
   }

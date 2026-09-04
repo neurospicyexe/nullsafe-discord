@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { select, relevance } from "../director/select.js";
+import { select, relevance, rankOffer } from "../director/select.js";
 import { emptyState } from "../director/types.js";
 import { applyTurn } from "../director/state.js";
 import type { DirectorSupplyItem } from "@nullsafe/shared";
@@ -51,5 +51,39 @@ describe("select", () => {
     s = applyTurn(s, bot("drevan", "crows remember faces and carry grudges", "m1", T0), []);
     expect(relevance(item({}), s)).toBeGreaterThan(0.15);
     expect(relevance(item({ title: "tide tables", body: "moon and tide" }), s)).toBe(0);
+  });
+  it("rankOffer maintains stable sort with identical timestamps", () => {
+    const ts = iso(T0);
+    const items = [
+      item({ id: "f1", created_at: ts, heat: null }),
+      item({ id: "f2", created_at: ts, heat: null }),
+      item({ id: "f3", created_at: ts, heat: null }),
+    ];
+    expect(rankOffer(items, "heat").map((x) => x.id)).toEqual(["f1", "f2", "f3"]);
+    expect(rankOffer(items, "recency").map((x) => x.id)).toEqual(["f1", "f2", "f3"]);
+  });
+  it("rankOffer returns newest-first for distinct timestamps in both orders", () => {
+    const items = [
+      item({ id: "f1", created_at: iso(T0 - 2000), heat: null }),
+      item({ id: "f2", created_at: iso(T0 - 1000), heat: null }),
+      item({ id: "f3", created_at: iso(T0), heat: null }),
+    ];
+    expect(rankOffer(items, "heat").map((x) => x.id)).toEqual(["f3", "f2", "f1"]);
+    expect(rankOffer(items, "recency").map((x) => x.id)).toEqual(["f3", "f2", "f1"]);
+  });
+  it("two-in-a-row exclusion allows siblings when cypher has spoken twice", () => {
+    let s = emptyState("c", iso(T0));
+    s = applyTurn(s, bot("cypher", "crows use tools", "m1", T0 - 200_000), []);
+    s = applyTurn(s, bot("cypher", "more on crows and sticks", "m2", T0 - 100_000), []);
+    const r = select({
+      ...base,
+      state: s,
+      supply: [
+        item({ id: "f1", owner: "cypher" }),
+        item({ id: "f3", owner: "gaia", title: "crows use tools", body: "corvid tool use" }),
+      ],
+    });
+    expect(r).toMatchObject({ kind: "invite", companionId: "gaia", reason: "supply_relevant" });
+    expect((r as { offer: DirectorSupplyItem[] }).offer.map((o) => o.id)).toEqual(["f3"]);
   });
 });
