@@ -66,6 +66,12 @@ describe("invite rendering", () => {
     expect(inv.expiresAt).toBe(new Date(1000).toISOString());
     expect(inv.companionId).toBe("cypher");
   });
+  it("buildInvite accepts addressedBy as a human name without type error", () => {
+    const s = emptyState("c1", "t0");
+    const inv = buildInvite({ kind: "invite", companionId: "gaia", reason: "addressed", offer: [], addressedBy: "raziel" }, s, {}, { inviteTtlMs: 1000 }, { inviteId: "i1", nowMs: 0 });
+    expect(inv.addressedBy).toBe("raziel");
+    expect(inv.companionId).toBe("gaia");
+  });
 });
 
 describe("handleMessage", () => {

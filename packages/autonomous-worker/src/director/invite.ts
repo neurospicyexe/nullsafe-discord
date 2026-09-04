@@ -24,7 +24,7 @@ export function buildInvite(
 ): DirectorInvitePayload {
   return {
     inviteId: ids.inviteId, channelId: s.channelId, threadId: s.threadId, companionId: sel.companionId,
-    reason: sel.reason, addressedBy: sel.addressedBy as DirectorInvitePayload["addressedBy"],
+    reason: sel.reason, addressedBy: sel.addressedBy,
     stateBlock: renderStateBlock(s), offer: sel.offer,
     neighborhoodBlock: extras.neighborhoodBlock, limbicLine: extras.limbicLine,
     expiresAt: new Date(ids.nowMs + cfg.inviteTtlMs).toISOString(),
