@@ -45,6 +45,22 @@ export function isTriadCommons(entry: { modes?: readonly string[] } | null | und
   return modes.includes("autonomous") && modes.includes("inter_companion");
 }
 
+/** Director rollout switch (2026-09-03 spec). Read per call so a pm2 env change lands without a code change. */
+export function directorMode(): "off" | "shadow" | "live" {
+  const raw = (process.env["DIRECTOR_ENABLED"] ?? "").trim().toLowerCase();
+  if (raw === "true") return "live";
+  if (raw === "shadow") return "shadow";
+  return "off";
+}
+
+/** Channels the director owns companion-to-companion turn-taking in: the triad commons, plus any
+ *  ids in DIRECTOR_CHANNELS. Human-authored traffic in these channels is untouched by this gate. */
+export function isDirectorChannel(entry: { modes?: readonly string[] } | null | undefined, channelId: string): boolean {
+  if (isTriadCommons(entry)) return true;
+  const extra = (process.env["DIRECTOR_CHANNELS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return extra.includes(channelId);
+}
+
 /** Env-tunable hard cap on consecutive bot-authored messages since the last human message.
  *  Read per-call (like echoThreshold) so a pm2 env change lands without a code change.
  *  `selfSustained` (triad commons) uses its own knob and a roomier default. */
