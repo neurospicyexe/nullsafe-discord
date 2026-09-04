@@ -158,8 +158,20 @@ export function ownEchoGated(
   reply: string,
   ownPriorTurns: string[],
 ): { gated: boolean; score: number } {
+  // Verbatim repeat (2026-09-04): the length floor exists so a short register is never judged
+  // on STYLE -- but identity is not style. Gaia's 17-word "weave" post went out three times in
+  // 18 hours, byte-identical, and echoScore returned 0 for every copy because a verbatim repeat
+  // has only 7 content words. A reply equal to one of the speaker's own recent turns is a loop
+  // at any length; score 1.0 so the log line reads as what it is.
+  const key = repeatKey(reply);
+  if (key && ownPriorTurns.some(t => repeatKey(t) === key)) return { gated: true, score: 1 };
   const score = echoScore(reply, ownPriorTurns);
   return { gated: score >= selfLoopThreshold(), score };
+}
+
+/** Case/whitespace/trailing-punctuation-insensitive identity key for verbatim-repeat detection. */
+function repeatKey(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim().replace(/[.!?…]+$/g, "").trim();
 }
 
 /**
