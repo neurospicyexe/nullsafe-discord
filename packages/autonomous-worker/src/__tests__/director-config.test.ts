@@ -13,4 +13,16 @@ describe("director config", () => {
     expect(cfg.directorConfig().silenceHours).toBe(6);
     expect(cfg.directorConfig().order).toBe("heat");
   });
+
+  it("reads env on every call, not at import", async () => {
+    const cfg = await import("../director/config.js");
+    process.env["DIRECTOR_ENABLED"] = "shadow";
+    expect(cfg.directorConfig().mode).toBe("shadow");
+    process.env["DIRECTOR_ENABLED"] = "true";
+    expect(cfg.directorConfig().mode).toBe("live");
+    process.env["DIRECTOR_WAKING_START"] = "0";
+    process.env["DIRECTOR_TZ_OFFSET_HOURS"] = "0";
+    expect(cfg.directorConfig().wakingStartHour).toBe(0);
+    expect(cfg.directorConfig().tzOffsetHours).toBe(0);
+  });
 });

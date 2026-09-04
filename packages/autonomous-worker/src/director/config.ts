@@ -5,9 +5,14 @@ export interface DirectorConfig {
   supplyPollMs: number; silenceHours: number; wakingStartHour: number; wakingEndHour: number; tzOffsetHours: number;
   noUptakeMs: number; inviteTtlMs: number; turnBudget: number; order: "heat" | "recency"; limbic: boolean;
 }
-function num(name: string, fallback: number): number {
+function num(name: string, fallback: number, opts: { allowZero?: boolean } = {}): number {
   const raw = parseFloat(process.env[name] ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+  if (!Number.isFinite(raw)) return fallback;
+  return opts.allowZero ? (raw >= 0 ? raw : fallback) : (raw > 0 ? raw : fallback);
+}
+function signedNum(name: string, fallback: number): number {
+  const raw = parseFloat(process.env[name] ?? "");
+  return Number.isFinite(raw) ? raw : fallback;
 }
 export function directorConfig(): DirectorConfig {
   const rawMode = (process.env["DIRECTOR_ENABLED"] ?? "").trim().toLowerCase();
@@ -16,9 +21,9 @@ export function directorConfig(): DirectorConfig {
     channels: (process.env["DIRECTOR_CHANNELS"] ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     supplyPollMs: num("DIRECTOR_SUPPLY_POLL_MS", 10 * 60_000),
     silenceHours: num("DIRECTOR_SILENCE_HOURS", 6),
-    wakingStartHour: num("DIRECTOR_WAKING_START", 7),
-    wakingEndHour: num("DIRECTOR_WAKING_END", 23),
-    tzOffsetHours: parseFloat(process.env["DIRECTOR_TZ_OFFSET_HOURS"] ?? "-5") || -5,
+    wakingStartHour: num("DIRECTOR_WAKING_START", 7, { allowZero: true }),
+    wakingEndHour: num("DIRECTOR_WAKING_END", 23, { allowZero: true }),
+    tzOffsetHours: signedNum("DIRECTOR_TZ_OFFSET_HOURS", -5),
     noUptakeMs: num("DIRECTOR_NO_UPTAKE_MS", 90 * 60_000),
     inviteTtlMs: num("DIRECTOR_INVITE_TTL_MS", 3 * 60_000),
     turnBudget: num("DIRECTOR_TURN_BUDGET", 18),
