@@ -55,9 +55,14 @@ export async function decide(channelId: string, rt: DirectorRuntime): Promise<vo
   if (!s) return;
   const sel = select({ state: s, supply: rt.pool.items(), nowMs: rt.now(), turnBudget: rt.cfg.turnBudget, noUptakeMs: rt.cfg.noUptakeMs, humanFloorMs: HUMAN_FLOOR_MS, order: rt.cfg.order });
   if (sel.kind === "invite") { await issue(sel, s, rt); return; }
-  if (rt.mode === "live" && s.threadId && (sel.reason === "budget" || sel.reason === "no_uptake")) {
-    const ok = await rt.ledger.fade(s.threadId, sel.reason === "budget" ? "turn_budget" : "no_uptake");
-    console.log(`[director] faded ${s.threadId} (${sel.reason}, ack=${ok})`);
+  if (rt.mode === "live" && (sel.reason === "budget" || sel.reason === "no_uptake")) {
+    const reasonCode = sel.reason === "budget" ? "turn_budget" : "no_uptake";
+    if (s.threadId) {
+      const ok = await rt.ledger.fade(s.threadId, reasonCode);
+      console.log(`[director] faded ${s.threadId} (${sel.reason}, ack=${ok})`);
+    } else {
+      console.log(`[director] cleared ${channelId} (${sel.reason}, no thread to fade)`);
+    }
     await rt.store.clear(channelId);
     knownChannels.add(channelId);
   } else if (sel.reason !== "nothing_to_add") {
@@ -80,9 +85,11 @@ export async function handleResult(r: DirectorResultPayload, rt: DirectorRuntime
   await rt.store.save({ ...s, offered });
   // Post first, consume after: only a SPOKE result burns anything, and only what the post used.
   if (r.outcome === "spoke") {
+    // The durable offer record, not the volatile pool -- the pool may have already evicted/dropped
+    // the item by the time the result comes back, and a forage consume must not depend on that race.
+    const kindOf = new Map(s.offered.map((o) => [o.id, o.kind]));
     for (const id of r.usedOfferIds) {
-      const item = rt.pool.items().find((it) => it.id === id);
-      if (item?.kind === "forage") await consumeForageFind(id, r.companionId).catch(() => false);
+      if (kindOf.get(id) === "forage") await consumeForageFind(id, r.companionId).catch(() => false);
       rt.pool.remove(id);
     }
     if (r.landed && s.threadId) {
@@ -97,7 +104,7 @@ async function floorTick(rt: DirectorRuntime): Promise<void> {
   const cfg = directorConfig();
   const states: ConversationState[] = [];
   for (const ch of [...knownChannels, ...cfg.channels]) {
-    states.push((await rt.store.load(ch)) ?? emptyState(ch, new Date(rt.now() - 24 * 3600_000).toISOString()));
+    states.push((await rt.store.load(ch)) ?? emptyState(ch, new Date(rt.now()).toISOString()));
   }
   const turns7d: Record<CompanionId, number> = { cypher: 0, drevan: 0, gaia: 0 };
   for (const s of states) for (const t of s.turns) if (t.companionId) turns7d[t.companionId]++;

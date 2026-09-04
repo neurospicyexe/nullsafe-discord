@@ -14,14 +14,14 @@ vi.mock("../halseth-client.js", () => ({
 }));
 
 import { renderStateBlock, buildInvite } from "../director/invite.js";
-import { handleMessage, type DirectorRuntime } from "../director/index.js";
+import { handleMessage, handleResult, decide, type DirectorRuntime } from "../director/index.js";
 import { createRedisStateStore } from "../director/state.js";
 import { createSupplyPool } from "../director/supply.js";
 import { createHalsethLedger } from "../director/ledger.js";
 import { emptyState } from "../director/types.js";
 import { applyTurn } from "../director/state.js";
-import { recordInvitation } from "../halseth-client.js";
-import { CHANNEL } from "@nullsafe/shared";
+import { recordInvitation, resolveInvitation, consumeForageFind, convoFadeFor, convoLandFor } from "../halseth-client.js";
+import { CHANNEL, type DirectorResultPayload } from "@nullsafe/shared";
 
 function fakeRedis() {
   const store = new Map<string, string>(); const published: Array<[string, string]> = [];
@@ -44,7 +44,13 @@ const msg = (companionId: "drevan"|"gaia", content: string, id: string) => ({
   replyToMessageId: null, createdAt: "2026-09-03T11:59:00.000Z", publishedBy: companionId,
 });
 
-beforeEach(() => { vi.mocked(recordInvitation).mockClear(); });
+beforeEach(() => {
+  vi.mocked(recordInvitation).mockClear();
+  vi.mocked(resolveInvitation).mockClear();
+  vi.mocked(consumeForageFind).mockClear();
+  vi.mocked(convoFadeFor).mockClear();
+  vi.mocked(convoLandFor).mockClear();
+});
 
 describe("invite rendering", () => {
   it("state block names speakers and open moves", () => {
@@ -80,5 +86,65 @@ describe("handleMessage", () => {
     await handleMessage(msg("gaia", "The perimeter holds.", "m2"), runtime(r, "live"));
     expect(recordInvitation).not.toHaveBeenCalled();
     expect(r.published).toHaveLength(0);
+  });
+});
+
+describe("handleResult", () => {
+  const result = (over: Partial<DirectorResultPayload> = {}): DirectorResultPayload => ({
+    inviteId: "i1", companionId: "gaia", channelId: "c1", outcome: "spoke", usedOfferIds: [], ...over,
+  });
+
+  it("spoke with a forage offer: consumes it from the durable record, lands the thread, clears state", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    const s = { ...emptyState("c1", "t0"), threadId: "t1", offered: [{ id: "f1", kind: "forage" as const, toCompanion: "gaia" as const, inviteId: "i1", usedBy: null }] };
+    await rt.store.save(s);
+    await handleResult(result({ usedOfferIds: ["f1"], landed: "the crows remember", companionId: "gaia" }), rt);
+    expect(consumeForageFind).toHaveBeenCalledWith("f1", "gaia");
+    expect(convoLandFor).toHaveBeenCalledWith("t1", "the crows remember", "gaia");
+    expect(await rt.store.load("c1")).toBeNull();
+  });
+
+  it("passed: resolves the invitation, never consumes forage, state stays", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    const s = { ...emptyState("c1", "t0"), threadId: "t1", offered: [{ id: "f1", kind: "forage" as const, toCompanion: "gaia" as const, inviteId: "i1", usedBy: null }] };
+    await rt.store.save(s);
+    await handleResult(result({ outcome: "passed", usedOfferIds: ["f1"] }), rt);
+    expect(resolveInvitation).toHaveBeenCalled();
+    expect(consumeForageFind).not.toHaveBeenCalled();
+    expect(await rt.store.load("c1")).not.toBeNull();
+  });
+});
+
+describe("decide -- fade and clear", () => {
+  it("shadow mode over budget: never fades, state stays", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "shadow");
+    const s = { ...emptyState("c1", "t0"), threadId: "t1", botTurns: 20 };
+    await rt.store.save(s);
+    await decide("c1", rt);
+    expect(convoFadeFor).not.toHaveBeenCalled();
+    expect(await rt.store.load("c1")).not.toBeNull();
+  });
+
+  it("live mode over budget, no thread: clears state without fading", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    const s = { ...emptyState("c1", "t0"), threadId: null, botTurns: 20 };
+    await rt.store.save(s);
+    await decide("c1", rt);
+    expect(convoFadeFor).not.toHaveBeenCalled();
+    expect(await rt.store.load("c1")).toBeNull();
+  });
+
+  it("live mode over budget, with a thread: fades it and clears state", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    const s = { ...emptyState("c1", "t0"), threadId: "t1", botTurns: 20 };
+    await rt.store.save(s);
+    await decide("c1", rt);
+    expect(convoFadeFor).toHaveBeenCalledWith("t1", "turn_budget");
+    expect(await rt.store.load("c1")).toBeNull();
   });
 });
