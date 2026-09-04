@@ -4,6 +4,7 @@ export interface DirectorConfig {
   channels: string[];
   supplyPollMs: number; silenceHours: number; wakingStartHour: number; wakingEndHour: number; tzOffsetHours: number;
   noUptakeMs: number; inviteTtlMs: number; turnBudget: number; order: "heat" | "recency"; limbic: boolean;
+  minGapMs: number;
 }
 function num(name: string, fallback: number, opts: { allowZero?: boolean } = {}): number {
   const raw = parseFloat(process.env[name] ?? "");
@@ -29,5 +30,6 @@ export function directorConfig(): DirectorConfig {
     turnBudget: num("DIRECTOR_TURN_BUDGET", 18),
     order: (process.env["DIRECTOR_ORDER"] ?? "heat") === "recency" ? "recency" : "heat",
     limbic: (process.env["DIRECTOR_LIMBIC"] ?? "").toLowerCase() === "true",
+    minGapMs: num("DIRECTOR_MIN_GAP_MS", 120_000),
   };
 }

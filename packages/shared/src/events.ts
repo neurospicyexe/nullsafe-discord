@@ -94,7 +94,7 @@ export type DirectorReason = "addressed" | "supply_relevant" | "open";
 export type DirectorOutcome = "shadow" | "spoke" | "passed" | "empty" | "expired";
 export type SupplyKind = "forage"|"listen"|"question"|"tension"|"project"|"club"|"council"|"inter_note"|"sibling_note"|"care_fact";
 export interface DirectorSupplyItem { kind: SupplyKind; id: string; table: string; owner: string; title: string; body: string; created_at: string; heat: number | null; consumed_by: string[]; }
-export interface CommonsMessagePayload { channelId: string; messageId: string; authorId: string; authorKind: "human"|"companion"|"proxy"; companionId?: CompanionId; content: string; replyToMessageId: string | null; createdAt: string; publishedBy: CompanionId; }
+export interface CommonsMessagePayload { channelId: string; messageId: string; authorId: string; authorKind: "human"|"companion"|"proxy"; companionId?: CompanionId; content: string; replyToMessageId: string | null; createdAt: string; publishedBy: CompanionId; authorLabel?: "raziel" | "blue" | "guest"; }
 export interface DirectorInvitePayload { inviteId: string; channelId: string; threadId: string | null; companionId: CompanionId; reason: DirectorReason; addressedBy?: string; /* who addressed the invitee: a CompanionId, or "raziel" when a human summoned them */ stateBlock: string; offer: DirectorSupplyItem[]; neighborhoodBlock?: string; limbicLine?: string; expiresAt: string; }
 export interface DirectorResultPayload { inviteId: string; companionId: CompanionId; channelId: string; outcome: Exclude<DirectorOutcome,"shadow">; messageId?: string; landed?: string | null; usedOfferIds: string[]; }
 

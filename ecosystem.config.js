@@ -256,6 +256,7 @@ module.exports = {
         DIRECTOR_TURN_BUDGET:      process.env.DIRECTOR_TURN_BUDGET,
         DIRECTOR_ORDER:            process.env.DIRECTOR_ORDER,
         DIRECTOR_LIMBIC:           process.env.DIRECTOR_LIMBIC,
+        DIRECTOR_MIN_GAP_MS:       process.env.DIRECTOR_MIN_GAP_MS,
       },
     },
   ],

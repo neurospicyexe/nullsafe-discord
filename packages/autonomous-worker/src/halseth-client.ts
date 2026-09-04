@@ -1588,8 +1588,10 @@ export async function convoTurnFor(threadId: string, p: { author: string; gist: 
   try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/turns`, "POST", p); } catch (e) { console.warn("[director] convoTurn failed:", e); }
 }
 export async function convoLandFor(threadId: string, resolution: string, landedBy: string): Promise<boolean> {
-  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/land`, "POST", { resolution, landed_by: landedBy }); return true; } catch { return false; }
+  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/land`, "POST", { resolution, landed_by: landedBy }); return true; }
+  catch (e) { console.warn(`[director] convoLand ${threadId} failed:`, e); return false; }
 }
 export async function convoFadeFor(threadId: string, reason: string): Promise<boolean> {
-  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/fade`, "POST", { reason }); return true; } catch { return false; }
+  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/fade`, "POST", { reason }); return true; }
+  catch (e) { console.warn(`[director] convoFade ${threadId} failed:`, e); return false; }
 }

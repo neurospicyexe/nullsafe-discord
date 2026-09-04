@@ -10,9 +10,10 @@ const GIST_MAX = 140;
 export function toTurn(p: CommonsMessagePayload): LedgerTurn {
   const isHuman = p.authorKind !== "companion";
   return {
-    // Non-companion authors are labeled "raziel" for the ledger.
-    // Blue/guest attribution in the commons is out of scope; the existing owner path handles their replies.
-    author: isHuman ? "raziel" : (p.companionId ?? "unknown"),
+    // Human/proxy authors carry their real attribution (authorLabel: raziel/blue/guest, set by
+    // commonsMessageFor from userTier); "raziel" is the fallback for older payloads that predate
+    // the field. Companion authors are keyed off companionId regardless of authorLabel.
+    author: isHuman ? (p.authorLabel ?? "raziel") : (p.companionId ?? "unknown"),
     companionId: isHuman ? undefined : p.companionId,
     gist: p.content.replace(/\s+/g, " ").trim().slice(0, GIST_MAX),
     messageId: p.messageId, saidAt: p.createdAt, isHuman,
@@ -28,12 +29,17 @@ export function addressedIn(p: CommonsMessagePayload): CompanionId[] {
   return [];
 }
 
-export async function ingest(p: CommonsMessagePayload, deps: { store: StateStore; ledger: Ledger; now: () => string }): Promise<ConversationState | null> {
+export async function ingest(p: CommonsMessagePayload, deps: { store: StateStore; ledger: Ledger; now: () => string; writeLedger: boolean }): Promise<ConversationState | null> {
   if (!(await deps.store.seenMessage(p.messageId))) return null;
   let s = (await deps.store.load(p.channelId)) ?? emptyState(p.channelId, deps.now());
   const turn = toTurn(p);
-  if (!s.threadId) s = { ...s, threadId: await deps.ledger.ensureThread(s, turn) };
-  if (s.threadId) await deps.ledger.appendTurn(s.threadId, turn);
+  // Shadow mode must be inert against the Halseth ledger (2026-09-03 review, C2): it observes and
+  // records what it WOULD have done, but a shadow run must never open/append a real
+  // conversation_threads row. threadId stays null for the life of a shadow-only channel.
+  if (deps.writeLedger) {
+    if (!s.threadId) s = { ...s, threadId: await deps.ledger.ensureThread(s, turn) };
+    if (s.threadId) await deps.ledger.appendTurn(s.threadId, turn);
+  }
   s = applyTurn(s, turn, addressedIn(p));
   await deps.store.save(s);
   return s;

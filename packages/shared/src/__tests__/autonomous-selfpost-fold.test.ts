@@ -81,9 +81,12 @@ describe("autonomous self-post is a foldable fragment, not permanent top-tier me
     (ctx.librarian as unknown as { writeWmNote: jest.Mock }).writeWmNote =
       jest.fn(async () => { throw new Error("halseth 500"); });
 
+    // sendAutonomousMessage now resolves `true`/`false` (2026-09-03 review, C3) so a director
+    // caller can tell delivery from cooldown/failure -- the send itself still succeeded here,
+    // only the bookkeeping note write threw, so the resolved value must be true.
     await expect(
       sendAutonomousMessage(ctx, "chan1", "post that outlives its bookkeeping", "heartbeat"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
     expect(sent).toHaveLength(1);
   });
 

@@ -29,15 +29,27 @@ describe("ingest", () => {
   });
   it("first message opens a thread, appends, and records an open move; duplicate is ignored", async () => {
     const store = memStore(); const l = ledger();
-    const s = await ingest(msg(), { store, ledger: l, now: () => "2026-09-03T12:00:01.000Z" });
+    const s = await ingest(msg(), { store, ledger: l, now: () => "2026-09-03T12:00:01.000Z", writeLedger: true });
     expect(s!.threadId).toBe("t1");
     expect(l.appendTurn).toHaveBeenCalledWith("t1", expect.objectContaining({ messageId: "m1" }));
     expect(s!.openMoves[0]!.to).toBe("gaia");
-    expect(await ingest(msg(), { store, ledger: l, now: () => "x" })).toBeNull();
+    expect(await ingest(msg(), { store, ledger: l, now: () => "x", writeLedger: true })).toBeNull();
   });
   it("proxy and human authors are human turns", async () => {
     const store = memStore(); const l = ledger();
-    const s = await ingest(msg({ authorKind: "proxy", companionId: undefined, content: "hey", messageId: "m9" }), { store, ledger: l, now: () => "t" });
+    const s = await ingest(msg({ authorKind: "proxy", companionId: undefined, content: "hey", messageId: "m9" }), { store, ledger: l, now: () => "t", writeLedger: true });
     expect(s!.lastHumanAt).toBe("2026-09-03T12:00:00.000Z");
+  });
+  it("a proxy/human payload with authorLabel carries it through as the ledger author", async () => {
+    const store = memStore(); const l = ledger();
+    const s = await ingest(msg({ authorKind: "proxy", companionId: undefined, authorLabel: "blue", content: "hey", messageId: "m10" }), { store, ledger: l, now: () => "t", writeLedger: true });
+    expect(s!.turns[0]!.author).toBe("blue");
+  });
+  it("shadow mode (writeLedger: false) never opens or appends to the ledger; threadId stays null", async () => {
+    const store = memStore(); const l = ledger();
+    const s = await ingest(msg(), { store, ledger: l, now: () => "2026-09-03T12:00:01.000Z", writeLedger: false });
+    expect(s!.threadId).toBeNull();
+    expect(l.ensureThread).not.toHaveBeenCalled();
+    expect(l.appendTurn).not.toHaveBeenCalled();
   });
 });

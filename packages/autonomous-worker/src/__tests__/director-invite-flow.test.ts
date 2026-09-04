@@ -14,7 +14,8 @@ vi.mock("../halseth-client.js", () => ({
 }));
 
 import { renderStateBlock, buildInvite } from "../director/invite.js";
-import { handleMessage, handleResult, decide, type DirectorRuntime } from "../director/index.js";
+import { handleMessage, handleResult, decide, serializeByKey, type DirectorRuntime } from "../director/index.js";
+import { floorSelection } from "../director/floor.js";
 import { createRedisStateStore } from "../director/state.js";
 import { createSupplyPool } from "../director/supply.js";
 import { createHalsethLedger } from "../director/ledger.js";
@@ -35,7 +36,7 @@ function runtime(redis: ReturnType<typeof fakeRedis>, mode: "shadow" | "live"): 
   return {
     mode, redis: redis as never, store: createRedisStateStore(redis as never), ledger: createHalsethLedger(),
     pool: createSupplyPool({ fetch: async () => ({ items: [], cursor: "x" }), redis: null }),
-    cfg: { turnBudget: 18, noUptakeMs: 90 * 60_000, inviteTtlMs: 180_000, order: "heat", limbic: false },
+    cfg: { turnBudget: 18, noUptakeMs: 90 * 60_000, inviteTtlMs: 180_000, order: "heat", limbic: false, minGapMs: 120_000 },
     now: () => Date.parse("2026-09-03T12:00:00.000Z"),
   };
 }
@@ -100,7 +101,7 @@ describe("handleResult", () => {
     inviteId: "i1", companionId: "gaia", channelId: "c1", outcome: "spoke", usedOfferIds: [], ...over,
   });
 
-  it("spoke with a forage offer: consumes it from the durable record, lands the thread, clears state", async () => {
+  it("spoke with a forage offer: consumes it from the durable record, lands the thread, RESETS state (floor clock keeps ticking)", async () => {
     const r = fakeRedis();
     const rt = runtime(r, "live");
     const s = { ...emptyState("c1", "t0"), threadId: "t1", offered: [{ id: "f1", kind: "forage" as const, toCompanion: "gaia" as const, inviteId: "i1", usedBy: null }] };
@@ -108,10 +109,14 @@ describe("handleResult", () => {
     await handleResult(result({ usedOfferIds: ["f1"], landed: "the crows remember", companionId: "gaia" }), rt);
     expect(consumeForageFind).toHaveBeenCalledWith("f1", "gaia");
     expect(convoLandFor).toHaveBeenCalledWith("t1", "the crows remember", "gaia");
-    expect(await rt.store.load("c1")).toBeNull();
+    const after = await rt.store.load("c1");
+    expect(after).not.toBeNull();
+    expect(after!.turns.length).toBe(0);
+    expect(after!.threadId).toBeNull();
+    expect(after!.startedAt).toBe(new Date(rt.now()).toISOString());
   });
 
-  it("passed: resolves the invitation, never consumes forage, state stays", async () => {
+  it("passed: resolves the invitation, never consumes forage, state stays (not reset -- no land happened)", async () => {
     const r = fakeRedis();
     const rt = runtime(r, "live");
     const s = { ...emptyState("c1", "t0"), threadId: "t1", offered: [{ id: "f1", kind: "forage" as const, toCompanion: "gaia" as const, inviteId: "i1", usedBy: null }] };
@@ -119,7 +124,83 @@ describe("handleResult", () => {
     await handleResult(result({ outcome: "passed", usedOfferIds: ["f1"] }), rt);
     expect(resolveInvitation).toHaveBeenCalled();
     expect(consumeForageFind).not.toHaveBeenCalled();
-    expect(await rt.store.load("c1")).not.toBeNull();
+    const after = await rt.store.load("c1");
+    expect(after).not.toBeNull();
+    expect(after!.threadId).toBe("t1");
+  });
+
+  it("passed: closes the open move addressed to the passing companion (C3c) -- a pass is an answer, not silence", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    const s = { ...emptyState("c1", "t0"), openMoves: [{ from: "drevan", to: "gaia" as const, messageId: "m1", saidAt: "t1" }] };
+    await rt.store.save(s);
+    await handleResult(result({ outcome: "passed", companionId: "gaia" }), rt);
+    const after = await rt.store.load("c1");
+    expect(after!.openMoves).toHaveLength(0);
+  });
+});
+
+describe("C1: floor survives a land/fade -- reset state, not deleted, so its silence clock keeps running", () => {
+  it("a floorSelection check well after a land/fade sees the reset channel as quiet and picks it", () => {
+    const T = Date.parse("2026-09-03T12:00:00.000Z");
+    const resetAt = new Date(T).toISOString();
+    const reset = emptyState("c1", resetAt);
+    const laterT = T + 7 * 3600_000; // T+7h
+    const supply = [{ kind: "project" as const, id: "p1", table: "companion_projects", owner: "cypher", title: "p1", body: "", created_at: "2026-09-01", heat: null, consumed_by: [] }];
+    const pick = floorSelection({
+      states: [reset], supply, nowMs: laterT,
+      silenceHours: 6, wakingStartHour: 7, wakingEndHour: 23, tzOffsetHours: -5,
+      turnsBySpeaker7d: { cypher: 0, drevan: 0, gaia: 0 },
+    });
+    expect(pick).toMatchObject({ channelId: "c1", companionId: "cypher" });
+  });
+});
+
+describe("I2: recordInvitation failure must not publish", () => {
+  it("a rejecting recordInvitation logs and returns without touching store/publish", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    vi.mocked(recordInvitation).mockRejectedValueOnce(new Error("halseth down"));
+    const s = { ...emptyState("c1", "t0"), openMoves: [{ from: "drevan", to: "gaia" as const, messageId: "m1", saidAt: "t1" }] };
+    await rt.store.save(s);
+    await decide("c1", rt);
+    expect(r.published).toHaveLength(0);
+    const after = await rt.store.load("c1");
+    expect(after!.lastInviteAt).toBeNull();
+  });
+});
+
+describe("I3: pacing gate", () => {
+  it("two invite-eligible messages close together: the second is paced out (not recorded, not published)", async () => {
+    const r = fakeRedis();
+    const rt = runtime(r, "live");
+    await handleMessage(msg("drevan", "Gaia, the feather is still there.", "m1"), rt);
+    expect(recordInvitation).toHaveBeenCalledTimes(1);
+    vi.mocked(recordInvitation).mockClear();
+    await handleMessage(msg("drevan", "Gaia, one more thing.", "m2"), rt);
+    expect(recordInvitation).not.toHaveBeenCalled();
+    expect(r.published).toHaveLength(1); // only the first invite ever published
+  });
+});
+
+describe("serializeByKey", () => {
+  it("two calls on the same key run in order", async () => {
+    const chains = new Map<string, Promise<void>>();
+    const order: number[] = [];
+    const p1 = serializeByKey(chains, "k1", async () => { await new Promise((r) => setTimeout(r, 10)); order.push(1); });
+    const p2 = serializeByKey(chains, "k1", async () => { order.push(2); });
+    await Promise.all([p1, p2]);
+    expect(order).toEqual([1, 2]);
+  });
+  it("different keys run concurrently (neither waits on the other's chain)", async () => {
+    const chains = new Map<string, Promise<void>>();
+    const order: string[] = [];
+    const pA = serializeByKey(chains, "a", async () => { await new Promise((r) => setTimeout(r, 20)); order.push("a-done"); });
+    const pB = serializeByKey(chains, "b", async () => { order.push("b-done"); });
+    await pB;
+    expect(order).toEqual(["b-done"]); // b finished before a, proving they didn't share a chain
+    await pA;
+    expect(order).toEqual(["b-done", "a-done"]);
   });
 });
 
@@ -134,23 +215,31 @@ describe("decide -- fade and clear", () => {
     expect(await rt.store.load("c1")).not.toBeNull();
   });
 
-  it("live mode over budget, no thread: clears state without fading", async () => {
+  it("live mode over budget, no thread: RESETS state without fading (floor clock survives)", async () => {
     const r = fakeRedis();
     const rt = runtime(r, "live");
     const s = { ...emptyState("c1", "t0"), threadId: null, botTurns: 20 };
     await rt.store.save(s);
     await decide("c1", rt);
     expect(convoFadeFor).not.toHaveBeenCalled();
-    expect(await rt.store.load("c1")).toBeNull();
+    const after = await rt.store.load("c1");
+    expect(after).not.toBeNull();
+    expect(after!.turns.length).toBe(0);
+    expect(after!.threadId).toBeNull();
+    expect(after!.startedAt).toBe(new Date(rt.now()).toISOString());
   });
 
-  it("live mode over budget, with a thread: fades it and clears state", async () => {
+  it("live mode over budget, with a thread: fades it and RESETS state (floor clock survives)", async () => {
     const r = fakeRedis();
     const rt = runtime(r, "live");
     const s = { ...emptyState("c1", "t0"), threadId: "t1", botTurns: 20 };
     await rt.store.save(s);
     await decide("c1", rt);
     expect(convoFadeFor).toHaveBeenCalledWith("t1", "turn_budget");
-    expect(await rt.store.load("c1")).toBeNull();
+    const after = await rt.store.load("c1");
+    expect(after).not.toBeNull();
+    expect(after!.turns.length).toBe(0);
+    expect(after!.threadId).toBeNull();
+    expect(after!.startedAt).toBe(new Date(rt.now()).toISOString());
   });
 });

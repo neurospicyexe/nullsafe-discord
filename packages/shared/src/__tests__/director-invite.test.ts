@@ -59,6 +59,19 @@ describe("director invite handling", () => {
     await handleDirectorInvite(ctx, invite());
     expect(JSON.parse(published[0]![1]).outcome).toBe("empty");
   });
+  test("a send that throws (delivery failure) reports empty, not spoke -- and never consumes offers", async () => {
+    const { ctx, published } = ctxWith("The crows do remember.");
+    const markQuestionVoiced = jest.fn(async () => false);
+    const commonsConsume = jest.fn(async () => {});
+    (ctx.librarian as unknown as { markQuestionVoiced: jest.Mock; commonsConsume: jest.Mock }).markQuestionVoiced = markQuestionVoiced;
+    (ctx.librarian as unknown as { markQuestionVoiced: jest.Mock; commonsConsume: jest.Mock }).commonsConsume = commonsConsume;
+    const channel = { isTextBased: () => true, send: jest.fn(async () => { throw new Error("discord 50035"); }), messages: { fetch: jest.fn(async () => new Map()) } };
+    (ctx.client as unknown as { channels: { fetch: jest.Mock } }).channels.fetch = jest.fn(async () => channel);
+    await handleDirectorInvite(ctx, invite({ offer: [{ kind: "question", id: "q1", table: "companion_questions", owner: "cypher", title: "does the pattern hold", body: "", created_at: "x", heat: null, consumed_by: [] }] }));
+    expect(JSON.parse(published[0]![1]).outcome).toBe("empty");
+    expect(markQuestionVoiced).not.toHaveBeenCalled();
+    expect(commonsConsume).not.toHaveBeenCalled();
+  });
 });
 
 describe("startDirectorListener: serializes invites so a bot never runs two concurrently", () => {
@@ -123,43 +136,55 @@ describe("commonsMessageFor: pure translation from a raw message into the common
     content: "hello", createdTimestamp: 1000, publishedBy: "cypher" as const,
   };
   test("authorKind is companion and companionId is set when isCompanionBot", () => {
-    const p = commonsMessageFor({ ...base, isCompanionBot: true, webhookId: null, senderCompanion: "gaia" });
+    const p = commonsMessageFor({ ...base, isCompanionBot: true, webhookId: null, senderCompanion: "gaia", userTier: "owner" });
     expect(p.authorKind).toBe("companion");
     expect(p.companionId).toBe("gaia");
   });
   test("authorKind is proxy when a webhookId is present and the sender is not a companion bot", () => {
-    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: "wh1", senderCompanion: undefined });
+    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: "wh1", senderCompanion: undefined, userTier: "owner" });
     expect(p.authorKind).toBe("proxy");
     expect(p.companionId).toBeUndefined();
   });
   test("authorKind is human otherwise", () => {
-    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: null, senderCompanion: undefined });
+    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: null, senderCompanion: undefined, userTier: "owner" });
     expect(p.authorKind).toBe("human");
     expect(p.companionId).toBeUndefined();
   });
   test("companionId is never set for a non-companion sender even if one was somehow passed", () => {
-    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: undefined, senderCompanion: "drevan" });
+    const p = commonsMessageFor({ ...base, isCompanionBot: false, webhookId: undefined, senderCompanion: "drevan", userTier: "owner" });
     expect(p.companionId).toBeUndefined();
+  });
+  test("userTier maps to authorLabel: owner -> raziel, intimate -> blue, guest -> guest", () => {
+    expect(commonsMessageFor({ ...base, isCompanionBot: false, webhookId: null, senderCompanion: undefined, userTier: "owner" }).authorLabel).toBe("raziel");
+    expect(commonsMessageFor({ ...base, isCompanionBot: false, webhookId: "wh1", senderCompanion: undefined, userTier: "intimate" }).authorLabel).toBe("blue");
+    expect(commonsMessageFor({ ...base, isCompanionBot: false, webhookId: "wh1", senderCompanion: undefined, userTier: "guest" }).authorLabel).toBe("guest");
+  });
+  test("authorLabel is still set from userTier for a companion author (ingest ignores it for companions)", () => {
+    const p = commonsMessageFor({ ...base, isCompanionBot: true, webhookId: null, senderCompanion: "cypher", userTier: "owner" });
+    expect(p.authorLabel).toBe("raziel");
   });
 });
 
-describe("shouldDeferToDirector: true only for a companion turn while fully live", () => {
-  test("companion + live: defer", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "live" })).toBe(true);
+describe("shouldDeferToDirector: true only for a companion turn while fully live AND the director is alive", () => {
+  test("companion + live + alive: defer", () => {
+    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "live", directorAlive: true })).toBe(true);
+  });
+  test("companion + live + NOT alive: does not defer (falls back to local reply path)", () => {
+    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "live", directorAlive: false })).toBe(false);
   });
   test("companion + shadow: does not defer", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "shadow" })).toBe(false);
+    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "shadow", directorAlive: true })).toBe(false);
   });
   test("companion + off: does not defer", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "off" })).toBe(false);
+    expect(shouldDeferToDirector({ isCompanionBot: true, mode: "off", directorAlive: true })).toBe(false);
   });
-  test("human + live: never defers", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "live" })).toBe(false);
+  test("human + live + alive: never defers", () => {
+    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "live", directorAlive: true })).toBe(false);
   });
   test("human + shadow: never defers", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "shadow" })).toBe(false);
+    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "shadow", directorAlive: true })).toBe(false);
   });
   test("human + off: never defers", () => {
-    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "off" })).toBe(false);
+    expect(shouldDeferToDirector({ isCompanionBot: false, mode: "off", directorAlive: true })).toBe(false);
   });
 });

@@ -38,23 +38,36 @@ export function commonsMessageFor(input: {
   channelId: string; messageId: string; authorId: string; isCompanionBot: boolean;
   webhookId: string | null | undefined; senderCompanion: CompanionId | undefined;
   content: string; replyToMessageId: string | null; createdTimestamp: number; publishedBy: CompanionId;
+  userTier: "owner" | "intimate" | "guest";
 }): CommonsMessagePayload {
+  // authorLabel maps the sender's relational tier onto the ledger's fixed vocabulary
+  // (owner -> raziel, intimate -> blue, guest -> guest). It is set from userTier for every
+  // author, companions included -- ingest.ts (worker) ignores it for companion turns, where
+  // the ledger author is always the companionId. Setting it unconditionally here keeps this
+  // function a pure translation with no branch on authorKind.
+  const authorLabel = input.userTier === "owner" ? "raziel" as const
+    : input.userTier === "intimate" ? "blue" as const
+    : "guest" as const;
   return {
     channelId: input.channelId, messageId: input.messageId, authorId: input.authorId,
     authorKind: input.isCompanionBot ? "companion" : (input.webhookId ? "proxy" : "human"),
     companionId: input.isCompanionBot ? input.senderCompanion : undefined,
     content: input.content, replyToMessageId: input.replyToMessageId,
     createdAt: new Date(input.createdTimestamp).toISOString(), publishedBy: input.publishedBy,
+    authorLabel,
   };
 }
 
 /**
  * Whether THIS bot must stand down and let the director route the reply instead of self-selecting
- * one. True only for a companion turn while the director is fully live -- a human turn always falls
- * through unchanged, and shadow mode publishes to the bus without ever suppressing a bot's own path.
+ * one. True only for a companion turn while the director is fully live AND the director process
+ * itself is confirmed alive (liveness gate, 2026-09-03 review) -- a human turn always falls through
+ * unchanged, and shadow mode publishes to the bus without ever suppressing a bot's own path. If the
+ * director is configured live but its liveness key has lapsed, deferring anyway would mean nobody
+ * ever answers a companion turn.
  */
-export function shouldDeferToDirector(input: { isCompanionBot: boolean; mode: "off" | "shadow" | "live" }): boolean {
-  return input.isCompanionBot && input.mode === "live";
+export function shouldDeferToDirector(input: { isCompanionBot: boolean; mode: "off" | "shadow" | "live"; directorAlive: boolean }): boolean {
+  return input.isCompanionBot && input.mode === "live" && input.directorAlive;
 }
 
 export async function handleDirectorInvite(ctx: AutonomousContext, invite: DirectorInvitePayload, deps: { now?: () => number } = {}): Promise<void> {
@@ -87,7 +100,12 @@ export async function handleDirectorInvite(ctx: AutonomousContext, invite: Direc
   if (echo.gated) { console.warn(`[${ctx.companionId}/director] own-echo-gated (score=${echo.score.toFixed(2)}) -- reporting empty`); await report("empty"); return; }
 
   let sentId: string | undefined;
-  await sendAutonomousMessage(ctx, invite.channelId, text, "director", { onSent: (id) => { sentId ??= id; } });
+  const sent = await sendAutonomousMessage(ctx, invite.channelId, text, "director", { onSent: (id) => { sentId ??= id; } });
+  if (!sent) {
+    console.warn(`[${ctx.companionId}/director] invite ${invite.inviteId} not delivered (cooldown or send failure) -- reporting empty`);
+    await report("empty");
+    return;
+  }
   const used = usedOffers(text, invite);
   await report("spoke", { messageId: sentId, landed: land.resolution, usedOfferIds: used });
   // Consume-on-use for the kinds whose stamp lives bot-side (post already landed above). Forage is
