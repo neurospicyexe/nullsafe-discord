@@ -1,5 +1,6 @@
 import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
 import type { Seed, GrowthJournalEntry, GrowthPattern, GrowthMarker, ActiveThread, PeerActivity } from "./types.js";
+import type { DirectorSupplyItem } from "@nullsafe/shared";
 
 /** True when a fetch failure died in the CONNECT phase (undici TypeError with a
  *  socket-level cause) -- the request never left the box, so retrying is safe for
@@ -1545,4 +1546,50 @@ export async function markSiblingRead(id: string, companionId: string): Promise<
 export async function discloseSiblingNote(id: string, companionId: string): Promise<boolean> {
   const r = await hFetch(`/mind/siblings/${id}/disclose`, "POST", { companion_id: companionId }) as { ok?: boolean };
   return r.ok === true;
+}
+
+// ── Conversation Director (spec 2026-09-03) ───────────────────────────────────
+export interface DirectorSupplyResponse { items: DirectorSupplyItem[]; cursor: string }
+
+/** Throws on failure -- the poll loop decides whether a failed poll advances the cursor (it must not). */
+export async function getDirectorSupply(since: string, limit = 40): Promise<DirectorSupplyResponse> {
+  const r = await hFetch(`/mind/director/supply?since=${encodeURIComponent(since)}&limit=${limit}`) as DirectorSupplyResponse;
+  return { items: r.items ?? [], cursor: r.cursor ?? since };
+}
+
+export async function getDirectorNeighborhood(reader: string, seeds: Array<{ table: string; id: string }>, hops: 1 | 2 = 1)
+  : Promise<{ lines: string[]; nodes: Array<{ table: string; id: string; heat: number | null; score: number }> }> {
+  if (seeds.length === 0) return { lines: [], nodes: [] };
+  try {
+    const q = seeds.map((s) => `${s.table}:${s.id}`).join(",");
+    return await hFetch(`/mind/director/neighborhood?reader=${reader}&seeds=${encodeURIComponent(q)}&hops=${hops}`) as { lines: string[]; nodes: Array<{ table: string; id: string; heat: number | null; score: number }> };
+  } catch (e) { console.warn("[director] neighborhood failed:", e); return { lines: [], nodes: [] }; }
+}
+
+export async function recordInvitation(row: { id: string; channel_id: string; thread_id: string | null; companion_id: string; reason: string; offer_ids: string[]; outcome: "shadow" | "issued" }): Promise<void> {
+  await hFetch("/mind/director/invitations", "POST", row);
+}
+export async function resolveInvitation(id: string, outcome: "spoke" | "passed" | "empty" | "expired", messageId?: string, usedOfferIds: string[] = []): Promise<void> {
+  try { await hFetch(`/mind/director/invitations/${encodeURIComponent(id)}`, "PATCH", { outcome, message_id: messageId, used_offer_ids: usedOfferIds }); }
+  catch (e) { console.warn(`[director] resolveInvitation ${id} failed:`, e); }
+}
+
+export interface ConvoThreadRow { id: string; state: string; turn_count: number; seed_text: string; seed_author: string; participants: string; last_turn_at: string }
+export interface ConvoLedgerRow { author: string; gist: string; said_at: string; message_id?: string | null }
+export async function convoActiveFor(channelId: string): Promise<{ thread: ConvoThreadRow; ledger: ConvoLedgerRow[] } | null> {
+  const r = await hFetch(`/mind/conversations/active?channel_id=${encodeURIComponent(channelId)}`) as { thread: ConvoThreadRow | null; ledger?: ConvoLedgerRow[] };
+  return r.thread ? { thread: r.thread, ledger: r.ledger ?? [] } : null;
+}
+export async function convoOpenFor(p: { channel_id: string; seed_text: string; seed_author: string; seed_message_id?: string }): Promise<{ id: string } | null> {
+  try { const r = await hFetch("/mind/conversations", "POST", p) as { thread?: { id: string } }; return r.thread ? { id: r.thread.id } : null; }
+  catch (e) { console.warn("[director] convoOpen failed:", e); return null; }
+}
+export async function convoTurnFor(threadId: string, p: { author: string; gist: string; message_id?: string; front?: string | null }): Promise<void> {
+  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/turns`, "POST", p); } catch (e) { console.warn("[director] convoTurn failed:", e); }
+}
+export async function convoLandFor(threadId: string, resolution: string, landedBy: string): Promise<boolean> {
+  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/land`, "POST", { resolution, landed_by: landedBy }); return true; } catch { return false; }
+}
+export async function convoFadeFor(threadId: string, reason: string): Promise<boolean> {
+  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/fade`, "POST", { reason }); return true; } catch { return false; }
 }
