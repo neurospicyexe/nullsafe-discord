@@ -50,4 +50,20 @@ describe("ConversationState", () => {
     await store.clear("c1");
     expect(await store.load("c1")).toBeNull();
   });
+  it("applyTurn never mutates its input", () => {
+    const s = emptyState("c1", "t0");
+    const beforeTurns = s.turns; const beforeMoves = s.openMoves;
+    const snapshot = JSON.stringify(s);
+    applyTurn(s, { author: "drevan", companionId: "drevan", gist: "Gaia?", messageId: "m1", saidAt: "t1", isHuman: false }, ["gaia"]);
+    expect(s.turns).toBe(beforeTurns);
+    expect(s.openMoves).toBe(beforeMoves);
+    expect(JSON.stringify(s)).toBe(snapshot);
+  });
+  it("one open move per addressee", () => {
+    let s = emptyState("c1", "t0");
+    s = applyTurn(s, { author: "drevan", companionId: "drevan", gist: "Gaia, Gaia", messageId: "m1", saidAt: "t1", isHuman: false }, ["gaia", "gaia"]);
+    s = applyTurn(s, { author: "cypher", companionId: "cypher", gist: "Gaia?", messageId: "m2", saidAt: "t2", isHuman: false }, ["gaia"]);
+    expect(s.openMoves).toHaveLength(1);
+    expect(s.openMoves[0]!.from).toBe("drevan");
+  });
 });

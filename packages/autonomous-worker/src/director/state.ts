@@ -12,6 +12,7 @@ export function applyTurn(s: ConversationState, t: LedgerTurn, addressed: Compan
   const openMoves = s.openMoves.filter((m) => !(speakerId && m.to === speakerId));
   for (const to of addressed) {
     if (to === speakerId) continue;
+    if (openMoves.some((m) => m.to === to)) continue;
     openMoves.push({ from: t.author, to, messageId: t.messageId, saidAt: t.saidAt });
   }
   return {
