@@ -175,3 +175,55 @@ describe("output length ceiling (Drevan cut-off fix)", () => {
     expect(sentBody.top_p).toBeUndefined();
   });
 });
+
+describe("HermesAdapter session id/key headers (rotation, 2026-09-05)", () => {
+  function captureHeaders() {
+    let sentHeaders: Record<string, string> | null = null;
+    const mockFetch = jest.fn(async (_url: string, init: any) => {
+      sentHeaders = init.headers;
+      return { ok: true, json: async () => ({ choices: [{ message: { content: "hi from hermes" } }] }) } as any;
+    });
+    return { mockFetch, get: () => sentHeaders! };
+  }
+
+  it("sends distinct id and key headers when a sessionKey is passed", async () => {
+    const { mockFetch, get } = captureHeaders();
+    // forceHermes routes createAdapter to the bare HermesAdapter regardless of `provider`.
+    const adapter = createAdapter(
+      "deepseek", "deepseek-chat", { hermes: "hermes-token" },
+      { hermes: "http://127.0.0.1:8642/v1", forceHermes: true },
+      mockFetch as any,
+    );
+    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.7, 1024, "cypher:chan1:2026-W36", "cypher:chan1");
+    const headers = get();
+    expect(headers["X-Hermes-Session-Id"]).toBe("cypher:chan1:2026-W36");
+    expect(headers["X-Hermes-Session-Key"]).toBe("cypher:chan1");
+    expect(headers["X-Hermes-Session-Id"]).not.toBe(headers["X-Hermes-Session-Key"]);
+  });
+
+  it("falls back to sessionId for both headers when sessionKey is omitted (pre-rotation call sites)", async () => {
+    const { mockFetch, get } = captureHeaders();
+    const adapter = createAdapter(
+      "deepseek", "deepseek-chat", { hermes: "hermes-token" },
+      { hermes: "http://127.0.0.1:8642/v1", forceHermes: true },
+      mockFetch as any,
+    );
+    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.7, 1024, "cypher:chan1");
+    const headers = get();
+    expect(headers["X-Hermes-Session-Id"]).toBe("cypher:chan1");
+    expect(headers["X-Hermes-Session-Key"]).toBe("cypher:chan1");
+  });
+
+  it("omits both headers when no sessionId is passed at all", async () => {
+    const { mockFetch, get } = captureHeaders();
+    const adapter = createAdapter(
+      "deepseek", "deepseek-chat", { hermes: "hermes-token" },
+      { hermes: "http://127.0.0.1:8642/v1", forceHermes: true },
+      mockFetch as any,
+    );
+    await adapter.generate("system", [{ role: "user", content: "hi" }]);
+    const headers = get();
+    expect(headers["X-Hermes-Session-Id"]).toBeUndefined();
+    expect(headers["X-Hermes-Session-Key"]).toBeUndefined();
+  });
+});
