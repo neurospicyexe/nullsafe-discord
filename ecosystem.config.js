@@ -135,6 +135,10 @@ const shared = {
   // one override, or add a fourth process without one, and it inherits a dead mode. Set the shared
   // value to hermes.
   INFERENCE_MODE:        process.env.INFERENCE_MODE        ?? "hermes",
+  // Hermes gateway session rotation (2026-09-05) -- "weekly" (default) | "daily" | "off". See
+  // packages/shared/src/hermes-session.ts. Rotates only the transcript id; the long-term-memory
+  // key stays the stable companion:channel pair regardless of this setting.
+  HERMES_SESSION_ROTATION: process.env.HERMES_SESSION_ROTATION,
   MISTRAL_API_KEY:       process.env.MISTRAL_API_KEY,
   // 2026-08-27: DeepInfra (flat-priced DeepSeek V4 Flash + Gemma) -- the until-May answer to
   // the DeepSeek repricing. SIXTH entry added to this allowlist after a .env knob was dead on

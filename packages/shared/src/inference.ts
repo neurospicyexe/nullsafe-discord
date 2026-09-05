@@ -3,13 +3,16 @@ import type { InferenceProvider } from "./models.js";
 
 export interface InferenceAdapter {
   /**
-   * `sessionId` (optional 5th arg) is a stable conversation key (`companionId:channelId`)
-   * consumed ONLY by the Hermes adapter, which forwards it as `X-Hermes-Session-Id` so the
-   * gateway keeps one agent session per channel. Without it the gateway derives session id
-   * from hash(system_prompt + first user msg) -- and our system prompt varies per message,
-   * churning a fresh gateway session nearly every reply. All other adapters ignore it.
+   * `sessionId` (optional 5th arg) and `sessionKey` (optional 6th arg) are consumed ONLY by the
+   * Hermes adapter. Without a session id the gateway derives one from hash(system_prompt +
+   * first user msg) -- and our system prompt varies per message, churning a fresh gateway
+   * session nearly every reply. `sessionId` names the TRANSCRIPT (`X-Hermes-Session-Id`) and now
+   * ROTATES on a schedule (see hermes-session.ts) so no single transcript grows unbounded and
+   * hits Hermes's compaction path. `sessionKey` (`X-Hermes-Session-Key`) is the STABLE long-term-
+   * memory scope (`companionId:channelId`, never rotates) -- when omitted the adapter falls back
+   * to `sessionId` for both headers (pre-rotation behavior). All other adapters ignore both.
    */
-  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string): Promise<string | null>;
+  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string): Promise<string | null>;
 }
 
 // ── Output length ceiling ──────────────────────────────────────────────────────
@@ -374,23 +377,27 @@ class HermesAdapter implements InferenceAdapter {
     private fetchFn: typeof fetch = globalThis.fetch,
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string, sessionKey?: string): Promise<string | null> {
     try {
       // Stable session pinning (2026-07-01): without an explicit session header the gateway
       // derives session id from hash(system_prompt + first user msg). Our system prompt varies
       // per message (SOMA age, tripwires, SB hits...), so every reply churned a fresh gateway
       // session. Callers that know the conversation pass `companionId:channelId`; when the
       // channel is unknown the header is omitted (previous behavior).
+      //
+      // Rotation (2026-09-05): the id above never changed, so a busy channel's gateway session
+      // grew without bound (one hit ~270k tokens) and Hermes compacted it on the critical path.
+      // `sessionId` now rotates on a schedule (hermes-session.ts) -- it is the TRANSCRIPT header.
+      // `sessionKey` stays the stable `companionId:channelId` -- it is the long-term-memory scope
+      // (e.g. Honcho), which must survive any number of transcript rotations. Callers that don't
+      // pass a separate key (pre-rotation call sites) fall back to `sessionId` for both headers.
       const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           ...(this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}),
           ...(sessionId ? { "X-Hermes-Session-Id": sessionId } : {}),
-          // Session KEY scopes the gateway's long-term memory (e.g. Honcho) across
-          // transcripts; the ID names this transcript. Pinning both to the stable
-          // companion:channel key means gateway LTM survives any future /new rotation.
-          ...(sessionId ? { "X-Hermes-Session-Key": sessionId } : {}),
+          ...(sessionId ? { "X-Hermes-Session-Key": sessionKey ?? sessionId } : {}),
         },
         body: JSON.stringify({
           model: this.model || "default",
@@ -659,9 +666,9 @@ class DeepInfraAdapter implements InferenceAdapter {
 class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string): Promise<string | null> {
     for (const { name, adapter } of this.adapters) {
-      const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens);
+      const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens, sessionId, sessionKey);
       if (result !== null) {
         console.log(`[inference] ${name} responded`);
         return result;

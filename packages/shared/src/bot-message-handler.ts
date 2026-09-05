@@ -68,6 +68,7 @@ import {
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
+import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { stampRelative } from "./relative-time.js";
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,13 @@ let _impContextCache: ImpContextCache | null = null;
 // delivered to the gateway session. Module-level = per-process = per companion bot.
 // Advanced ONLY after a successful gateway reply, so a failed call re-sends its delta.
 const hermesDeliveredMark = new Map<string, number>();
+
+// Hermes session rotation (2026-09-05): per-channel last transcript id actually sent to the
+// gateway. Module-level = per-process = per companion bot, same idiom as hermesDeliveredMark
+// above. Used only to detect a rotation edge (this reply's computed id differs from the last one
+// sent) so the delivered mark can be reset -- the new transcript has no history, so the next
+// delta must re-send the recent window instead of folding nothing.
+const hermesLastSessionId = new Map<string, string>();
 
 // Director liveness gate (2026-09-03 review): when in `live` mode but the worker's
 // `director:alive` key has lapsed, this bot must fall back to its own reply path rather than
@@ -1586,12 +1594,31 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // a crash. From here down every path ends in a send, so the promise is kept.
     await ch.sendTyping();
 
-    // Stable per-conversation session key (2026-07-01): forwarded by the Hermes adapter
-    // as X-Hermes-Session-Id so the gateway keeps ONE agent session per companion+channel
-    // instead of deriving it from hash(system_prompt + first msg) -- our system prompt
-    // varies per message, which churned a fresh gateway session nearly every reply.
-    // Other adapters ignore it.
-    const inferenceSessionId = `${COMPANION_ID}:${message.channelId}`;
+    // Per-conversation session ids (2026-07-01, rotation added 2026-09-05): forwarded by the
+    // Hermes adapter as X-Hermes-Session-Id / X-Hermes-Session-Key so the gateway keeps one
+    // agent session per companion+channel instead of deriving an id from hash(system_prompt +
+    // first msg) -- our system prompt varies per message, which churned a fresh gateway session
+    // nearly every reply. Other adapters ignore both.
+    //
+    // The id (transcript) now rotates on a schedule (HERMES_SESSION_ROTATION, default weekly) --
+    // a fixed id let one busy channel's gateway session grow to ~270k tokens, and Hermes then
+    // compacted it on the critical path (3-12 minutes observed), the compaction itself adding to
+    // the session it was trying to shrink. The key (long-term-memory scope) stays the stable
+    // `companionId:channelId` across every rotation.
+    const { sessionId: inferenceSessionId, sessionKey: inferenceSessionKey } =
+      hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode());
+    const lastSessionId = hermesLastSessionId.get(message.channelId);
+    if (lastSessionId !== undefined && lastSessionId !== inferenceSessionId) {
+      // The gateway transcript just rotated -- it has no history, so the next hermesDelta must
+      // re-send the recent window rather than folding nothing. `hermesDelta` treats a mark of 0
+      // as "every timestamped user turn is undelivered" (deliveredThroughTs !== null takes the
+      // `m.timestamp > deliveredThroughTs` branch, and 0 is older than any real timestamp) --
+      // that's the value that re-sends the window, not `null` (which instead falls back to
+      // idx > lastAssistant, bounded by THIS bot's local STM window, not the fresh transcript).
+      hermesDeliveredMark.set(message.channelId, 0);
+      console.log(`[${COMPANION_ID}] hermes session rotated -> ${inferenceSessionId} (window re-sent)`);
+    }
+    hermesLastSessionId.set(message.channelId, inferenceSessionId);
 
     // Turn-scoped [HEARD]/[NOT HEARD] blocks reach INFERENCE without living in STM (2026-09-01).
     // The 08-29 stranding fix stores only a short marker in STM -- but inference reads STM, so
@@ -1642,7 +1669,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Gone with it: the swarm slot/priority_order stagger, Brain's suppression path (which could
     // `return` without replying), and the buildThoughtPacket/isSwarmReply call sites.
     // `let`, not `const`: the coherence retry and the imp/scramble passes downstream reassign it.
-    let response: string | null = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
+    let response: string | null = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId, inferenceSessionKey));
 
     if (!response) {
       // The in-character fallback exists so a HUMAN who is waiting hears something. When the
