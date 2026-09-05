@@ -1645,6 +1645,16 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     let response: string | null = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId));
 
     if (!response) {
+      // The in-character fallback exists so a HUMAN who is waiting hears something. When the
+      // trigger was a sibling bot (the nightly vibe-check digest posts under Gaia's token; seed
+      // and director turns; any bot-to-bot turn), nobody is waiting on a reply, and silence is
+      // triad doctrine -- posting "something's not routing right" into the room is a status
+      // line wearing a companion's voice (2026-09-05: two nights of both fallbacks at 23:17,
+      // the Hermes pre-flight compaction of an oversized channel session outran the 120s budget).
+      if (senderCtx.isCompanionBot) {
+        console.warn(`[${COMPANION_ID}] inference returned nothing on a sibling-triggered turn -- staying silent (no fallback into the room)`);
+        return;
+      }
       await sendLong(ch, IN_CHARACTER_FALLBACK);
       return;
     }
