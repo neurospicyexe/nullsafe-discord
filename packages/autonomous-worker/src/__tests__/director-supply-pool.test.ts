@@ -158,14 +158,67 @@ describe("supply pool", () => {
     const pool = createSupplyPool({ fetch, redis, now: () => T });
 
     await pool.poll();
-    expect(redis.setCalls).toHaveLength(1);
-    expect(redis.setCalls[0]).toEqual({ key: "director:supply:cursor", value: "2026-09-01T00:00:00.000Z" });
+    // Only cursor writes are counted: the pool is persisted on every poll since 2026-09-06.
+    const cursorSets = () => redis.setCalls.filter((c) => c.key === "director:supply:cursor");
+    expect(cursorSets()).toHaveLength(1);
+    expect(cursorSets()[0]).toEqual({ key: "director:supply:cursor", value: "2026-09-01T00:00:00.000Z" });
 
     await pool.poll();
-    expect(redis.setCalls).toHaveLength(1); // no new call when cursor equal
+    expect(cursorSets()).toHaveLength(1); // no new call when cursor equal
 
     await pool.poll();
-    expect(redis.setCalls).toHaveLength(2);
-    expect(redis.setCalls[1]).toEqual({ key: "director:supply:cursor", value: "2026-09-02T00:00:00.000Z" });
+    expect(cursorSets()).toHaveLength(2);
+    expect(cursorSets()[1]).toEqual({ key: "director:supply:cursor", value: "2026-09-02T00:00:00.000Z" });
+  });
+});
+
+describe("supply pool persistence across restarts (2026-09-06)", () => {
+  const T = Date.parse("2026-09-06T12:00:00Z");
+  const fresh = (id: string) => item("drevan", id, "2026-09-05T00:00:00.000Z");
+
+  it("persists the pool beside the cursor on poll and on remove", async () => {
+    const redis = createFakeRedis();
+    const fetch = async () => ({ items: [fresh("a"), fresh("b")], cursor: "2026-09-06T00:00:00.000Z" });
+    const pool = createSupplyPool({ fetch, redis, now: () => T });
+    await pool.poll();
+    expect(JSON.parse((await redis.get("director:supply:pool"))!)).toHaveLength(2);
+    pool.remove("a");
+    expect(JSON.parse((await redis.get("director:supply:pool"))!).map((p: DirectorSupplyItem) => p.id)).toEqual(["b"]);
+  });
+
+  it("a restarted worker reloads the persisted pool and resumes from the stored cursor (no rewind)", async () => {
+    const redis = createFakeRedis();
+    await redis.set("director:supply:cursor", "2026-09-06T00:00:00.000Z");
+    await redis.set("director:supply:pool", JSON.stringify([fresh("kept")]));
+    const fetched: string[] = [];
+    const fetch = async (since: string) => { fetched.push(since); return { items: [], cursor: "2026-09-06T00:00:00.000Z" }; };
+    const pool = createSupplyPool({ fetch, redis, now: () => T });
+    await pool.poll();
+    expect(fetched).toEqual(["2026-09-06T00:00:00.000Z"]);
+    expect(pool.items().map((p) => p.id)).toEqual(["kept"]);
+  });
+
+  it("a persisted EMPTY pool is authoritative: keeps the cursor, does not rewind", async () => {
+    const redis = createFakeRedis();
+    await redis.set("director:supply:cursor", "2026-09-06T00:00:00.000Z");
+    await redis.set("director:supply:pool", "[]");
+    const fetched: string[] = [];
+    const fetch = async (since: string) => { fetched.push(since); return { items: [], cursor: "2026-09-06T00:00:00.000Z" }; };
+    const pool = createSupplyPool({ fetch, redis, now: () => T });
+    await pool.poll();
+    expect(fetched).toEqual(["2026-09-06T00:00:00.000Z"]);
+  });
+
+  it("a stored cursor with NO persisted pool (pre-persistence restart) rewinds 7d once to rebuild", async () => {
+    const redis = createFakeRedis();
+    await redis.set("director:supply:cursor", "2026-09-06T00:00:00.000Z");
+    const fetched: string[] = [];
+    const fetch = async (since: string) => { fetched.push(since); return { items: [fresh("old")], cursor: "2026-09-06T00:00:00.000Z" }; };
+    const pool = createSupplyPool({ fetch, redis, now: () => T });
+    await pool.poll();
+    expect(fetched).toEqual([new Date(T - 7 * 24 * 3600_000).toISOString()]);
+    expect(pool.items().map((p) => p.id)).toEqual(["old"]);
+    await pool.poll();
+    expect(fetched[1]).toBe("2026-09-06T00:00:00.000Z");
   });
 });
