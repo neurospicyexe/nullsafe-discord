@@ -1,6 +1,11 @@
-import { readFileSync, statSync } from "node:fs";
-import type { InferenceAdapter } from "./inference.js";
-import { DeepSeekAdapter } from "./inference.js";
+import { loadIdentity } from "./direct-inference.js";
+
+// `loadIdentity` (with its mtime-keyed cache) and `createDirectAdapter` (this file's former
+// `createNarrator`) now live in direct-inference.ts, shared with the judgeWriteback one-shot path.
+// Both are already exported from there (and from index.ts) -- NOT re-exported here too, since
+// `export *` from both this file and direct-inference.ts in index.ts would collide on the same
+// names. Import `createDirectAdapter` directly from "@nullsafe/shared" (it resolves to
+// direct-inference.ts's export); this file only needs `loadIdentity` for buildNarratorPrompt below.
 
 /**
  * The narrator: a DIRECT, TOOLLESS inference path used only to write session close handoffs.
@@ -26,6 +31,12 @@ import { DeepSeekAdapter } from "./inference.js";
  * Rotation cadence was the assumed lever and is third-order: session history is ~1.5k of a 45k
  * call. The daily lane rotation shipped earlier on 08-07 still earned its keep (the old static lane
  * measured 247,432/call, so it cut 5.5x) -- it just cannot reach the remaining floor.
+ *
+ * DeepInfra-first as of 2026-09-05: the direct DeepSeek account (api.deepseek.com) went to $0
+ * balance, so calls through it started failing (402) and silently falling all the way back to the
+ * Hermes agent path -- the exact cost this file exists to avoid. DeepInfra hosts the same
+ * DeepSeek-V4-Flash weights, so `createDirectAdapter()` (direct-inference.ts) now tries it first
+ * and DeepSeek direct second, chained so a DeepInfra outage still has somewhere to go.
  */
 
 /**
@@ -63,82 +74,8 @@ const ONE_SHOT_FRAME =
   "This is a single one-shot call: you have NO tools and NO retrieval available, so rely only on " +
   "the state given below. Respond with ONLY valid JSON, no markdown.";
 
-/** Env var holding each companion's identity file path (already set on the VPS for the worker). */
-const IDENTITY_ENV: Record<string, string> = {
-  cypher: "CYPHER_IDENTITY_PATH",
-  drevan: "DREVAN_IDENTITY_PATH",
-  gaia: "GAIA_IDENTITY_PATH",
-};
-
-/**
- * mtime-keyed cache. Editing an identity file takes effect on the next consolidation with no
- * restart and no cache-busting step to remember -- the same self-healing requirement that chose the
- * whole file over a slice. `statSync` per call is trivial next to a network round trip.
- */
-const cache = new Map<string, { mtimeMs: number; size: number; text: string }>();
-
-/**
- * Read a companion's identity file, cached against its mtime+size.
- * Returns null (never throws) if the path is unset or unreadable, so the caller can fall back.
- */
-export function loadIdentity(companionId: string): string | null {
-  const envVar = IDENTITY_ENV[companionId];
-  if (!envVar) {
-    console.warn(`[narrator] ${companionId}: no identity env var mapped`);
-    return null;
-  }
-  const path = process.env[envVar]?.trim();
-  if (!path) {
-    console.warn(`[narrator] ${companionId}: ${envVar} is unset -- cannot build voice preamble`);
-    return null;
-  }
-  try {
-    const st = statSync(path);
-    const hit = cache.get(path);
-    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.text;
-    const text = readFileSync(path, "utf8");
-    // An identity file that reads as near-empty is a broken deploy, not a terse companion. Writing
-    // handoffs in no voice at all is worse than paying for the Hermes path, so refuse it.
-    if (text.trim().length < 500) {
-      console.error(
-        `[narrator] ${companionId}: identity file ${path} is only ${text.trim().length} chars -- ` +
-        `refusing to narrate in no voice; falling back`,
-      );
-      return null;
-    }
-    cache.set(path, { mtimeMs: st.mtimeMs, size: st.size, text });
-    console.log(`[narrator] ${companionId}: loaded identity (${text.length} chars) from ${path}`);
-    return text;
-  } catch (e) {
-    console.error(`[narrator] ${companionId}: cannot read ${envVar}=${path}`, e);
-    return null;
-  }
-}
-
 /** The system prompt for a consolidation call: full identity + the one-shot frame. */
 export function buildNarratorPrompt(companionId: string): string | null {
   const identity = loadIdentity(companionId);
   return identity === null ? null : identity + ONE_SHOT_FRAME;
-}
-
-/**
- * Build the narrator adapter, or null when it cannot be built (no DeepSeek key).
- *
- * Deliberately a DeepSeekAdapter and not `buildAdapter`: the bots run INFERENCE_MODE=hermes, so
- * every `buildAdapter` call returns the Hermes adapter by design (`forceHermes`), which is the
- * exact path this exists to avoid. Going through DeepSeekAdapter also inherits
- * DEEPSEEK_REASONING_HEADROOM -- v4-flash reasons, reasoning is billed against `max_tokens`, and a
- * bare ceiling returns an EMPTY string (hit while measuring: 1024 completion tokens, all of them
- * reasoning, zero content).
- */
-export function createNarrator(): InferenceAdapter | null {
-  const key = process.env["DEEPSEEK_API_KEY"]?.trim();
-  if (!key) {
-    console.warn(
-      "[narrator] DEEPSEEK_API_KEY unset -- consolidation will fall back to the Hermes agent path " +
-      "(~44.6k prompt tokens/call instead of ~7.7k cold / ~200 warm)",
-    );
-    return null;
-  }
-  return new DeepSeekAdapter(key);
 }

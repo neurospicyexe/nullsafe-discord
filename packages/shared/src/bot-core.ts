@@ -19,6 +19,7 @@ import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
+import { createDirectAdapter } from "./direct-inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
 import { readHermesModelKeys, selectableModels, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
@@ -435,6 +436,17 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     forceHermes: env.inferenceMode === "hermes" && !!env.hermesUrl,
   };
 
+  // Direct, tool-less adapter (DeepInfra-first, DeepSeek-direct fallback) for judgeWriteback and
+  // judgeAmbientRelevance -- built once, not per-message, and independent of forceHermes: these
+  // two classifier calls must NEVER ride the Hermes agent adapter (see direct-inference.ts).
+  // null when neither key is configured; both judges then fall back to adapterRef.current.
+  const directAdapter = createDirectAdapter({ deepinfra: env.deepinfraApiKey, deepseek: env.deepseekApiKey });
+  console.log(
+    directAdapter
+      ? `[${companionId}] judges: direct (deepinfra-first)`
+      : `[${companionId}] judges: hermes agent path (no direct key)`,
+  );
+
   // In hermes mode the watcher -- not this bot -- applies the model change, so the live
   // hermes-model-map.json defines what `cy: model` may offer. Read it once at boot and report the
   // gap both ways; a key the watcher can't resolve would otherwise ack SUCCESS and change nothing.
@@ -814,7 +826,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       voiceClient, redis, librarian,
-      adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
+      adapterRef, directAdapter, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster,
       ...(pkSenderId ? { pkSenderId } : {}),
       guildVoiceConnections, sentIds, distillationCounter, pulseCounter,

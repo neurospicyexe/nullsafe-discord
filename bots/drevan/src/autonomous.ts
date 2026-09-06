@@ -15,13 +15,13 @@ import {
   CONSOLIDATION_IDLE_MINUTES,
 } from "./config.js";
 import {
-  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession, createNarrator,
+  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession, createDirectAdapter,
 } from "@nullsafe/shared";
 
 // Built once, not per tick: the adapter is stateless and rebuilding it every 5 minutes would only
 // re-log the same warning. Null when DEEPSEEK_API_KEY is unset -- consolidateSession then falls back
 // to the Hermes agent path. See packages/shared/src/consolidation-narrator.ts.
-const narrator = createNarrator();
+const narrator = createDirectAdapter();
 
 // Per-process state shared by-reference with the shared autonomous runners (autonomous-core.ts).
 // pushRazielMessage (called from the message handler) and the runner signal-detection read the

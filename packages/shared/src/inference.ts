@@ -602,7 +602,10 @@ class MistralAdapter implements InferenceAdapter {
   }
 }
 
-class DeepInfraAdapter implements InferenceAdapter {
+// Exported for direct-inference.ts, which builds a DeepInfra-first tool-less chain outside
+// buildAdapter/createAdapter (those are forced onto the Hermes agent path when
+// INFERENCE_MODE=hermes -- see createAdapter's forceHermes branch below).
+export class DeepInfraAdapter implements InferenceAdapter {
   // DeepInfra is OpenAI-compatible at /v1/openai. It hosts the same DeepSeek weights as
   // api.deepseek.com, so the reasoning-headroom rule carries over: a DeepSeek model spends
   // max_tokens on its thought before any content, and a ceiling below the burn returns ""
@@ -662,8 +665,10 @@ class DeepInfraAdapter implements InferenceAdapter {
   }
 }
 
-// Tries each adapter in order, returns first non-null result.
-class FallbackAdapter implements InferenceAdapter {
+// Tries each adapter in order, returns first non-null result. Exported for direct-inference.ts
+// (chains DeepInfra-first, DeepSeek-direct-second for the tool-less judge/narrator path) so that
+// module doesn't duplicate this loop.
+export class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string): Promise<string | null> {
@@ -721,13 +726,17 @@ function buildAdapter(
 // Resilience tail (Finding 4b): when the chosen provider returns null (5xx, network,
 // rate limit), fall through to the next configured provider instead of dropping to a
 // static in-character string. Order favors cheap, reliable cloud providers; local last.
+// Model id DeepInfra hosts for the same DeepSeek-V4-Flash weights as api.deepseek.com's
+// "deepseek-v4-flash". Exported so direct-inference.ts doesn't hardcode a second copy.
+export const DEEPINFRA_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731";
+
 const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   // Flash, not the delisted `deepseek-chat` alias (2026-07-28) -- a resilience tail pointed at
   // a model on the deprecation path is one silent retirement away from being no tail at all.
   { provider: "deepseek", model: "deepseek-v4-flash" },
   // Same weights, different vendor -- cheapest cross-vendor hop when DeepSeek itself is the
   // one that failed (funds, peak-window flap). Only armed when DEEPINFRA_API_KEY is present.
-  { provider: "deepinfra", model: "deepseek-ai/DeepSeek-V4-Flash-0731" },
+  { provider: "deepinfra", model: DEEPINFRA_FLASH_MODEL },
   { provider: "kimi",     model: "kimi-k2" },
   { provider: "groq",     model: "llama-3.3-70b-versatile" },
   // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even

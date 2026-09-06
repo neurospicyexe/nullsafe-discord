@@ -24,13 +24,15 @@ describe("meetsNoteThreshold()", () => {
 /** Captures the system+user prompt so we can assert on what the judge was actually told. */
 function fakeInference(reply: string | null) {
   const seen: string[] = [];
+  const seenSystem: string[] = [];
   const adapter: InferenceAdapter = {
-    generate: async (_system, messages) => {
+    generate: async (system, messages) => {
+      seenSystem.push(system);
       seen.push(messages.map((m) => m.content).join("\n"));
       return reply;
     },
   };
-  return { adapter, seen };
+  return { adapter, seen, seenSystem };
 }
 
 const OWNER = { name: "Raziel", isOwner: true as const, ownerName: "Raziel" };
@@ -125,5 +127,18 @@ describe("judgeWriteback() -- first-person voice", () => {
     const { adapter } = fakeInference(firstPerson);
     const wb = await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
     expect(wb?.type).toBe("companion_note");
+  });
+});
+
+describe("judgeWriteback() -- tool-less one-shot framing", () => {
+  // 2026-09-05: this classifier rode whatever adapter the caller handed in (the Hermes agent
+  // path under INFERENCE_MODE=hermes), and one memory-judge call spelunked the vault 161 times
+  // in a single session before hitting Hermes's 150-turn cap. The system prompt must always
+  // carry the no-tools frame (buildOneShotPrompt, direct-inference.ts) regardless of which
+  // adapter actually answers it.
+  it("hands the adapter a system prompt stating NO tools", async () => {
+    const { adapter, seenSystem } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
+    expect(seenSystem[0]).toMatch(/NO tools/);
   });
 });

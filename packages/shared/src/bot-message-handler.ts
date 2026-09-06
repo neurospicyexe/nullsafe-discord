@@ -180,6 +180,14 @@ export interface MessageHandlerDeps {
   librarian: LibrarianClient;
   // live refs (same instances the refresh loop mutates)
   adapterRef: { current: InferenceAdapter };
+  /** Direct, tool-less adapter (DeepInfra-first, DeepSeek-direct fallback; see
+   *  direct-inference.ts) used ONLY by the two small classifier calls -- judgeWriteback and
+   *  judgeAmbientRelevance -- that need zero tools. Built once in bot-core.ts. null when neither
+   *  DEEPINFRA_API_KEY nor DEEPSEEK_API_KEY is configured, in which case both judges fall back to
+   *  `adapterRef.current` (the Hermes agent path under INFERENCE_MODE=hermes) -- more expensive,
+   *  still correct. Optional so direct handleMessage() calls in tests need no direct-adapter
+   *  plumbing. */
+  directAdapter?: InferenceAdapter | null;
   activeModelRef: { key: string | null; label: string };
   /** Keys the live hermes-model-map.json can apply, read at boot. null = not hermes mode, or the
    *  map was unreadable; both mean fall back to the full registry. See hermes-model-map.ts. */
@@ -293,7 +301,7 @@ export function mapColdStartHistory(
 export async function handleMessage(message: Message, deps: MessageHandlerDeps): Promise<void> {
   const {
     client, cfg, voiceClient, redis, librarian,
-    adapterRef, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
+    adapterRef, directAdapter, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
     stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
@@ -1078,10 +1086,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       !namesSiblingOnly(effectiveContent, COMPANION_ID);
 
     if (isAmbientOwnerOnly) {
+      // A yes/no relevance filter needs zero tools; riding the Hermes agent adapter here
+      // over-costs a one-word answer the same way the memory judge over-cost a one-sentence
+      // one (see the 2026-09-05 150-turn memory-judge runaway). Prefer the direct adapter,
+      // fall back to the live agent adapter when no direct key is configured.
       const relevant = await judgeAmbientRelevance(
         effectiveContent,
         COMPANION_ID,
-        (sys, msgs) => adapterRef.current.generate(sys, msgs as ChatMessage[], 0.3),
+        (sys, msgs) => (directAdapter ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
     } else if (!isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
@@ -1977,7 +1989,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       isOwner: attribution.isOwner,
       ownerName: cfg.ownerDisplayName,
     };
-    judgeWriteback(effectiveContent, response, adapterRef.current, COMPANION_ID, writebackSpeaker).then((wb) => {
+    // judgeWriteback asks for ONE first-person sentence and needs zero tools. Measured
+    // 2026-09-05: on the Hermes agent adapter this call spelunked the vault 161 times in one
+    // session and ran to Hermes's 150-turn cap, burning >100M of a companion's weekly input
+    // tokens. The direct adapter has no tools to reach for; fall back to the live agent adapter
+    // only when no direct key is configured.
+    judgeWriteback(effectiveContent, response, directAdapter ?? adapterRef.current, COMPANION_ID, writebackSpeaker).then((wb) => {
       if (!wb) return;
       writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
         if (wb.type === "companion_note") {

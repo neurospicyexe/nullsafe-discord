@@ -3,7 +3,8 @@ import { mkdtempSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { consolidateSession } from "../consolidation.js";
-import { loadIdentity, buildNarratorPrompt, createNarrator } from "../consolidation-narrator.js";
+import { buildNarratorPrompt } from "../consolidation-narrator.js";
+import { loadIdentity, createDirectAdapter } from "../direct-inference.js";
 
 // ── Why this file exists ─────────────────────────────────────────────────────
 // Measured 2026-08-07 (docs/consolidation-cost-2026-08-07.md): the Hermes agent path costs ~44,600
@@ -56,7 +57,7 @@ const mockNarrator = {
   generate: jest.fn<() => Promise<string | null>>().mockResolvedValue(validHandoffJson),
 };
 
-const ENV_KEYS = ["CYPHER_IDENTITY_PATH", "DREVAN_IDENTITY_PATH", "GAIA_IDENTITY_PATH", "DEEPSEEK_API_KEY"];
+const ENV_KEYS = ["CYPHER_IDENTITY_PATH", "DREVAN_IDENTITY_PATH", "GAIA_IDENTITY_PATH", "DEEPSEEK_API_KEY", "DEEPINFRA_API_KEY"];
 const saved: Record<string, string | undefined> = {};
 beforeEach(() => {
   jest.clearAllMocks();
@@ -150,15 +151,25 @@ describe("buildNarratorPrompt", () => {
   });
 });
 
-describe("createNarrator", () => {
-  test("returns null without DEEPSEEK_API_KEY, so consolidation falls back instead of dying", () => {
+describe("createDirectAdapter (formerly createNarrator)", () => {
+  test("returns null without DEEPSEEK_API_KEY or DEEPINFRA_API_KEY, so consolidation falls back instead of dying", () => {
     delete process.env["DEEPSEEK_API_KEY"];
-    expect(createNarrator()).toBeNull();
+    delete process.env["DEEPINFRA_API_KEY"];
+    expect(createDirectAdapter()).toBeNull();
   });
 
-  test("builds an adapter when the key is present", () => {
+  test("builds an adapter when only DEEPSEEK_API_KEY is present", () => {
+    delete process.env["DEEPINFRA_API_KEY"];
     process.env["DEEPSEEK_API_KEY"] = "sk-test-not-a-real-key";
-    expect(createNarrator()).not.toBeNull();
+    expect(createDirectAdapter()).not.toBeNull();
+  });
+
+  // 2026-09-05: the DeepSeek direct account went to $0 balance; DeepInfra hosts the same weights
+  // and must work on its own, with no DeepSeek key present at all.
+  test("builds an adapter when only DEEPINFRA_API_KEY is present", () => {
+    delete process.env["DEEPSEEK_API_KEY"];
+    process.env["DEEPINFRA_API_KEY"] = "di-test-not-a-real-key";
+    expect(createDirectAdapter()).not.toBeNull();
   });
 });
 

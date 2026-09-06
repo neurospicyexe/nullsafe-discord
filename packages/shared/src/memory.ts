@@ -1,4 +1,5 @@
 import type { InferenceAdapter } from "./inference.js";
+import { buildOneShotPrompt } from "./direct-inference.js";
 
 const NOTE_KEYWORDS = [
   // relational / emotional
@@ -125,8 +126,18 @@ THREAD_NAME: <short name, only if thread_open>
 ${speakerName}: ${userMessage}
 ${cName}: ${assistantResponse}`;
 
-  const result = await inference.generate(
+  // Tool-less one-shot: identity file (voice) + a NO-tools frame + this task line. Measured
+  // 2026-09-05 -- riding the caller's normal adapter (Hermes agent under INFERENCE_MODE=hermes)
+  // let a memory-judge call spelunk the vault for 161 identical searches in one session and run
+  // to Hermes's 150-turn cap. This classifier needs zero tools; buildOneShotPrompt is what keeps
+  // it from reaching for any, on whichever adapter the caller hands in.
+  const systemPrompt = buildOneShotPrompt(
+    companionName,
     `You are ${cName}, writing a memory to your future self. First person only. Follow the output format exactly.`,
+  );
+
+  const result = await inference.generate(
+    systemPrompt,
     [{ role: "user", content: prompt }],
   );
 
