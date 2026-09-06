@@ -21,6 +21,7 @@
 
 import type { CompanionId } from "./types.js";
 import { halsethEnv } from "./halseth-command-env.js";
+import { COMPANION_ALIASES } from "./command-triggers.js";
 
 export interface WatchShelfItem {
   id?: string;
@@ -86,6 +87,79 @@ export function parseWatchArgs(arg: string): {
   return { title: rest.trim(), season, episode, note: note || null, status };
 }
 
+/**
+ * Passive watch-party channels (2026-09-05). Raziel co-watches with the triad in a shared
+ * channel (e.g. #fargo-watch-party) and never types the explicit `dre: watched fargo s4e6`
+ * command mid-episode -- so the deterministic shelf above only advances when someone
+ * remembers to say it out loud, and it went stale for a month (07-31 -> 08-29/30) even
+ * though the room kept talking about episodes in plain prose.
+ *
+ * `WATCH_PARTY_CHANNELS` binds a channel to a title + the ONE companion who records for it
+ * (so all three bots seeing the same message don't triple-write). Format:
+ *   "channelId:Title:companion;channelId2:Title2:companion2"
+ * Tolerant: blank/garbage entries are skipped rather than throwing, so a typo in .env
+ * degrades to "this channel doesn't passively track" instead of crashing the bot.
+ */
+export function parseWatchPartyChannels(raw: string | undefined): Map<string, { title: string; companion: CompanionId }> {
+  const map = new Map<string, { title: string; companion: CompanionId }>();
+  if (!raw) return map;
+  const entries = raw.split(/[;,]/).map(e => e.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const parts = entry.split(":").map(p => p.trim());
+    if (parts.length !== 3) continue;
+    const [channelId, title, companionRaw] = parts;
+    if (!channelId || !title || !companionRaw) continue;
+    const companion = companionRaw.toLowerCase();
+    if (companion !== "cypher" && companion !== "drevan" && companion !== "gaia") continue;
+    map.set(channelId, { title, companion: companion as CompanionId });
+  }
+  return map;
+}
+
+// Recognizes "this message IS addressed as a watch command" (any companion's alias followed by
+// watching/watched/watch) so passive detection never double-records what the deterministic
+// command path above already writes. Deliberately BROADER than the real per-companion WATCH_TRIGGER
+// (built via buildCommandTriggers, which gates on a stricter position/status sub-pattern that does
+// not accept a bare "e6" -- only "ep6"/"episode6"/"s4e6"/"4x6"): a message that merely LOOKS like an
+// attempted command must still be treated as "the command path's territory", not silently re-parsed
+// here, or a phrasing the strict gate rejects (and that therefore falls through to ordinary reply
+// handling) would get double-recorded by both this passive path's parse AND whatever the strict gate
+// eventually does with it. Under-detecting a passive marker is harmless (nothing regresses); a
+// double-write is not.
+const ALL_WATCH_ALIASES = Object.values(COMPANION_ALIASES).flat();
+const WATCH_ADDRESS_RE = new RegExp(`^(?:${ALL_WATCH_ALIASES.join("|")})\\b[,:]?\\s*(?:watching|watched|watch)\\b`, "i");
+
+function isExplicitWatchCommand(content: string): boolean {
+  return WATCH_ADDRESS_RE.test(content);
+}
+
+// A bare episode number is only trustworthy as a passive marker when it appears in one of these
+// explicit forms -- never a number that merely happens to be small. parseWatchPosition already
+// requires an "e"/"ep"/"episode" or "NxM" token before it will set `episode`, which is what keeps
+// a time ("12:04") or a date ("9/2") from being mistaken for one: neither carries that token.
+/**
+ * Passive episode detector for a message already known to belong to a bound watch-party channel.
+ * Reuses `parseWatchPosition` (the same parser the explicit command uses) so the two paths can
+ * never disagree about what "S4E6" means.
+ *
+ * Returns a hit when season+episode both parsed, or when episode parsed alone via an explicit
+ * form ("e6" / "ep 6" / "episode 6" / "4x6") -- bare-episode-alone is acceptable here ONLY
+ * because the channel binding already supplies the title (so there is nowhere else for a
+ * position to belong). A season-only mention ("season 4") is not enough: null. Never matches
+ * the explicit command form itself -- that path already records progress deterministically.
+ */
+export function detectWatchProgress(
+  content: string,
+  party: { title: string; companion: CompanionId },
+): { season: number | null; episode: number | null } | null {
+  void party; // title/companion are the caller's routing context, not inputs to parsing
+  if (isExplicitWatchCommand(content)) return null;
+  const { season, episode } = parseWatchPosition(content);
+  if (season !== null && episode !== null) return { season, episode };
+  if (season === null && episode !== null) return { season: null, episode };
+  return null;
+}
+
 /** Render the shelf. One line per title -- this is the answer to "where are we". */
 export function formatShelf(items: WatchShelfItem[], me: CompanionId): string {
   if (items.length === 0) {
@@ -114,6 +188,18 @@ async function watchFetch(
   });
   const json = await res.json().catch(() => ({})) as Record<string, unknown>;
   return { ok: res.ok, status: res.status, json };
+}
+
+/**
+ * Thin wrapper over the same POST the explicit command uses, for the passive watch-party path
+ * (`detectWatchProgress` above) -- one write shape, two ways of noticing there is something to
+ * write. Never throws; the caller fires this and forgets, same as any other side effect.
+ */
+export async function recordWatchProgress(
+  halsethSecret: string,
+  body: { title: string; season: number | null; episode: number | null; note: string | null; surface: string; with_companion: CompanionId },
+): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
+  return watchFetch("/mind/watch/progress", "POST", halsethSecret, body);
 }
 
 /**
