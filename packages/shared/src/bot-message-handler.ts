@@ -52,6 +52,7 @@ import {
   handleLogCommand,
   handleIntoCommand,
   handleWatchCommand,
+  parseWatchPartyChannels, detectWatchProgress, recordWatchProgress,
   handleToolSearch, formatSearchReadIn, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
@@ -112,6 +113,13 @@ const followUps = new FollowUpLedger();
 const replyAuthorCache = new Map<string, string>();
 const REPLY_AUTHOR_CACHE_CAP = 500;
 const reactionCooldownUntil = new Map<string, number>();
+
+// Passive watch-party progress (2026-09-05): last `${season}x${episode}` recorded per channel,
+// module-level = per-process = per companion bot. Dedupes the passive write against repeated
+// mentions of the same position in the same conversational burst (Raziel restating "S4E6" a few
+// messages later shouldn't re-POST). Empty when WATCH_PARTY_CHANNELS is unset, so the block below
+// is a no-op on every box that hasn't configured it.
+const lastPassiveWatchProgress = new Map<string, string>();
 
 async function getImpContext(
   librarian: LibrarianClient,
@@ -865,6 +873,39 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           .catch(err => `watch command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await sendLong(message.channel as TextChannel, reply);
         return;
+      }
+    }
+
+    // Passive watch-party progress (2026-09-05). Placed AFTER the explicit WATCH_TRIGGER block
+    // above (which already `return`ed on a match) so the deterministic command always keeps
+    // precedence -- this never runs for a message that IS "dre: watched fargo s4e6". It exists
+    // because nobody types that command mid-episode: the shelf said S4E4 from 07-31 while the
+    // actual watching in #fargo-watch-party reached S4E6+ on 08-29/30, and this is the fix --
+    // notice the episode Raziel names in ordinary conversation and record it silently, no reply.
+    //
+    // Exactly ONE companion records per bound channel (party.companion) even though all three
+    // bots see every message, so a three-way write race never happens.
+    if (attribution.isOwner) {
+      const party = parseWatchPartyChannels(process.env["WATCH_PARTY_CHANNELS"]).get(message.channelId);
+      if (party && party.companion === COMPANION_ID) {
+        const hit = detectWatchProgress(effectiveContent, party);
+        if (hit) {
+          const key = `${hit.season ?? "?"}x${hit.episode}`;
+          if (lastPassiveWatchProgress.get(message.channelId) !== key) {
+            lastPassiveWatchProgress.set(message.channelId, key);
+            writeQueue.fireAndForget(`watch:passive:${message.channelId}`, async () => {
+              const res = await recordWatchProgress(cfg.halsethSecret, {
+                title: party.title, season: hit.season, episode: hit.episode,
+                note: null, surface: "discord", with_companion: COMPANION_ID,
+              });
+              if (res.ok) {
+                console.log(`[${COMPANION_ID}] watch progress (passive): ${party.title} S${hit.season ?? "?"}E${hit.episode} from #${message.channelId}`);
+              } else {
+                console.warn(`[${COMPANION_ID}] passive watch progress write failed (status ${res.status}) -- shelf unchanged`);
+              }
+            });
+          }
+        }
       }
     }
 

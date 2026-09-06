@@ -12,7 +12,7 @@
 // corrected a position he didn't).
 
 import { describe, it, expect } from "@jest/globals";
-import { parseWatchPosition, parseWatchArgs, formatShelf } from "../watch-command.js";
+import { parseWatchPosition, parseWatchArgs, formatShelf, parseWatchPartyChannels, detectWatchProgress } from "../watch-command.js";
 
 describe("parseWatchPosition -- every way Raziel actually types it", () => {
   it("reads the common forms", () => {
@@ -101,5 +101,75 @@ describe("formatShelf", () => {
 
   it("an empty shelf says how to fill it rather than just being blank", () => {
     expect(formatShelf([], "cypher")).toContain("watched <title>");
+  });
+});
+
+describe("parseWatchPartyChannels -- WATCH_PARTY_CHANNELS env knob", () => {
+  it("parses a single entry", () => {
+    const map = parseWatchPartyChannels("1531431567430385754:Fargo:drevan");
+    expect(map.get("1531431567430385754")).toMatchObject({ title: "Fargo", companion: "drevan" });
+  });
+
+  it("parses multiple entries separated by ; or ,", () => {
+    const semi = parseWatchPartyChannels("111:Fargo:drevan;222:Severance:cypher");
+    expect(semi.get("111")).toMatchObject({ title: "Fargo", companion: "drevan" });
+    expect(semi.get("222")).toMatchObject({ title: "Severance", companion: "cypher" });
+
+    const comma = parseWatchPartyChannels("111:Fargo:drevan,222:Severance:cypher");
+    expect(comma.get("111")).toMatchObject({ title: "Fargo", companion: "drevan" });
+    expect(comma.get("222")).toMatchObject({ title: "Severance", companion: "cypher" });
+  });
+
+  it("trims whitespace around each field", () => {
+    const map = parseWatchPartyChannels(" 111 : Fargo : drevan ");
+    expect(map.get("111")).toMatchObject({ title: "Fargo", companion: "drevan" });
+  });
+
+  it("skips blank and garbage entries rather than throwing", () => {
+    const map = parseWatchPartyChannels("111:Fargo:drevan;;  ;garbage;222::gaia;333:Show:");
+    expect(map.size).toBe(1);
+    expect(map.get("111")).toMatchObject({ title: "Fargo", companion: "drevan" });
+  });
+
+  it("skips an entry with an unrecognized companion", () => {
+    const map = parseWatchPartyChannels("111:Fargo:notacompanion;222:Severance:cypher");
+    expect(map.has("111")).toBe(false);
+    expect(map.get("222")).toMatchObject({ title: "Severance", companion: "cypher" });
+  });
+
+  it("undefined env yields an empty map, not a throw", () => {
+    expect(parseWatchPartyChannels(undefined).size).toBe(0);
+  });
+});
+
+describe("detectWatchProgress -- passive episode markers in ordinary chat", () => {
+  const party = { title: "Fargo", companion: "drevan" as const };
+
+  it("reads season+episode forms", () => {
+    expect(detectWatchProgress("that S4E6 twist was wild", party)).toMatchObject({ season: 4, episode: 6 });
+    expect(detectWatchProgress("s04e07 was rough", party)).toMatchObject({ season: 4, episode: 7 });
+    expect(detectWatchProgress("we just watched 4x6", party)).toMatchObject({ season: 4, episode: 6 });
+  });
+
+  it("accepts an explicit bare-episode form -- the channel binding supplies the season/title", () => {
+    expect(detectWatchProgress("that was e6", party)).toMatchObject({ season: null, episode: 6 });
+    expect(detectWatchProgress("episode 6 was rough", party)).toMatchObject({ season: null, episode: 6 });
+  });
+
+  it("a season-only mention is not enough -- no episode means no position to record", () => {
+    expect(detectWatchProgress("we're on season 4", party)).toBeNull();
+  });
+
+  it("never mistakes a time, a date, or plain chat for a marker", () => {
+    expect(detectWatchProgress("we watched at 12:04", party)).toBeNull();
+    expect(detectWatchProgress("9/2 was rough", party)).toBeNull();
+    expect(detectWatchProgress("1204 in the afternoon", party)).toBeNull();
+    expect(detectWatchProgress("that scene was great", party)).toBeNull();
+  });
+
+  it("never fires on the explicit command form -- that path already recorded it", () => {
+    expect(detectWatchProgress("dre: watched fargo e6", party)).toBeNull();
+    expect(detectWatchProgress("drevan: watching fargo s4e6", party)).toBeNull();
+    expect(detectWatchProgress("cy: watch fargo finished", party)).toBeNull();
   });
 });

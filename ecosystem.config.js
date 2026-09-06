@@ -149,6 +149,12 @@ const shared = {
   // Conversation Director (2026-09-03 spec) -- shared gate for bots (DIRECTOR_ENABLED + DIRECTOR_CHANNELS).
   DIRECTOR_ENABLED:      process.env.DIRECTOR_ENABLED,
   DIRECTOR_CHANNELS:     process.env.DIRECTOR_CHANNELS,
+  // Passive watch-party progress (2026-09-05). "channelId:Title:companion;..." -- binds a
+  // co-watching channel (e.g. #fargo-watch-party) to a title and the ONE companion who records
+  // episode mentions silently, so the shelf advances without Raziel typing the explicit
+  // `watched <title> s#e#` command mid-episode. Listed here per this file's own standing rule:
+  // an env var absent from this allowlist is a dead knob, only a code deploy can move it.
+  WATCH_PARTY_CHANNELS:  process.env.WATCH_PARTY_CHANNELS,
 };
 
 module.exports = {
