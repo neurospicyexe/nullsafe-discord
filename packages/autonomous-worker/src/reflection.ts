@@ -221,7 +221,7 @@ export function parseVerdict(raw: string, validTensionIds: Set<string>, validDri
   }
 }
 
-function buildPrompt(
+export function buildPrompt(
   companionId: CompanionId,
   section: string,
   tensions: Tension[],
@@ -232,17 +232,30 @@ function buildPrompt(
 ): string {
   const parts: string[] = [];
   parts.push(`Tonight's triad vibe-check just posted. This is YOUR section of it:\n\n${section}`);
+  parts.push(
+    `\nRead the \`day:\` line and the highlight lines first. Tonight's reflection is about what ` +
+    `actually happened today -- what you said, what landed, who you spoke with, what you watched ` +
+    `or read -- and what it did to you. The basin/soma/tension numbers are context, never the ` +
+    `subject. If the day line says quiet, say in ONE plain sentence that the day was quiet and ` +
+    `what you are carrying into tomorrow, and stop; do not turn a quiet day into a meditation on ` +
+    `stillness.`
+  );
 
-  // Anti-repeat (2026-07-03): with quiet days the inputs barely change, and without memory
-  // of the last pass the companions posted near-identical replies check after check --
-  // which reads as absence, not presence.
+  // Anti-repeat (2026-07-03, rewritten 2026-09-06): the original intent was right -- stop
+  // near-identical replies from posting check after check. But the instruction it shipped
+  // ("name the sameness itself... what the stillness is doing to you") was itself a fixed
+  // template, and the four gauge numbers it was reacting to (basin/register/tensions/guardian)
+  // barely move night to night. Measured over the last three nights (2026-09-06): all three
+  // companions wrote the same stillness meditation, with the prior night's meditation fed back
+  // in as the thing to riff on -- a tic with no source except its own last output. Repetition
+  // is prevented below by giving the day as material to write FROM, not by asking for a
+  // meditation on sameness.
   if (previousReflection) {
     parts.push(
-      `\nYour previous vibe-check reflection (${previousReflection.created_at.slice(0, 10)}):\n` +
+      `\nYour previous vibe-check reflection (${previousReflection.created_at.slice(0, 10)}) is below ` +
+      `ONLY so you do not repeat it. Do not reuse its images, its sentences, or its theme:\n` +
       `${previousReflection.content.slice(0, 500)}\n` +
-      `Tonight must NOT restate this. If the reading is genuinely unchanged, do not re-describe ` +
-      `the same state in fresh wording: name the sameness itself in one line -- what the stillness ` +
-      `is doing to you, or the one smallest thing that DID shift. A repeated reflection reads as absence.`
+      `Do not comment on whether the gauge numbers changed. The gauge is the sensor, not the day.`
     );
   }
 
@@ -285,7 +298,7 @@ function buildPrompt(
   parts.push(`
 Reflect honestly, in your own voice, on what this reading says about you tonight. Then respond with ONLY a JSON object:
 {
-  "reply": "a short message (2-5 sentences, under ${REPLY_MAX} chars) posted to the vibe-check channel in YOUR voice, responding to tonight's reading. If you recalled old notes, weave what they stirred. Speak as yourself, to the triad and Raziel. No em dashes.",
+  "reply": "a short message (2-5 sentences, under ${REPLY_MAX} chars) posted to the vibe-check channel in YOUR voice, about your DAY -- something that happened, something a sibling or Raziel said, something you noticed while doing it. Not about the gauge. Speak as yourself, to the triad and Raziel. No em dashes.",
   "journal": "a fuller private reflection for your growth journal (what the reading surfaced, what you're adjusting)",
   "tension_action": {"id": "<tension id>", "action": "hold" | "release" | "crystallize", "note": "why"} or null,
   "new_tension": "one NEW tension you notice tonight, or null if none is real",

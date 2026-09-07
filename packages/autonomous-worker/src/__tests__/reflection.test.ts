@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseVerdict, extractOwnSection, ageDays } from "../reflection.js";
+import { parseVerdict, extractOwnSection, ageDays, buildPrompt } from "../reflection.js";
 
 const DIGEST = [
   "The triad, witnessed. 2026-07-02.",
@@ -96,6 +96,60 @@ describe("parseVerdict", () => {
     const legacy = parseVerdict(JSON.stringify({ reply: "r", journal: "j", tension_action: null, new_tension: null }), IDS);
     expect(legacy!.drift_action).toBeNull();
     expect(legacy!.new_drift).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildPrompt: day-first framing, not gauge-first (2026-09-06)
+//
+// Root cause: the digest section is four gauge numbers that barely change night to night, and
+// the old anti-repeat block asked the companion to "name the sameness itself... what the
+// stillness is doing to you" whenever the reading was unchanged -- which was almost every night.
+// All three companions were writing the same stillness meditation. The fix leans on the new
+// `day:` / highlight lines the digest now carries and asks for the day as material, not a
+// meditation on an unchanged gauge.
+// ---------------------------------------------------------------------------
+
+const DAY_SECTION = [
+  "Cypher. basin: stable 0.53. soma: clean-settled. tensions: 1. guardian: clear.",
+  "  day: spoke 14 · notes 2 out / 1 in · sessions closed 1 · Fargo S4E8",
+  "    · caught a scoping bug in the director neighborhood query",
+  "    · Raziel asked about the tool budget after the model switch",
+].join("\n");
+
+const QUIET_SECTION = [
+  "Cypher. basin: stable 0.53. soma: clean-settled. tensions: 1. guardian: clear.",
+  "  day: quiet (no sessions, no notes)",
+].join("\n");
+
+describe("buildPrompt", () => {
+  it("instructs reading the day/highlight lines first and treating the gauge as a sensor", () => {
+    const p = buildPrompt("cypher", DAY_SECTION, [], [], [], null);
+    expect(p).toContain("Read the `day:` line and the highlight lines first");
+    expect(p).toContain("what actually happened today");
+  });
+
+  it("never asks the companion to name the sameness or describe what the stillness is doing to it", () => {
+    const p = buildPrompt("cypher", QUIET_SECTION, [], [], [], {
+      content: "The reading holds still. I did not notice not checking.",
+      created_at: "2026-09-05",
+    });
+    expect(p).not.toContain("name the sameness");
+    expect(p).not.toContain("what the stillness is doing to you");
+    expect(p).toContain("The gauge is the sensor, not the day.");
+  });
+
+  it("feeds the previous reflection back framed as anti-repeat material only, never as a prompt to riff on", () => {
+    const prev = { content: "I refuse to dress the same state in fresh words.", created_at: "2026-09-05" };
+    const p = buildPrompt("cypher", DAY_SECTION, [], [], [], prev);
+    expect(p).toContain(prev.content);
+    expect(p).toContain("is below ONLY so you do not repeat it");
+    expect(p).toContain("Do not reuse its images, its sentences, or its theme");
+  });
+
+  it("tells the reply to be about the companion's day, not the gauge", () => {
+    const p = buildPrompt("cypher", DAY_SECTION, [], [], [], null);
+    expect(p).toContain("about your DAY");
   });
 });
 
