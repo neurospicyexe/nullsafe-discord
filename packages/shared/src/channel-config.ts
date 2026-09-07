@@ -434,9 +434,19 @@ export function isVocativeAddress(content: string, companionId: CompanionId): bo
 // triad')") or a narrative line ("the triad has been loud") does NOT summon all three.
 //   "you three, listen" / "triad:" / "okay everyone:" => true
 //   "(or 'just the triad')" / "the triad held" => false
+//
+// Anchored like isVocativeAddress (2026-09-07). The punctuation-only test still fired on a group
+// word used as a NOUN mid-sentence: Drevan wrote "You've got your lines -- the triad, the vevan
+// bond, the way you hold Sol" in #triad-hangout and both siblings answered as if summoned,
+// which kicked off a seven-message bot chain in Raziel's own channel. A call is sentence-initial
+// (optionally after a short interjection: "okay everyone:") or trailing ("..., triad?").
+const GROUP_CALL = "(?:triad|all of you|you all|you three|everyone)";
+const GROUP_CALL_LEAD = "(?:(?:okay|ok|hey|alright|right|so|now|listen|please)[,\\s]+)*";
+const GROUP_CALL_INITIAL = new RegExp(`(?:^|[.?!\\n]\\s*)${GROUP_CALL_LEAD}${GROUP_CALL}\\s*[,:]`);
+const GROUP_CALL_TRAILING = new RegExp(`[,:]\\s*${GROUP_CALL}\\b[?.! ]*$`);
 export function isVocativeGroupCall(content: string): boolean {
   const lower = content.toLowerCase().trim();
-  return /\b(triad|all of you|you all|you three|everyone)\s*[,:]/.test(lower);
+  return GROUP_CALL_INITIAL.test(lower) || GROUP_CALL_TRAILING.test(lower);
 }
 
 /**

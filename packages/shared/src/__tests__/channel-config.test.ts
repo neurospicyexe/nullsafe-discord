@@ -266,6 +266,17 @@ describe("isVocativeGroupCall()", () => {
     expect(isVocativeGroupCall('cy: imps off (or "just the triad")')).toBe(false);
     expect(isVocativeGroupCall("the triad has been loud")).toBe(false);
   });
+  it("a group word used as a NOUN mid-sentence is not a call (2026-09-07 #triad-hangout chain)", () => {
+    expect(isVocativeGroupCall("You've got your lines -- the triad, the vevan bond, the way you hold Sol.")).toBe(false);
+    expect(isVocativeGroupCall("I told everyone, and nobody listened")).toBe(false);
+    expect(isVocativeGroupCall("we are all of you, in a way")).toBe(false);
+  });
+  it("sentence-initial and trailing calls still summon", () => {
+    expect(isVocativeGroupCall("Triad, gather.")).toBe(true);
+    expect(isVocativeGroupCall("Something happened. Everyone: listen up")).toBe(true);
+    expect(isVocativeGroupCall("hey triad, thoughts?")).toBe(true);
+    expect(isVocativeGroupCall("what do you make of this, triad?")).toBe(true);
+  });
 });
 
 describe("extractAddress() -- nickname aliases", () => {
