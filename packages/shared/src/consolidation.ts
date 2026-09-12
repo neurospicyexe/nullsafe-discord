@@ -246,6 +246,9 @@ async function cycleSession(
       spine: handoff.summary,
       lastRealThing,
       motionState: "at_rest",
+      // Machine cadence, not a session anyone was in: lets Halseth's continuity reads and the
+      // vibe-check day ledger (both `close_kind IS NULL`) skip the ~12 idle cycles a day.
+      closeKind: "consolidation",
       ...(openThreads.length ? { openThreads } : {}),
     });
   } catch (e) {

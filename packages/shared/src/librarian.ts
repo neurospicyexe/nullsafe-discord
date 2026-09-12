@@ -184,6 +184,13 @@ export class LibrarianClient {
      * is working in.
      */
     sessionScope?: "unattended";
+    /**
+     * Machine-cadence marker (2026-09-11). The idle-consolidation cycle closes a bot lane ~12x/day
+     * with a narrator spine; without this Halseth wrote those as close_kind NULL ("authored live"),
+     * the vibe-check day ledger counted them as the day, and continuity surfaced a 2h-old
+     * re-narration of stillness as the latest authored handover.
+     */
+    closeKind?: "consolidation";
   }) {
     // Serialize with snake_case keys to match execSessionClose field names.
     // emotion_prompted: true bypasses the soft emotion prompt -- bot shutdowns
@@ -191,6 +198,7 @@ export class LibrarianClient {
     return this.askWrite("session close", "close session", JSON.stringify({
       ...(params.sessionId ? { session_id: params.sessionId } : {}),
       ...(params.sessionScope ? { session_scope: params.sessionScope } : {}),
+      ...(params.closeKind ? { close_kind: params.closeKind } : {}),
       ...(params.openThreads?.length ? { open_threads: params.openThreads } : {}),
       spine: params.spine,
       last_real_thing: params.lastRealThing,

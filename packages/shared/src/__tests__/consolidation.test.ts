@@ -255,6 +255,8 @@ describe("consolidateSession session cycling", () => {
       // last_real_thing = the summary's most concrete (final) sentence.
       lastRealThing: "Something settled.",
       motionState: "at_rest",
+      // Tagged as machine cadence so continuity + the day ledger do not read it as authored.
+      closeKind: "consolidation",
     });
     // Reopen only AFTER the close acked, same surface, and the live session id follows the cycle.
     expect(lib.sessionOpen).toHaveBeenCalledWith("work", "discord:cypher");
