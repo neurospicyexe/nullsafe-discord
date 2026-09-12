@@ -19,7 +19,7 @@ import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
-import { createDirectAdapter } from "./direct-inference.js";
+import { createDirectAdapter, directChainNames } from "./direct-inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
 import { readHermesModelKeys, selectableModels, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
@@ -440,10 +440,14 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // judgeAmbientRelevance -- built once, not per-message, and independent of forceHermes: these
   // two classifier calls must NEVER ride the Hermes agent adapter (see direct-inference.ts).
   // null when neither key is configured; both judges then fall back to adapterRef.current.
-  const directAdapter = createDirectAdapter({ deepinfra: env.deepinfraApiKey, deepseek: env.deepseekApiKey });
+  const directKeys = { deepinfra: env.deepinfraApiKey, deepseek: env.deepseekApiKey };
+  const directAdapter = createDirectAdapter(directKeys);
+  // The label names the chain that was BUILT (directChainNames reads the same resolver), never a
+  // hard-coded "deepinfra-first": that string stayed true-looking for 12h on 2026-09-11 while the
+  // chain was DeepSeek-direct-only and every judge call 402'd.
   console.log(
     directAdapter
-      ? `[${companionId}] judges: direct (deepinfra-first)`
+      ? `[${companionId}] judges: direct (${directChainNames(directKeys).join(" -> ")})`
       : `[${companionId}] judges: hermes agent path (no direct key)`,
   );
 

@@ -132,16 +132,10 @@ export function buildOneShotPrompt(companionId: string, task: string): string {
  * env-sourced keys explicitly), it is used as given with no env fallback per-field.
  */
 export function createDirectAdapter(keys?: { deepinfra?: string; deepseek?: string }): InferenceAdapter | null {
-  const resolved = keys ?? {
-    deepinfra: process.env["DEEPINFRA_API_KEY"],
-    deepseek: process.env["DEEPSEEK_API_KEY"],
-  };
-  const deepinfraKey = resolved.deepinfra?.trim();
-  const deepseekKey = resolved.deepseek?.trim();
-
+  const resolved = resolveDirectKeys(keys);
   const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
-  if (deepinfraKey) chain.push({ name: "deepinfra", adapter: new DeepInfraAdapter(deepinfraKey, DIRECT_FLASH_MODEL) });
-  if (deepseekKey) chain.push({ name: "deepseek", adapter: new DeepSeekAdapter(deepseekKey) });
+  if (resolved.deepinfra) chain.push({ name: "deepinfra", adapter: new DeepInfraAdapter(resolved.deepinfra, DIRECT_FLASH_MODEL) });
+  if (resolved.deepseek) chain.push({ name: "deepseek", adapter: new DeepSeekAdapter(resolved.deepseek) });
 
   if (chain.length === 0) {
     console.warn(
@@ -150,5 +144,38 @@ export function createDirectAdapter(keys?: { deepinfra?: string; deepseek?: stri
     );
     return null;
   }
+  // Say what was ACTUALLY built. The boot log used to print "deepinfra-first" whenever this
+  // returned non-null, which on 2026-09-11 meant it said "deepinfra-first" for 12 hours while the
+  // chain was DeepSeek-direct-only (key missing from the process env) and every call 402'd.
+  if (!resolved.deepinfra) {
+    console.warn(
+      "[direct-inference] DEEPINFRA_API_KEY absent -- chain is DeepSeek-direct ONLY " +
+      "(402 on a $0 balance; is the .env loaded / key in the process env?)",
+    );
+  }
   return chain.length === 1 ? chain[0].adapter : new FallbackAdapter(chain);
+}
+
+function resolveDirectKeys(keys?: { deepinfra?: string; deepseek?: string }): { deepinfra?: string; deepseek?: string } {
+  const src = keys ?? {
+    deepinfra: process.env["DEEPINFRA_API_KEY"],
+    deepseek: process.env["DEEPSEEK_API_KEY"],
+  };
+  // `.replace(/^=+/, "")` mirrors the bots' config.ts: a `KEY==value` typo in .env otherwise
+  // ships a key with a leading "=" and 401s in a way that reads like a revoked credential.
+  const clean = (v?: string) => v?.trim().replace(/^=+/, "") || undefined;
+  return { deepinfra: clean(src.deepinfra), deepseek: clean(src.deepseek) };
+}
+
+/**
+ * The provider names the chain WOULD contain, in order, for these keys -- for boot-log labels and
+ * tests. Empty when neither key is present. Kept separate from `createDirectAdapter` so a label
+ * can never disagree with the chain it describes: both read the same resolver.
+ */
+export function directChainNames(keys?: { deepinfra?: string; deepseek?: string }): string[] {
+  const resolved = resolveDirectKeys(keys);
+  const names: string[] = [];
+  if (resolved.deepinfra) names.push("deepinfra");
+  if (resolved.deepseek) names.push("deepseek");
+  return names;
 }

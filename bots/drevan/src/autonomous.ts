@@ -21,7 +21,15 @@ import {
 // Built once, not per tick: the adapter is stateless and rebuilding it every 5 minutes would only
 // re-log the same warning. Null when DEEPSEEK_API_KEY is unset -- consolidateSession then falls back
 // to the Hermes agent path. See packages/shared/src/consolidation-narrator.ts.
-const narrator = createDirectAdapter();
+// Lazy (2026-09-11): built on first use, not at import. Even with the .env loader imported first in
+// index.ts, a module-level build is one import-order regression away from reading an env that
+// is not loaded yet -- which is how the narrator became DeepSeek-direct-only (402) for 12 hours.
+let narratorBuilt = false;
+let narratorRef: InferenceAdapter | null = null;
+function getNarrator(): InferenceAdapter | null {
+  if (!narratorBuilt) { narratorRef = createDirectAdapter(); narratorBuilt = true; }
+  return narratorRef;
+}
 
 // Per-process state shared by-reference with the shared autonomous runners (autonomous-core.ts).
 // pushRazielMessage (called from the message handler) and the runner signal-detection read the
@@ -86,7 +94,7 @@ export function startAutonomous(
       if (await isConsolidated(redis, COMPANION_ID)) return;
       // session: an acked handoff also closes + reopens the Halseth session (surface must match
       // the boot open in index.ts) so the boot narrative stops freezing on a never-closed row.
-      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference, narrator, session: { surface: `discord:${COMPANION_ID}`, bootCtx } });
+      const result = await consolidateSession({ companionId: COMPANION_ID, librarian, inference, narrator: getNarrator(), session: { surface: `discord:${COMPANION_ID}`, bootCtx } });
       // Hold on the ATTEMPT, not just the success. `markConsolidated` used to run only when a write
       // landed, so any persistent failure (a 402 balance, an empty parse) left this cron free to
       // retry on all 288 five-minute ticks -- which is exactly how 2026-08-07 burned 864 calls with

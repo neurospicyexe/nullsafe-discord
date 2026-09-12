@@ -1293,6 +1293,55 @@ def render_full(rep):
     return "\n".join(out)
 
 
+def check_direct_inference(rep):
+    """The direct (tool-less) judge/narrator chain: consolidation on a 5-minute cron is its
+    heartbeat. `skipped (inference_empty)` means every link failed -- on 2026-09-11 that was the
+    chain silently DeepSeek-direct-only (DEEPINFRA_API_KEY missing from the process env after a
+    bare `pm2 restart --update-env`) 402ing on a $0 balance for 12h, while the boot log said
+    "deepinfra-first" and the balance check said "primary unaffected". Read the symptom, not the
+    label: N skips in the last 3h across the bot logs, with no narrator success in between, is a
+    dead chain whatever the cause."""
+    import glob, re, time
+    from datetime import datetime, timedelta
+    horizon = datetime.utcnow() - timedelta(hours=3)
+    skips, wins, di_only = 0, 0, 0
+    for path in glob.glob("/app/logs/*-bot-out.log"):
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - 400_000))
+                tail = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        for line in tail.splitlines():
+            m = re.match(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}): ", line)
+            if not m:
+                continue
+            try:
+                ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+            if ts < horizon:
+                continue
+            if "[consolidation]" in line and "skipped (inference_empty)" in line:
+                skips += 1
+            elif "[consolidation]" in line and "written via narrator" in line:
+                wins += 1
+            elif "judges: direct (deepseek)" in line or "chain is DeepSeek-direct ONLY" in line:
+                di_only += 1
+    if di_only:
+        rep.add("inference:direct_chain", "red",
+                "direct judge/narrator chain is DeepSeek-direct ONLY (no DEEPINFRA_API_KEY in the process) "
+                "-- reload via ecosystem.config.js, or check .env is being loaded")
+    elif skips >= 3 and wins == 0:
+        rep.add("inference:direct_chain", "red",
+                "consolidation skipped (inference_empty) %d times in 3h with no narrator success -- "
+                "every link of the direct chain is failing" % skips)
+    elif skips:
+        rep.add("inference:direct_chain", "notice", "consolidation skipped %d / written %d in 3h" % (skips, wins))
+    else:
+        rep.add("inference:direct_chain", "ok", "narrator written %d in 3h, no skips" % wins)
+
+
 def main():
     args = set(sys.argv[1:])
     rep = Report()
@@ -1312,6 +1361,7 @@ def main():
         check_second_brain(rep, denv)
         check_inference_balance(rep, denv)
         check_deepinfra_spend(rep)
+        check_direct_inference(rep)
     except Exception as e:
         print("health-check itself failed: %s" % e, file=sys.stderr)
         return 3

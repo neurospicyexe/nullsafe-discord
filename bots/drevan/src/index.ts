@@ -1,3 +1,4 @@
+import "@nullsafe/shared/env-file"; // MUST be first: fills process.env from .env before config.ts reads it (2026-09-11: pm2 env alone lost DEEPINFRA_API_KEY on a bare restart)
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import { runBot } from "@nullsafe/shared";
