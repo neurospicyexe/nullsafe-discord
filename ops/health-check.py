@@ -1303,7 +1303,9 @@ def check_direct_inference(rep):
     dead chain whatever the cause."""
     import glob, re, time
     from datetime import datetime, timedelta
-    horizon = datetime.utcnow() - timedelta(hours=3)
+    # pm2 stamps these logs in the VPS's LOCAL zone (CDT), not UTC -- the OPS-MANUAL trap. Compare
+    # local to local or every line reads as 'too old' and the check says 'no skips' over a dead chain.
+    horizon = datetime.now() - timedelta(hours=3)
     skips, wins, di_only = 0, 0, 0
     for path in glob.glob("/app/logs/*-bot-out.log"):
         try:
