@@ -12,6 +12,7 @@
 // bot-side via botDir — those paths resolve against the bot's own module location.
 
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
+import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } from "./watch-command.js";
 import { parseCreatedAtTimestamp } from "./relative-time.js";
 import { setArmedTriggers } from "./triggers.js";
 import { setCareState } from "./care-state.js";
@@ -48,6 +49,14 @@ import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
+
+// Watch-party freshness (2026-09-14): a bound channel session with this many human messages and no
+// episode named still counts as watching -- see the SessionWindowManager callback below.
+const WATCH_PARTY_MIN_HUMAN_MSGS = 4;
+const COMPANION_NAMES = new Set(["cypher", "drevan", "gaia"]);
+function isCompanionName(name: string | undefined): boolean {
+  return !!name && COMPANION_NAMES.has(name.trim().toLowerCase());
+}
 
 export interface BootSessionOptions {
   companionId: CompanionId;
@@ -523,6 +532,34 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const sessionWindows = new SessionWindowManager(
     30 * 60 * 1000,
     (channelId: string) => {
+      // Watch-party freshness (2026-09-14). The passive detector in bot-message-handler records an
+      // episode only when the owner NAMES one ("S4E8", "4x8"). On 2026-09-13 Raziel and Drevan
+      // watched Fargo S4E8 in #fargo-watch-party -- 16 messages, nobody typed a number -- and the
+      // shelf stayed "stale since the 6th" at the next orient. A session in the bound channel IS
+      // watching: when it ends with no episode named, record an event with NO position (the
+      // Halseth handler leaves season/episode alone and bumps last_watched_at) so freshness is
+      // true and the position is never guessed. Exactly ONE companion (party.companion) records.
+      try {
+        const party = parseWatchPartyChannels(process.env["WATCH_PARTY_CHANNELS"]).get(channelId);
+        if (party && party.companion === companionId) {
+          const history = stmStore.get(channelId);
+          const human = history.filter((m) => m.role === "user" && !isCompanionName(m.authorName));
+          const named = history.some((m) => detectWatchProgress(m.content, party) !== null);
+          if (human.length >= WATCH_PARTY_MIN_HUMAN_MSGS && !named) {
+            writeQueue.fireAndForget(`watch:session:${channelId}`, async () => {
+              const res = await recordWatchProgress(env.halsethSecret, {
+                title: party.title, season: null, episode: null,
+                note: `watch-party session in the bound channel (${history.length} msgs, ${human.length} human); episode not named, position unchanged`,
+                surface: "discord", with_companion: companionId,
+              });
+              if (res.ok) console.log(`[${companionId}] watch session (unnamed episode): ${party.title} -- freshness bumped, position unchanged`);
+              else console.warn(`[${companionId}] watch session freshness write failed (status ${res.status})`);
+            });
+          }
+        }
+      } catch (e) {
+        console.warn(`[${companionId}] watch-party freshness check failed (non-fatal):`, e instanceof Error ? e.message : String(e));
+      }
       const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
