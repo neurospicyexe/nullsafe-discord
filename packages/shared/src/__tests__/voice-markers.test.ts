@@ -155,6 +155,17 @@ describe("voiceFeedbackBlock", () => {
     expect(block).toContain("cypher");
   });
 
+  it("fires at exactly the floor: one sibling phrase per reply (score 0.8 each) is drift, not clean", () => {
+    // 2026-09-14: Cypher's Discord replies scored exactly 0.8 with "gaia: perimeter holds" on 6 of 7
+    // scored rows while the Guardian went red -- and the old `avg >= 0.8` never fired.
+    const oneHit = "The read holds. The perimeter holds, and the logic is clean end to end.";
+    reportVoiceScore("cypher", oneHit, "ch1", "test-secret");
+    reportVoiceScore("cypher", oneHit, "ch1", "test-secret");
+    const block = voiceFeedbackBlock("cypher");
+    expect(block).not.toBeNull();
+    expect(block).toContain("perimeter holds");
+  });
+
   it("recovers to null after clean replies wash the window", () => {
     const drifty = "You've got this! I'm so proud of you, gentle reminder to hold space.";
     reportVoiceScore("cypher", drifty, "ch1", "test-secret");

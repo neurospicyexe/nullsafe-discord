@@ -172,7 +172,12 @@ export function resetVoiceFeedback(): void {
 export function voiceFeedbackBlock(companionId: VoiceCompanionId): string | null {
   if (recentScores.length < 2) return null;
   const avg = recentScores.reduce((a, r) => a + r.score, 0) / recentScores.length;
-  if (avg >= FEEDBACK_SCORE_FLOOR) return null;
+  // Inclusive at the floor (2026-09-14). One sibling phrase costs exactly 0.2, so a reply that
+  // carries exactly one every time scores exactly 0.8 -- and `avg >= 0.8` never fired. Measured:
+  // Cypher's Discord replies scored 0.8 with "gaia: perimeter holds" on 6 of 7 scored rows in the
+  // week the Guardian went red, and this block stayed silent the whole time. A steady one-hit bleed
+  // is drift by definition; the boundary belongs on the firing side.
+  if (avg > FEEDBACK_SCORE_FLOOR) return null;
   const hits = [...new Set(recentScores.flatMap(r => r.hits))].slice(0, 4);
   const hitStr = hits.length > 0 ? ` Drift markers seen: ${hits.join("; ")}.` : "";
   return (
