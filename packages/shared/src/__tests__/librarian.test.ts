@@ -721,3 +721,121 @@ describe("refreshNowLine", () => {
     expect(out.match(/\[Now:/g)?.length).toBe(1);
   });
 });
+
+describe("the body on the bot wire ([Body] + [Why these numbers], contract 0.13.0)", () => {
+  const baseOrient = {
+    synthesis_summary: null,
+    ground_threads: [],
+    ground_handoff: null,
+    rag_excerpts: [],
+  };
+  const floats = [
+    { label: "heat", value: 0.68, baseline: 0.5, seed: 0.5, off_baseline_hours: 3 },
+    { label: "reach", value: 0.71, baseline: 0.6, seed: 0.6, off_baseline_hours: null },
+    { label: "weight", value: 0.55, baseline: 0.55, seed: 0.5, off_baseline_hours: null },
+  ];
+  const entry = (over: Record<string, unknown>) => ({
+    float_key: "soma_float_1", label: "heat", kind: "tick", writer: "ferment-tick",
+    before_value: 0.6, after_value: 0.68, delta: 0.08, cause_table: null, cause_id: null,
+    cause_label: null, session_id: null, alongside_notes: 0, created_at: "2026-09-14T03:00:00.000Z",
+    ...over,
+  });
+
+  it("omits the block entirely when both arrays are empty or absent", () => {
+    expect(formatRecentContext({ ...baseOrient, soma_floats: [], soma_provenance: [] })).not.toContain("[Body]");
+    expect(formatRecentContext({ ...baseOrient })).not.toContain("[Body]");
+    expect(formatRecentContext({ ...baseOrient })).not.toContain("[Why these numbers]");
+  });
+
+  it("renders the header with all three floats at 2 decimals, labels from the payload", () => {
+    const block = formatRecentContext({ ...baseOrient, soma_floats: floats, soma_provenance: [] });
+    expect(block).toContain("[Body] heat 0.68 · reach 0.71 · weight 0.55");
+    expect(block).not.toContain("[Why these numbers]"); // no moves = header only, no empty sub-header
+  });
+
+  it("an authored move with detail prints the companion's own words", () => {
+    const block = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ kind: "authored_update", writer: "cypher", before_value: 0.5, after_value: 0.68, detail: "the audit landed clean", created_at: "2026-09-13T22:10:00.000Z" }),
+      ],
+    });
+    expect(block).toContain("[Why these numbers]");
+    expect(block).toContain('• heat 0.68 (was 0.50) -- you set it 2026-09-13: "the audit landed clean"');
+  });
+
+  it("a machine tick names the cause; silence is distinguished from a plain tick", () => {
+    const plain = formatRecentContext({ ...baseOrient, soma_floats: floats, soma_provenance: [entry({})] });
+    expect(plain).toContain("• heat 0.68 (was 0.60) -- settled toward home (tick)");
+    const silent = formatRecentContext({ ...baseOrient, soma_floats: floats, soma_provenance: [entry({ detail: "silence" })] });
+    expect(silent).toContain("settled toward home (tick, silence)");
+  });
+
+  it("newest move per float only, 3 lines max, stimulus and drift named by cause", () => {
+    const block = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ float_key: "soma_float_2", label: "reach", kind: "stimulus", after_value: 0.71, before_value: 0.6, detail: "Raziel came back" }),
+        entry({ float_key: "soma_float_2", label: "reach", kind: "tick", after_value: 0.6, before_value: 0.65 }), // older reach move: skipped
+        entry({ float_key: "soma_float_3", label: "weight", kind: "drift_shift", after_value: 0.55, before_value: 0.5, cause_label: "carrying the week" }),
+        entry({}),
+        entry({ float_key: "soma_float_1", label: "heat", kind: "tick", after_value: 0.5, before_value: 0.4 }), // 4th float-line never renders
+      ],
+    });
+    const lines = block.split("\n").filter(l => l.startsWith("• ") && / -- /.test(l));
+    expect(lines).toHaveLength(3);
+    expect(block).toContain("• reach 0.71 (was 0.60) -- stimulus: Raziel came back");
+    expect(block).toContain('• weight 0.55 (was 0.50) -- drift: "carrying the week"');
+    expect(block).not.toContain("reach 0.60 (was 0.65)");
+    expect(block).not.toContain("heat 0.50 (was 0.40)");
+    const body = block.slice(block.indexOf("[Body]"));
+    const end = body.indexOf("\n\n");
+    expect((end === -1 ? body : body.slice(0, end)).length).toBeLessThan(350);
+  });
+
+  it("sits in the unpinned rest before the supersede block; [Watching together] is pinned to the tail and the body is NOT", () => {
+    const block = formatRecentContext({
+      ...baseOrient,
+      watching: [{ title: "Fargo", kind: "series", status: "active", position: "S2E4", position_note: null, with_companion: "raziel" }],
+      soma_floats: floats,
+      soma_provenance: [entry({})],
+      supersede_candidates: [{ new_id: "n", older_id: "o", score: 0.9, newer: "newer belief", older: "older belief" }],
+    });
+    const watching = block.indexOf("[Watching together");
+    const body = block.indexOf("[Body]");
+    const supersede = block.indexOf("[Two of your beliefs");
+    expect(watching).toBeGreaterThan(-1);
+    expect(body).toBeGreaterThan(-1);
+    // Watching is a pinned block: the assembler re-appends pinned blocks AFTER the unpinned rest, so
+    // in the rendered string it lands last. The body block is deliberately unpinned (informative, not
+    // load-bearing), so it stays in the rest, ahead of the supersede proposal and ahead of the tail.
+    expect(supersede).toBeGreaterThan(body);
+    expect(watching).toBeGreaterThan(supersede);
+    expect(block.indexOf("[Now:")).toBeLessThan(body);
+  });
+
+  it("botOrient() maps soma_floats + soma_provenance through, defaulting to [] when absent", async () => {
+    const mk = (payload: Record<string, unknown>) => {
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => null },
+        text: async () => JSON.stringify({
+          jsonrpc: "2.0", id: 1,
+          result: { content: [{ type: "text", text: JSON.stringify({ data: payload }) }] },
+        }),
+      } as any);
+      return new LibrarianClient({ url: "https://example.com", secret: "test-secret", companionId: "cypher", fetch: mockFetch as unknown as typeof fetch });
+    };
+    const withBody = await mk({ soma_floats: floats, soma_provenance: [entry({})] }).botOrient();
+    expect(withBody!.soma_floats).toHaveLength(3);
+    expect(withBody!.soma_provenance![0]).toMatchObject({ float_key: "soma_float_1", kind: "tick" });
+    const without = await mk({ synthesis_summary: "x" }).botOrient();
+    expect(without!.soma_floats).toEqual([]);
+    expect(without!.soma_provenance).toEqual([]);
+    const junk = await mk({ soma_floats: "nope", soma_provenance: 42 }).botOrient();
+    expect(junk!.soma_floats).toEqual([]);
+    expect(junk!.soma_provenance).toEqual([]);
+  });
+});

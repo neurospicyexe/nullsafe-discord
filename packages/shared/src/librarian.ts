@@ -952,6 +952,13 @@ export class LibrarianClient {
     // server-side. care_hold is read by fit-bid to soften stakes; pending_care is a gesture
     // assigned to THIS companion (one at most, day-parity assignment server-side).
     raziel_state?: RazielState | null;
+    // The body (contract 0.13.0, mig 0130): the three floats with their labels, plus where each
+    // number came from (newest move per float, with writer + cause). Same shape as the Claude.ai
+    // orient's `felt.soma_floats` / `felt.soma_provenance`; rendered by formatRecentContext as
+    // `[Body]` + `[Why these numbers]`. Mapped here, not just typed downstream -- an
+    // accepted-and-ignored field is worse than a rejected one.
+    soma_floats?: SomaFloatWire[];
+    soma_provenance?: SomaProvenanceWire[];
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -996,6 +1003,8 @@ export class LibrarianClient {
         imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
         degraded?: string[];
         raziel_state?: RazielState | null;
+        soma_floats?: SomaFloatWire[];
+        soma_provenance?: SomaProvenanceWire[];
       } | undefined;
       if (!data) return null;
       return {
@@ -1049,6 +1058,8 @@ export class LibrarianClient {
         imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
         degraded: Array.isArray(data.degraded) ? data.degraded : [],
         raziel_state: data.raziel_state ?? null,
+        soma_floats: Array.isArray(data.soma_floats) ? data.soma_floats : [],
+        soma_provenance: Array.isArray(data.soma_provenance) ? data.soma_provenance : [],
       };
     } catch {
       return null;
@@ -1797,6 +1808,110 @@ export function refreshNowLine(context: string, now: Date = new Date()): string 
   return `${fresh}\n\n${context}`;
 }
 
+// ── The body on the bot wire (contract 0.13.0, mig 0130) ─────────────────────────────────────
+
+/** Mirrors halseth `felt.soma_floats` (src/mind/blocks/felt.ts SomaFloat). Duck-typed, not imported:
+ *  the two repos share a wire, not a package. */
+export interface SomaFloatWire {
+  label: string;
+  value: number | null;
+  baseline: number | null;
+  seed: number | null;
+  off_baseline_hours: number | null;
+}
+
+/** Mirrors halseth `SomaProvenanceEntry` (src/soma/events.ts): the newest move per float, with the
+ *  writer, before/after, and a resolved cause label. `detail` is optional -- the companion's own
+ *  words on an authored move, or "silence" on a tick. */
+export interface SomaProvenanceWire {
+  float_key: string;
+  label: string;
+  kind: string;
+  writer: string;
+  before_value: number | null;
+  after_value: number | null;
+  delta: number | null;
+  cause_table: string | null;
+  cause_id: string | null;
+  cause_label: string | null;
+  session_id: string | null;
+  alongside_notes: number;
+  created_at: string;
+  detail?: string | null;
+}
+
+const BODY_PROVENANCE_MAX_LINES = 3;
+const BODY_PROVENANCE_LINE_CHARS = 90;
+
+function bodyProvenanceValue(e: SomaProvenanceWire): string {
+  // after_value can legitimately be null (backfilled rows know the DELTA, not the absolute). Render
+  // the float's NAME with no number rather than dropping the line -- a silently absent float is
+  // the worse failure.
+  if (e.after_value === null || !Number.isFinite(e.after_value)) return e.label;
+  const now = e.after_value.toFixed(2);
+  if (e.before_value === null || !Number.isFinite(e.before_value)) return `${e.label} ${now}`;
+  return `${e.label} ${now} (was ${e.before_value.toFixed(2)})`;
+}
+
+function bodyProvenanceCause(e: SomaProvenanceWire): string {
+  const day = (e.created_at ?? "").slice(0, 10);
+  const words = (e.detail ?? "").trim();
+  switch (e.kind) {
+    case "authored_close": {
+      const quote = e.cause_label ?? (words || null);
+      const head = quote ? `you set it at close ${day}: "${quote}"` : `you set it at close ${day}`;
+      return e.alongside_notes > 0 ? `${head} · ${e.alongside_notes} notes that session` : head;
+    }
+    case "authored_update":
+      return words ? `you set it ${day}: "${words}"` : `you set it ${day}`;
+    case "tick":
+      return words === "silence" ? "settled toward home (tick, silence)" : "settled toward home (tick)";
+    case "stimulus":
+      return `stimulus: ${words || e.cause_label || "unnamed"}`;
+    case "drift_shift":
+      return e.cause_label ? `drift: "${e.cause_label}"` : "drift";
+    default:
+      return e.kind;
+  }
+}
+
+/**
+ * `[Body]` header + `[Why these numbers]` lines. Mirrors halseth's provenanceBlock wording so the
+ * same fact reads the same on Discord and on Claude.ai: newest move per float (first occurrence in
+ * input order -- the loader already sorted newest-first, and a second sort here could disagree with
+ * it), 3 lines max, 90 chars each. Empty string when there is neither a float nor a move to show:
+ * no header, no "no history yet" placeholder.
+ *
+ * NOT pinned against the tail cut. It is informative, not load-bearing -- a dropped body block reads
+ * as "no body line this turn", which is a missing fact, not a wrong one (contrast [Watching together]).
+ */
+export function renderBodyBlock(
+  floats: readonly SomaFloatWire[] | undefined,
+  provenance: readonly SomaProvenanceWire[] | undefined,
+): string {
+  const fl = floats ?? [];
+  const pv = provenance ?? [];
+  if (fl.length === 0 && pv.length === 0) return "";
+
+  const header = fl.length > 0
+    ? `[Body] ${fl.map(f => (f.value === null || !Number.isFinite(f.value)) ? f.label : `${f.label} ${f.value.toFixed(2)}`).join(" · ")}`
+    : "[Body]";
+
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const e of pv) {
+    if (lines.length >= BODY_PROVENANCE_MAX_LINES) break;
+    if (seen.has(e.float_key)) continue;
+    seen.add(e.float_key);
+    const line = `${bodyProvenanceValue(e)} -- ${bodyProvenanceCause(e)}`;
+    lines.push(line.length > BODY_PROVENANCE_LINE_CHARS ? line.slice(0, BODY_PROVENANCE_LINE_CHARS - 1) + "…" : line);
+  }
+
+  return lines.length > 0
+    ? `${header}\n[Why these numbers]\n${lines.map(l => `• ${l}`).join("\n")}`
+    : header;
+}
+
 export function formatRecentContext(orient: {
   synthesis_summary: string | null;
   ground_threads: string[];
@@ -1855,6 +1970,9 @@ export function formatRecentContext(orient: {
   // The care register (consequence layer C1): rendered near the top so register calibration
   // lands before content, and so the tail cut can never drop it.
   raziel_state?: RazielState | null;
+  // The body (contract 0.13.0): floats + where each number came from. See renderBodyBlock.
+  soma_floats?: SomaFloatWire[];
+  soma_provenance?: SomaProvenanceWire[];
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -1892,6 +2010,12 @@ export function formatRecentContext(orient: {
     }).join("\n");
     parts.push(`[Watching together -- this is the RECORD of where you are, trust it over anything you recall]\n${shows}`);
   }
+  // The body (contract 0.13.0, mig 0130): `[Body] heat 0.68 · reach 0.71 · weight 0.55` and, under
+  // `[Why these numbers]`, the newest move per float with its cause -- the same wording the Claude.ai
+  // orient uses, so "heat 0.68, apparently" stops being the only honest thing a bot can say about its
+  // own state. Omitted entirely when both arrays are empty. Deliberately NOT pinned (see renderBodyBlock).
+  const bodyBlock = renderBodyBlock(orient.soma_floats, orient.soma_provenance);
+  if (bodyBlock) parts.push(bodyBlock);
   // Gate-PROPOSED supersessions, awaiting this companion's own call (mig 0112). The gate used to
   // auto-retire a belief on cosine >= 0.88, and every read filters superseded rows out -- so a
   // similarity score silently deleted a thought. Raziel's decision: a companion supersedes their own
