@@ -190,7 +190,7 @@ export class LibrarianClient {
      * the vibe-check day ledger counted them as the day, and continuity surfaced a 2h-old
      * re-narration of stillness as the latest authored handover.
      */
-    closeKind?: "consolidation";
+    closeKind?: "consolidation" | "shutdown";
   }) {
     // Serialize with snake_case keys to match execSessionClose field names.
     // emotion_prompted: true bypasses the soft emotion prompt -- bot shutdowns

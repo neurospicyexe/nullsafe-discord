@@ -881,6 +881,10 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
             spine: `[auto] ${companionId} bot shutdown -- process received a stop signal`,
             lastRealThing: "[auto] graceful shutdown; queued writes flushed before close",
             motionState: "floating",
+            // 2026-09-14: a machine close, tagged as one. Without this the row landed as close_kind
+            // NULL (= authored) and the next boot's "[Last: ...]" read "bot shutdown -- process
+            // received a stop signal" -- a pm2 reload presented as the last thing that happened.
+            closeKind: "shutdown",
           }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("session close timed out (5s)")), 5000)),
         ]);
