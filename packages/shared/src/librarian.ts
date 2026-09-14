@@ -1841,7 +1841,17 @@ export interface SomaProvenanceWire {
 }
 
 const BODY_PROVENANCE_MAX_LINES = 3;
-const BODY_PROVENANCE_LINE_CHARS = 90;
+// Same cap as halseth's PROVENANCE_LINE_CHARS: one fact, one budget on both surfaces.
+const BODY_PROVENANCE_LINE_CHARS = 110;
+// Value/cause separator. THE one intentional divergence from halseth's provenanceBlock, which joins
+// with an em dash: this codebase forbids em dashes, so the bot renders ` -- ` instead.
+const BODY_PROVENANCE_SEP = " -- ";
+
+/** Truncate to `max` code points with a trailing ellipsis, never splitting a surrogate pair (emoji in `detail`). */
+function clipLine(line: string, max: number): string {
+  const chars = Array.from(line);
+  return chars.length > max ? chars.slice(0, max - 1).join("") + "…" : line;
+}
 
 function bodyProvenanceValue(e: SomaProvenanceWire): string {
   // after_value can legitimately be null (backfilled rows know the DELTA, not the absolute). Render
@@ -1858,12 +1868,17 @@ function bodyProvenanceCause(e: SomaProvenanceWire): string {
   const words = (e.detail ?? "").trim();
   switch (e.kind) {
     case "authored_close": {
-      const quote = e.cause_label ?? (words || null);
-      const head = quote ? `you set it at close ${day}: "${quote}"` : `you set it at close ${day}`;
+      // cause_label only (the spine head), as halseth renders it. `detail` is not a fallback here.
+      const head = e.cause_label ? `you set it at close ${day}: "${e.cause_label}"` : `you set it at close ${day}`;
       return e.alongside_notes > 0 ? `${head} · ${e.alongside_notes} notes that session` : head;
     }
-    case "authored_update":
-      return words ? `you set it ${day}: "${words}"` : `you set it ${day}`;
+    case "authored_update": {
+      // A bare state_update carries its open session as the cause (cause_label like
+      // "work session 4f2a91c0, opened 2026-09-14") and the companion's own words in `detail`.
+      // Both are optional on the row: PATCH /soma and the MCP tool pass neither.
+      const where = e.cause_label ? `you set it ${day} during ${e.cause_label}` : `you set it ${day}`;
+      return words ? `${where}: "${words}"` : where;
+    }
     case "tick":
       return words === "silence" ? "settled toward home (tick, silence)" : "settled toward home (tick)";
     case "stimulus":
@@ -1876,11 +1891,15 @@ function bodyProvenanceCause(e: SomaProvenanceWire): string {
 }
 
 /**
- * `[Body]` header + `[Why these numbers]` lines. Mirrors halseth's provenanceBlock wording so the
- * same fact reads the same on Discord and on Claude.ai: newest move per float (first occurrence in
- * input order -- the loader already sorted newest-first, and a second sort here could disagree with
- * it), 3 lines max, 90 chars each. Empty string when there is neither a float nor a move to show:
- * no header, no "no history yet" placeholder.
+ * `[Body]` header + `[Why these numbers]` lines. Mirrors halseth's provenanceBlock /
+ * provenanceCause (src/librarian/response/orient-blocks.ts) so the same fact reads the same on
+ * Discord and on Claude.ai. Mirrored exactly: the per-kind cause wording (authored_close quotes
+ * cause_label only; authored_update is `you set it <day>[ during <cause_label>][: "<detail>"]`;
+ * tick / stimulus / drift_shift phrasing), the value rendering, newest move per float (first
+ * occurrence in input order -- the loader already sorted newest-first, and a second sort here could
+ * disagree with it), 3 lines max, 110 chars each with an ellipsis. The ONLY divergence is the
+ * value/cause separator: ` -- ` here, em dash there (see BODY_PROVENANCE_SEP). Empty string when
+ * there is neither a float nor a move to show: no header, no "no history yet" placeholder.
  *
  * NOT pinned against the tail cut. It is informative, not load-bearing -- a dropped body block reads
  * as "no body line this turn", which is a missing fact, not a wrong one (contrast [Watching together]).
@@ -1903,8 +1922,7 @@ export function renderBodyBlock(
     if (lines.length >= BODY_PROVENANCE_MAX_LINES) break;
     if (seen.has(e.float_key)) continue;
     seen.add(e.float_key);
-    const line = `${bodyProvenanceValue(e)} -- ${bodyProvenanceCause(e)}`;
-    lines.push(line.length > BODY_PROVENANCE_LINE_CHARS ? line.slice(0, BODY_PROVENANCE_LINE_CHARS - 1) + "…" : line);
+    lines.push(clipLine(`${bodyProvenanceValue(e)}${BODY_PROVENANCE_SEP}${bodyProvenanceCause(e)}`, BODY_PROVENANCE_LINE_CHARS));
   }
 
   return lines.length > 0

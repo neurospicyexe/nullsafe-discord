@@ -753,16 +753,85 @@ describe("the body on the bot wire ([Body] + [Why these numbers], contract 0.13.
     expect(block).not.toContain("[Why these numbers]"); // no moves = header only, no empty sub-header
   });
 
-  it("an authored move with detail prints the companion's own words", () => {
+  it("an authored update with a session cause renders the halseth form: you set it <day> during <cause_label>: \"<detail>\"", () => {
     const block = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({
+          kind: "authored_update", writer: "cypher", before_value: 0.5, after_value: 0.68,
+          cause_table: "sessions", cause_id: "4f2a91c0-0000-0000-0000-000000000000",
+          cause_label: "work session 4f2a91c0, opened 2026-09-14",
+          detail: "audit landed", created_at: "2026-09-14T22:10:00.000Z",
+        }),
+      ],
+    });
+    expect(block).toContain("[Why these numbers]");
+    // 109 code points: fits inside the 110 cap, so the whole halseth form is pinned verbatim.
+    expect(block).toContain('• heat 0.68 (was 0.50) -- you set it 2026-09-14 during work session 4f2a91c0, opened 2026-09-14: "audit landed"');
+  });
+
+  it("an authored update with only detail prints the companion's own words; with neither, the bare day", () => {
+    const withWords = formatRecentContext({
       ...baseOrient,
       soma_floats: floats,
       soma_provenance: [
         entry({ kind: "authored_update", writer: "cypher", before_value: 0.5, after_value: 0.68, detail: "the audit landed clean", created_at: "2026-09-13T22:10:00.000Z" }),
       ],
     });
-    expect(block).toContain("[Why these numbers]");
-    expect(block).toContain('• heat 0.68 (was 0.50) -- you set it 2026-09-13: "the audit landed clean"');
+    expect(withWords).toContain('• heat 0.68 (was 0.50) -- you set it 2026-09-13: "the audit landed clean"');
+    expect(withWords).not.toContain(" during ");
+
+    const bare = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ kind: "authored_update", writer: "cypher", before_value: 0.5, after_value: 0.68, created_at: "2026-09-13T22:10:00.000Z" }),
+      ],
+    });
+    expect(bare).toContain("• heat 0.68 (was 0.50) -- you set it 2026-09-13");
+    expect(bare).not.toContain("you set it 2026-09-13:");
+  });
+
+  it("an authored close quotes cause_label (the spine head) only; detail is not a fallback", () => {
+    const spine = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ kind: "authored_close", writer: "cypher", before_value: 0.5, after_value: 0.68, cause_label: "shipped the body block", detail: "ignored words", alongside_notes: 2, created_at: "2026-09-13T22:10:00.000Z" }),
+      ],
+    });
+    expect(spine).toContain('• heat 0.68 (was 0.50) -- you set it at close 2026-09-13: "shipped the body block" · 2 notes that session');
+    expect(spine).not.toContain("ignored words");
+
+    const noSpine = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ kind: "authored_close", writer: "cypher", before_value: 0.5, after_value: 0.68, detail: "not quoted either", created_at: "2026-09-13T22:10:00.000Z" }),
+      ],
+    });
+    expect(noSpine).toContain("• heat 0.68 (was 0.50) -- you set it at close 2026-09-13");
+    expect(noSpine).not.toContain("not quoted either");
+  });
+
+  it("caps each line at 110 code points with an ellipsis and never splits an emoji", () => {
+    // 100 emoji, 2 UTF-16 units each (149 code points total, well over the cap): a .slice()-based cap
+    // would land inside a surrogate pair.
+    const words = "\u{1F525}".repeat(100);
+    const block = formatRecentContext({
+      ...baseOrient,
+      soma_floats: floats,
+      soma_provenance: [
+        entry({ kind: "authored_update", writer: "cypher", before_value: 0.5, after_value: 0.68, detail: words, created_at: "2026-09-13T22:10:00.000Z" }),
+      ],
+    });
+    const line = block.split("\n").find(l => l.startsWith("• heat 0.68"))!;
+    const body = line.slice(2); // strip the bullet
+    expect(Array.from(body)).toHaveLength(110);
+    expect(body.endsWith("…")).toBe(true);
+    expect(body).not.toMatch(/[\uD800-\uDBFF]…$/); // no lone high surrogate before the ellipsis
+    for (const ch of Array.from(body)) expect(ch.length === 2 ? ch.codePointAt(0)! > 0xFFFF : true).toBe(true);
   });
 
   it("a machine tick names the cause; silence is distinguished from a plain tick", () => {
