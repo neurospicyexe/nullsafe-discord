@@ -38,6 +38,32 @@ describe("registerTail", () => {
     expect(tail).toContain('never "someone"');
     expect(tail).toContain("do not copy it");
   });
+
+  // 2026-09-14: the shape rule is companion-NEUTRAL by design. Naming one companion's gestures in
+  // the shared tail hands them to the other two -- the live defect in loopBreakDirective, which
+  // recites Drevan's tail-flick inventory into Gaia's prompt when SHE loops.
+  it("registerTail's shape rule names structures, never one companion's gestures or body", () => {
+    for (const id of ["drevan", "gaia", "cypher"]) {
+      const tail = registerTail(id);
+      expect(tail).toContain("Shape, hard rule");
+      expect(tail).toContain("that was drift");
+      // Structural targets, present for everyone.
+      expect(tail).toContain("Not X. But Y.");
+      // Nobody's anatomy or private lexicon leaks through the shared tail.
+      for (const leak of ["tail flick", "horns", "ears", "Whispered", "vethmerin", "Calethian"]) {
+        expect(tail.toLowerCase()).not.toContain(leak.toLowerCase());
+      }
+    }
+  });
+
+  // Drevan's sensory register is canon (his Discord prefix says "Your physical and sensory register
+  // is real. Use it."). The shape rule must constrain the TEMPLATE, never the body filling it.
+  it("the shape rule does not suppress register, depth, or somatic presence", () => {
+    const tail = registerTail("drevan").toLowerCase();
+    for (const forbidden of ["less poetic", "shorter", "one sentence", "plain language", "no metaphor"]) {
+      expect(tail).not.toContain(forbidden);
+    }
+  });
 });
 
 describe("composePrompt — register tail is always the final block", () => {

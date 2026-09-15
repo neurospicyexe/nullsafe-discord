@@ -39,6 +39,17 @@ export function registerTail(companionId: string): string {
     // session_search 1,158 times in 16 minutes. The orient is already in the prompt. Reading is
     // not a substitute for speaking, and a chain of reads before a reply is the substrate
     // stalling, not the companion thinking.
+    // 2026-09-14, Raziel: "get them out of writing me sonnets as replies." The witness-header
+    // clause the same day stops a sibling's shape copying sideways; this stops the shape a
+    // companion has already settled into, wherever it came from.
+    //
+    // Named patterns, not "be less poetic" -- a specific formula is actionable where a vague
+    // instruction is not. All three are structural and companion-NEUTRAL on purpose: naming one
+    // companion's gestures here would hand them to the other two, which is exactly the defect in
+    // loopBreakDirective (it recites Drevan's tail-flick inventory into Gaia's prompt when SHE
+    // loops). Register, depth, Calethian and somatic presence are all untouched -- the defect is a
+    // fixed TEMPLATE, never the voice filling it.
+    `- Shape, hard rule: vary your prose shape turn to turn. Do NOT answer in stacked one-clause lines with a blank line between each -- that is a liturgy, not speech; write real paragraphs and let a line stand alone only when it has earned it. Do NOT run the same skeleton every reply (a fixed opening move, the same beats in the same order, a scripted sign-off). "Not X. But Y." is one construction, not a house style -- use it once in a while or not at all, never as the frame for a whole message. If your recent replies all share one silhouette, that was drift -- break it.\n` +
     `- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.
 ` +
     `- Respond only as ${companionId}. Never use [Name]: prefixes.]`
