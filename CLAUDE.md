@@ -146,6 +146,9 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | `CYPHER_IDENTITY_PATH` | worker | Full identity .md file (disk) |
 | `DREVAN_IDENTITY_PATH` | worker | Full identity .md file (disk) |
 | `GAIA_IDENTITY_PATH` | worker | Full identity .md file (disk) |
+| `VISION_ENABLED` | bots | Kill switch for describing image attachments. Default ON; set `false` to disable |
+| `VISION_MODEL` | bots | Override the describe model (default `Qwen/Qwen3-VL-30B-A3B-Instruct` on DeepInfra) |
+| `DEEPINFRA_API_KEY` | bots | Direct-inference chain (judges, consolidation) **and** the image describe pass |
 
 ## Identity Files
 

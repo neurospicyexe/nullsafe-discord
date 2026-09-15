@@ -50,6 +50,7 @@ export * from "./triggers.js";
 export * from "./command-triggers.js";
 export * from "./care-state.js";
 export * from "./media.js";
+export * from "./vision.js";
 export * from "./club-command.js";
 export * from "./log-command.js";
 export * from "./into-command.js";

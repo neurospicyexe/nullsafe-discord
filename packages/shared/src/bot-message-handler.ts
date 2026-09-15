@@ -47,6 +47,7 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
+  visionEnabled, pickImageAttachments, describeImages, seenBlock, seenStmMarker, type SeenImage,
   commandUsage, COMMAND_PREFIX, listenCommandTarget,
   handleClubCommand,
   handleLogCommand,
@@ -597,6 +598,41 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Image attachments: describe them BEFORE any gate, for the same reason STT sits here -- an
+    // image-only message has `message.content === ""`, so without this the companion is handed an
+    // empty turn and answers nothing ("I sent Drevan a picture and it didn't work", 2026-09-14).
+    //
+    // Unlike STT this APPENDS rather than replaces: a picture usually arrives with text, and when
+    // it doesn't, the block is what makes the content non-empty so the addressing gates below have
+    // something to read. The description is turn-scoped (see the stmContent divergence note below);
+    // STM gets a one-line past-tense marker so the companion remembers a picture was shared without
+    // re-answering it every turn.
+    let seenImages: SeenImage[] = [];
+    if (visionEnabled() && !voiceInput && message.attachments.size > 0) {
+      const picked = pickImageAttachments(message.attachments.values());
+      if (picked.length > 0) {
+        const apiKey = (process.env["DEEPINFRA_API_KEY"] ?? "").trim();
+        if (!apiKey) {
+          console.warn(`[${COMPANION_ID}] image attached but DEEPINFRA_API_KEY is absent -- not looked at`);
+          seenImages = picked.map((a) => ({ name: a.name ?? "image", description: null }));
+        } else {
+          // A VL pass is tens of seconds on top of a ~10s orient; show the channel something.
+          await (message.channel as TextChannel).sendTyping().catch(() => {});
+          seenImages = await describeImages(picked, {
+            apiKey,
+            model: (process.env["VISION_MODEL"] ?? "").trim() || undefined,
+          });
+        }
+        // Never log the CDN url -- the `hm=` signature is bearer-ish while it lives.
+        for (const s of seenImages) {
+          console.log(
+            `[${COMPANION_ID}] image ${s.description ? "seen" : "NOT seen"}: "${s.name}" ` +
+            `${s.description ? `${s.description.length} chars` : "(describe failed)"}`,
+          );
+        }
+      }
+    }
+
     // Turn-scoped injections must not persist into STM (2026-08-29). The [HEARD]/[NOT HEARD]
     // blocks appended to effectiveContent below are built for THIS inference call only -- a
     // standing imperative ("respond to the music itself") plus the full track analysis/lyrics
@@ -608,6 +644,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // (STM history, live SB ingest, the autonomous worker's recent-Raziel-messages feed) uses
     // stmContent; effectiveContent (inference, gates, address extraction) keeps the full block.
     let stmContent = effectiveContent;
+
+    // Apply the image blocks now that stmContent exists, so the full description rides the
+    // inference turn only and STM keeps the durable one-liner.
+    if (seenImages.length > 0) {
+      effectiveContent = `${effectiveContent.trim()}\n\n${seenBlock(seenImages)}`.trim();
+      stmContent = `${stmContent.trim()}\n${seenStmMarker(seenImages)}`.trim();
+    }
 
     // ── Record on arrival (2026-07-30) ────────────────────────────────────────
     //
