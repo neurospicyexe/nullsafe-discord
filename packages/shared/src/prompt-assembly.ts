@@ -133,6 +133,50 @@ const HERMES_WITNESS_CAP = 12;         // max folded turns per delta
 const HERMES_WITNESS_CHAR_CAP = 6000;  // max chars for the folded block (2400 truncated peer essays away -- 07-03)
 const HERMES_WITNESS_ITEM_CAP = 1400;  // per-turn slice, head-first so attribution + opening survive
 
+/**
+ * The witness block's header. It has always governed CONTENT ("do not answer each line"); the
+ * FORM clause was added 2026-09-14 after Raziel: "Dre and Gaia in particular have got caught in
+ * this very patterned formulated way of talking ... it's leaning towards looping almost."
+ *
+ * WHAT THE MEASUREMENTS SAID (both hypotheses I started with were wrong, so they are written down
+ * here rather than re-derived). Weekly transcript rotation IS firing and compaction bloat in these
+ * transcripts is 0.0%, so the shape is NOT old history feeding itself: Drevan's hangout transcript
+ * was one day old and already 71.4% broken-line form. No prompt file models the form either -- the
+ * identity kernels, both SOUL.md files and shared_system_context.md are clean of it, and the text
+ * facts-sync recently ADDED is long-line prose that lowered their short-line ratio.
+ *
+ * What is left is sideways propagation, and it is channel-shaped exactly like this block:
+ *   #triad-hangout (all three speak)  W38: 71.4% broken, mean 25.4 lines
+ *   Drevan everywhere else, same week:      6.7% broken, mean  3.7 lines
+ *   #fargo-watch-party (no siblings, withWitness=0): no drift at all
+ * Measured on Gaia's turn: the user-role prompt carrying this block was 4,970 chars with 21
+ * em-dashes (her eleven-week baseline: 0.0), containing Drevan's hard-broken lines verbatim. Her
+ * reply came back at 23 lines against a 2.7-line baseline. The block's one instruction covered
+ * content, so FORM was the one thing free to copy.
+ *
+ * The clause names the drift and forbids copying it, in the same shape as registerTail's "someone"
+ * rule -- never a rewrite layer on the output ([[style-drift-rides-session-history]]). It is
+ * deliberately NOT "be less poetic": Drevan's immersive register is canon and Raziel's
+ * declarative-seal close is his own authored preference. The defect is inheriting a SIBLING's
+ * shape, not having a shape.
+ *
+ * It lives in the header rather than registerTail because the drift is channel-scoped and arrives
+ * WITH this block: here it fires exactly when sibling text is present, and stays silent in a
+ * one-to-one channel where nothing is wrong. The header is outside the HERMES_WITNESS_CHAR_CAP
+ * budget (the loop below measures `folded` only), so its length evicts no witnessed turns.
+ *
+ * NOT fixed here, because it is not a prompt problem: Drevan and Gaia have been on the SAME model
+ * (Qwen3-235B) since 2026-08-30 / 09-02, and Drevan's hangout em-dash rate went 0% (W35, pre-switch)
+ * -> 75% (W36, the switch week) -> 100% (W37-W38). Part of this convergence is a shared-model house
+ * voice and no prompt string can undo it. That lever is Raziel's ("voice is the model").
+ */
+const WITNESS_HEADER =
+  "[Witnessed since your last turn -- already happened, absorb as context, do not answer each line. " +
+  "Absorb WHAT they said, not HOW they typed it: their line breaks, their dashes, their " +
+  "one-clause-per-line shape are theirs, not a format to match. Write in your own register at your " +
+  "own length -- a paragraph is a paragraph. If your recent messages drifted toward a sibling's " +
+  "shape, that was drift -- do not copy it.]";
+
 export interface HermesDeltaResult<T> {
   messages: T[];
   /** Highest timestamp actually folded into this delta. Callers persist it AFTER a
@@ -187,7 +231,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   return {
     messages: [{
       ...current,
-      content: `[Witnessed since your last turn -- already happened, absorb as context, do not answer each line]\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
+      content: `${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
     }],
     deliveredThroughTs: outMark,
   };

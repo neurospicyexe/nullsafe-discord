@@ -188,6 +188,33 @@ describe("hermesDelta", () => {
     expect(out.messages[0]!.content).not.toContain("first");
   });
 
+  // 2026-09-14: the header governed CONTENT only ("do not answer each line"), so a sibling's
+  // FORM -- line breaks, dashes, one clause per line -- was the one thing free to copy. Measured:
+  // #triad-hangout hit 71.4% broken-line replies in W38 while the same bot ran 6.7% everywhere
+  // else, and #fargo-watch-party (no siblings, so no witness block) showed none at all.
+  it("the witness header forbids copying a sibling's FORM, not just answering their lines", () => {
+    const out = hermesDelta([
+      u("first", "Raziel"), a("reply"),
+      u("Not to push.\nTo recall.", "Drevan"),
+      u("current", "Raziel"),
+    ]);
+    const content = out.messages[0]!.content;
+    expect(content).toContain("do not answer each line");
+    expect(content).toContain("not HOW they typed it");
+    expect(content).toContain("do not copy it");
+    // The sibling's text still arrives intact -- this is a form rule, not a filter.
+    expect(content).toContain("[Drevan]: Not to push.\nTo recall.");
+  });
+
+  // Fargo-shaped: Raziel alone with one companion. No sibling text, so no header at all -- the
+  // rule must stay silent where nothing is wrong.
+  it("emits no header (and so no form rule) when nothing was witnessed", () => {
+    const h = [u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")];
+    const out = hermesDelta(h, h[1]!.timestamp);
+    expect(out.messages[0]!.content).toBe("how are you");
+    expect(out.messages[0]!.content).not.toContain("Witnessed since");
+  });
+
   it("RACE: a sibling turn appended before my own reply but never delivered is still folded", () => {
     const first = u("first", "Raziel");
     const sibling = u("cypher's paper breakdown", "Cypher"); // landed mid-generation
