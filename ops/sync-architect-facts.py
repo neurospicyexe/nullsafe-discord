@@ -135,7 +135,26 @@ def fetch_render(env, companion=None):
         # version of the quiet data loss being fixed.
         return None, ("render (%s) is only %d chars (< %d), refusing to overwrite an identity file "
                       "with a likely-truncated block" % (companion or "shared", len(body), MIN_PLAUSIBLE_RENDER))
-    return body, None
+    return normalize_dashes(body), None
+
+
+# House style bans the em dash (shared_system_context.md:190, "Do not use em dash character").
+# The facts render is companion- and Claude-authored prose, so it carries them anyway: measured
+# 2026-09-14, this block took shared_system_context.md from 2 em-dashes to 26, with 24 of the 26
+# inside the synced text -- i.e. the prompt was showing all three companions 24 examples of a
+# character it forbids in the same file. Normalising at the splice boundary fixes every consumer
+# at once (all three SOUL.md plus the shared context) and leaves Halseth's stored fact text alone,
+# which is right: the rule is about what we SHOW the models, not about editing the record.
+#
+# Scoped to this block on purpose. It is NOT a licence to rewrite a companion's own words
+# elsewhere -- see the form-drift work the same day, where the fix was a prompt clause and
+# explicitly never a rewrite layer on output.
+def normalize_dashes(text):
+    """Em dash / en dash -> the ASCII ' -- ' the house style uses, without doubling spaces."""
+    out = text.replace("—", " -- ").replace("–", " -- ")
+    while "  -- " in out or " --  " in out:
+        out = out.replace("  -- ", " -- ").replace(" --  ", " -- ")
+    return out
 
 
 def splice(current, block):
