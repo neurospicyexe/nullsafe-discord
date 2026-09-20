@@ -364,6 +364,47 @@ class LMStudioAdapter implements InferenceAdapter {
   }
 }
 
+// Hermes client timeout (2026-09-19). This was a bare `120_000` literal with no knob, and it
+// was silently LOSING replies. The gateway is stateful: when the client aborts, the agent keeps
+// running, finishes, and writes a real answer into its own state.db -- but nothing delivers it,
+// and `bot-message-handler` (correctly) does not advance the hermes delivered mark on a failed
+// call, so the next inbound message refolds the same question into the witness block and the
+// gateway answers it a SECOND time, minutes late and attached to whatever prompt happens to be
+// live by then.
+//
+// Confirmed 2026-09-16: Drevan ran 29 Librarian searches on one turn (144s). The client aborted
+// at 120s and posted the in-character fallback; the gateway's answer landed 28s later and never
+// reached Discord; the next message replayed the question. All-time aborts at the 120s ceiling:
+// drevan 136, gaia 62, cypher 60 -- so this was never a one-off.
+//
+// 300s default, because the observed worst case is ~144s and the gateway's own tool-call cap
+// bounds the turn. The cost of a longer ceiling is that ChannelInbox serializes per channel, so
+// a slow turn holds the room; that is bounded by the supersede probe (a newer human message
+// drops the in-flight reply) and is strictly better than discarding an answer that exists.
+// Tunable because in-place session compaction has been observed at 3-12 minutes, which no fixed
+// ceiling covers well.
+export const HERMES_REQUEST_TIMEOUT_MS_DEFAULT = 300_000;
+const HERMES_REQUEST_TIMEOUT_MS_MIN = 30_000;
+const HERMES_REQUEST_TIMEOUT_MS_MAX = 900_000;
+
+/**
+ * Reads `HERMES_REQUEST_TIMEOUT_MS` from the given env (defaults to `process.env`). A missing,
+ * unparseable, non-finite or out-of-range value degrades to the default rather than throwing --
+ * a typo'd env var must not take inference down, and must not silently produce a 0ms timeout
+ * that aborts every call.
+ */
+export function hermesRequestTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env["HERMES_REQUEST_TIMEOUT_MS"];
+  if (raw === undefined || raw.trim() === "") return HERMES_REQUEST_TIMEOUT_MS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return HERMES_REQUEST_TIMEOUT_MS_DEFAULT;
+  const ms = Math.trunc(n);
+  if (ms < HERMES_REQUEST_TIMEOUT_MS_MIN || ms > HERMES_REQUEST_TIMEOUT_MS_MAX) {
+    return HERMES_REQUEST_TIMEOUT_MS_DEFAULT;
+  }
+  return ms;
+}
+
 // Hermes agent API server (OpenAI-compatible /v1/chat/completions, bearer-gated).
 // Unlike LMStudioAdapter, this sends Authorization and allows a long timeout: each call
 // runs the FULL Hermes agent (orient, SOUL.md, Halseth MCP, tools), which can take tens of
@@ -375,9 +416,11 @@ class HermesAdapter implements InferenceAdapter {
     private apiKey: string,
     private model: string = "",
     private fetchFn: typeof fetch = globalThis.fetch,
+    private timeoutMs: number = hermesRequestTimeoutMs(),
   ) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string, sessionKey?: string): Promise<string | null> {
+    const startedAt = Date.now();
     try {
       // Stable session pinning (2026-07-01): without an explicit session header the gateway
       // derives session id from hash(system_prompt + first user msg). Our system prompt varies
@@ -409,7 +452,7 @@ class HermesAdapter implements InferenceAdapter {
           temperature,
           stream: false,
         }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
       if (!res.ok) {
         console.warn(`[inference:hermes] non-2xx response: ${res.status}`);
@@ -432,7 +475,17 @@ class HermesAdapter implements InferenceAdapter {
       return content;
     } catch (e: unknown) {
       const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
-      console.warn(`[inference:hermes] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
+      // Elapsed is the discriminator: a client abort at the ceiling means the gateway is still
+      // working and its answer will be ORPHANED (see HERMES_REQUEST_TIMEOUT_MS_DEFAULT above),
+      // which is a different incident from a connection refused at 5ms. Without this number the
+      // 2026-09-16 loss took a code trace plus a log archaeology dig to tell apart.
+      const elapsed = Date.now() - startedAt;
+      const atCeiling = elapsed >= this.timeoutMs - 1_000;
+      console.warn(
+        `[inference:hermes] generate failed after ${elapsed}ms (ceiling ${this.timeoutMs}ms): ` +
+        `${e instanceof Error ? e.message : String(e)}${cause}` +
+        (atCeiling ? " -- client abort at the ceiling; the gateway may still answer and that reply will be orphaned" : ""),
+      );
       return null;
     }
   }

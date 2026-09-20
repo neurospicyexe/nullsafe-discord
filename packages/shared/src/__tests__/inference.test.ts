@@ -1,5 +1,5 @@
 import { jest, describe, it, expect } from "@jest/globals";
-import { createAdapter, samplingParamsFor, replyMaxTokensFor, DEFAULT_MAX_TOKENS, HERMES_REPLY_MAX_TOKENS } from "../inference.js";
+import { createAdapter, samplingParamsFor, replyMaxTokensFor, DEFAULT_MAX_TOKENS, HERMES_REPLY_MAX_TOKENS, hermesRequestTimeoutMs, HERMES_REQUEST_TIMEOUT_MS_DEFAULT } from "../inference.js";
 import type { ChatMessage } from "../types.js";
 
 describe("DeepSeekAdapter", () => {
@@ -225,5 +225,36 @@ describe("HermesAdapter session id/key headers (rotation, 2026-09-05)", () => {
     const headers = get();
     expect(headers["X-Hermes-Session-Id"]).toBeUndefined();
     expect(headers["X-Hermes-Session-Key"]).toBeUndefined();
+  });
+});
+
+describe("hermesRequestTimeoutMs (2026-09-19)", () => {
+  // Regression guard for the 2026-09-16 orphaned-reply loss: the ceiling was a bare 120_000
+  // literal, a 144s turn aborted, and the gateway's finished answer never reached Discord.
+  it("defaults to 5 minutes when unset or blank", () => {
+    expect(hermesRequestTimeoutMs({})).toBe(HERMES_REQUEST_TIMEOUT_MS_DEFAULT);
+    expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: "" })).toBe(HERMES_REQUEST_TIMEOUT_MS_DEFAULT);
+    expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: "   " })).toBe(HERMES_REQUEST_TIMEOUT_MS_DEFAULT);
+  });
+
+  it("the default is comfortably above the observed worst-case turn (144s)", () => {
+    expect(HERMES_REQUEST_TIMEOUT_MS_DEFAULT).toBeGreaterThan(144_000);
+    // and strictly above the old hardcoded ceiling that was losing replies
+    expect(HERMES_REQUEST_TIMEOUT_MS_DEFAULT).toBeGreaterThan(120_000);
+  });
+
+  it("accepts an in-range override", () => {
+    expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: "45000" })).toBe(45_000);
+    expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: "600000" })).toBe(600_000);
+  });
+
+  it("degrades to the default on garbage rather than producing a 0ms abort-everything timeout", () => {
+    for (const bad of ["abc", "0", "-1", "NaN", "Infinity", "10", "999999999"]) {
+      expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: bad })).toBe(HERMES_REQUEST_TIMEOUT_MS_DEFAULT);
+    }
+  });
+
+  it("truncates a fractional value instead of passing a float to AbortSignal.timeout", () => {
+    expect(hermesRequestTimeoutMs({ HERMES_REQUEST_TIMEOUT_MS: "45000.7" })).toBe(45_000);
   });
 });

@@ -1778,6 +1778,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         console.warn(`[${COMPANION_ID}] inference returned nothing on a sibling-triggered turn -- staying silent (no fallback into the room)`);
         return;
       }
+      // Supersede check A (2026-09-19): the reply path below has had a supersede gate since
+      // 2026-07-06, but this failure path did not -- so a slow turn that aborted while a newer
+      // human message was already queued dropped "give me a moment" into the room on top of a
+      // question the channel had visibly moved past. The superseding turn regenerates with
+      // everything in STM, so there is nobody left waiting on this apology.
+      if (isSuperseded?.()) {
+        console.log(`[${COMPANION_ID}] inference returned nothing AND the turn was superseded -- skipping the fallback line`);
+        return;
+      }
       await sendLong(ch, IN_CHARACTER_FALLBACK);
       return;
     }
