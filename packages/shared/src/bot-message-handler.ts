@@ -45,6 +45,7 @@ import {
   echoScore, echoThreshold, ownEchoGated,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
+  formWindowShape,
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
@@ -1472,11 +1473,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Logged in both directions: a gate that only speaks when it trips cannot answer "is it
     // running?" (`write-gate-is-unfalsifiable`).
     const formRatchet = formBreakAppend(selfTurns);
+    // The WINDOW, not just the verdict (2026-09-20 evening). Hours after this shipped it reported
+    // `mean_line_len=157, mean_lines=8.2, turns=5` identically on three consecutive turns while he
+    // emitted 19, 31 and 45 lines -- "form ok" straight through the collapse. A verdict with no
+    // input printed cannot be checked, and nothing here could tell a lagging STM apart from a
+    // channel filter matching nothing: `selfFromChannel` compares a webhook-masked DISPLAY name
+    // against the lowercase COMPANION_ID, so it can legitimately be empty and leave the window
+    // pure-STM without ever saying so.
+    const formWindow = `window=${formWindowShape(selfTurns)} stm=${selfFromStm.length} ch=${selfFromChannel.length}`;
     if (formRatchet.text) {
       contextPrompt += formRatchet.text;
-      console.warn(`[${COMPANION_ID}] form ratchet detected (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}) -- injecting form break`);
+      console.warn(`[${COMPANION_ID}] form ratchet detected (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow}) -- injecting form break`);
     } else if (formRatchet.result.turns > 0) {
-      console.log(`[${COMPANION_ID}] form ok (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns})`);
+      console.log(`[${COMPANION_ID}] form ok (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow})`);
     }
 
     // Situational grounding (Component 3): tell the companion WHERE it is -- channel name, thread

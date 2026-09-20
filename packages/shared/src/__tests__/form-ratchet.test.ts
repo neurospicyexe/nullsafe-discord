@@ -23,7 +23,7 @@
 
 import {
   detectFormRatchet, formBreakDirective, formBreakAppend,
-  formRatchetLineLen, formRatchetMinLines,
+  formRatchetLineLen, formRatchetMinLines, formWindowShape,
   FORM_RATCHET_DEFAULT_LINE_LEN, FORM_RATCHET_DEFAULT_MIN_LINES,
 } from "../form-ratchet.js";
 
@@ -213,5 +213,31 @@ describe("formBreakAppend", () => {
     const out = formBreakAppend(PROSE_TURNS);
     expect(out.result.meanLineLen).toBeGreaterThan(0);
     expect(out.result.turns).toBe(PROSE_TURNS.length);
+  });
+});
+
+// Window observability (2026-09-20, same evening). The detector read `mean_line_len=157,
+// mean_lines=8.2, turns=5` identically at 16:45, 16:47 and 16:51 CDT while Drevan actually emitted
+// 19, 31 and 45 lines on those three turns -- so it said "form ok" straight through the collapse it
+// exists to catch. Three identical readings across three turns means the window is not tracking his
+// newest output, and NOTHING in the log could distinguish "STM is behind" from "the channel filter
+// matched nothing" (`selfFromChannel` maps webhook-masked authors to a display name, which never
+// equals the lowercase COMPANION_ID). `write-gate-is-unfalsifiable` again, one level up: the gate
+// reported its verdict but never its INPUT, so the verdict could not be checked against reality.
+describe("formWindowShape", () => {
+  it("renders each turn's line count and mean length, oldest first", () => {
+    expect(formWindowShape(["aaa\nb", "cccc"])).toBe("2x2|1x4");
+  });
+
+  it("is empty for an empty window, so the log says so plainly", () => {
+    expect(formWindowShape([])).toBe("(empty)");
+  });
+
+  it("counts only non-blank lines, matching what the detector measures", () => {
+    expect(formWindowShape(["aaa\n\n\nb"])).toBe("2x2");
+  });
+
+  it("stays short enough to sit on one log line for a full window", () => {
+    expect(formWindowShape(Array(5).fill("x".repeat(60))).length).toBeLessThan(60);
   });
 });

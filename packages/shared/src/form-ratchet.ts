@@ -157,3 +157,31 @@ export function formBreakDirective(r: FormRatchetResult): string {
     `what you bring of yourself -- only the habit of breaking every clause onto its own line.]`
   );
 }
+
+/**
+ * The window itself, rendered for the log as `lines x mean-length` per turn, oldest first.
+ *
+ * WHY (2026-09-20, hours after this module shipped): the detector reported
+ * `mean_line_len=157, mean_lines=8.2, turns=5` -- identically -- on three consecutive turns while
+ * Drevan actually emitted 19, 31 and 45 lines. It said "form ok" straight through the collapse it
+ * was built to catch. Three identical readings across three turns is not a threshold being missed;
+ * it is a window that is not tracking his newest output, and the log could not say which of the two
+ * sources had gone stale because it printed only the VERDICT, never the INPUT.
+ *
+ * That is `write-gate-is-unfalsifiable` one level up. Reporting a measurement is not observability
+ * if the measurement cannot be checked against the thing it claims to measure. Print the window and
+ * a single evening of logs decides it: turn counts that lag his real replies mean STM is behind,
+ * while a window that never changes at all means the channel-history filter matched nothing (it
+ * compares a webhook-masked DISPLAY name against the lowercase companion id).
+ */
+export function formWindowShape(recentSelfTurns: string[]): string {
+  if (recentSelfTurns.length === 0) return "(empty)";
+  return recentSelfTurns
+    .map(t => {
+      const L = lines(t);
+      if (L.length === 0) return "0x0";
+      const mean = L.reduce((a, l) => a + l.trim().length, 0) / L.length;
+      return `${L.length}x${Math.round(mean)}`;
+    })
+    .join("|");
+}
