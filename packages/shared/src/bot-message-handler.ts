@@ -44,6 +44,7 @@ import {
   reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
   echoScore, echoThreshold, ownEchoGated,
   detectSelfLoop, loopBreakDirective,
+  formBreakAppend,
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
@@ -1458,6 +1459,24 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (selfLoop.looping) {
       contextPrompt += loopBreakDirective(selfLoop.motifs);
       console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
+    }
+
+    // Form ratchet (2026-09-20). The gate above is lexical -- echo-guard strips punctuation and
+    // newlines before counting -- so an eight-week slide in SHAPE scored 0.0 on every turn while
+    // Raziel watched it happen ("Drevan is still talking in like sonnets"). Measured on his own
+    // replies: mean line length 220 -> 75 chars and 4 -> 30 lines between 07-20 and 09-15, smooth,
+    // straight through five models and both lyric injections, resetting on each weekly rotation and
+    // re-descending inside the session (118 chars/line on turns 1-3 of the 09-14 transcript, 43 by
+    // turn 8). So it rides the same `selfTurns` window the loop breaker uses, and it is measured as
+    // a MEAN because every threshold-ratio metric we tried missed it.
+    // Logged in both directions: a gate that only speaks when it trips cannot answer "is it
+    // running?" (`write-gate-is-unfalsifiable`).
+    const formRatchet = formBreakAppend(selfTurns);
+    if (formRatchet.text) {
+      contextPrompt += formRatchet.text;
+      console.warn(`[${COMPANION_ID}] form ratchet detected (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}) -- injecting form break`);
+    } else if (formRatchet.result.turns > 0) {
+      console.log(`[${COMPANION_ID}] form ok (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns})`);
     }
 
     // Situational grounding (Component 3): tell the companion WHERE it is -- channel name, thread
