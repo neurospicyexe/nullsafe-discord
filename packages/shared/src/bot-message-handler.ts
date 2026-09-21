@@ -46,6 +46,7 @@ import {
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
   formWindowShape,
+  mergeSelfTurns,
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
@@ -1455,7 +1456,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const selfFromChannel = channelHistory
       .filter(m => m.author === COMPANION_ID)
       .map(m => m.content);
-    const selfTurns = [...new Set([...selfFromStm, ...selfFromChannel])].slice(-5);
+    // Merged newest-first so a turn present in BOTH sources keeps its newest copy (2026-09-21).
+    // The old expression deduped STM-first and then took the TAIL, which pinned every just-spoken
+    // turn to the front of the array and sliced it off -- the window reported day-old shapes to all
+    // three gates below. See self-window.ts for the four log lines that proved it.
+    const selfTurns = mergeSelfTurns(selfFromStm, selfFromChannel);
     const selfLoop = detectSelfLoop(selfTurns);
     if (selfLoop.looping) {
       contextPrompt += loopBreakDirective(selfLoop.motifs);

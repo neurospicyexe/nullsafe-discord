@@ -46,6 +46,7 @@ export * from "./slash-commands.js";
 export * from "./voice-markers.js";
 export * from "./echo-guard.js";
 export * from "./form-ratchet.js";
+export * from "./self-window.js";
 export * from "./inter-seed-gate.js";
 export * from "./triggers.js";
 export * from "./command-triggers.js";
