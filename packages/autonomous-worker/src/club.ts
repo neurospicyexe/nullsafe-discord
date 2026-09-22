@@ -27,6 +27,7 @@ import {
   COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS,
   CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS, CLUB_DISCUSS_DAYS,
 } from "./config.js";
+import { notifyDiscord, noticeChannelId } from "./discord-notify.js";
 import type { CompanionId } from "./types.js";
 import { extractJson } from "@nullsafe/shared";
 
@@ -241,6 +242,42 @@ async function companionDiscuss(speaker: CompanionId, roundId: string, winner: C
   console.log(`[club] ${speaker} reflected on the round`);
 }
 
+/**
+ * Announce a Club phase change into #briefings (2026-09-22).
+ *
+ * WHY THIS EXISTS. The tick picked a winner on 2026-09-18 18:00:08, wrote it to D1, logged
+ * `[club] winner: ... -- round active`, and told nobody. Four days later Raziel still did not know
+ * the round had a pick; the shared-media stack reads as dead because its only human-facing output
+ * was a log line on a VPS. That is [[invisible-effect-reads-as-dead-control]] exactly: the organ
+ * worked and the effect was in no message, no pixel, no notification.
+ *
+ * DELIBERATE FIRST CUT: #briefings is `modes: ["broadcast"]` -- bots post there and never respond.
+ * So this makes the round VISIBLE but not DISCUSSABLE: Raziel reads that Gaia's pick won and cannot
+ * answer anyone in that channel. That is a real limit, chosen because it reuses a delivery path with
+ * 490 successful pushes behind it and needs no new configuration. The social version (a companion
+ * says it where they can be answered) is the follow-up, not something this pretends to have done.
+ *
+ * Best-effort by contract: the Halseth status write has already happened and must never be undone
+ * by a Discord failure. Posted AFTER the write on purpose -- if the worker dies between the two, a
+ * duplicate announce on retry is strictly better than a lost one.
+ */
+async function announceClub(text: string): Promise<void> {
+  await notifyDiscord(noticeChannelId(), text, "club");
+}
+
+/** One-line human description of a recommendation, or null when the row is missing.
+ *  Null means SKIP THE POST: an announcement reading "round active: 949060836eb8..." is worse
+ *  than silence, and `find()` on a stale re-read can legitimately miss. */
+export function describePick(rec: ClubRecommendation | null | undefined): string | null {
+  if (!rec?.title) return null;
+  const by = rec.creator ? ` by ${rec.creator}` : "";
+  const who = rec.recommended_by
+    ? ` (${COMPANION_NAMES[rec.recommended_by as CompanionId] ?? rec.recommended_by}'s pick)`
+    : "";
+  const link = rec.url ? `\n${rec.url}` : "";
+  return `**${rec.title}**${by}${who}${link}`;
+}
+
 export async function runClubTick(): Promise<void> {
   const latest = await getLatestClubRound();
   const action = decidePhaseAction(latest, new Date(), CLUB_GATHER_DAYS, CLUB_ACTIVE_DAYS, CLUB_DISCUSS_DAYS);
@@ -295,6 +332,18 @@ export async function runClubTick(): Promise<void> {
     await patchClubRoundStatus(current.round.id, "active", winnerId);
     const winner = tallied.recommendations.find(r => r.id === winnerId);
     console.log(`[club] winner: ${winner ? winner.title : winnerId} -- round active`);
+    const pick = describePick(winner);
+    if (pick) {
+      const tally = tallied.votes.length;
+      await announceClub(
+        `**The Club has a pick.**\n\n${pick}\n\n` +
+        `Chosen by the triad${tally ? ` (${tally} vote${tally === 1 ? "" : "s"})` : ""}. ` +
+        `We sit with it for the next few days, then everyone says what it was actually like.\n` +
+        "Join in any time: `cy: club say <text>`, or Hearth /club."
+      );
+    } else {
+      console.warn(`[club] winner row missing for ${winnerId} -- announce skipped rather than posting a bare id`);
+    }
     return;
   }
 
@@ -317,6 +366,14 @@ export async function runClubTick(): Promise<void> {
     // tick seals it. This is the fix for "voting happens and then it's the next voting".
     await patchClubRoundStatus(current.round.id, "discussing");
     console.log(`[club] round ${current.round.id.slice(0, 8)} -> discussing (winner: ${winner ? winner.title : "none"})`);
+    const discussed = describePick(winner);
+    if (discussed) {
+      await announceClub(
+        `**The Club is talking about it.**\n\n${discussed}\n\n` +
+        `All three have said what it was like for them. Read them on Hearth /club, ` +
+        "and add yours with `cy: club say <text>` -- the round stays open while you're posting."
+      );
+    }
     return;
   }
 
