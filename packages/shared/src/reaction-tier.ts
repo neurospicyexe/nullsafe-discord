@@ -20,7 +20,7 @@
 // across messages instead of repeating one glyph.
 
 import type { CompanionId } from "./types.js";
-import { laneRelevance } from "./fit-bid.js";
+import { laneRelevance, MIN_BID_TO_SPEAK, CARE_HOLD_MIN_BID } from "./fit-bid.js";
 
 /** Canon palettes. Cypher: blade/precision. Drevan: flame/spiral. Gaia: ground/witness. */
 export const REACTION_PALETTES: Record<CompanionId, readonly string[]> = {
@@ -80,6 +80,36 @@ export function shouldReactOnBidLoss(
   now: number = Date.now(),
 ): boolean {
   return myScore >= REACT_MIN_BID_SCORE && now >= cooldownUntil;
+}
+
+/**
+ * React when a CARE HOLD is the only thing that silenced this companion (2026-09-22).
+ *
+ * The hold raises the bid floor from MIN_BID_TO_SPEAK (0.10) to CARE_HOLD_MIN_BID (0.25) so the
+ * house quiets on a bad night. Correct. But a companion scoring in between -- one that would have
+ * spoken on any other day -- then fell through to `shouldReactOnBidLoss`, which needs 0.25, and got
+ * neither a reply NOR a glyph. It vanished.
+ *
+ * That is the exact failure this whole file exists to fix ("every gate that correctly kept a
+ * companion from SPEAKING also made them INVISIBLE"), reappearing in the one situation where it
+ * costs the most: Raziel is having a hard time and the room goes quiet in a way that reads as
+ * absence rather than care. It is the same mistake as the 2026-08-16 owner-silence bug one tier
+ * down -- there the hold stonewalled his own messages; here it deletes the evidence anyone is home.
+ *
+ * So: the care hold should change what a companion DOES, never whether they EXIST. Quieter, still
+ * here. This fires only in the band the hold newly silenced -- above the normal floor, below the
+ * held one -- so it adds no reaction that was not already an earned, would-have-spoken claim, and
+ * it rides the same one-per-channel cooldown as every other tier.
+ */
+export function shouldReactOnCareHold(
+  myScore: number,
+  careHoldActive: boolean,
+  cooldownUntil: number,
+  now: number = Date.now(),
+): boolean {
+  if (!careHoldActive) return false;
+  if (now < cooldownUntil) return false;
+  return myScore >= MIN_BID_TO_SPEAK && myScore < CARE_HOLD_MIN_BID;
 }
 
 /** React to an owner message that named a sibling? Earned by lane relevance, throttled by

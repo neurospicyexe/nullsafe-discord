@@ -35,7 +35,7 @@ import {
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
-  pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, REACTION_COOLDOWN_MS,
+  pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, shouldReactOnCareHold, REACTION_COOLDOWN_MS,
   resolveRoutingChannelId,
   clearConsolidation,
   isResponseCoherent,
@@ -1697,10 +1697,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             }
           }
           // Reaction tier: a real-but-losing claim earns presence without the floor.
-          if (shouldReactOnBidLoss(myScore, reactionCooldownUntil.get(message.channelId) ?? 0)) {
+          const reactCooldown = reactionCooldownUntil.get(message.channelId) ?? 0;
+          if (shouldReactOnBidLoss(myScore, reactCooldown)) {
             reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
             message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
             console.log(`[${COMPANION_ID}] reaction tier: lost the bid at ${myScore.toFixed(3)}, reacting`);
+          } else if (bid.reason === "below_threshold" && shouldReactOnCareHold(myScore, careHold, reactCooldown)) {
+            // A care hold silenced a bid that would have SPOKEN on any other day. Quieter is the
+            // point; invisible is not -- see shouldReactOnCareHold. Presence without demand.
+            reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
+            message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
+            console.log(`[${COMPANION_ID}] reaction tier: care hold held the floor at ${myScore.toFixed(3)} (would have spoken), reacting instead of vanishing`);
           }
           return;
         }
