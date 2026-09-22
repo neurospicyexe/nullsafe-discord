@@ -25,7 +25,7 @@ import {
   resolveAttribution, detectPluralKit,
   isInvitation, isLeaveRequest, markVoiceUsed, shouldVoice,
   isDirectAddress, shouldRespond, computeChainDepth, extractAddress, activeExchangeHolder, namesSiblingOnly,
-  judgeAmbientRelevance, judgeWriteback,
+  judgeAmbientRelevance,
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
   countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
@@ -74,7 +74,14 @@ import {
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
+import { readWritebackGateMode } from "./jev-gate.js";
+import { runWritebackGate } from "./writeback-gate.js";
 import { stampRelative } from "./relative-time.js";
+
+// Writeback gate mode (2026-09-21). Read ONCE at module load: a knob re-read per message would
+// let the three modes interleave mid-conversation, and the shadow measurement needs a stable
+// denominator. Restart the bot to change it.
+const WRITEBACK_GATE_MODE = readWritebackGateMode();
 
 // ---------------------------------------------------------------------------
 // Imp context cache (module-level, per-process = per companion bot).
@@ -2079,18 +2086,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // session and ran to Hermes's 150-turn cap, burning >100M of a companion's weekly input
     // tokens. The direct adapter has no tools to reach for; fall back to the live agent adapter
     // only when no direct key is configured.
-    judgeWriteback(effectiveContent, response, directAdapter ?? adapterRef.current, COMPANION_ID, writebackSpeaker).then((wb) => {
-      if (!wb) return;
-      writeQueue.fireAndForget(`writeback:${message.channelId}`, async () => {
-        if (wb.type === "companion_note") {
-          await librarian.addCompanionNote(wb.content, message.channelId);
-          // companion_journal is not read by Claude.ai orient; wm_continuity_notes is.
-          // Write relational observations to both so Claude.ai sees them at next boot.
-          await librarian.writeWmNote(`[discord:observation] ${wb.content}`, message.channelId);
-        }
-        else if (wb.type === "witness_log") await librarian.witnessLog(wb.content, message.channelId);
-        else if (wb.type === "thread_open") await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
-      }, { maxAgeMs: APPEND_MAX_AGE_MS });
+    runWritebackGate({
+      mode: WRITEBACK_GATE_MODE,
+      companionId: COMPANION_ID,
+      speaker: writebackSpeaker,
+      userMessage: effectiveContent,
+      assistantResponse: response,
+      channelId: message.channelId,
+      messageId: message.id,
+      inference: directAdapter ?? adapterRef.current,
+      librarian,
+      enqueue: (label, fn) => writeQueue.fireAndForget(label, fn, { maxAgeMs: APPEND_MAX_AGE_MS }),
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeWriteback failed:`, e));
 
     if (attribution.source === "fallback") {

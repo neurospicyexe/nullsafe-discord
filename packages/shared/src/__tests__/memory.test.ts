@@ -1,5 +1,5 @@
-import { describe, it, expect } from "@jest/globals";
-import { meetsNoteThreshold, judgeWriteback } from "../memory.js";
+import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
+import { meetsNoteThreshold, judgeWriteback, authorWriteback } from "../memory.js";
 import type { InferenceAdapter } from "../inference.js";
 
 describe("meetsNoteThreshold()", () => {
@@ -140,5 +140,115 @@ describe("judgeWriteback() -- tool-less one-shot framing", () => {
     const { adapter, seenSystem } = fakeInference("ACTION: skip\nCONTENT:");
     await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
     expect(seenSystem[0]).toMatch(/NO tools/);
+  });
+});
+
+// ── [memory-judge] observability (2026-09-21) ────────────────────────────────
+// The judge's ACTION was never logged. "The bots remember almost nothing" (measured recall
+// ~0.21) could not be told apart from "the judge never ran", so exactly one line per call is
+// now an invariant, pre-gate failures included.
+describe("judgeWriteback() -- the [memory-judge] line", () => {
+  let logSpy: ReturnType<typeof jest.spyOn>;
+  let warnSpy: ReturnType<typeof jest.spyOn>;
+  beforeEach(() => {
+    logSpy = jest.spyOn(console, "log").mockImplementation(() => {});
+    warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+  });
+
+  const judgeLines = () =>
+    logSpy.mock.calls.map((c) => String(c[0])).filter((s) => s.startsWith("[memory-judge]"));
+
+  it("logs pregate=fail action=skip when the lexical pre-gate stops the call", async () => {
+    const { adapter, seen } = fakeInference("ACTION: companion_note\nCONTENT: never reached");
+    await judgeWriteback("the weather is nice", "indeed", adapter, "cypher", OWNER);
+    expect(seen).toHaveLength(0);
+    expect(judgeLines()).toEqual([
+      "[memory-judge] companion=cypher speaker=owner pregate=fail action=skip",
+    ]);
+  });
+
+  it("logs the parsed action once when the pre-gate passes", async () => {
+    const { adapter } = fakeInference("ACTION: Companion_Note\nCONTENT: Something shifted.");
+    await judgeWriteback("I decided to stop", "ok", adapter, "cypher", OWNER);
+    expect(judgeLines()).toEqual([
+      "[memory-judge] companion=cypher speaker=owner pregate=pass action=companion_note",
+    ]);
+  });
+
+  it("marks a peer exchange as peer and still logs exactly one line", async () => {
+    const { adapter } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
+    expect(judgeLines()).toEqual([
+      "[memory-judge] companion=drevan speaker=peer pregate=pass action=skip",
+    ]);
+  });
+
+  it("logs action=none when the model returns nothing at all", async () => {
+    const { adapter } = fakeInference(null);
+    await judgeWriteback("I decided to stop", "ok", adapter, "cypher", OWNER);
+    expect(judgeLines()).toEqual([
+      "[memory-judge] companion=cypher speaker=owner pregate=pass action=none",
+    ]);
+  });
+});
+
+// ── authorWriteback (2026-09-21) ─────────────────────────────────────────────
+// The authoring half of the Jev gate: the KIND is already decided, so there is no ACTION menu
+// and no lexical pre-gate (re-running one would re-impose the recall ceiling Jev was brought in
+// to lift). The attribution guards stay, because they protect the WORDS, not the decision.
+describe("authorWriteback()", () => {
+  let warnSpy: ReturnType<typeof jest.spyOn>;
+  beforeEach(() => { warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {}); });
+  afterEach(() => { warnSpy.mockRestore(); });
+
+  it("returns the kind it was given and offers no ACTION choice", async () => {
+    const { adapter, seen } = fakeInference("CONTENT: We named the thing together.");
+    const wb = await authorWriteback("companion_note", "hello", "hi", adapter, "cypher", OWNER);
+    expect(wb).toEqual({ type: "companion_note", content: "We named the thing together." });
+    expect(seen[0]).not.toContain("ACTION:");
+    expect(seen[0]).toContain("You have decided this exchange deserves a companion_note. Write it.");
+  });
+
+  it("runs with no lexical pre-gate: content Jev kept is authored even without keywords", async () => {
+    const { adapter, seen } = fakeInference("CONTENT: A quiet one, and it mattered.");
+    const wb = await authorWriteback("companion_note", "the weather is nice", "indeed", adapter, "gaia", OWNER);
+    expect(seen).toHaveLength(1);
+    expect(wb).not.toBeNull();
+  });
+
+  it("authors a thread_open with its name", async () => {
+    const { adapter } = fakeInference("CONTENT: This keeps surfacing.\nTHREAD_NAME: the project");
+    expect(await authorWriteback("thread_open", "x", "y", adapter, "cypher", OWNER))
+      .toEqual({ type: "thread_open", name: "the project", notes: "This keeps surfacing." });
+  });
+
+  it("drops a peer witness_log without spending a call", async () => {
+    const { adapter, seen } = fakeInference("CONTENT: They ate.");
+    expect(await authorWriteback("witness_log", GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA)).toBeNull();
+    expect(seen).toHaveLength(0);
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it("keeps the absent-owner and third-person guards", async () => {
+    const fabricated = fakeInference("CONTENT: Raziel said the thing out loud.");
+    expect(await authorWriteback("companion_note", GAIA_MSG, REPLY, fabricated.adapter, "drevan", PEER_GAIA)).toBeNull();
+
+    const thirdPerson = fakeInference("CONTENT: Drevan felt the shift.");
+    expect(await authorWriteback("companion_note", GAIA_MSG, REPLY, thirdPerson.adapter, "drevan", PEER_GAIA)).toBeNull();
+  });
+
+  it("adds the drift note only when asked", async () => {
+    const off = fakeInference("CONTENT: A plain memory.");
+    await authorWriteback("companion_note", "hello", "hi", off.adapter, "cypher", OWNER);
+    expect(off.seen[0]).not.toContain("drifted out of your own register");
+
+    const on = fakeInference("CONTENT: A plain memory.");
+    await authorWriteback("companion_note", "hello", "hi", on.adapter, "cypher", OWNER, { driftNote: true });
+    expect(on.seen[0]).toContain("Your reply below drifted out of your own register.");
+    expect(on.seen[0]).toContain("do not carry the drifted phrasing or register into the memory.");
   });
 });

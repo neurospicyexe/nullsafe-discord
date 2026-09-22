@@ -155,6 +155,21 @@ const shared = {
   // `watched <title> s#e#` command mid-episode. Listed here per this file's own standing rule:
   // an env var absent from this allowlist is a dead knob, only a code deploy can move it.
   WATCH_PARTY_CHANNELS:  process.env.WATCH_PARTY_CHANNELS,
+  // Writeback gate (2026-09-21, S3). WRITEBACK_GATE picks which judgment decides what the
+  // companions remember: legacy (today's generative judge, the default), jev-shadow (judge
+  // still decides and writes; Jev runs alongside and only logs what it would have done), or
+  // jev (Jev decides, the companion authors). The thresholds are the operating points measured
+  // on 2026-09-21; per-companion overrides exist because Cypher, Drevan and Gaia score very
+  // differently. Listed here per this file's own standing rule: an env var absent from this
+  // allowlist is a dead knob, only a code deploy can move it.
+  WRITEBACK_GATE:            process.env.WRITEBACK_GATE,
+  JEV_WRITEBACK_THETA:       process.env.JEV_WRITEBACK_THETA,
+  JEV_WRITEBACK_THETA_CYPHER: process.env.JEV_WRITEBACK_THETA_CYPHER,
+  JEV_WRITEBACK_THETA_DREVAN: process.env.JEV_WRITEBACK_THETA_DREVAN,
+  JEV_WRITEBACK_THETA_GAIA:  process.env.JEV_WRITEBACK_THETA_GAIA,
+  JEV_DRIFT_THETA:           process.env.JEV_DRIFT_THETA,
+  JEV_NOTABLE_SCORE:         process.env.JEV_NOTABLE_SCORE,
+  JEV_SHADOW_LOG:            process.env.JEV_SHADOW_LOG,
 };
 
 module.exports = {
