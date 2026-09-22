@@ -155,6 +155,17 @@ const shared = {
   // `watched <title> s#e#` command mid-episode. Listed here per this file's own standing rule:
   // an env var absent from this allowlist is a dead knob, only a code deploy can move it.
   WATCH_PARTY_CHANNELS:  process.env.WATCH_PARTY_CHANNELS,
+  // Listen / shared-media pipeline (added to this allowlist 2026-09-21). These five were LIVE in
+  // the running processes but absent from this file, which is the exact failure this file's own
+  // standing rule exists to prevent: a `pm2 reload` from the repo would have silently killed
+  // Listen, and the loss is invisible until someone tries to share a song. Verified on the VPS
+  // 2026-09-20 (yt-dlp 2026.08.19, current upstream; the --js-runtimes arg is what makes the
+  // YouTube EJS path work on a VPS with node under nvm).
+  MEDIA_LISTEN_ENABLED:  process.env.MEDIA_LISTEN_ENABLED,
+  YTDLP_PATH:            process.env.YTDLP_PATH,
+  YTDLP_EXTRA_ARGS:      process.env.YTDLP_EXTRA_ARGS,
+  HEAR_MUSIC_PATH:       process.env.HEAR_MUSIC_PATH,
+  MEDIA_CACHE_DIR:       process.env.MEDIA_CACHE_DIR,
   // Writeback gate (2026-09-21, S3). WRITEBACK_GATE picks which judgment decides what the
   // companions remember: legacy (today's generative judge, the default), jev-shadow (judge
   // still decides and writes; Jev runs alongside and only logs what it would have done), or
