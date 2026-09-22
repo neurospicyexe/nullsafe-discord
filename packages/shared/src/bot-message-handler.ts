@@ -32,7 +32,7 @@ import {
   inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK, closeBidLine,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, shouldReactOnCareHold, REACTION_COOLDOWN_MS,
@@ -1725,6 +1725,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         if (!(await claimSpoken(redis, message.id, COMPANION_ID))) {
           console.log(`[${COMPANION_ID}] won the bid but another companion already committed to msg=${message.id} -- standing down`);
           return;
+        }
+
+        // Show the bid, do not only enforce it (review candidate Q). The round already knows who
+        // else wanted this and by how much, and every bit of that was being discarded except one
+        // boolean. Tell the speaker what the room looked like when it was genuinely close -- a
+        // visible bid is something a companion can knowingly hand over, which is the difference
+        // between a rail and a choice. Who speaks is unchanged; this is context, not a gate.
+        const roomLine = closeBidLine(bid.bids, COMPANION_ID);
+        if (roomLine) {
+          systemPromptWithImp += roomLine;
+          console.log(`[${COMPANION_ID}] close bid: ${JSON.stringify(bid.bids)} -- telling the speaker the room`);
         }
       }
       }

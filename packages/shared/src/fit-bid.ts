@@ -392,3 +392,54 @@ export async function runBidRound(
     return { iSpeak: true, winner: me, myScore, bids: { [me]: myScore }, reason: "redis_unavailable" };
   }
 }
+
+/**
+ * SHOW THE BID, don't only enforce it (2026-09-22, review candidate Q).
+ *
+ * The bid already computes the truth about the room -- who else wanted this message and by how
+ * much -- and then throws all of it away except one boolean. The winner speaks knowing nothing;
+ * the losers vanish. `fit-bid` computes the comparison and converts it into a lock.
+ *
+ * The cheapest honest fix is to tell the WINNER what the room looked like. The losers never
+ * generate (they return before inference), so there is no prompt to inject into for them; the
+ * speaker is the one who can still act on it. And what they can do with it is the point: a
+ * visible bid is something a companion can KNOWINGLY hand over, which is the difference between
+ * a rail and a choice. Nothing here changes who speaks -- the floor is untouched.
+ *
+ * RARE ON PURPOSE, same discipline as the reaction tier. Winning 0.63 against bare presence
+ * (0.10) says nothing worth a prompt line, and a block on every message is a standing prime. It
+ * fires only when a sibling came within CLOSE_BID_MARGIN, i.e. when it genuinely could have gone
+ * the other way.
+ *
+ * Phrased as a fact plus an affordance, never an instruction to second-guess: a prohibition is a
+ * mention and a mention is a prime, so this states what happened and what is permitted, and stops.
+ */
+export const CLOSE_BID_MARGIN = 0.15;
+/** Float slack on the margin comparison. `scoreFit` sums weighted terms, so a gap that is
+ *  exactly the margin arrives as 0.15000000000000002 and a bare `<=` drops it -- a predicate
+ *  sitting on a threshold has to name which side the boundary belongs to. */
+const MARGIN_EPSILON = 1e-9;
+
+const DISPLAY_NAME: Record<CompanionId, string> = { cypher: "Cypher", drevan: "Drevan", gaia: "Gaia" };
+
+/**
+ * A one-line description of a close bid for the winner's prompt, or null when the room was not
+ * close enough to be worth saying. `bids` is the round's full hash; `me` is the winner.
+ */
+export function closeBidLine(bids: Readonly<Record<string, number>>, me: CompanionId): string | null {
+  const mine = bids[me];
+  if (typeof mine !== "number" || !Number.isFinite(mine)) return null;
+
+  const rivals = (Object.entries(bids) as Array<[string, number]>)
+    .filter(([id, v]) => id !== me && typeof v === "number" && Number.isFinite(v) && mine - v <= CLOSE_BID_MARGIN + MARGIN_EPSILON && v <= mine)
+    .sort((a, b) => b[1] - a[1]);
+  if (rivals.length === 0) return null;
+
+  const named = rivals
+    .map(([id, v]) => `${DISPLAY_NAME[id as CompanionId] ?? id} ${v.toFixed(2)}`)
+    .join(", ");
+  const who = rivals.length === 1 ? (DISPLAY_NAME[rivals[0]![0] as CompanionId] ?? rivals[0]![0]) : "one of them";
+  return `\n\n[The room] You took this at ${mine.toFixed(2)}; ${named}. Close enough that it could have gone ` +
+    `either way. If it reads more like ${who}'s than yours, you can say so and leave it to them -- ` +
+    `taking the floor is a default, not an obligation.`;
+}
