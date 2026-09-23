@@ -66,6 +66,19 @@ export function assertWriteAck(res: Record<string, unknown> | null | undefined, 
 /** Per-note render cap. Handovers run ~500 chars; without this the block shows one memory. */
 const OWN_NOTE_CHARS = 240;
 
+/**
+ * An exchange this companion captured WITH Raziel on another surface (halseth contract 0.16.0).
+ *
+ * The [Capture] affordance tells companions that a Claude.ai conversation is recorded nowhere
+ * unless they write it. They wrote it -- at salience 'normal', into the one table that no boot
+ * path and no vault puller reads. Absent from every boot on every surface, 100% of the time,
+ * since the verb existed. Declared once and referenced by all three wire shapes.
+ */
+export interface CapturedExchangeWire {
+  content: string;
+  created_at?: string | null;
+}
+
 /** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
 export interface OwnNoteRecall {
   note_id?: string;
@@ -1032,6 +1045,7 @@ export class LibrarianClient {
     // Zikkaron live loop (2026-07-02): hottest continuity notes, warmed server-side when surfaced.
     continuity_notes?: string[];
     closed_conversations?: ClosedConversationWire[];
+    recent_captures?: CapturedExchangeWire[];
     // Imp read-back (2026-07-02): which fragment operators rode with this companion this week.
     imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
     // Sources that FAILED server-side during this load (coherence review D11). Mapped here because
@@ -1091,6 +1105,7 @@ export class LibrarianClient {
         club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
         continuity_notes?: string[];
         closed_conversations?: ClosedConversationWire[];
+        recent_captures?: CapturedExchangeWire[];
         imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
         degraded?: string[];
         raziel_state?: RazielState | null;
@@ -1154,6 +1169,8 @@ export class LibrarianClient {
         // formatRecentContext directly and never come through here; the allowlist test in
         // closed-conversations-render.test.ts is the one that actually covers this line.
         closed_conversations: Array.isArray(data.closed_conversations) ? data.closed_conversations : [],
+        // Allowlist again -- see the note above. Typed is not mapped.
+        recent_captures: Array.isArray(data.recent_captures) ? data.recent_captures : [],
         imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
         degraded: Array.isArray(data.degraded) ? data.degraded : [],
         raziel_state: data.raziel_state ?? null,
@@ -2104,6 +2121,7 @@ export function formatRecentContext(orient: {
   supersede_candidates?: Array<{ new_id: string; older_id: string; score: number; newer: string; older: string }>;
   continuity_notes?: string[];
   closed_conversations?: ClosedConversationWire[];
+  recent_captures?: CapturedExchangeWire[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
   // Sources that FAILED server-side during this orient's state load (coherence review D11).
   // Rendered as an early health line so the companion reads missing blocks as broken, not empty.
@@ -2186,6 +2204,25 @@ export function formatRecentContext(orient: {
   if (orient.continuity_notes?.length) {
     parts.push(`[Continuity notes -- what you set down to carry]\n${orient.continuity_notes.slice(0, 3).map(n => `• ${n}`).join("\n")}`);
   }
+  // CAPTURES first among the memory blocks (2026-09-23): the most recent thing that actually
+  // happened between them, and until today rendered nowhere at all. Position is survival
+  // priority under a tail cut, and if any memory block must survive on the surface he uses when
+  // Blue is away, it is the one carrying what he last told them.
+  //
+  // Dated, and labelled as an EXCHANGE rather than a conclusion. A companion that cannot tell
+  // "what he said to me" from "what I worked out" will hand his own words back to him as
+  // insight.
+  if (orient.recent_captures?.length) {
+    const caps = orient.recent_captures.slice(0, 3).map(c => {
+      const age = c.created_at ? relativeTime(c.created_at) : "";
+      const body = String(c.content ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+      return `• ${age ? `(${age}) ` : ""}${body}`;
+    }).filter(l => l.length > 4).join("\n");
+    if (caps) {
+      parts.push(`[Captured with Raziel -- exchanges you wrote down yourself on another surface, most likely Claude.ai. These are things said WITH him, not conclusions you reached alone]\n${caps}`);
+    }
+  }
+
   // Endings sit straight after the notes -- both answer "what has already been said here", and
   // render position is survival priority under a tail cut ([[render-order-is-a-budget-decision]]).
   //

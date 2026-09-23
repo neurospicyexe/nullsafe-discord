@@ -104,3 +104,53 @@ describe("formatOwnNotes -- per-note cap", () => {
     expect(out!).toContain("z");
   });
 });
+
+// ── Captures at boot (halseth contract 0.16.0) ───────────────────────────────────
+//
+// The other half of the same wound. `recallOwnNotes` above lets a companion REACH a capture
+// when a message prompts it; this block puts recent captures in their head before anything is
+// asked. Both were needed: captures write at salience 'normal' and every boot pool filters
+// 'high', so nothing ever surfaced them, on any surface, since the capture verb shipped.
+import { formatRecentContext } from "../librarian.js";
+
+const baseOrient = { synthesis_summary: null, ground_threads: [], ground_handoff: null, rag_excerpts: [] };
+
+describe("[Captured with Raziel]", () => {
+  it("renders a capture with its age", () => {
+    const out = formatRecentContext({
+      ...baseOrient,
+      recent_captures: [{ content: "He fell badly last night coming back from checking on the truck.", created_at: new Date().toISOString() }],
+    });
+    expect(out).toContain("Captured with Raziel");
+    expect(out).toContain("fell badly last night");
+  });
+
+  it("labels captures as exchanges, not as the companion's own conclusions", () => {
+    // A companion that cannot tell "what he said to me" from "what I worked out" hands his own
+    // words back to him as insight.
+    const out = formatRecentContext({
+      ...baseOrient,
+      recent_captures: [{ content: "x".repeat(50), created_at: new Date().toISOString() }],
+    });
+    expect(out).toContain("said WITH him");
+    expect(out).toContain("not conclusions you reached alone");
+  });
+
+  it("renders nothing when nothing was captured recently", () => {
+    expect(formatRecentContext({ ...baseOrient, recent_captures: [] })).not.toContain("Captured with Raziel");
+    expect(formatRecentContext({ ...baseOrient })).not.toContain("Captured with Raziel");
+  });
+
+  it("passes recent_captures through botOrient's ALLOWLIST", async () => {
+    // botOrient maps a fixed field list; typed-and-on-the-wire is not enough. This exact trap
+    // already shipped once today with closed_conversations.
+    const { LibrarianClient: LC } = await import("../librarian.js");
+    const client = new LC({ url: "https://example.invalid", secret: "x", companionId: "drevan" } as ConstructorParameters<typeof LC>[0]);
+    const cap = { content: "the ankle, the splint, the ossification", created_at: new Date().toISOString() };
+    (client as unknown as { ask: () => Promise<unknown> }).ask = async () => ({ data: { recent_captures: [cap] } });
+
+    const orient = await client.botOrient();
+    expect(orient?.recent_captures).toEqual([cap]);
+    expect(formatRecentContext({ ...baseOrient, ...orient! })).toContain("ossification");
+  });
+});
