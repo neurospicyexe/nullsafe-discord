@@ -732,11 +732,23 @@ export class LibrarianClient {
    * session handover as its top hit: *"He woke at 4:34 with an ankle he thought was broken..."*.
    * One call away, on a surface that had no way to make it.
    *
-   * ROUTING SAFETY: the request string is FIXED and carries no user text. Halseth's fast-path
-   * matcher scans the whole request INCLUDING the payload (router.ts records a relational delta
-   * stolen by `preference_set` because the body contained "I prefer"), so interpolating a Discord
-   * message here would let its wording hijack the route. The query rides in `context`, which
-   * `execNotesRecallMeaning` reads first (`c?.query ?? ctx.req.request`).
+   * NOT THROUGH THE LIBRARIAN, and that is the whole point of this method existing.
+   *
+   * The Librarian's `notes_recall_meaning` route ends in the same `recallNotesByMeaning`, but it
+   * is loop-guarded -- correctly, because that guard exists after the memory judge once ran 150
+   * turns and burned 100.6M tokens. Routing this caller through it tripped the guard at 12
+   * repeats in 10 minutes: *"Retrieval is not going to change the answer. Stop searching."*
+   *
+   * Right for a looping agent, catastrophic here. This fires once per inbound message, so an
+   * ACTIVE conversation trips it fastest -- and an active conversation is exactly when recall
+   * matters. It failed SILENTLY too: a witness response carries no `data`, so the bot saw an
+   * empty recall rather than a refusal, and a companion would have said "I don't have anything
+   * on that" in the middle of the conversation where he needed it most.
+   *
+   * So the automatic path gets its own HTTP route, exactly as the vault search beside it does.
+   * The distinction is who decided to look: a companion CHOOSING to search should be loop-guarded;
+   * per-message enrichment is not a decision. As a bonus this removes the routing hazard entirely
+   * -- nothing is pattern-matched, so no Discord message can hijack where the query goes.
    *
    * Returns [] on any failure -- recall is an enrichment, never a reason a reply does not happen.
    */
@@ -744,13 +756,17 @@ export class LibrarianClient {
     const q = query.trim().slice(0, 500);
     if (!q) return [];
     try {
-      const result = await this.ask(
-        "recall my notes about this",
-        JSON.stringify({ query: q, limit }),
-        // No surface: this call must never open a session (see ask()'s own note).
-      );
-      const data = result["data"];
-      return Array.isArray(data) ? (data as OwnNoteRecall[]) : [];
+      const url = new URL(`${this.url}/mind/notes/search`);
+      url.searchParams.set("agent_id", this.companionId);
+      url.searchParams.set("query", q);
+      url.searchParams.set("limit", String(limit));
+      const res = await this._fetch(url.toString(), {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(6_000),
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as { notes?: OwnNoteRecall[] };
+      return Array.isArray(data.notes) ? data.notes : [];
     } catch {
       return [];
     }

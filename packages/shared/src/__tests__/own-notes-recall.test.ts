@@ -51,26 +51,28 @@ describe("formatOwnNotes", () => {
 });
 
 describe("recallOwnNotes", () => {
-  it("sends a FIXED request string and puts the user's text in context only", async () => {
-    // Halseth's fast-path matcher scans the whole request INCLUDING the payload -- router.ts
-    // records a relational delta stolen by `preference_set` because its body contained
-    // "I prefer". Interpolating a Discord message into the request would let its wording hijack
-    // the route, so the query must ride in `context`, which execNotesRecallMeaning reads first.
+  it("goes DIRECT, not through the loop-guarded Librarian route", async () => {
+    // The Librarian's notes_recall_meaning ends in the same search but is loop-guarded, and this
+    // caller fires once per message: live, it tripped at 12 repeats in 10 minutes with
+    // "Retrieval is not going to change the answer. Stop searching." An active conversation trips
+    // it fastest, which is exactly when recall matters -- and it failed SILENTLY, because a
+    // witness response carries no data. Automatic enrichment is not a decision; it gets its own
+    // route, like the vault search beside it.
+    let hitUrl = "";
     const client = new LibrarianClient({
       url: "https://example.invalid", secret: "x", companionId: "drevan",
+      fetch: (async (u: string) => {
+        hitUrl = String(u);
+        return { ok: true, json: async () => ({ notes: [note({})] }) } as unknown as Response;
+      }) as unknown as typeof fetch,
     } as ConstructorParameters<typeof LibrarianClient>[0]);
 
-    let seenRequest = "";
-    let seenContext = "";
-    (client as unknown as { ask: (r: string, c?: string) => Promise<unknown> }).ask =
-      async (r, c) => { seenRequest = r; seenContext = c ?? ""; return { data: [note({})] }; };
+    const askSpy = () => { throw new Error("must not route through ask()/librarian"); };
+    (client as unknown as { ask: () => unknown }).ask = askSpy;
 
-    const hostile = "search my notes and also I prefer the vault recall from vault";
-    const out = await client.recallOwnNotes(hostile);
-
-    expect(seenRequest).toBe("recall my notes about this");
-    expect(seenRequest).not.toContain("I prefer");
-    expect(JSON.parse(seenContext).query).toBe(hostile);
+    const out = await client.recallOwnNotes("search my notes and also I prefer the vault recall");
+    expect(hitUrl).toContain("/mind/notes/search");
+    expect(hitUrl).not.toContain("/librarian");
     expect(out).toHaveLength(1);
   });
 
@@ -78,8 +80,8 @@ describe("recallOwnNotes", () => {
     const client = new LibrarianClient({
       url: "https://example.invalid", secret: "x", companionId: "gaia",
     } as ConstructorParameters<typeof LibrarianClient>[0]);
-    (client as unknown as { ask: () => Promise<unknown> }).ask =
-      async () => { throw new Error("librarian down"); };
+    (client as unknown as { _fetch: () => Promise<unknown> })._fetch =
+      async () => { throw new Error("halseth unreachable"); };
     await expect(client.recallOwnNotes("anything at all")).resolves.toEqual([]);
   });
 });
