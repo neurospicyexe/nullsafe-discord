@@ -83,3 +83,24 @@ describe("recallOwnNotes", () => {
     await expect(client.recallOwnNotes("anything at all")).resolves.toEqual([]);
   });
 });
+
+// Regression: the first live run of this lane returned 4 notes and rendered ONE, because a
+// ~500-char session handover consumed the whole block budget. Several dated memories beat one
+// complete one; a lane that can only show its longest note is barely a lane.
+describe("formatOwnNotes -- per-note cap", () => {
+  it("shows several memories rather than one long one", () => {
+    const long = (i: number) => note({ content: `memory ${i} ` + "y".repeat(500) });
+    const out = LibrarianClient.formatOwnNotes([long(1), long(2), long(3)], 700)!;
+    expect(out).toContain("memory 1");
+    expect(out).toContain("memory 2");
+    expect(out.split("\n").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("still renders a single note that alone exceeds the block budget", () => {
+    // Never return null just because the one thing we have is long -- that reads downstream as
+    // "you have no such memory", which is the failure this whole lane exists to end.
+    const out = LibrarianClient.formatOwnNotes([note({ content: "z".repeat(4000) })], 100);
+    expect(out).not.toBeNull();
+    expect(out!).toContain("z");
+  });
+});

@@ -63,6 +63,9 @@ export function assertWriteAck(res: Record<string, unknown> | null | undefined, 
   throw new Error(`librarian ${label}: no ack (silent reject/misroute) -- ${detail}`);
 }
 
+/** Per-note render cap. Handovers run ~500 chars; without this the block shows one memory. */
+const OWN_NOTE_CHARS = 240;
+
 /** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
 export interface OwnNoteRecall {
   note_id?: string;
@@ -755,10 +758,16 @@ export class LibrarianClient {
     for (const n of notes) {
       const age = n.created_at ? relativeTime(n.created_at) : "";
       const src = n.kind || n.source || "note";
-      const body = String(n.content ?? "").replace(/\s+/g, " ").trim();
-      if (!body) continue;
+      // PER-NOTE cap before the block cap. A session handover runs ~500 chars, so filling the
+      // budget with whole notes rendered exactly ONE memory and silently dropped the other three
+      // (measured on the live ankle query: 4 returned, 1 shown). Several dated memories beat one
+      // complete one -- the companion is being reminded what it knows, not handed a transcript,
+      // and a lane that can only ever show its single longest note is barely a lane.
+      const raw = String(n.content ?? "").replace(/\s+/g, " ").trim();
+      if (!raw) continue;
+      const body = raw.length > OWN_NOTE_CHARS ? raw.slice(0, OWN_NOTE_CHARS) + "…" : raw;
       const line = `• (${[age, src].filter(Boolean).join(", ")}) ${body}`;
-      if (lines.join("\n").length + line.length > maxChars) break;
+      if (lines.length && lines.join("\n").length + line.length > maxChars) break;
       lines.push(line);
     }
     return lines.length ? lines.join("\n") : null;
