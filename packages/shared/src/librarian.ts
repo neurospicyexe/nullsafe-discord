@@ -942,6 +942,7 @@ export class LibrarianClient {
     club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
     // Zikkaron live loop (2026-07-02): hottest continuity notes, warmed server-side when surfaced.
     continuity_notes?: string[];
+    closed_conversations?: ClosedConversationWire[];
     // Imp read-back (2026-07-02): which fragment operators rode with this companion this week.
     imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
     // Sources that FAILED server-side during this load (coherence review D11). Mapped here because
@@ -1000,6 +1001,7 @@ export class LibrarianClient {
         guardian_flags?: Array<{ id: string; flag_type: string; severity: string; summary: string }>;
         club_round?: { id: string; status: string; winner_title: string | null; candidate_count: number } | null;
         continuity_notes?: string[];
+        closed_conversations?: ClosedConversationWire[];
         imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
         degraded?: string[];
         raziel_state?: RazielState | null;
@@ -1930,6 +1932,29 @@ export function renderBodyBlock(
     : header;
 }
 
+/**
+ * A conversation ENDING on the Discord wire (halseth contract 0.15.0, 2026-09-23).
+ *
+ * The thread spine has run here since July -- open, ledger, `[LANDS:]`, turn budget -- but the
+ * CLOSE half was write-only: halseth's orient read only `state IN ('open','moving')`, so the
+ * closing line a companion wrote left their context the instant the thread ended. Measured on
+ * prod before the fix: 100+ landed threads every one carrying an authored resolution, and 66
+ * faded threads holding 967 turns of which 850 had nothing recorded at all.
+ *
+ * Declared ONCE and referenced by all three wire shapes below. Three copies of a payload type
+ * is how three consumers drift apart ([[three-consumers-three-files]]).
+ */
+export interface ClosedConversationWire {
+  seed_author: string;
+  seed_gist: string;
+  /** landed = a companion wrote the resolution; spent = the turn budget tripped; quiet = it
+   *  simply stopped and the 12h read-fade retired it, with nothing authored. */
+  ending: "landed" | "spent" | "quiet";
+  resolution: string | null;
+  landed_by: string | null;
+  turn_count: number;
+}
+
 export function formatRecentContext(orient: {
   synthesis_summary: string | null;
   ground_threads: string[];
@@ -1981,6 +2006,7 @@ export function formatRecentContext(orient: {
   watching?: Array<{ title: string; kind: string; status: string; position: string; position_note: string | null; with_companion: string | null }>;
   supersede_candidates?: Array<{ new_id: string; older_id: string; score: number; newer: string; older: string }>;
   continuity_notes?: string[];
+  closed_conversations?: ClosedConversationWire[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
   // Sources that FAILED server-side during this orient's state load (coherence review D11).
   // Rendered as an early health line so the companion reads missing blocks as broken, not empty.
@@ -2063,6 +2089,27 @@ export function formatRecentContext(orient: {
   if (orient.continuity_notes?.length) {
     parts.push(`[Continuity notes -- what you set down to carry]\n${orient.continuity_notes.slice(0, 3).map(n => `• ${n}`).join("\n")}`);
   }
+  // Endings sit straight after the notes -- both answer "what has already been said here", and
+  // render position is survival priority under a tail cut ([[render-order-is-a-budget-decision]]).
+  //
+  // Each ending renders as what it WAS. A landed thread quotes the companion's own sentence and
+  // NAMES them: threads are triad-shared, and an unattributed closing line reads to the next
+  // companion as their own conclusion ([[an-address-needs-its-speakers]]). A spent thread says
+  // the counter tripped -- its stored resolution is a bracketed reason code, never prose, and is
+  // deliberately not quoted. A quiet thread says only that it went quiet. Nothing is summarised
+  // on a thread's behalf; where nobody wrote an ending, the absence IS the honest reading.
+  if (orient.closed_conversations?.length) {
+    const ends = orient.closed_conversations.slice(0, 4).map(c => {
+      const opened = `${c.seed_author} opened "${c.seed_gist.slice(0, 90)}"`;
+      if (c.ending === "landed" && c.resolution) {
+        return `• ${opened} -- ${c.turn_count} turns, closed by ${c.landed_by ?? "someone"}: "${c.resolution.slice(0, 160)}"`;
+      }
+      if (c.ending === "spent") return `• ${opened} -- ${c.turn_count} turns, retired on length. Nobody closed it.`;
+      return `• ${opened} -- ${c.turn_count} turns, then it went quiet. Never closed.`;
+    }).join("\n");
+    parts.push(`[Recently ended -- conversations here that finished, and how]\n${ends}`);
+  }
+
   if (orient.identity_anchor) {
     parts.push(`[Anchor] ${orient.identity_anchor}`);
   }
