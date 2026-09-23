@@ -1057,6 +1057,14 @@ export class LibrarianClient {
         guardian_flags: Array.isArray(data.guardian_flags) ? data.guardian_flags : [],
         club_round: data.club_round ?? null,
         continuity_notes: Array.isArray(data.continuity_notes) ? data.continuity_notes : [],
+        // REQUIRED, not optional: this mapping is an ALLOWLIST. A field present on the wire and
+        // on the DTO type but missing from this object is dropped at runtime while TypeScript
+        // stays perfectly happy -- the same shape as the pm2 env allowlist trap, and the same
+        // lesson soma_floats records two screens up ("an accepted-and-ignored field is worse
+        // than a rejected one"). The render tests pass either way, because they call
+        // formatRecentContext directly and never come through here; the allowlist test in
+        // closed-conversations-render.test.ts is the one that actually covers this line.
+        closed_conversations: Array.isArray(data.closed_conversations) ? data.closed_conversations : [],
         imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
         degraded: Array.isArray(data.degraded) ? data.degraded : [],
         raziel_state: data.raziel_state ?? null,

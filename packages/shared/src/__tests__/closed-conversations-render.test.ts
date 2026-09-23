@@ -57,3 +57,35 @@ describe("formatRecentContext -- [Recently ended]", () => {
     expect(formatRecentContext({ ...base })).not.toContain("Recently ended");
   });
 });
+
+// ── The allowlist ────────────────────────────────────────────────────────────────
+//
+// botOrient does not spread the wire payload; it maps a fixed list of fields onto its
+// result. A field can therefore be present on the wire AND on the DTO type and still be
+// dropped at runtime, with TypeScript perfectly satisfied -- the same shape as the pm2 env
+// allowlist trap, and the reason this file's render tests cannot catch it: they call
+// formatRecentContext directly and never pass through the mapping.
+//
+// This was a real defect during the 0.15.0 build, found by reading the mapping rather than
+// by a failing test. The assertion exists so it cannot come back quietly.
+describe("botOrient -- field allowlist", () => {
+  it("passes closed_conversations through to the render layer", async () => {
+    const { LibrarianClient } = await import("../librarian.js");
+    const client = new LibrarianClient({
+      url: "https://example.invalid", secret: "x", companionId: "cypher",
+    } as ConstructorParameters<typeof LibrarianClient>[0]);
+
+    const ending = {
+      seed_author: "raziel", seed_gist: "a thread", ending: "landed",
+      resolution: "it landed here.", landed_by: "gaia", turn_count: 6,
+    };
+    (client as unknown as { ask: (q: string) => Promise<unknown> }).ask =
+      async () => ({ data: { closed_conversations: [ending] } });
+
+    const orient = await client.botOrient();
+    expect(orient?.closed_conversations).toEqual([ending]);
+
+    // And it must survive all the way into the rendered prompt text.
+    expect(formatRecentContext({ ...base, ...orient! })).toContain("it landed here.");
+  });
+});
