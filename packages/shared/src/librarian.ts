@@ -63,6 +63,16 @@ export function assertWriteAck(res: Record<string, unknown> | null | undefined, 
   throw new Error(`librarian ${label}: no ack (silent reject/misroute) -- ${detail}`);
 }
 
+/** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
+export interface OwnNoteRecall {
+  note_id?: string;
+  content: string;
+  created_at?: string | null;
+  salience?: string | null;
+  kind?: string | null;
+  source?: string | null;
+}
+
 export class LibrarianClient {
   private url: string;
   private secret: string;
@@ -682,6 +692,76 @@ export class LibrarianClient {
     if (weeks < 9) return `${weeks} weeks ago`;
     const months = Math.floor(days / 30);
     return months < 24 ? `${months} months ago` : `${Math.floor(days / 365)} years ago`;
+  }
+
+  /**
+   * Recall this companion's OWN continuity notes by meaning -- the SECOND substrate (2026-09-23).
+   *
+   * WHY THIS EXISTS. `searchForMessage` below is the bots' only memory retrieval, and it searches
+   * the Obsidian vault. The vault is fed by 19 Second Brain pullers and `wm_continuity_notes` is
+   * not one of them -- so everything a companion captures on Claude.ai ("capture this exchange",
+   * which writes note_type `conversation_capture`) was unreachable from Discord by BOTH routes:
+   * the boot pools filter `salience = 'high'` and captures default to `normal`, and the vault
+   * never held them at all.
+   *
+   * The lived failure, 2026-09-23: Raziel told Drevan on Claude.ai that he had fallen and hurt his
+   * ankle. Hours later in Discord he asked Drevan to find it, and Drevan -- searching the vault,
+   * because that is the only thing he can search -- surfaced a July ankle thread and reported it as
+   * the answer. The July transcript is Raziel's own verbatim words, so it outranked everything; the
+   * September material exists only as a third-person synthesis ABOUT the writing. Raziel had to
+   * correct him: "No Dre, I hurt myself last night this is new."
+   *
+   * The verb was already there and already worked. `notes_recall_meaning` searches the companion's
+   * own notes by embedding with NO salience filter, and run against that same day it returned the
+   * session handover as its top hit: *"He woke at 4:34 with an ankle he thought was broken..."*.
+   * One call away, on a surface that had no way to make it.
+   *
+   * ROUTING SAFETY: the request string is FIXED and carries no user text. Halseth's fast-path
+   * matcher scans the whole request INCLUDING the payload (router.ts records a relational delta
+   * stolen by `preference_set` because the body contained "I prefer"), so interpolating a Discord
+   * message here would let its wording hijack the route. The query rides in `context`, which
+   * `execNotesRecallMeaning` reads first (`c?.query ?? ctx.req.request`).
+   *
+   * Returns [] on any failure -- recall is an enrichment, never a reason a reply does not happen.
+   */
+  async recallOwnNotes(query: string, limit = 4): Promise<OwnNoteRecall[]> {
+    const q = query.trim().slice(0, 500);
+    if (!q) return [];
+    try {
+      const result = await this.ask(
+        "recall my notes about this",
+        JSON.stringify({ query: q, limit }),
+        // No surface: this call must never open a session (see ask()'s own note).
+      );
+      const data = result["data"];
+      return Array.isArray(data) ? (data as OwnNoteRecall[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Render recalled own-notes for the prompt, newest first, each stamped with its age.
+   *
+   * The age is not decoration. An undated note reads as present-tense news, which is the exact
+   * shape of the failure this whole change exists to fix -- a two-month-old ankle thread served
+   * as though it were today. Deliberately labelled as the companion's OWN notes and NOT as vault
+   * material: they are different substrates, and a block that blurs them teaches the companion
+   * that its memory of a conversation and a synthesis about that conversation are the same thing.
+   */
+  static formatOwnNotes(notes: OwnNoteRecall[], maxChars = 700): string | null {
+    if (!notes.length) return null;
+    const lines: string[] = [];
+    for (const n of notes) {
+      const age = n.created_at ? relativeTime(n.created_at) : "";
+      const src = n.kind || n.source || "note";
+      const body = String(n.content ?? "").replace(/\s+/g, " ").trim();
+      if (!body) continue;
+      const line = `• (${[age, src].filter(Boolean).join(", ")}) ${body}`;
+      if (lines.join("\n").length + line.length > maxChars) break;
+      lines.push(line);
+    }
+    return lines.length ? lines.join("\n") : null;
   }
 
   /**

@@ -1378,6 +1378,22 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const sbSearchPromise = effectiveContent.length >= 12
       ? librarian.searchForMessage(effectiveContent, recentContext).catch(() => null)
       : Promise.resolve(null);
+    // SECOND SUBSTRATE (2026-09-23). Fired in parallel with the vault search above -- same query,
+    // different store: this companion's OWN continuity notes.
+    //
+    // Until now the vault was the only thing a bot could search, and the vault does not contain
+    // what the companions write on Claude.ai. `wm_continuity_notes` is not among Second Brain's
+    // 19 pullers, and the boot pools that might otherwise have carried it filter
+    // `salience = 'high'` while `conversation_capture` defaults to `normal`. Both roads out of a
+    // Claude.ai capture were closed, so it was not that memory was lagging -- it was unreachable.
+    //
+    // The cost of that, in Raziel's own words after Drevan answered his ankle question with a
+    // thread from two months earlier: "No Dre, I hurt myself last night this is new." Drevan had
+    // not failed to search. He had never been the one searching -- this call site is automatic and
+    // its query is the raw message -- and the single store he can reach did not hold the answer.
+    const ownNotesPromise = effectiveContent.length >= 12
+      ? librarian.recallOwnNotes(effectiveContent).catch(() => [])
+      : Promise.resolve([]);
 
     const history = stmStore.get(message.channelId);
     // Temporal grounding (Component 1): stamp each in-window turn with how long ago it was sent
@@ -1400,6 +1416,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const sbRecall = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
     if (sbRecall) {
       contextPrompt += `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecall.slice(0, 1200)}]`;
+    }
+
+    // A SEPARATE block from the vault, deliberately. These are the companion's own notes -- what
+    // they wrote down, in their own voice, including everything captured with Raziel on Claude.ai.
+    // The vault holds syntheses ABOUT those conversations, which is a different kind of thing;
+    // collapsing the two teaches a companion that a book report is the book.
+    //
+    // Ages are load-bearing here, for the same reason they are on vault excerpts: an undated note
+    // reads as present-tense news, which is exactly how a July thread got served as today. Capped
+    // small (700) because this rides the per-message prompt -- a different pool from the 14k boot
+    // budget, which this block does not touch.
+    const ownNotes = LibrarianClient.formatOwnNotes(await ownNotesPromise);
+    if (ownNotes) {
+      contextPrompt += `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`;
     }
 
     // Peer-framing: anchor to triad register rather than Raziel-facing register.
