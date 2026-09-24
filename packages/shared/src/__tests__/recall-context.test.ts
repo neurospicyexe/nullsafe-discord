@@ -140,3 +140,33 @@ describe("isServerRoom", () => {
     expect(isServerRoom(undefined)).toBe(false);
   });
 });
+
+describe("per-room recall controls (RECALL_NO_QUOTE_FROM / _INTO)", () => {
+  const config: ChannelConfig = { shared1: { modes: ["open"] }, shared2: { modes: ["open"] } } as unknown as ChannelConfig;
+  const reset = () => { delete process.env["RECALL_NO_QUOTE_FROM"]; delete process.env["RECALL_NO_QUOTE_INTO"]; };
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("seals a named room as a SOURCE -- what is said there stays there", () => {
+    process.env["RECALL_NO_QUOTE_FROM"] = "shared1";
+    expect(mayWidenAcross(config, "shared1", "shared2")).toBe(false);
+    // and every other room still behaves normally
+    expect(mayWidenAcross(config, "shared2", "shared1")).toBe(true);
+  });
+
+  it("seals a named room as a DESTINATION -- nothing is carried in where guests are reading", () => {
+    process.env["RECALL_NO_QUOTE_INTO"] = "shared2";
+    expect(mayWidenAcross(config, "shared1", "shared2")).toBe(false);
+    expect(mayWidenAcross(config, "shared2", "shared1")).toBe(true);
+  });
+
+  it("takes several ids, and tolerates spacing", () => {
+    process.env["RECALL_NO_QUOTE_FROM"] = " shared1 , shared2 ";
+    expect(mayWidenAcross(config, "shared1", "shared2")).toBe(false);
+    expect(mayWidenAcross(config, "shared2", "shared1")).toBe(false);
+  });
+
+  it("is OFF by default -- this is Raziel's switch, not an imposed policy", () => {
+    expect(mayWidenAcross(config, "shared1", "shared2")).toBe(true);
+  });
+});

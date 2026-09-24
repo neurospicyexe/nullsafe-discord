@@ -48,10 +48,35 @@ export function parseDiscordLivePath(vaultPath: string | undefined | null): { ch
  * wants -- that question is his, and it is logged. This just declines to make it bigger by
  * default.
  */
+/**
+ * Rooms whose contents never leave them (`RECALL_NO_QUOTE_FROM`), and rooms nothing is ever
+ * carried into (`RECALL_NO_QUOTE_INTO`). Comma-separated channel ids, read at call time so a
+ * change lands on a pm2 env reload without a deploy -- same idiom as THREADS_EXTRA_CHANNELS.
+ *
+ * WHY BOTH DIRECTIONS. They answer two different worries and neither substitutes for the other:
+ *
+ *   FROM = "what is said here stays here." For a room that is sensitive without being marked
+ *          `owner_only` -- which is most of them, since the channel config describes who may
+ *          SPEAK, not what is private, and the busiest room is not in it at all.
+ *   INTO = "bring nothing else into this room." For a room where Blue or a guest is reading, so
+ *          nothing from anywhere else can surface in front of them, whatever its source.
+ *
+ * Default empty: this is a control Raziel switches on for named rooms, not a policy I imposed.
+ */
+export function recallNoQuoteFrom(): readonly string[] {
+  return (process.env["RECALL_NO_QUOTE_FROM"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+export function recallNoQuoteInto(): readonly string[] {
+  return (process.env["RECALL_NO_QUOTE_INTO"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export function mayWidenAcross(
   config: ChannelConfig, sourceChannelId: string, currentChannelId: string,
 ): boolean {
   if (sourceChannelId === currentChannelId) return false;   // already in history; nothing to widen
+  // Raziel's explicit lists win over every other rule here, in both directions.
+  if (recallNoQuoteFrom().includes(sourceChannelId)) return false;
+  if (recallNoQuoteInto().includes(currentChannelId)) return false;
   const isPrivate = (e: { modes?: readonly string[] } | undefined) => !!e?.modes?.includes("owner_only");
   const source = config[sourceChannelId];
   if (!isPrivate(source)) return true;

@@ -1,5 +1,6 @@
 import type { CompanionId } from "./types.js";
 import { relativeTime } from "./relative-time.js";
+import { recallNoQuoteFrom } from "./recall-context.js";
 
 /**
  * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
@@ -666,6 +667,14 @@ export class LibrarianClient {
       const text = (c.text ?? "").trim();
       if (!text) continue;
       if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
+      // RECALL_NO_QUOTE_FROM applies HERE too, not only to the widened block (2026-09-24).
+      //
+      // This is the pre-existing behaviour Q20 is actually about: a single line from another room
+      // has been surfacing into prompts all along, with no gate, by design -- it is how "I'll meet
+      // you in the watch party channel" carries. Gating only the widening would have made the
+      // control a half-measure, which is worse than none: Raziel would name a room, believe it
+      // sealed, and its lines would keep appearing one at a time.
+      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
       const key = text.slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);

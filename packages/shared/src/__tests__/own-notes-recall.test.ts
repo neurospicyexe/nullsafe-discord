@@ -182,3 +182,30 @@ describe("recall failure is not recall emptiness", () => {
     expect(out.failed).toBe(false);
   });
 });
+
+describe("RECALL_NO_QUOTE_FROM applies to the ONE-LINE recall too", () => {
+  // The half-measure failure: gating only the widened block would let Raziel name a room, believe
+  // it sealed, and still have its lines surface one at a time -- which is the pre-existing
+  // behaviour Q20 is actually about.
+  const reset = () => { delete process.env["RECALL_NO_QUOTE_FROM"]; };
+  beforeEach(reset);
+  afterEach(reset);
+
+  const raw = JSON.stringify({ chunks: [
+    { text: "something said in the sealed room", vault_path: "discord-live/111/999.md", created_at: new Date().toISOString() },
+    { text: "something said in an ordinary room", vault_path: "discord-live/222/888.md", created_at: new Date().toISOString() },
+  ] });
+
+  it("drops chunks from a sealed room", () => {
+    process.env["RECALL_NO_QUOTE_FROM"] = "111";
+    const out = LibrarianClient.formatSbRecall(raw) ?? "";
+    expect(out).not.toContain("sealed room");
+    expect(out).toContain("ordinary room");
+  });
+
+  it("keeps both when nothing is sealed", () => {
+    const out = LibrarianClient.formatSbRecall(raw) ?? "";
+    expect(out).toContain("sealed room");
+    expect(out).toContain("ordinary room");
+  });
+});
