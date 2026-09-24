@@ -330,7 +330,9 @@ async function decideWithContext(
     `Reply with just A or B and one sentence of reasoning. No preamble.`;
 
   try {
-    const result = await prompt(userMessage, undefined, { temperature: 0.1, maxTokens: 120 });
+    // ownerPronounRule: false -- an A/B pick + one sentence of reasoning, deterministically
+    // parsed for the leading letter only (like lane-guard's YES/NO); not a prose writer.
+    const result = await prompt(userMessage, undefined, { temperature: 0.1, maxTokens: 120, ownerPronounRule: false });
     ctx.tokensUsed += result.tokensUsed;
     const text = result.content.trim();
     const isLive = /^B\b/i.test(text);

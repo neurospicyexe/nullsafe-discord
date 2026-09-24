@@ -13,6 +13,7 @@ import { assertWriteAck } from "./librarian.js";
 import type { WriteQueue } from "./write-queue.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
+import { withOwnerPronounRule } from "./pronoun-rule.js";
 
 /**
  * Per-bot prompt text for end-of-session distillation. The companion's voice and SOMA schema are
@@ -73,7 +74,7 @@ export async function distillSessionOnInactive(
   // output feeds witnessLog + synthesizeSession + writeHandoff + writeWmNote, so the fabrication
   // reached the handoff and every Claude.ai orient. runDistillation (below) already does this.
   const summaryInput = history.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
-  const synthResult = await inference.generate(prompts.synthesisPrompt, [{ role: "user", content: summaryInput }]);
+  const synthResult = await inference.generate(withOwnerPronounRule(prompts.synthesisPrompt), [{ role: "user", content: summaryInput }]);
   if (!synthResult) {
     console.warn(`[${tag}] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
     return;
@@ -88,7 +89,7 @@ export async function distillSessionOnInactive(
   console.log(`[${tag}] onChannelInactive: 4 writes queued channel=${channelId}`);
 
   // Structured extract: handoff record + SOMA update + feeling log
-  const extractRaw = await inference.generate(prompts.sessionExtractPrompt, [{ role: "user", content: summaryInput }]);
+  const extractRaw = await inference.generate(withOwnerPronounRule(prompts.sessionExtractPrompt), [{ role: "user", content: summaryInput }]);
   if (extractRaw) {
     // Tolerant extraction: the model answers in prose or wraps/embeds the JSON often enough
     // that a raw JSON.parse threw daily on all three bots. Extract the first {...} block;
@@ -146,7 +147,7 @@ export async function runDistillation(
   const ownerSpoke = !ownerDisplayName
     || window.some((m) => m.authorName === ownerDisplayName || m.authorName?.startsWith(`${ownerDisplayName} `));
 
-  const result = await inference.generate(distillationPrompt, [{ role: "user", content: conversationText }]);
+  const result = await inference.generate(withOwnerPronounRule(distillationPrompt), [{ role: "user", content: conversationText }]);
   if (!result) return;
 
   // Tolerant extraction (same class as the structured-extract fix above): pull the first

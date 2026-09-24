@@ -9,6 +9,7 @@ import {
   contentBudget,
   isReasoningModel,
 } from "./config.js";
+import { withOwnerPronounRule } from "@nullsafe/shared";
 
 interface Vendor {
   baseUrl: string;
@@ -49,6 +50,14 @@ interface ChatOptions {
    * Worth it only where the output is PARSED, because there a cut-off is a total loss.
    */
   retryOnTruncate?: boolean;
+  /**
+   * Append the owner pronoun rule (@nullsafe/shared pronoun-rule.ts) to the system message.
+   * Default true -- these are the background writers the rule exists for (2026-09-24: Crash
+   * being called "she" in signal-audit/reflection/synthesize/etc. output). Opt out ONLY for a
+   * pure scoring/classifier call whose prompt must stay byte-identical for caching or where the
+   * output is a fixed token (YES/NO, A/B) that never mentions a person at all -- see lane-guard.ts.
+   */
+  ownerPronounRule?: boolean;
 }
 
 interface ChatResult {
@@ -199,7 +208,14 @@ export async function prompt(
   opts: ChatOptions = {},
 ): Promise<ChatResult> {
   const messages: Message[] = [];
-  if (systemMessage) messages.push({ role: "system", content: systemMessage });
+  // Default ON: append the owner pronoun rule to whatever system message exists, or push one
+  // containing just the rule when there is none, so a caller that passes no systemMessage at all
+  // still carries it. `opts.ownerPronounRule === false` is the explicit classifier opt-out.
+  if (opts.ownerPronounRule !== false) {
+    messages.push({ role: "system", content: systemMessage ? withOwnerPronounRule(systemMessage) : withOwnerPronounRule("") });
+  } else if (systemMessage) {
+    messages.push({ role: "system", content: systemMessage });
+  }
   messages.push({ role: "user", content: userMessage });
   return chat(messages, opts);
 }
@@ -226,8 +242,10 @@ export async function promptWithScratchpad(
   systemMessage: string,
   opts: ScratchpadOptions = {},
 ): Promise<ScratchpadResult> {
+  // Default ON, same rule as prompt() above -- see reflect.ts/synthesize.ts, both prose writers.
+  const sysWithRule = opts.ownerPronounRule !== false ? withOwnerPronounRule(systemMessage) : systemMessage;
   const base: Message[] = [
-    { role: "system", content: systemMessage },
+    { role: "system", content: sysWithRule },
     { role: "user", content: scratchpadPrompt },
   ];
   const first = await chat(base, {

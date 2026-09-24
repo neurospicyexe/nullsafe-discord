@@ -27,7 +27,9 @@ Does this topic align with the companion's documented interests, knowledge areas
 Answer with exactly one word: YES or NO.`;
 
   try {
-    const result = await prompt(userMessage, undefined, { temperature: 0.1, maxTokens: 10 });
+    // ownerPronounRule: false -- pure YES/NO classifier, no person ever mentioned in the output;
+    // keep this prompt byte-identical (see deepseek.ts ChatOptions.ownerPronounRule).
+    const result = await prompt(userMessage, undefined, { temperature: 0.1, maxTokens: 10, ownerPronounRule: false });
     const answer = result.content.trim().toUpperCase();
     if (answer.startsWith("N")) {
       console.warn(`[lane-guard] ${companionId}: topic drifts from identity lane: "${topic.slice(0, 80)}"`);

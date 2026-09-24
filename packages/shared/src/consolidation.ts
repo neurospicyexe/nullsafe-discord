@@ -2,6 +2,7 @@ import type { LibrarianClient } from "./librarian.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
 import { buildNarratorPrompt } from "./consolidation-narrator.js";
+import { withOwnerPronounRule } from "./pronoun-rule.js";
 
 export interface ConsolidationOpts {
   companionId: "cypher" | "drevan" | "gaia";
@@ -133,7 +134,7 @@ export async function consolidateSession(
   // 256 tokens truncated Hermes-agent replies (the agent narrates before/around the
   // JSON), so the object arrived cut off and unparseable. 1024 is pure ceiling headroom.
   const raw = await inference.generate(
-    "Write a concise session close handoff. Respond with ONLY valid JSON, no markdown.",
+    withOwnerPronounRule("Write a concise session close handoff. Respond with ONLY valid JSON, no markdown."),
     [userTurn],
     0.3,
     1024,

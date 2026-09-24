@@ -3,6 +3,7 @@ import {
   DeepSeekAdapter, DeepInfraAdapter, FallbackAdapter, DEEPINFRA_FLASH_MODEL,
   type InferenceAdapter,
 } from "./inference.js";
+import { withOwnerPronounRule } from "./pronoun-rule.js";
 
 /**
  * A DIRECT, TOOLLESS inference path shared by the two small classifier calls that used to ride
@@ -115,8 +116,11 @@ export function loadIdentity(companionId: string): string | null {
  */
 export function buildOneShotPrompt(companionId: string, task: string): string {
   const identity = loadIdentity(companionId);
-  if (identity === null) return `${ONE_SHOT_NO_TOOLS}\n${task}`;
-  return `${identity}\n\n---\n${ONE_SHOT_NO_TOOLS}\n${task}`;
+  // Rule goes LAST -- after identity and after the task line, never before. judgeWriteback and
+  // memory.ts's author both slice this string (see their own comments) before it ever reaches an
+  // adapter, and a leading rule risks being the part that gets cut.
+  if (identity === null) return withOwnerPronounRule(`${ONE_SHOT_NO_TOOLS}\n${task}`);
+  return withOwnerPronounRule(`${identity}\n\n---\n${ONE_SHOT_NO_TOOLS}\n${task}`);
 }
 
 /**

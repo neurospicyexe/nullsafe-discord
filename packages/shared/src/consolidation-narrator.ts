@@ -1,4 +1,5 @@
 import { loadIdentity } from "./direct-inference.js";
+import { withOwnerPronounRule } from "./pronoun-rule.js";
 
 // `loadIdentity` (with its mtime-keyed cache) and `createDirectAdapter` (this file's former
 // `createNarrator`) now live in direct-inference.ts, shared with the judgeWriteback one-shot path.
@@ -77,5 +78,7 @@ const ONE_SHOT_FRAME =
 /** The system prompt for a consolidation call: full identity + the one-shot frame. */
 export function buildNarratorPrompt(companionId: string): string | null {
   const identity = loadIdentity(companionId);
-  return identity === null ? null : identity + ONE_SHOT_FRAME;
+  // Appended after identity + the one-shot frame, never before -- this call writes a third-person
+  // handoff narrative about a session with Raziel, exactly the shape that was landing "she".
+  return identity === null ? null : withOwnerPronounRule(identity + ONE_SHOT_FRAME);
 }

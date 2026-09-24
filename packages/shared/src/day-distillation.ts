@@ -15,6 +15,7 @@
 
 import type { LibrarianClient } from "./librarian.js";
 import type { InferenceAdapter } from "./inference.js";
+import { withOwnerPronounRule } from "./pronoun-rule.js";
 
 /** Fold no fewer than this many fragments -- a single note IS already the day's note. */
 const MIN_FRAGMENTS = 2;
@@ -78,7 +79,7 @@ export async function runDayDistillation(deps: DayDistillDeps): Promise<"skipped
 
   const dayKey = new Date().toISOString().slice(0, 10);
   const digest = await deps.adapter().generate(
-    dayDistillPrompt(companionId),
+    withOwnerPronounRule(dayDistillPrompt(companionId)),
     [{ role: "user", content: `Today's session notes, oldest first:\n${body}` }],
     0.7,
     600,
