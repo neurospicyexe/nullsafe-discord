@@ -1,3 +1,8 @@
+import type { ChannelConfig } from "./types.js";
+import {
+  parseDiscordLivePath, mayWidenAcross, buildRecallContext,
+  WIDEN_BEFORE, WIDEN_AFTER, type RecalledMessage,
+} from "./recall-context.js";
 // Shared Discord messageCreate handler for the companion bots (cypher/drevan/gaia).
 //
 // The ~500-line handler was triplicated near-verbatim across the three bots. It is lifted
@@ -1427,6 +1432,24 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // reads as present-tense news, which is exactly how a July thread got served as today. Capped
     // small (700) because this rides the per-message prompt -- a different pool from the 14k boot
     // budget, which this block does not touch.
+    // CONTEXTUAL RECALL (2026-09-23, T3 item 5). A discord-live hit is one message lifted out of a
+    // conversation in another room -- the current channel is filtered out upstream, so every hit
+    // that survives is by construction an orphan line. A line means what the turns around it make
+    // it mean, and a companion handed only the line will pick a meaning and commit to it.
+    //
+    // Discord has the real messages, so ask Discord. One fetch, 2s ceiling, fail open: this sits
+    // on the reply path and no memory enrichment is worth a slower or missing reply.
+    if (sbHit) {
+      try {
+        const widened = await widenTopDiscordHit(
+          sbHit, message.client, channelConfig, message.channelId,
+        );
+        if (widened) contextPrompt += `
+
+${widened}`;
+      } catch { /* enrichment is never a reason a reply does not happen */ }
+    }
+
     const ownRecall = await ownNotesPromise;
     // A FAILED recall must never read as an empty one. If the embedder is down or Halseth is
     // unreachable, the honest sentence is "I could not reach it", not "I have nothing on that" --
@@ -2163,4 +2186,62 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         await librarian.addCompanionNote(`PK attribution unavailable for message in channel ${message.channelId}; attributed to ${who}`, message.channelId);
       }, { maxAgeMs: APPEND_MAX_AGE_MS });
     }
+}
+
+/**
+ * Widen the top discord-live hit in a recall payload into the conversation around it.
+ *
+ * Thin by design: every decision that can be made without discord.js lives in recall-context.ts
+ * and is unit-tested there. This function is the part that must touch the network, so it does as
+ * little as possible and swallows everything.
+ *
+ * ONE hit only. The enrichment costs a Discord fetch on the reply path, and a second block of
+ * another room's conversation is past the point where it helps the companion read the first one.
+ */
+async function widenTopDiscordHit(
+  raw: string,
+  client: { channels: { fetch(id: string): Promise<unknown> } },
+  config: ChannelConfig,
+  currentChannelId: string,
+): Promise<string | null> {
+  let parsed: { chunks?: Array<{ vault_path?: string }> };
+  try { parsed = JSON.parse(raw) as { chunks?: Array<{ vault_path?: string }> }; } catch { return null; }
+  for (const c of parsed.chunks ?? []) {
+    const ref = parseDiscordLivePath(c.vault_path);
+    if (!ref) continue;
+    if (!mayWidenAcross(config, ref.channelId, currentChannelId)) continue;
+
+    const ch = await withTimeout(client.channels.fetch(ref.channelId), 2_000).catch(() => null) as
+      | { isTextBased?: () => boolean; name?: string; messages?: { fetch(o: unknown): Promise<Map<string, unknown>> } }
+      | null;
+    if (!ch?.messages) return null;
+    const fetched = await withTimeout(
+      ch.messages.fetch({ around: ref.messageId, limit: WIDEN_BEFORE + WIDEN_AFTER + 3 }), 2_000,
+    ).catch(() => null);
+    if (!fetched) return null;
+
+    const msgs: RecalledMessage[] = [...fetched.values()].map(m => {
+      const d = m as { id: string; content?: string; createdTimestamp?: number;
+                       author?: { bot?: boolean; username?: string; displayName?: string } };
+      return {
+        id: d.id,
+        // The webhook display name is the FRONT who spoke, which is exactly the label we want
+        // ([[an-address-needs-its-speakers]]) -- PluralKit writes it there.
+        author: d.author?.displayName || d.author?.username || "someone",
+        content: d.content ?? "",
+        createdTimestamp: d.createdTimestamp,
+        isBot: d.author?.bot,
+      };
+    });
+    return buildRecallContext(msgs, ref.messageId, { channelLabel: ch.name });
+  }
+  return null;
+}
+
+/** Reject after `ms` so a slow Discord call can never hold the reply path. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error("timeout")), ms)),
+  ]);
 }
