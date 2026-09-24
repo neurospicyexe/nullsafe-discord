@@ -1584,8 +1584,28 @@ export async function convoOpenFor(p: { channel_id: string; seed_text: string; s
   try { const r = await hFetch("/mind/conversations", "POST", p) as { thread?: { id: string } }; return r.thread ? { id: r.thread.id } : null; }
   catch (e) { console.warn("[director] convoOpen failed:", e); return null; }
 }
-export async function convoTurnFor(threadId: string, p: { author: string; gist: string; message_id?: string; front?: string | null }): Promise<void> {
-  try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/turns`, "POST", p); } catch (e) { console.warn("[director] convoTurn failed:", e); }
+/**
+ * Append a turn. Returns "terminal" when the thread has already landed or faded, so the caller can
+ * DROP a stale thread id instead of retrying it forever (2026-09-24).
+ *
+ * This used to swallow every failure into a warning, which meant the director's cached
+ * `state.threadId` outlived the thread it pointed at: once a companion wrote `[LANDS:]` or the
+ * turn budget faded the row, every subsequent message logged
+ * `convoTurn failed: ... 409 {"reason":"terminal"}` and nothing ever re-opened. Observed on one
+ * thread across two days. Harmless in itself, but it writes errors into the log continuously,
+ * which is where a real error goes to hide.
+ */
+export type ConvoTurnResult = "ok" | "terminal" | "error";
+export async function convoTurnFor(threadId: string, p: { author: string; gist: string; message_id?: string; front?: string | null }): Promise<ConvoTurnResult> {
+  try {
+    await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/turns`, "POST", p);
+    return "ok";
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes("409") || msg.includes("terminal")) return "terminal";
+    console.warn("[director] convoTurn failed:", e);
+    return "error";
+  }
 }
 export async function convoLandFor(threadId: string, resolution: string, landedBy: string): Promise<boolean> {
   try { await hFetch(`/mind/conversations/${encodeURIComponent(threadId)}/land`, "POST", { resolution, landed_by: landedBy }); return true; }

@@ -38,7 +38,21 @@ export async function ingest(p: CommonsMessagePayload, deps: { store: StateStore
   // conversation_threads row. threadId stays null for the life of a shadow-only channel.
   if (deps.writeLedger) {
     if (!s.threadId) s = { ...s, threadId: await deps.ledger.ensureThread(s, turn) };
-    if (s.threadId) await deps.ledger.appendTurn(s.threadId, turn);
+    if (s.threadId) {
+      const res = await deps.ledger.appendTurn(s.threadId, turn);
+      // A LANDED OR FADED THREAD IS NOT AN ERROR TO RETRY -- it is a thread that ended (2026-09-24).
+      //
+      // The cached id used to outlive the row it pointed at: once a companion wrote [LANDS:] or the
+      // turn budget faded it, every later message retried the same dead id and logged a 409,
+      // forever, and no new thread ever opened. Dropping the id and re-opening here is also the
+      // semantically right move -- the previous conversation ended, so this message genuinely IS
+      // the seed of the next one.
+      if (res === "terminal") {
+        const fresh = await deps.ledger.ensureThread({ ...s, threadId: null }, turn);
+        s = { ...s, threadId: fresh };
+        if (fresh) await deps.ledger.appendTurn(fresh, turn);
+      }
+    }
   }
   s = applyTurn(s, turn, addressedIn(p));
   await deps.store.save(s);

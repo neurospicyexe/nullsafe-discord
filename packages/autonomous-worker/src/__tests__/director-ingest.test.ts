@@ -15,7 +15,7 @@ function memStore(): StateStore & { seen: Set<string> } {
     async load(ch) { return (m.get(ch) as never) ?? null; }, async save(s) { m.set(s.channelId, s); },
     async clear(ch) { m.delete(ch); }, async seenMessage(id) { if (seen.has(id)) return false; seen.add(id); return true; } };
 }
-const ledger = (): Ledger => ({ ensureThread: vi.fn(async () => "t1"), appendTurn: vi.fn(async () => {}), land: vi.fn(async () => true), fade: vi.fn(async () => true) });
+const ledger = (): Ledger => ({ ensureThread: vi.fn(async () => "t1"), appendTurn: vi.fn(async () => "ok" as const), land: vi.fn(async () => true), fade: vi.fn(async () => true) });
 
 describe("ingest", () => {
   it("gist is single-line and capped", () => {
@@ -51,5 +51,30 @@ describe("ingest", () => {
     expect(s!.threadId).toBeNull();
     expect(l.ensureThread).not.toHaveBeenCalled();
     expect(l.appendTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe("ingest -- a thread that has already ended", () => {
+  it("drops the stale id and opens a new thread instead of retrying it forever", async () => {
+    // The director caches state.threadId. Once the Halseth row landed ([LANDS:]) or faded (turn
+    // budget / 12h silence), that id was dead but still cached, so every later message retried it
+    // and logged `convoTurn failed: 409 {"reason":"terminal"}`. Observed on one thread across two
+    // days -- and nothing ever re-opened, so the channel silently stopped being threaded at all.
+    let n = 0;
+    const l: Ledger = {
+      ensureThread: vi.fn(async () => `t${++n}`),
+      appendTurn: vi.fn(async (threadId: string) => (threadId === "t1" ? "terminal" as const : "ok" as const)),
+      land: vi.fn(async () => true),
+      fade: vi.fn(async () => true),
+    };
+    const store = memStore();
+    const s = await ingest(msg(), { store, ledger: l, now: () => "2026-09-24T00:00:01.000Z", writeLedger: true });
+
+    // t1 came back terminal, so the state must NOT still point at it.
+    expect(s!.threadId).toBe("t2");
+    // The turn is not lost -- it seeds the replacement thread, which is also semantically right:
+    // the previous conversation ended, so this message genuinely begins the next one.
+    expect(l.appendTurn).toHaveBeenCalledTimes(2);
+    expect(l.appendTurn).toHaveBeenLastCalledWith("t2", expect.objectContaining({ messageId: "m1" }));
   });
 });
