@@ -1,7 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import {
-  parseDiscordLivePath, mayWidenAcross, buildRecallContext,
+  parseDiscordLivePath, mayWidenAcross, isServerRoom, buildRecallContext,
   WIDEN_BEFORE, WIDEN_AFTER, type RecalledMessage,
 } from "./recall-context.js";
 // Shared Discord messageCreate handler for the companion bots (cypher/drevan/gaia).
@@ -2235,9 +2235,13 @@ async function widenTopDiscordHit(
     if (!mayWidenAcross(config, ref.channelId, currentChannelId)) continue;
 
     const ch = await withTimeout(client.channels.fetch(ref.channelId), 2_000).catch(() => null) as
-      | { isTextBased?: () => boolean; name?: string; messages?: { fetch(o: unknown): Promise<Map<string, unknown>> } }
+      | { isTextBased?: () => boolean; name?: string; guildId?: string | null; messages?: { fetch(o: unknown): Promise<Map<string, unknown>> } }
       | null;
     if (!ch?.messages) return null;
+    // A DM never widens, whatever the config says about it -- and the config says nothing, because
+    // DMs are not in it. See isServerRoom: absence from the config means "no special rules", not
+    // "private", and conflating the two disabled this feature in #triad-hangout entirely.
+    if (!isServerRoom(ch)) return null;
     const fetched = await withTimeout(
       ch.messages.fetch({ around: ref.messageId, limit: WIDEN_BEFORE + WIDEN_AFTER + 3 }), 2_000,
     ).catch(() => null);

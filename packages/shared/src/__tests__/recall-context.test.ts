@@ -7,7 +7,7 @@
 // what preceded it, and a companion handed only the line will pick one and commit to it.
 
 import {
-  parseDiscordLivePath, mayWidenAcross, buildRecallContext,
+  parseDiscordLivePath, mayWidenAcross, isServerRoom, buildRecallContext,
   type RecalledMessage,
 } from "../recall-context.js";
 import type { ChannelConfig } from "../types.js";
@@ -55,8 +55,14 @@ describe("mayWidenAcross", () => {
     expect(mayWidenAcross(config, "shared1", "private1")).toBe(true);
     expect(mayWidenAcross(config, "shared1", "private2")).toBe(true);
   });
-  it("never widens an UNKNOWN room -- DMs are not in the config", () => {
-    expect(mayWidenAcross(config, "somedmchannel", "shared1")).toBe(false);
+  it("DOES widen a room that is simply not in the config", () => {
+    // CORRECTED 2026-09-24 after measuring. The first cut treated "absent from the config" as
+    // "private", which was wrong and expensive: CHANNEL_CONFIG_URL is unset so the live config is
+    // the static 17-entry map, and #triad-hangout -- the busiest room -- is not in it. Seven of
+    // ten sampled cross-channel hits came from that one channel, so the gate had silently
+    // disabled this feature exactly where Raziel talks to them. `modes` describes who may SPEAK;
+    // absence means "no special rules", not "secret".
+    expect(mayWidenAcross(config, "1497734427298762828", "shared1")).toBe(true);
   });
   it("never widens the current channel into itself", () => {
     expect(mayWidenAcross(config, "shared1", "shared1")).toBe(false);
@@ -115,5 +121,22 @@ describe("buildRecallContext", () => {
   it("returns null on nothing, rather than an empty header", () => {
     expect(buildRecallContext([], "1")).toBeNull();
     expect(buildRecallContext([msg("1", "x", "   ", 1)], "1")).toBeNull();
+  });
+});
+
+describe("isServerRoom", () => {
+  // DMs are absent from the config too, which is why absence cannot be the privacy test. The
+  // discriminator has to be structural: a server channel has a guild, a DM does not.
+  it("accepts a channel with a guild", () => {
+    expect(isServerRoom({ guildId: "123456789" })).toBe(true);
+  });
+  it("rejects a DM", () => {
+    expect(isServerRoom({ guildId: null })).toBe(false);
+    expect(isServerRoom({})).toBe(false);
+  });
+  it("rejects an unfetchable channel rather than assuming it is safe", () => {
+    // If we cannot prove it is a room, we do not widen it.
+    expect(isServerRoom(null)).toBe(false);
+    expect(isServerRoom(undefined)).toBe(false);
   });
 });

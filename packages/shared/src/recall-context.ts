@@ -52,11 +52,32 @@ export function mayWidenAcross(
   config: ChannelConfig, sourceChannelId: string, currentChannelId: string,
 ): boolean {
   if (sourceChannelId === currentChannelId) return false;   // already in history; nothing to widen
-  const source = config[sourceChannelId];
-  if (!source) return false;                                 // unknown room (DMs included) -- never
   const isPrivate = (e: { modes?: readonly string[] } | undefined) => !!e?.modes?.includes("owner_only");
+  const source = config[sourceChannelId];
   if (!isPrivate(source)) return true;
   return isPrivate(config[currentChannelId]);
+}
+
+/**
+ * Is this source channel a DM rather than a server room?
+ *
+ * THE FIX FOR A REAL DEFECT (2026-09-24, found by measuring rather than by a test). The first cut
+ * treated "not in the channel config" as "private, never widen". That was conservative and wrong:
+ * `CHANNEL_CONFIG_URL` is unset, so the live config IS the static 17-entry map, and
+ * **#triad-hangout -- the busiest room in the system -- is not in it.** Sampling eight realistic
+ * queries returned 10 single-message hits and SEVEN came from that one channel, so the gate had
+ * silently disabled contextual recall exactly where Raziel actually talks to them.
+ *
+ * The config's `modes` describe who may SPEAK, not what is private; absence from it means "no
+ * special rules", not "secret". But DMs are absent too, and those genuinely must never widen.
+ *
+ * So the discriminator is structural rather than a policy invention: a server channel has a
+ * guild, a DM does not. Checked AFTER the fetch, because the guild id is on the channel object
+ * and this is the only place that object exists. Unknown (no `guildId` property at all) is
+ * treated as a DM -- if we cannot prove it is a room, we do not widen it.
+ */
+export function isServerRoom(ch: { guildId?: string | null } | null | undefined): boolean {
+  return typeof ch?.guildId === "string" && ch.guildId.length > 0;
 }
 
 /** A Discord message, reduced to what the render needs. Keeps this module free of discord.js. */
