@@ -1,4 +1,5 @@
 import type { ChannelConfig } from "./types.js";
+import { railSuppressed } from "./rail-telemetry.js";
 import {
   parseDiscordLivePath, mayWidenAcross, buildRecallContext,
   WIDEN_BEFORE, WIDEN_AFTER, type RecalledMessage,
@@ -1741,6 +1742,22 @@ ${widened}`;
           `signals=${JSON.stringify(signals)} bids=${JSON.stringify(bid.bids)}`,
         );
         if (!bid.iSpeak) {
+          // T4 groundwork: the bid is the single largest suppressor in the stack, and its reason
+          // already exists -- it just lived in prose nobody could aggregate. `below_threshold`
+          // (nobody cleared the floor) and `lost` (a sibling won) are different facts about the
+          // room and are counted separately. The threshold recorded is the one that ACTUALLY
+          // applied, which is raised on a care hold, so a night where the hold did the silencing
+          // is distinguishable afterwards from an ordinary quiet one.
+          railSuppressed(
+            COMPANION_ID,
+            bid.reason === "lost" ? "bid_lost" : "bid_threshold",
+            {
+              score: myScore,
+              threshold: careHold ? CARE_HOLD_MIN_BID : MIN_BID_TO_SPEAK,
+              channelId: message.channelId,
+              detail: careHold ? `${bid.reason} care_hold` : bid.reason,
+            },
+          );
           // Group call: losing the bid means speaking LATER, not never. Everyone who posted a
           // real bid gets a position; each waits on its predecessor's reply. An explicit "you
           // three" finally gets three answers, in an order every process computed identically.
@@ -1771,6 +1788,7 @@ ${widened}`;
             reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
             message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
             console.log(`[${COMPANION_ID}] reaction tier: care hold held the floor at ${myScore.toFixed(3)} (would have spoken), reacting instead of vanishing`);
+            railSuppressed(COMPANION_ID, "care_hold", { score: myScore, channelId: message.channelId, detail: "reacted instead" });
           }
           return;
         }
@@ -1925,6 +1943,7 @@ ${widened}`;
     // delta); the reply is not appended to STM and not sent.
     if (isSuperseded?.()) {
       console.log(`[${COMPANION_ID}] reply superseded mid-inference (newer human message queued) -- dropping reply to ${message.id}`);
+      railSuppressed(COMPANION_ID, "superseded", { channelId: message.channelId });
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
       return;
     }
@@ -1991,6 +2010,9 @@ ${widened}`;
         const echo = echoScore(response, channelHistory.map(m => m.content));
         if (echo >= echoThreshold()) {
           console.warn(`[${COMPANION_ID}] echo-gated reply (score=${echo.toFixed(2)}) -- staying silent`);
+          // T4 groundwork: count it, with the margin. A rail that only fires far past its line is
+          // doing real work; one that fires constantly and barely over is a candidate to loosen.
+          railSuppressed(COMPANION_ID, "echo", { score: echo, threshold: echoThreshold(), channelId: message.channelId });
           distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
           return;
         }
@@ -2121,6 +2143,7 @@ ${widened}`;
       stmStore.append(message.channelId, { role: "assistant", content: response, timestamp: Date.now() });
     } else {
       console.warn(`[${COMPANION_ID}] incoherent response detected -- skipping STM write to prevent contamination`);
+      railSuppressed(COMPANION_ID, "coherence", { channelId: message.channelId });
     }
 
     // Update cross-companion safety rail counters after sending response.

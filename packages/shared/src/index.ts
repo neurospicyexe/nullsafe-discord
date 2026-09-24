@@ -3,6 +3,7 @@ export * from "./types.js";
 export * from "./floor.js";
 export * from "./fit-bid.js";
 export * from "./recall-context.js";
+export * from "./rail-telemetry.js";
 export * from "./sequential-floor.js";
 export * from "./reaction-tier.js";
 export * from "./events.js";
