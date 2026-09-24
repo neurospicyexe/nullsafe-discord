@@ -79,6 +79,19 @@ export interface CapturedExchangeWire {
   created_at?: string | null;
 }
 
+/**
+ * The outcome of an own-notes recall.
+ *
+ * `failed` exists because "nothing matched" and "I could not look" are different sentences and
+ * only one of them is ever true. Collapsing them is how a dead embedder reaches Raziel as a
+ * companion saying "I don't have anything on that" about something he said hours earlier -- the
+ * single most damaging thing this whole memory lane could do at 2am.
+ */
+export interface OwnNoteResult {
+  notes: OwnNoteRecall[];
+  failed: boolean;
+}
+
 /** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
 export interface OwnNoteRecall {
   note_id?: string;
@@ -752,9 +765,9 @@ export class LibrarianClient {
    *
    * Returns [] on any failure -- recall is an enrichment, never a reason a reply does not happen.
    */
-  async recallOwnNotes(query: string, limit = 4): Promise<OwnNoteRecall[]> {
+  async recallOwnNotes(query: string, limit = 4): Promise<OwnNoteResult> {
     const q = query.trim().slice(0, 500);
-    if (!q) return [];
+    if (!q) return { notes: [], failed: false };
     try {
       const url = new URL(`${this.url}/mind/notes/search`);
       url.searchParams.set("agent_id", this.companionId);
@@ -764,11 +777,12 @@ export class LibrarianClient {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(6_000),
       });
-      if (!res.ok) return [];
-      const data = await res.json() as { notes?: OwnNoteRecall[] };
-      return Array.isArray(data.notes) ? data.notes : [];
+      if (!res.ok) return { notes: [], failed: true };
+      const data = await res.json() as { notes?: OwnNoteRecall[]; recall_failed?: boolean };
+      return { notes: Array.isArray(data.notes) ? data.notes : [], failed: data.recall_failed === true };
     } catch {
-      return [];
+      // Unreachable Halseth is ALSO "I could not look", not "you have no such memory".
+      return { notes: [], failed: true };
     }
   }
 

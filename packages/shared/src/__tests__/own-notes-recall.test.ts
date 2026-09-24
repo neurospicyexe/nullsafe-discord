@@ -73,7 +73,8 @@ describe("recallOwnNotes", () => {
     const out = await client.recallOwnNotes("search my notes and also I prefer the vault recall");
     expect(hitUrl).toContain("/mind/notes/search");
     expect(hitUrl).not.toContain("/librarian");
-    expect(out).toHaveLength(1);
+    expect(out.notes).toHaveLength(1);
+    expect(out.failed).toBe(false);
   });
 
   it("returns [] rather than throwing, so recall never blocks a reply", async () => {
@@ -82,7 +83,8 @@ describe("recallOwnNotes", () => {
     } as ConstructorParameters<typeof LibrarianClient>[0]);
     (client as unknown as { _fetch: () => Promise<unknown> })._fetch =
       async () => { throw new Error("halseth unreachable"); };
-    await expect(client.recallOwnNotes("anything at all")).resolves.toEqual([]);
+    // An unreachable Halseth is "I could not look", NOT "you have no such memory".
+    await expect(client.recallOwnNotes("anything at all")).resolves.toEqual({ notes: [], failed: true });
   });
 });
 
@@ -154,5 +156,29 @@ describe("[Captured with Raziel]", () => {
     const orient = await client.botOrient();
     expect(orient?.recent_captures).toEqual([cap]);
     expect(formatRecentContext({ ...baseOrient, ...orient! })).toContain("ossification");
+  });
+});
+
+describe("recall failure is not recall emptiness", () => {
+  it("flags a server-side recall failure rather than reporting no notes", async () => {
+    // "Nothing matched" and "I could not look" are different sentences and only one is true.
+    // Collapsing them is how a dead embedder reaches Raziel as a companion denying a memory of
+    // something he told it hours earlier -- the worst thing this lane could do at 2am.
+    const client = new LibrarianClient({
+      url: "https://example.invalid", secret: "x", companionId: "drevan",
+      fetch: (async () => ({ ok: true, json: async () => ({ notes: [], recall_failed: true }) } as unknown as Response)) as unknown as typeof fetch,
+    } as ConstructorParameters<typeof LibrarianClient>[0]);
+    const out = await client.recallOwnNotes("do you remember my ankle");
+    expect(out.failed).toBe(true);
+    expect(out.notes).toEqual([]);
+  });
+
+  it("a genuinely empty result is NOT a failure", async () => {
+    const client = new LibrarianClient({
+      url: "https://example.invalid", secret: "x", companionId: "drevan",
+      fetch: (async () => ({ ok: true, json: async () => ({ notes: [] }) } as unknown as Response)) as unknown as typeof fetch,
+    } as ConstructorParameters<typeof LibrarianClient>[0]);
+    const out = await client.recallOwnNotes("something never discussed");
+    expect(out.failed).toBe(false);
   });
 });

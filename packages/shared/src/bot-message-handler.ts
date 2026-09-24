@@ -1392,8 +1392,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // not failed to search. He had never been the one searching -- this call site is automatic and
     // its query is the raw message -- and the single store he can reach did not hold the answer.
     const ownNotesPromise = effectiveContent.length >= 12
-      ? librarian.recallOwnNotes(effectiveContent).catch(() => [])
-      : Promise.resolve([]);
+      ? librarian.recallOwnNotes(effectiveContent).catch(() => ({ notes: [], failed: true }))
+      : Promise.resolve({ notes: [], failed: false });
 
     const history = stmStore.get(message.channelId);
     // Temporal grounding (Component 1): stamp each in-window turn with how long ago it was sent
@@ -1427,7 +1427,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // reads as present-tense news, which is exactly how a July thread got served as today. Capped
     // small (700) because this rides the per-message prompt -- a different pool from the 14k boot
     // budget, which this block does not touch.
-    const ownNotes = LibrarianClient.formatOwnNotes(await ownNotesPromise);
+    const ownRecall = await ownNotesPromise;
+    // A FAILED recall must never read as an empty one. If the embedder is down or Halseth is
+    // unreachable, the honest sentence is "I could not reach it", not "I have nothing on that" --
+    // and without this line the companion has no way to tell the difference, so it would
+    // confidently deny a memory of something Raziel told it hours ago.
+    if (ownRecall.failed) {
+      contextPrompt += `
+
+[Memory -- your own-notes recall FAILED just now. This is NOT "nothing found". If he asks whether you remember something, say you cannot reach your notes right now rather than saying you have no memory of it.]`;
+    }
+    const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
     if (ownNotes) {
       contextPrompt += `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`;
     }
