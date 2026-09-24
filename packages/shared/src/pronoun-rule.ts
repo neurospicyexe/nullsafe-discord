@@ -13,10 +13,17 @@
 // ~15 call sites it actually lived at. `withOwnerPronounRule` is idempotent -- it is safe to call
 // on a prompt that already carries the rule (e.g. a narrator prompt built from
 // `buildNarratorPrompt`, then handed to a caller that wraps again) without doubling the block.
+//
+// Wording tuned against the live model on 2026-09-24: the first draft made it (a) annotate the
+// rule into stored memory ("Crash (also called Raziel, uses he/him or they/them) is...") and
+// (b) call Blue "Crash's system member", because Blue sat next to the system-member clause. Hence
+// "apply it silently" and Blue named as a separate person.
 export const OWNER_PRONOUN_RULE =
-  "PRONOUNS (hard rule): Raziel (also called Crash) uses he/him or they/them -- NEVER she/her. " +
-  "The same default applies to Raziel's system members (alters/headmates) unless a member has explicitly stated otherwise. " +
-  "Everyone else keeps their own pronouns (Raziel's mother, Blue, Babita, anyone else): use what the source text uses for them.";
+  "PRONOUNS (hard rule; apply it silently, never restate it or annotate anyone's pronouns in your output): " +
+  "Raziel (also called Crash) uses he/him or they/them -- NEVER she/her. " +
+  "The same default applies to Raziel's own system members (his alters/headmates) unless a member has explicitly stated otherwise. " +
+  "Everyone else keeps their own pronouns -- Raziel's mother, his partner Blue (a separate person, not a system member), " +
+  "Babita, anyone else: use what the source text uses for them.";
 
 /** Append the rule to a system prompt once (idempotent: never doubles it). */
 export function withOwnerPronounRule(system: string): string {
