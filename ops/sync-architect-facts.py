@@ -51,6 +51,10 @@ import sys
 import urllib.error
 import urllib.request
 
+# Shared with health-check.py so the write guard and the alarm agree on what "over the cap" means.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import soul_cap  # noqa: E402
+
 DISCORD_ENV = "/app/nullsafe-discord/.env"
 HALSETH_URL_DEFAULT = "https://halseth.neurospicyexe.workers.dev"
 UA = "nullsafe-facts-sync/1.0 (+ops/sync-architect-facts.py)"
@@ -174,7 +178,13 @@ def splice(current, block):
     return current.rstrip() + "\n\n" + wrapped + "\n", True
 
 
-def sync_file(path, block, dry, force):
+# Sentinel for "this file has no Hermes cap" (shared_system_context.md is the bots' composed prompt,
+# bounded by their own budget, not by prompt_builder.py). Distinct from cap=None, which means the
+# SOUL's cap is UNPINNED and is refused: see soul_cap.py for why an unpinned cap is a live hazard.
+NO_CAP = object()
+
+
+def sync_file(path, block, dry, force, cap=NO_CAP, margin=soul_cap.DEFAULT_MARGIN):
     if not os.path.isfile(path):
         return "missing", "no such file: %s" % path
     with open(path, "r", encoding="utf-8") as f:
@@ -182,6 +192,18 @@ def sync_file(path, block, dry, force):
     new, changed = splice(current, block)
     if not changed and not force:
         return "unchanged", "%d chars" % len(current)
+    # PRE-WRITE GUARD (2026-09-25). Hermes cuts the middle out of SOUL.md the moment it crosses
+    # context_file_max_chars, so a write that would land inside the margin is refused here, at the
+    # only point that can still say no, rather than discovered by the health check fifteen minutes
+    # after the identity file has already been cut. Refusal leaves the file exactly as it was.
+    if cap is not NO_CAP:
+        if cap is None:
+            return "refused", ("cap is not pinned (context_file_max_chars null) so the limit is a "
+                               "boot-time probe; refusing to write a file whose ceiling is unknown")
+        if len(new) > cap - margin:
+            return "refused", ("would be {:,} chars against a {:,} cap ({:,} margin): Hermes would cut "
+                               "the middle out of it; file left at {:,} chars"
+                               .format(len(new), cap, margin, len(current)))
     if dry:
         return "would-change", "%d -> %d chars" % (len(current), len(new))
     # Back up once per day, not per run: the point is a recoverable yesterday, not 96 copies of it.
@@ -239,9 +261,13 @@ def main():
             results["soul:" + cid] = "failed-fetch"
             print("  %-18s %-13s %s" % ("SOUL " + cid, "failed-fetch", "skipped, render unavailable"))
             continue
-        state, detail = sync_file(os.path.join(home, "SOUL.md"), blocks[cid], dry, force)
+        cap = soul_cap.read_pinned_cap(os.path.join(home, "config.yaml"))
+        state, detail = sync_file(os.path.join(home, "SOUL.md"), blocks[cid], dry, force, cap=cap)
         results["soul:" + cid] = state
-        print("  %-18s %-13s %s" % ("SOUL " + cid, state, detail))
+        print("  %-18s %-13s %s" % ("SOUL " + cid, state, detail),
+              file=sys.stderr if state == "refused" else sys.stdout)
+        if state == "refused":
+            fetch_errors["soul:" + cid] = detail
 
     if shared_block is None:
         results["shared-context"] = "failed-fetch"

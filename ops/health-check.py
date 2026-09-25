@@ -45,6 +45,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+# Shared with sync-architect-facts.py so the alarm and the write guard can never disagree on what
+# "over the cap" means. Same directory; the scripts run as `python3 ops/<name>.py`.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import soul_cap  # noqa: E402
+
 DISCORD_ENV = "/app/nullsafe-discord/.env"
 HERMES_ENV = "/home/nullsafe/.hermes/.env"          # Telegram token + home channel
 EXPECTED_PM2 = ["cypher-bot", "drevan-bot", "gaia-bot", "autonomous-worker"]
@@ -357,6 +362,33 @@ def check_architect_facts(rep, env):
         rep.add("architect-facts:halseth-render", "warning",
                 "could not fetch the facts render, so the Halseth-backed surfaces are UNVERIFIED: %s"
                 % str(e)[:120])
+
+
+def check_soul_cap(rep, homes=None, margin=None):
+    """Does every SOUL.md load WHOLE, and is that guaranteed by a number we chose?
+
+    Hermes cuts the middle out of SOUL.md (70%+20% of the cap kept) the moment the file crosses
+    `context_file_max_chars`, and with that key `null` the cap is a boot-time probe of the provider
+    (see soul_cap.py for the two numbers it can land on and why nothing logs which). So this check
+    has two jobs: RED when a file is at or over its cap (identity is being cut right now), and RED
+    when the cap is unpinned (identity is being sized by a network call). WARN inside the margin,
+    because the cut is a cliff and the check has to speak before the line, not after.
+
+    `homes` / `margin` are injectable for tests; production uses HERMES_HOMES and the module default.
+    """
+    homes = homes if homes is not None else HERMES_HOMES
+    margin = margin if margin is not None else soul_cap.DEFAULT_MARGIN
+    for cid, home in sorted(homes.items()):
+        soul_path = os.path.join(home, "SOUL.md")
+        try:
+            size = os.path.getsize(soul_path)
+        except OSError as e:
+            rep.add("soul-cap:" + cid, "warning",
+                    "could not read %s, so its size is UNKNOWN not fine: %s" % (soul_path, str(e)[:80]))
+            continue
+        cap = soul_cap.read_pinned_cap(os.path.join(home, "config.yaml"))
+        sev, detail = soul_cap.assess(size, cap, margin)
+        rep.add("soul-cap:" + cid, sev, detail)
 
 
 def _yaml_int(path, key):
@@ -1356,6 +1388,7 @@ def main():
         check_hermes(rep)
         check_companion_memory(rep)
         check_architect_facts(rep, denv)
+        check_soul_cap(rep)
         check_roster(rep, denv)
         check_halseth(rep, denv)
         check_graph_health(rep, denv)
