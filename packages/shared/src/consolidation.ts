@@ -3,6 +3,25 @@ import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
 import { buildNarratorPrompt } from "./consolidation-narrator.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
+import { ledgerDistillEnabled, LEDGER_CLERK_PROMPT, parseClerkResult, postLedgerLines, ledgerSummary } from "./ledger-clerk.js";
+
+/** Placeholder session ids: boot never opened a real session, so there is nothing to point at. */
+function isRealSessionId(id: string | undefined): id is string {
+  return !!id && id !== "unknown" && id !== "cached";
+}
+
+/**
+ * LEDGER_DISTILL context threaded into finishHandoff (2026-09-26, imp lane tranche 2). The
+ * handoff SUMMARY becomes clerk lines in the ledger lane with a `session <id>` source (the idle
+ * session being consolidated -- consolidation has no channel and no STM, so a window source does
+ * not exist here). The narrator still runs: its summary remains the session-close SPINE, which
+ * spec section 6 leaves unchanged in this tranche.
+ */
+interface LedgerCtx {
+  clerk: InferenceAdapter;
+  stateContext: string;
+  sessionId: string;
+}
 
 export interface ConsolidationOpts {
   companionId: "cypher" | "drevan" | "gaia";
@@ -112,6 +131,19 @@ export async function consolidateSession(
   // Fall back to `inference` whenever the narrator or the identity file is unavailable. The fallback
   // is more expensive, not broken: it is exactly the behaviour that shipped before this change, lane
   // rotation included. Degrading loudly beats a consolidation that stops writing.
+  // No source, no write: under LEDGER_DISTILL the handoff summary is ledger lines pointing at the
+  // session being consolidated. Without a real session id there is nothing to point at, so skip
+  // BEFORE spending inference.
+  let ledger: LedgerCtx | undefined;
+  if (ledgerDistillEnabled()) {
+    const sid = session?.bootCtx.sessionId;
+    if (!isRealSessionId(sid)) {
+      console.warn(`[consolidation] ${companionId}: LEDGER_DISTILL on and no real session id -- no source, skipping handoff`);
+      return { written: false, reason: "no_source" };
+    }
+    ledger = { clerk: narrator ?? inference, stateContext, sessionId: sid };
+  }
+
   const narratorPrompt = narrator ? buildNarratorPrompt(companionId) : null;
   if (narrator && narratorPrompt) {
     // 256 tokens truncated replies (the model narrates before/around the JSON), so the object
@@ -122,7 +154,7 @@ export async function consolidateSession(
     // No 5th arg: a direct provider call has no gateway session, so there is no lane to name and
     // nothing accumulates between calls. That is the whole point.
     const raw = await narrator.generate(narratorPrompt, [userTurn], 0.3, 1024);
-    return await finishHandoff(raw, companionId, librarian, "narrator", session);
+    return await finishHandoff(raw, companionId, librarian, "narrator", session, ledger);
   }
 
   console.warn(
@@ -157,7 +189,7 @@ export async function consolidateSession(
     // instant than every other date-keyed thing in the suite.
     `consolidation:${companionId}:${new Date().toISOString().slice(0, 10)}`,
   );
-  return await finishHandoff(raw, companionId, librarian, "hermes", session);
+  return await finishHandoff(raw, companionId, librarian, "hermes", session, ledger);
 }
 
 /**
@@ -171,6 +203,7 @@ async function finishHandoff(
   librarian: LibrarianClient,
   via: "narrator" | "hermes",
   session?: ConsolidationOpts["session"],
+  ledger?: LedgerCtx,
 ): Promise<{ written: boolean; reason?: string }> {
   if (!raw) return { written: false, reason: "inference_empty" };
   // Tolerant extraction: models reply with prose ("I know you...") or fenced/embedded
@@ -183,6 +216,8 @@ async function finishHandoff(
     console.warn(`[consolidation] ${companionId}: no usable handoff JSON in output (via ${via}), skipping -- raw: ${rawPreview(raw)}`);
     return { written: false, reason: "parse_error" };
   }
+
+  if (ledger) return await finishLedgerHandoff(handoff as { title: string; summary: string; state_hint?: string; open_loops?: unknown }, companionId, librarian, via, session, ledger);
 
   try {
     await librarian.writeHandoff({
@@ -209,6 +244,65 @@ async function finishHandoff(
     if (session) {
       await cycleSession(session, handoff as { title: string; summary: string; open_loops?: unknown }, companionId, librarian);
     }
+    return { written: true };
+  } catch (e) {
+    console.error(`[consolidation] ${companionId}: librarian write error`, e);
+    return { written: false, reason: "librarian_error" };
+  }
+}
+
+/**
+ * Knob-on tail of finishHandoff. The narrator's parsed handoff is kept ONLY as the close spine
+ * (unchanged in T2); the handoff row's summary is the accepted ledger lines' server-rendered
+ * content, marks intact. Zero accepted lines means no handoff and no cycle -- nothing sourced to
+ * write, and a close without a landed handoff is the defect cycleSession's ordering prevents.
+ * Still stamps `source: "consolidation"` (the guarantee this function pair exists to hold).
+ */
+async function finishLedgerHandoff(
+  narrated: { title: string; summary: string; state_hint?: string; open_loops?: unknown },
+  companionId: string,
+  librarian: LibrarianClient,
+  via: "narrator" | "hermes",
+  session: ConsolidationOpts["session"] | undefined,
+  ledger: LedgerCtx,
+): Promise<{ written: boolean; reason?: string }> {
+  const clerkRaw = await ledger.clerk.generate(
+    LEDGER_CLERK_PROMPT,
+    [{ role: "user", content: `Current companion state records:
+${ledger.stateContext}` }],
+    0.3,
+    1024,
+    // Only reaches a gateway on the Hermes fallback: a dated lane of its own, same reason as the
+    // consolidation pin above.
+    `ledger-consolidation:${companionId}:${new Date().toISOString().slice(0, 10)}`,
+  );
+  const clerk = parseClerkResult(clerkRaw);
+  if (!clerk || clerk.lines.length === 0) {
+    console.warn(`[consolidation] ${companionId}: clerk returned no ledger lines (via ${via}) -- handoff skipped`);
+    return { written: false, reason: "no_ledger_lines" };
+  }
+  const outcome = await postLedgerLines(librarian, {
+    companionId: companionId as ConsolidationOpts["companionId"], fn: "distiller", lines: clerk.lines,
+    sourceKind: "session", sourceRef: ledger.sessionId,
+    dedupPrefix: `consolidation:${companionId}:${ledger.sessionId}`,
+    tag: `consolidation:${companionId}`,
+  });
+  if (outcome.accepted.length === 0) {
+    console.warn(`[consolidation] ${companionId}: no ledger line accepted -- handoff skipped`);
+    return { written: false, reason: "no_ledger_lines" };
+  }
+
+  try {
+    await librarian.writeHandoff({
+      title: clerk.title ?? "Idle consolidation",
+      summary: ledgerSummary(outcome),
+      ...(clerk.open_loops ? { open_loops: clerk.open_loops } : {}),
+      ...(clerk.next_steps ? { next_steps: clerk.next_steps } : {}),
+      state_hint: typeof narrated.state_hint === "string" ? narrated.state_hint : undefined,
+      source: "consolidation",
+    });
+    console.log(`[consolidation] ${companionId}: ledger handoff written via ${via} (${outcome.accepted.length} line(s))`);
+    if (session) await cycleSession(session, narrated, companionId, librarian);
     return { written: true };
   } catch (e) {
     console.error(`[consolidation] ${companionId}: librarian write error`, e);

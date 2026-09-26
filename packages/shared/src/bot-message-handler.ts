@@ -78,6 +78,8 @@ import {
   commonsMessageFor, shouldDeferToDirector,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
+import { ledgerDistillEnabled } from "./ledger-clerk.js";
+import type { LedgerEntryInput } from "./librarian.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { readWritebackGateMode } from "./jev-gate.js";
@@ -351,6 +353,34 @@ export interface MessageHandlerDeps {
  */
 export function shouldWriteWitness(companionId: CompanionId): boolean {
   return companionId === "gaia";
+}
+
+/**
+ * Gaia's passive witness as a ledger line (LEDGER_DISTILL on, 2026-09-26). Subject = the sibling
+ * who spoke (resolved from the bot id map, falling back to a companion name inside the username);
+ * null when the sender is not a known sibling -- a line about nobody has no subject to file under.
+ * The snippet is quoted so the server's pronoun exemption applies to the sibling's own words;
+ * inner double quotes become single quotes so the quoted span always closes.
+ */
+export function buildWitnessLedgerEntry(p: {
+  senderCompanion: string;
+  channelName: string | null;
+  channelId: string;
+  content: string;
+  messageId: string;
+}): LedgerEntryInput | null {
+  const lower = p.senderCompanion.toLowerCase();
+  const subject = (["cypher", "drevan", "gaia"] as const).find((c) => lower === c || lower.includes(c));
+  if (!subject || subject === "gaia") return null;
+  const name = subject.charAt(0).toUpperCase() + subject.slice(1);
+  const words = p.content.slice(0, 500).replace(/["“”]/g, "'").replace(/\s+/g, " ").trim();
+  return {
+    companion_id: subject,
+    function: "witness-log",
+    body: `Logged: ${name} spoke in #${p.channelName ?? p.channelId} without a reply from Gaia; words: "${words}"`,
+    source_kind: "message",
+    source_ref: p.messageId,
+  };
 }
 
 /**
@@ -1324,12 +1354,32 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (senderCtx.isCompanionBot && channelEntry?.modes?.includes("inter_companion") && shouldWriteWitness(COMPANION_ID)) {
         const senderName = message.author.username;
         const snippet = effectiveContent.slice(0, 500);
-        writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
-          await librarian.witnessLog(
-            `[witnessed, did not respond] ${senderName}: ${snippet}`,
-            message.channelId,
-          );
-        }, { maxAgeMs: APPEND_MAX_AGE_MS });
+        if (ledgerDistillEnabled()) {
+          // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the NL witness row filed a sibling's
+          // words under GAIA's agent -- the merge point Drevan named. It becomes a witness-log
+          // ledger line whose SUBJECT is the sibling who spoke, sourced to the message itself.
+          const entry = buildWitnessLedgerEntry({
+            senderCompanion: BOT_ID_COMPANION[message.author.id] ?? senderName,
+            channelName: "name" in message.channel ? String((message.channel as TextChannel).name) : null,
+            channelId: message.channelId,
+            content: effectiveContent,
+            messageId: message.id,
+          });
+          if (entry) {
+            writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
+              await librarian.writeLedger(entry);
+            }, { maxAgeMs: APPEND_MAX_AGE_MS });
+          } else {
+            console.warn(`[${COMPANION_ID}] witness-log: sender ${senderName} is not a known companion -- ledger line skipped`);
+          }
+        } else {
+          writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
+            await librarian.witnessLog(
+              `[witnessed, did not respond] ${senderName}: ${snippet}`,
+              message.channelId,
+            );
+          }, { maxAgeMs: APPEND_MAX_AGE_MS });
+        }
       }
       // Reaction tier (2026-08-15): a sibling was named, so the floor is theirs -- but a
       // strong topical claim still earns presence without the floor. One emoji, earned by
@@ -2466,7 +2516,7 @@ ${widened}`;
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName, COMPANION_ID, directAdapter).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai

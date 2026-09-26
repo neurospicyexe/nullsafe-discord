@@ -6,6 +6,14 @@ import { consolidateSession } from "../consolidation.js";
 import { buildNarratorPrompt } from "../consolidation-narrator.js";
 import { loadIdentity, createDirectAdapter } from "../direct-inference.js";
 
+import { beforeAll as ledgerOffBeforeAll, afterAll as ledgerOffAfterAll } from "@jest/globals";
+
+// LEDGER_DISTILL (2026-09-26) defaults ON. This file pins the legacy writers, so it runs with the
+// knob OFF -- which is also the byte-for-byte rollback guarantee. Knob-on behaviour lives in
+// ledger-distill.test.ts.
+ledgerOffBeforeAll(() => { process.env["LEDGER_DISTILL"] = "off"; });
+ledgerOffAfterAll(() => { delete process.env["LEDGER_DISTILL"]; });
+
 // ── Why this file exists ─────────────────────────────────────────────────────
 // Measured 2026-08-07 (docs/consolidation-cost-2026-08-07.md): the Hermes agent path costs ~44,600
 // prompt tokens per consolidation call REGARDLESS of payload -- a two-word probe billed 43,768, and

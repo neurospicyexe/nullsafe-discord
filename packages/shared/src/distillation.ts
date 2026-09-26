@@ -14,6 +14,10 @@ import type { WriteQueue } from "./write-queue.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
+import type { ChatMessage, CompanionId } from "./types.js";
+import {
+  ledgerDistillEnabled, LEDGER_CLERK_PROMPT, parseClerkResult, windowSource, postLedgerLines, ledgerSummary,
+} from "./ledger-clerk.js";
 
 /**
  * Per-bot prompt text for end-of-session distillation. The companion's voice and SOMA schema are
@@ -63,6 +67,8 @@ export async function distillSessionOnInactive(
   inference: InferenceAdapter,
   wq: WriteQueue,
   prompts: DistillationPrompts,
+  /** Direct toolless adapter for the ledger clerk (knob on). Absent -> `inference`. */
+  clerk?: InferenceAdapter | null,
 ): Promise<void> {
   const tag = prompts.companionId;
   const history = stmStore.get(channelId);
@@ -74,6 +80,15 @@ export async function distillSessionOnInactive(
   // output feeds witnessLog + synthesizeSession + writeHandoff + writeWmNote, so the fabrication
   // reached the handoff and every Claude.ai orient. runDistillation (below) already does this.
   const summaryInput = history.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
+
+  // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the distiller becomes a clerk. The four
+  // first-person writes stop; the clerk's record lines go to /ledger with a window source.
+  if (ledgerDistillEnabled()) {
+    await distillSessionToLedger(channelId, history, summaryInput, librarian, clerk ?? inference, inference, wq, prompts);
+    stmStore.clear(channelId);
+    return;
+  }
+
   const synthResult = await inference.generate(withOwnerPronounRule(prompts.synthesisPrompt), [{ role: "user", content: summaryInput }]);
   if (!synthResult) {
     console.warn(`[${tag}] onChannelInactive: synthesis null, skipping all writes channel=${channelId}`);
@@ -122,6 +137,86 @@ export async function distillSessionOnInactive(
 }
 
 /**
+ * The knob-on body of distillSessionOnInactive (2026-09-26).
+ *
+ * STOPPED: witnessLog, synthesizeSession, updatePromptContext, writeWmNote(synthResult) -- all
+ * four wrote a first-person synth as the companion, with no source.
+ *
+ * KEPT: the handoff (Claude.ai's `latest_handoff` reads it), but its summary is now the ACCEPTED
+ * ledger lines' server-rendered `content`, marks intact, and title/open_loops/next_steps come from
+ * the clerk JSON. Nothing else may stand in for the summary: zero accepted lines means no handoff.
+ *
+ * KEPT UNCHANGED: the structured-extract call and the SOMA update + feeling log it drives (spec
+ * section 6: Drevan and Raziel decide those). `state_hint` still derives from the extract's SOMA.
+ */
+async function distillSessionToLedger(
+  channelId: string,
+  history: ChatMessage[],
+  summaryInput: string,
+  librarian: LibrarianClient,
+  clerk: InferenceAdapter,
+  inference: InferenceAdapter,
+  wq: WriteQueue,
+  prompts: DistillationPrompts,
+): Promise<void> {
+  const tag = prompts.companionId;
+  const companionId = prompts.companionId as CompanionId;
+
+  const clerkRaw = await clerk.generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: summaryInput }]);
+  const clerkResult = parseClerkResult(clerkRaw);
+  if (clerkResult === null) {
+    console.warn(`[${tag}] onChannelInactive: clerk returned no JSON, no ledger lines -- raw: ${rawPreview(clerkRaw ?? "")}`);
+  }
+
+  // The ledger POSTs are awaited, not queued: the handoff needs their returned `content`.
+  const win = windowSource(channelId, history);
+  if (win.fallback) console.warn(`[${tag}] onChannelInactive: no STM timestamps, window source is the distillation instant`);
+  const outcome = clerkResult && clerkResult.lines.length
+    ? await postLedgerLines(librarian, {
+        companionId, fn: "distiller", lines: clerkResult.lines,
+        sourceKind: "window", sourceRef: win.ref,
+        dedupPrefix: `distill:${companionId}:${channelId}:${win.firstTs}`,
+        observedOn: win.observedOn, tag,
+      })
+    : null;
+  const summary = outcome ? ledgerSummary(outcome) : "";
+
+  // Structured extract: SOMA update + feeling log (unchanged) + the handoff's state_hint.
+  const extractRaw = await inference.generate(withOwnerPronounRule(prompts.sessionExtractPrompt), [{ role: "user", content: summaryInput }]);
+  const ext = extractRaw ? extractJson(extractRaw) as SessionExtract | null : null;
+  if (extractRaw && ext === null) {
+    console.warn(`[${tag}] structured extract parse failed, skipping -- raw: ${rawPreview(extractRaw)}`);
+  }
+
+  if (summary) {
+    const title = clerkResult?.title ?? "Discord session";
+    const stateHint = ext ? deriveStateHint(ext.soma) : undefined;
+    wq.fireAndForget(`handoff:${channelId}`, async () => {
+      await librarian.writeHandoff({
+        title, summary, open_loops: clerkResult?.open_loops, state_hint: stateHint,
+        next_steps: clerkResult?.next_steps, source: "distillation",
+      });
+    });
+  } else {
+    console.warn(`[${tag}] onChannelInactive: no ledger line accepted -- handoff skipped (nothing sourced to summarize) channel=${channelId}`);
+  }
+
+  if (ext) {
+    const title = ext.title ?? "Discord session";
+    if (hasSomaValue(ext.soma)) {
+      wq.fireAndForget(`somaUpdate:${channelId}`, async () => {
+        assertWriteAck(await librarian.ask("update my state", JSON.stringify(ext.soma)), "soma update");
+      });
+    }
+    if (ext.emotion) {
+      wq.fireAndForget(`feeling:${channelId}`, async () => {
+        assertWriteAck(await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title })), "feeling log");
+      });
+    }
+  }
+}
+
+/**
  * Mid-session distillation: every `distillationInterval` messages, extract typed persona/human
  * memory blocks and bridge human observations to orient. Byte-for-byte the bots' runDistillation.
  */
@@ -134,6 +229,10 @@ export async function runDistillation(
   distillationPrompt: string,
   distillationInterval: number,
   ownerDisplayName?: string,
+  /** Subject for the knob-on ledger lines (this bot). */
+  companionIdForLedger?: CompanionId,
+  /** Direct toolless adapter for the ledger clerk (knob on). Absent -> `inference`. */
+  clerk?: InferenceAdapter | null,
 ): Promise<void> {
   const history = stmStore.get(channelId);
   if (history.length < distillationInterval) return;
@@ -162,10 +261,34 @@ export async function runDistillation(
     }
     if (parsed.human_blocks?.length && ownerSpoke) {
       wq.fireAndForget(`human:${channelId}`, () => librarian.writeHumanBlocks(channelId, parsed.human_blocks!));
-      // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
-      // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
-      const noteText = `[discord:distillation] ${parsed.human_blocks.map((b) => b.content).join(" ")}`;
-      wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
+      if (ledgerDistillEnabled()) {
+        // LEDGER_DISTILL (2026-09-26): the mid-session orient bridge becomes ledger lines. The
+        // human blocks are interpretive observations and cannot pass the ledger grammar, so the
+        // clerk reads the same window instead -- fired under the SAME condition that used to write
+        // the note, so the cadence is unchanged (one extra inference call per interval).
+        const companionId = companionIdForLedger;
+        if (companionId) {
+          wq.fireAndForget(`ledger:distill:${channelId}`, async () => {
+            const raw = await (clerk ?? inference).generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: conversationText }]);
+            const res = parseClerkResult(raw);
+            if (!res || !res.lines.length) return;
+            const win = windowSource(channelId, window);
+            await postLedgerLines(librarian, {
+              companionId, fn: "distiller", lines: res.lines,
+              sourceKind: "window", sourceRef: win.ref,
+              dedupPrefix: `distill-mid:${companionId}:${channelId}:${win.firstTs}`,
+              observedOn: win.observedOn, tag: companionId,
+            });
+          });
+        } else {
+          console.warn(`[${channelId}] distillation: LEDGER_DISTILL on but no companion id passed -- ledger lines skipped`);
+        }
+      } else {
+        // Bridge to Claude.ai orient: write human observations as wm_note so orient sees
+        // Discord activity mid-conversation, not just after the 30-min channel-inactive timeout.
+        const noteText = `[discord:distillation] ${parsed.human_blocks.map((b) => b.content).join(" ")}`;
+        wq.fireAndForget(`wmNote:distill:${channelId}`, () => librarian.writeWmNote(noteText, channelId));
+      }
     } else if (parsed.human_blocks?.length) {
       console.warn(`[${channelId}] distillation: dropped ${parsed.human_blocks.length} human block(s) -- owner absent from window`);
     }

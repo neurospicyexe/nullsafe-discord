@@ -3,6 +3,14 @@ import { runDayDistillation, dayDistillPrompt, DAY_DISTILL_NOTE_TYPE, FRAGMENT_N
 import type { LibrarianClient } from "../librarian.js";
 import type { InferenceAdapter } from "../inference.js";
 
+import { beforeAll as ledgerOffBeforeAll, afterAll as ledgerOffAfterAll } from "@jest/globals";
+
+// LEDGER_DISTILL (2026-09-26) defaults ON. This file pins the legacy writers, so it runs with the
+// knob OFF -- which is also the byte-for-byte rollback guarantee. Knob-on behaviour lives in
+// ledger-distill.test.ts.
+ledgerOffBeforeAll(() => { process.env["LEDGER_DISTILL"] = "off"; });
+ledgerOffAfterAll(() => { delete process.env["LEDGER_DISTILL"]; });
+
 function note(content: string, created_at: string) {
   return { note_id: `n-${content.slice(0, 6)}`, agent_id: "drevan", content, created_at };
 }

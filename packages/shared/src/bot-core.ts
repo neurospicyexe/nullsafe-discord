@@ -564,7 +564,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       } catch (e) {
         console.warn(`[${companionId}] watch-party freshness check failed (non-fatal):`, e instanceof Error ? e.message : String(e));
       }
-      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
+      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }, directAdapter).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
     },
@@ -614,7 +614,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // CDT: after evening closures flush, before Layer B autonomous time at 01:30).
   const dayDistillHour = parseInt(process.env["DAY_DISTILL_UTC_HOUR"] ?? "6", 10);
   const dayDistillInterval = scheduleDayDistillation(
-    { companionId, librarian, adapter: () => adapterRef.current },
+    { companionId, librarian, adapter: () => adapterRef.current, clerk: () => directAdapter },
     Number.isFinite(dayDistillHour) ? dayDistillHour : 6,
   );
 

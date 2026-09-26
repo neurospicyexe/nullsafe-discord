@@ -1,6 +1,14 @@
 import { jest } from "@jest/globals";
 import { deriveStateHint, hasSomaValue, distillSessionOnInactive } from "../distillation.js";
 
+import { beforeAll as ledgerOffBeforeAll, afterAll as ledgerOffAfterAll } from "@jest/globals";
+
+// LEDGER_DISTILL (2026-09-26) defaults ON. This file pins the legacy writers, so it runs with the
+// knob OFF -- which is also the byte-for-byte rollback guarantee. Knob-on behaviour lives in
+// ledger-distill.test.ts.
+ledgerOffBeforeAll(() => { process.env["LEDGER_DISTILL"] = "off"; });
+ledgerOffAfterAll(() => { delete process.env["LEDGER_DISTILL"]; });
+
 // These two helpers encode the SOMA-handling logic that was inlined identically in all three
 // bots' onChannelInactive (bots/<name>/src/index.ts). The bots differ ONLY in their SOMA field
 // names (Cypher acuity/presence/warmth, Drevan heat/reach/weight, Gaia stillness/density/perimeter),

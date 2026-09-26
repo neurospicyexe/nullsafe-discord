@@ -1,6 +1,14 @@
 import { jest, describe, test, expect, beforeEach } from "@jest/globals";
 import { consolidateSession } from "../consolidation.js";
 
+import { beforeAll as ledgerOffBeforeAll, afterAll as ledgerOffAfterAll } from "@jest/globals";
+
+// LEDGER_DISTILL (2026-09-26) defaults ON. This file pins the legacy writers, so it runs with the
+// knob OFF -- which is also the byte-for-byte rollback guarantee. Knob-on behaviour lives in
+// ledger-distill.test.ts.
+ledgerOffBeforeAll(() => { process.env["LEDGER_DISTILL"] = "off"; });
+ledgerOffAfterAll(() => { delete process.env["LEDGER_DISTILL"]; });
+
 const mockState = "SOMA: present. Tensions: none. Recent: a session of code and presence.";
 
 const validHandoffJson = JSON.stringify({

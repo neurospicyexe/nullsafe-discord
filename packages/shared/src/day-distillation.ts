@@ -16,6 +16,8 @@
 import type { LibrarianClient } from "./librarian.js";
 import type { InferenceAdapter } from "./inference.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
+import type { CompanionId } from "./types.js";
+import { ledgerDistillEnabled, LEDGER_CLERK_PROMPT, parseClerkResult, postLedgerLines } from "./ledger-clerk.js";
 
 /** Fold no fewer than this many fragments -- a single note IS already the day's note. */
 const MIN_FRAGMENTS = 2;
@@ -39,6 +41,8 @@ export interface DayDistillDeps {
   companionId: string;
   librarian: LibrarianClient;
   adapter: () => InferenceAdapter;
+  /** Direct toolless adapter for the ledger clerk (LEDGER_DISTILL on). Null/absent -> `adapter()`. */
+  clerk?: () => InferenceAdapter | null;
 }
 
 /**
@@ -78,6 +82,46 @@ export async function runDayDistillation(deps: DayDistillDeps): Promise<"skipped
   const body = ordered.map(f => `- ${f.content}`).join("\n");
 
   const dayKey = new Date().toISOString().slice(0, 10);
+
+  // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the first-person day note becomes clerk
+  // lines in the ledger lane, sourced to the oldest folded fragment (`row
+  // wm_continuity_notes:<id>`). Same ordering guarantee as below: fragments demote ONLY after at
+  // least one line was accepted, so orient is never left with neither record nor fragments.
+  if (ledgerDistillEnabled()) {
+    const clerk = deps.clerk?.() ?? deps.adapter();
+    const raw = await clerk.generate(
+      LEDGER_CLERK_PROMPT,
+      [{ role: "user", content: `Session notes recorded today, oldest first:
+${body}` }],
+      0.3,
+      800,
+      `ledger-day-${companionId}-${dayKey}`, // only matters on the Hermes fallback: a fresh lane
+    );
+    const res = parseClerkResult(raw);
+    if (!res || res.lines.length === 0) {
+      console.warn(`[${tag}] day-distill: clerk returned no lines; fragments left at high salience`);
+      return "failed";
+    }
+    const outcome = await postLedgerLines(librarian, {
+      companionId: companionId as CompanionId, fn: "distiller", lines: res.lines,
+      sourceKind: "row", sourceRef: `wm_continuity_notes:${ordered[0]!.note_id}`,
+      dedupPrefix: `daydistill:${companionId}:${dayKey}`, observedOn: dayKey, tag,
+    });
+    if (outcome.accepted.length === 0) {
+      // All-duplicate = a prior run today already wrote these keys (the digest-note restart guard
+      // above cannot see ledger lines). Anything else is a failure: leave the fragments alone.
+      if (outcome.duplicates > 0) {
+        console.log(`[${tag}] day-distill: ledger lines already written today, skipping`);
+        return "skipped_done";
+      }
+      console.warn(`[${tag}] day-distill: no ledger line accepted; fragments left at high salience`);
+      return "failed";
+    }
+    const demotedL = await librarian.demoteNotes(FRAGMENT_NOTE_TYPE, toSqliteUtc(newestFolded));
+    console.log(`[${tag}] day-distill: ${outcome.accepted.length} ledger line(s) written (${fragments.length} fragments folded, ${demotedL ?? "?"} demoted)`);
+    return "written";
+  }
+
   const digest = await deps.adapter().generate(
     withOwnerPronounRule(dayDistillPrompt(companionId)),
     [{ role: "user", content: `Today's session notes, oldest first:\n${body}` }],
