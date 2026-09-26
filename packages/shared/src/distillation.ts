@@ -268,18 +268,21 @@ export async function runDistillation(
         // the note, so the cadence is unchanged (one extra inference call per interval).
         const companionId = companionIdForLedger;
         if (companionId) {
-          wq.fireAndForget(`ledger:distill:${channelId}`, async () => {
-            const raw = await (clerk ?? inference).generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: conversationText }]);
-            const res = parseClerkResult(raw);
-            if (!res || !res.lines.length) return;
+          // Inference runs OUTSIDE the write queue: a queued thunk that throws is retried as a failed
+          // write, which would re-bill the clerk call. Only the (never-throwing) POST loop is queued.
+          const raw = await (clerk ?? inference).generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: conversationText }]);
+          const res = parseClerkResult(raw);
+          if (res && res.lines.length) {
             const win = windowSource(channelId, window);
-            await postLedgerLines(librarian, {
-              companionId, fn: "distiller", lines: res.lines,
-              sourceKind: "window", sourceRef: win.ref,
-              dedupPrefix: `distill-mid:${companionId}:${channelId}:${win.firstTs}`,
-              observedOn: win.observedOn, tag: companionId,
+            wq.fireAndForget(`ledger:distill:${channelId}`, async () => {
+              await postLedgerLines(librarian, {
+                companionId, fn: "distiller", lines: res.lines,
+                sourceKind: "window", sourceRef: win.ref,
+                dedupPrefix: `distill-mid:${companionId}:${channelId}:${win.firstTs}`,
+                observedOn: win.observedOn, tag: companionId,
+              });
             });
-          });
+          }
         } else {
           console.warn(`[${channelId}] distillation: LEDGER_DISTILL on but no companion id passed -- ledger lines skipped`);
         }

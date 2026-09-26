@@ -472,6 +472,7 @@ describe("buildWitnessLedgerEntry", () => {
       body: `Logged: Drevan spoke in #couch without a reply from Gaia; words: "I said 'held' and I meant it"`,
       source_kind: "message",
       source_ref: "m-123",
+      dedup_key: "witness:m-123",
     });
     // The sibling's own "I" sits inside the quotes -- the pre-filter (and server) exempt it.
     expect(preflightLedgerBody(e!.body)).toBeNull();

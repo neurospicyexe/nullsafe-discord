@@ -380,6 +380,9 @@ export function buildWitnessLedgerEntry(p: {
     body: `Logged: ${name} spoke in #${p.channelName ?? p.channelId} without a reply from Gaia; words: "${words}"`,
     source_kind: "message",
     source_ref: p.messageId,
+    // This is the one writeLedger caller riding the write queue, which retries on the 5xx that
+    // writeLedger throws -- the key is what makes that retry safe.
+    dedup_key: `witness:${p.messageId}`,
   };
 }
 
