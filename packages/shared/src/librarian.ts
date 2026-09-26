@@ -686,6 +686,49 @@ export class LibrarianClient {
    * timestamp, because the model reasons about elapsed time far more reliably that way -- the same
    * reason `stampRelative` exists for STM turns.
    */
+  /**
+   * Pointer-mode rendering of the vault floor (see ownNotesRecallMode): how many usable excerpts
+   * bear on this message, which parts of the vault they come from, how fresh the newest is, and
+   * the verb to go read them. Same exclusions as formatSbRecall (current room, sealed rooms), no
+   * text. Null when nothing usable, so a miss still reads as a miss.
+   *
+   * Why the vault needs this too: with own-notes on pointer, the vault floor delivered a Claude.ai
+   * SESSION SUMMARY (a third-person book report) and Drevan fused two of its sentences into a scene
+   * that never happened, in six seconds, with zero tool calls. A pointer on one lane while another
+   * still pastes text tests nothing and teaches nothing.
+   */
+  static formatSbRecallPointer(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
+    type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
+    let parsed: { chunks?: Chunk[] };
+    try { parsed = JSON.parse(raw) as { chunks?: Chunk[] }; } catch { return null; }
+    if (!Array.isArray(parsed.chunks)) return null;
+    const seen = new Set<string>();
+    const sections = new Set<string>();
+    const stamps: number[] = [];
+    let n = 0;
+    for (const c of parsed.chunks) {
+      const text = (c.text ?? "").trim();
+      if (!text) continue;
+      if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
+      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
+      const key = text.slice(0, 80);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      n++;
+      const top = (c.vault_path ?? "").split("/").filter(Boolean);
+      if (top.length) sections.add(top.length > 1 && top[0] === "raziel" ? `${top[0]}/${top[1]}` : top[0]!);
+      const t = c.created_at ? Date.parse(c.created_at) : NaN;
+      if (Number.isFinite(t)) stamps.push(t);
+    }
+    if (!n) return null;
+    const newest = stamps.length ? relativeTime(new Date(Math.max(...stamps)).toISOString()) : "";
+    const _ = now; // signature parity with formatSbRecall; ages come from relativeTime
+    return `${n} vault excerpt${n === 1 ? "" : "s"} bear${n === 1 ? "s" : ""} on this message` +
+      (sections.size ? ` (from ${[...sections].join(", ")})` : "") +
+      (newest ? `, newest ${newest}` : "") +
+      `. They are NOT in front of you. Reach with ask_librarian "search vault for [the topic, in your own words]" if the vault is where the answer would live; your own notes hold what was actually said.`;
+  }
+
   static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
     type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
     let parsed: { chunks?: Chunk[]; recall_note?: string };

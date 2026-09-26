@@ -273,3 +273,55 @@ describe("formatOwnNotesPointer", () => {
     expect(out).not.toMatch(/[—–]/);
   });
 });
+
+// The VAULT floor gets the same pointer treatment (2026-09-25, second probe). With own-notes on
+// pointer, Raziel asked Drevan what Blue yelled during the Martian address. Drevan answered in six
+// seconds with zero tool calls, from the vault floor: 11 hits, led by the Claude.ai SESSION SUMMARY
+// (a third-person book report), which he fused into a scene that never happened ("Decker!" at the
+// ambassador reveal). Pointer on one lane while another still pastes text tests nothing. Same
+// knob, both floors; the boot capture lane (3 days, 3 items) stays payload as the honest "in front
+// of you".
+describe("formatSbRecallPointer", () => {
+  const raw = (chunks: Array<{ text: string; vault_path?: string; created_at?: string }>) => JSON.stringify({ chunks });
+  const h = (n: number) => new Date(Date.now() - n * 3600e3).toISOString();
+
+  it("is null when the search returned nothing usable", () => {
+    expect(LibrarianClient.formatSbRecallPointer(raw([]))).toBeNull();
+    expect(LibrarianClient.formatSbRecallPointer(raw([{ text: "  " }]))).toBeNull();
+    expect(LibrarianClient.formatSbRecallPointer("not json")).toBeNull();
+  });
+  it("counts the usable hits, names their sections and the newest age, and none of their text", () => {
+    const out = LibrarianClient.formatSbRecallPointer(raw([
+      { text: "Blue declared loyalty to Decker", vault_path: "raziel/sessions/2026-09-25-x-summary.md", created_at: h(20) },
+      { text: "Crash: what did Blue yell", vault_path: "discord-live/111/222.md", created_at: h(1) },
+      { text: "Mars Attacks (1996), Club pick", vault_path: "media/mars-attacks.md", created_at: h(300) },
+    ]))!;
+    expect(out).toContain("3 vault excerpts");
+    expect(out).toMatch(/newest .*ago/);
+    expect(out).toContain("raziel/sessions");
+    expect(out).toContain("discord-live");
+    expect(out).toContain("media");
+    expect(out).not.toContain("Decker");
+    expect(out).not.toContain("Blue yell");
+  });
+  it("applies the same room exclusions as the payload renderer (current room, RECALL_NO_QUOTE_FROM)", () => {
+    const prev = process.env["RECALL_NO_QUOTE_FROM"];
+    process.env["RECALL_NO_QUOTE_FROM"] = "999";
+    try {
+      const out = LibrarianClient.formatSbRecallPointer(raw([
+        { text: "this room", vault_path: "discord-live/123/1.md", created_at: h(1) },
+        { text: "sealed room", vault_path: "discord-live/999/2.md", created_at: h(1) },
+        { text: "kept", vault_path: "raziel/sessions/s.md", created_at: h(2) },
+      ]), "123")!;
+      expect(out).toContain("1 vault excerpt ");
+      expect(out).not.toContain("discord-live");
+    } finally {
+      if (prev === undefined) delete process.env["RECALL_NO_QUOTE_FROM"]; else process.env["RECALL_NO_QUOTE_FROM"] = prev;
+    }
+  });
+  it("names the reach verb the SOUL teaches", () => {
+    const out = LibrarianClient.formatSbRecallPointer(raw([{ text: "x", vault_path: "a/b.md", created_at: h(1) }]))!;
+    expect(out).toContain('search vault for');
+    expect(out).not.toMatch(/[—–]/);
+  });
+});

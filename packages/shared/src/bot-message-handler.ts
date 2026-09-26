@@ -1419,9 +1419,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     const sbHit = await sbSearchPromise;
-    const sbRecall = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
-    if (sbRecall) {
-      contextPrompt += `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecall.slice(0, 1200)}]`;
+    // PAYLOAD vs POINTER applies to the vault floor as well (2026-09-25): see ownNotesRecallMode.
+    if (ownNotesRecallMode(process.env, COMPANION_ID) === "pointer") {
+      const sbPointer = sbHit ? LibrarianClient.formatSbRecallPointer(sbHit, message.channelId) : null;
+      if (sbPointer) contextPrompt += `\n\n[Memory -- ${sbPointer}]`;
+    } else {
+      const sbRecall = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
+      if (sbRecall) {
+        contextPrompt += `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecall.slice(0, 1200)}]`;
+      }
     }
 
     // A SEPARATE block from the vault, deliberately. These are the companion's own notes -- what
