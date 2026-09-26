@@ -11,8 +11,12 @@ export interface InferenceAdapter {
    * hits Hermes's compaction path. `sessionKey` (`X-Hermes-Session-Key`) is the STABLE long-term-
    * memory scope (`companionId:channelId`, never rotates) -- when omitted the adapter falls back
    * to `sessionId` for both headers (pre-rotation behavior). All other adapters ignore both.
+   *
+   * `signal` (optional 7th arg, 2026-09-26) lets a caller with its own deadline ABORT the request
+   * rather than abandon it running (reach-decision.ts's side ask). Honoured by the Hermes adapter
+   * and forwarded by FallbackAdapter; other adapters ignore it and keep their own timeouts.
    */
-  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string): Promise<string | null>;
+  generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null>;
 }
 
 // ── Output length ceiling ──────────────────────────────────────────────────────
@@ -419,7 +423,7 @@ class HermesAdapter implements InferenceAdapter {
     private timeoutMs: number = hermesRequestTimeoutMs(),
   ) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string, sessionKey?: string): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null> {
     const startedAt = Date.now();
     try {
       // Stable session pinning (2026-07-01): without an explicit session header the gateway
@@ -452,7 +456,8 @@ class HermesAdapter implements InferenceAdapter {
           temperature,
           stream: false,
         }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        // The caller's signal (when given) aborts alongside the adapter's own ceiling.
+        signal: signal ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal]) : AbortSignal.timeout(this.timeoutMs),
       });
       if (!res.ok) {
         console.warn(`[inference:hermes] non-2xx response: ${res.status}`);
@@ -724,9 +729,11 @@ export class DeepInfraAdapter implements InferenceAdapter {
 export class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string): Promise<string | null> {
+  async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null> {
     for (const { name, adapter } of this.adapters) {
-      const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens, sessionId, sessionKey);
+      // An aborted caller has stopped listening: trying the next provider would only spend it.
+      if (signal?.aborted) return null;
+      const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens, sessionId, sessionKey, signal);
       if (result !== null) {
         console.log(`[inference] ${name} responded`);
         return result;

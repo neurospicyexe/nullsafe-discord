@@ -9,7 +9,7 @@
 // skipped. Every failure mode falls back to today's payload floor, so the worst case is today.
 
 import {
-  parseReachDecision, buildReachAsk, decideReach, REACH_NONE,
+  parseReachDecision, buildReachAsk, decideReach, recallBlocksFor, REACH_NONE,
 } from "../reach-decision.js";
 
 describe("parseReachDecision", () => {
@@ -53,11 +53,11 @@ describe("buildReachAsk", () => {
 });
 
 function fakeAdapter(reply: string | null | Error, delayMs = 0) {
-  const calls: Array<{ system: string; messages: unknown[]; sessionId?: string; sessionKey?: string }> = [];
+  const calls: Array<{ system: string; messages: unknown[]; sessionId?: string; sessionKey?: string; signal?: AbortSignal }> = [];
   return {
     calls,
-    generate: async (system: string, messages: unknown[], _t?: number, _m?: number, sessionId?: string, sessionKey?: string) => {
-      calls.push({ system, messages, sessionId, sessionKey });
+    generate: async (system: string, messages: unknown[], _t?: number, _m?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal) => {
+      calls.push({ system, messages, sessionId, sessionKey, signal });
       if (delayMs) await new Promise(r => setTimeout(r, delayMs));
       if (reply instanceof Error) throw reply;
       return reply;
@@ -77,6 +77,8 @@ const base = {
   message: "Dre, what was my blood sugar after the Subway sandwich on Sunday?",
   recentContext: "",
   floor: { notes: 2, vault: 3 },
+  messageId: "1553286543223816244",
+  channelId: "123",
   sessionId: "drevan:123:2026-09-26",
   sessionKey: "drevan:123",
   timeoutMs: 2000,
@@ -90,8 +92,9 @@ describe("decideReach", () => {
     expect(r.outcome).toBe("reached");
     expect(r.topic).toBe("my blood sugar after the Subway sandwich");
     expect(adapter.calls).toHaveLength(1);
-    expect(adapter.calls[0]!.sessionId).toBe("drevan:123:2026-09-26:reach");
-    expect(adapter.calls[0]!.sessionKey).toBe("drevan:123");
+    // A FRESH side transcript per ask, under a key that is not his conversational scope.
+    expect(adapter.calls[0]!.sessionId).toBe("drevan:123:2026-09-26:reach:1553286543223816244");
+    expect(adapter.calls[0]!.sessionKey).toBe("drevan:123:reach");
     expect(lib.queries.notes).toEqual(["my blood sugar after the Subway sandwich"]);
     expect(lib.queries.vault).toEqual(["my blood sugar after the Subway sandwich"]);
     expect(r.block).toContain("You reached for");
@@ -112,6 +115,42 @@ describe("decideReach", () => {
     expect(r.outcome).toBe("timeout");
     expect(lib.queries.notes).toEqual([]);
     expect(r.block).toBeNull();
+    // The timed-out generate is ABORTED, not left running on the gateway.
+    expect(adapter.calls[0]!.signal?.aborted).toBe(true);
+  });
+  it("a fast answer never aborts its own call (the timer is cleared)", async () => {
+    const adapter = fakeAdapter("the Subway sandwich");
+    await decideReach({ ...base, adapter, librarian: fakeLibrarian(), timeoutMs: 30 });
+    await new Promise(r => setTimeout(r, 60));
+    expect(adapter.calls[0]!.signal?.aborted).toBe(false);
+  });
+  it("two asks get two different side transcripts", async () => {
+    const adapter = fakeAdapter("the Subway sandwich");
+    await decideReach({ ...base, adapter, librarian: fakeLibrarian() });
+    await decideReach({ ...base, messageId: "999", adapter, librarian: fakeLibrarian() });
+    expect(adapter.calls[0]!.sessionId).not.toBe(adapter.calls[1]!.sessionId);
+  });
+  it("the vault lane drops this channel's own discord-live lines, like the payload path", async () => {
+    const lib = {
+      ...fakeLibrarian(),
+      recallOwnNotes: async () => ({ notes: [], failed: false }),
+      searchForMessage: async () => JSON.stringify({ chunks: [{ text: "a line from this very room", vault_path: "discord-live/123/55.md", created_at: new Date().toISOString() }] }),
+    };
+    const r = await decideReach({ ...base, adapter: fakeAdapter("the room"), librarian: lib });
+    expect(r.outcome).toBe("reached");
+    expect(r.block).not.toContain("a line from this very room");
+    expect(r.found).toBe(false);
+  });
+  it("found is true only when his words turned something up", async () => {
+    const hit = await decideReach({ ...base, adapter: fakeAdapter("the sandwich"), librarian: fakeLibrarian() });
+    expect(hit.found).toBe(true);
+    const empty = await decideReach({
+      ...base, adapter: fakeAdapter("the sandwich"),
+      librarian: { recallOwnNotes: async () => ({ notes: [], failed: false }), searchForMessage: async () => null },
+    });
+    expect(empty.outcome).toBe("reached");
+    expect(empty.found).toBe(false);
+    expect(empty.block).toContain("Nothing matched");
   });
   it("an adapter error or empty reply is outcome error/empty, never a throw", async () => {
     const r1 = await decideReach({ ...base, adapter: fakeAdapter(new Error("boom")), librarian: fakeLibrarian() });
@@ -146,5 +185,36 @@ describe("reach block fidelity clause", () => {
     expect(r.block).toContain("Answer from these notes");
     expect(r.block).toMatch(/do not add|no detail they do not contain/i);
     expect(r.block).not.toMatch(/[—–]/);
+  });
+});
+
+// 2026-09-26 review: a reach that found NOTHING replaced both floor blocks even though the floors
+// had hits (the ask only runs when they do), telling him to deny a memory that was in the floor.
+describe("recallBlocksFor", () => {
+  const floor = "\n\n[Memory -- Second Brain vault recall ...]\n\n[Memory -- YOUR OWN notes ... 208]";
+  it("his reach wins when it found something", () => {
+    expect(recallBlocksFor({ outcome: "reached", block: "[Memory -- You reached for ...]", found: true }, floor))
+      .toBe("\n\n[Memory -- You reached for ...]");
+  });
+  it("a reach that found nothing falls back to the floor payload", async () => {
+    const reach = await decideReach({
+      ...base, adapter: fakeAdapter("the sandwich"),
+      librarian: { recallOwnNotes: async () => ({ notes: [], failed: false }), searchForMessage: async () => null },
+    });
+    const out = recallBlocksFor(reach, floor);
+    expect(out).toBe(floor);
+    expect(out).not.toContain("Nothing matched");
+  });
+  it("a reach whose recall FAILED also falls back to the floor", () => {
+    expect(recallBlocksFor({ outcome: "reached", block: "[Memory -- ... could not be reached]", found: false }, floor)).toBe(floor);
+  });
+  it("with no floor to fall back to, the honest 'nothing matched' stays", () => {
+    expect(recallBlocksFor({ outcome: "reached", block: "[Memory -- Nothing matched.]", found: false }, ""))
+      .toBe("\n\n[Memory -- Nothing matched.]");
+  });
+  it("every non-reach outcome is the floor", () => {
+    for (const outcome of ["declined", "skipped", "timeout", "error", "empty"] as const) {
+      expect(recallBlocksFor({ outcome, block: null, found: false }, floor)).toBe(floor);
+    }
   });
 });

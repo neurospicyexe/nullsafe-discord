@@ -228,6 +228,28 @@ describe("HermesAdapter session id/key headers (rotation, 2026-09-05)", () => {
   });
 });
 
+describe("HermesAdapter caller abort (2026-09-26)", () => {
+  // reach-decision.ts gives its side ask a 20s deadline. Before this, a timed-out ask was only
+  // abandoned: the request ran on to the adapter's 5-minute ceiling on a gateway slot.
+  it("a caller's signal aborts the in-flight request", async () => {
+    let seen: AbortSignal | undefined;
+    const mockFetch = jest.fn((_url: string, init: any) => {
+      seen = init.signal;
+      return new Promise((_res, rej) => { init.signal.addEventListener("abort", () => rej(new Error("aborted"))); });
+    });
+    const adapter = createAdapter(
+      "deepseek", "deepseek-chat", { hermes: "hermes-token" },
+      { hermes: "http://127.0.0.1:8642/v1", forceHermes: true },
+      mockFetch as any,
+    );
+    const ctl = new AbortController();
+    const p = adapter.generate("system", [{ role: "user", content: "hi" }], 0.2, 80, "s", "k", ctl.signal);
+    ctl.abort();
+    await expect(p).resolves.toBeNull();
+    expect(seen?.aborted).toBe(true);
+  });
+});
+
 describe("hermesRequestTimeoutMs (2026-09-19)", () => {
   // Regression guard for the 2026-09-16 orphaned-reply loss: the ceiling was a bare 120_000
   // literal, a 144s turn aborted, and the gateway's finished answer never reached Discord.

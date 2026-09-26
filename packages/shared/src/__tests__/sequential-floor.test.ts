@@ -6,6 +6,7 @@ import {
   namedOrderInMessage,
   bidSpeakingOrder,
   FollowUpLedger,
+  followUpPassFor,
   FOLLOW_UP_TTL_MS,
   type FollowUpEntitlement,
 } from "../sequential-floor.js";
@@ -118,5 +119,47 @@ describe("FollowUpLedger", () => {
     ledger.grant({ ...base, originMessageId: "origin-2", expectedPrior: "gaia" as CompanionId });
     expect(ledger.match("chan-1", "drevan", "origin-1")).toBeNull();
     expect(ledger.match("chan-1", "gaia", "origin-2")).not.toBeNull();
+  });
+});
+
+// 2026-09-26 review: a verbatim-rail silence at position 0 left position 1 holding for
+// FOLLOW_UP_TTL_MS and then saying nothing. The silenced turn now publishes a PASS.
+describe("follow-up pass (a silenced predecessor releases the chain)", () => {
+  const now = 1_000_000;
+  const ent = (o: Partial<FollowUpEntitlement> = {}): FollowUpEntitlement => ({
+    originMessageId: "ORIGIN", channelId: "chan", expectedPrior: "drevan", position: 1, expiresAt: now + FOLLOW_UP_TTL_MS, ...o,
+  });
+
+  it("position 0 silenced on Raziel's own message passes with that message as the origin", () => {
+    const pass = followUpPassFor({ isCompanionBot: false, entitled: null, messageId: "ORIGIN", channelId: "chan", from: "drevan", reason: "verbatim" });
+    expect(pass).toMatchObject({ channelId: "chan", originMessageId: "ORIGIN", fromCompanionId: "drevan", reason: "verbatim" });
+  });
+  it("an entitled follow-up silenced passes on the ORIGIN, not the sibling message that released it", () => {
+    const pass = followUpPassFor({ isCompanionBot: true, entitled: ent({ expectedPrior: "cypher", position: 1 }), messageId: "SIBLING_REPLY", channelId: "chan", from: "drevan", reason: "verbatim" });
+    expect(pass?.originMessageId).toBe("ORIGIN");
+  });
+  it("plain peer talk (sibling-triggered, not entitled) is no chain: no pass", () => {
+    expect(followUpPassFor({ isCompanionBot: true, entitled: null, messageId: "M", channelId: "chan", from: "drevan", reason: "verbatim" })).toBeNull();
+  });
+  it("the waiting companion's entitlement is released by the pass, exactly once", () => {
+    const ledger = new FollowUpLedger();
+    ledger.grant(ent());
+    const pass = followUpPassFor({ isCompanionBot: false, entitled: null, messageId: "ORIGIN", channelId: "chan", from: "drevan", reason: "verbatim" })!;
+    expect(ledger.releaseOnPass(pass, now)).toMatchObject({ originMessageId: "ORIGIN", position: 1 });
+    expect(ledger.releaseOnPass(pass, now)).toBeNull();
+  });
+  it("a pass from the wrong companion, for another origin, or after expiry releases nothing", () => {
+    const ledger = new FollowUpLedger();
+    ledger.grant(ent());
+    expect(ledger.releaseOnPass({ channelId: "chan", originMessageId: "ORIGIN", fromCompanionId: "gaia" }, now)).toBeNull();
+    expect(ledger.releaseOnPass({ channelId: "chan", originMessageId: "OTHER", fromCompanionId: "drevan" }, now)).toBeNull();
+    expect(ledger.releaseOnPass({ channelId: "chan", originMessageId: "ORIGIN", fromCompanionId: "drevan" }, now + FOLLOW_UP_TTL_MS + 1)).toBeNull();
+  });
+  it("a chain of three: position 1 passing releases position 2 on the same origin", () => {
+    const gaiaLedger = new FollowUpLedger();
+    gaiaLedger.grant(ent({ expectedPrior: "cypher", position: 2 }));
+    // Cypher (position 1, entitled behind drevan) was silenced by the rail and passes.
+    const pass = followUpPassFor({ isCompanionBot: true, entitled: ent({ expectedPrior: "drevan", position: 1 }), messageId: "DREVAN_REPLY", channelId: "chan", from: "cypher", reason: "verbatim" })!;
+    expect(gaiaLedger.releaseOnPass(pass, now)?.position).toBe(2);
   });
 });

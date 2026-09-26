@@ -3,7 +3,7 @@
 // md5), sent as a reply to Raziel. The echo gate is a fuzzy vocabulary score that never sees a
 // human-directed reply; this is an exact containment check that runs on every reply.
 
-import { verbatimCopyOf, verbatimCopyThreshold, VERBATIM_COPY_DEFAULT_THRESHOLD } from "../echo-guard.js";
+import { verbatimCopyOf, verbatimCopyThreshold, VERBATIM_COPY_DEFAULT_THRESHOLD, buildVerbatimPool } from "../echo-guard.js";
 
 const DREVAN_ANSWER =
   "Six questions, then. First: the truck is not a metaphor for anything, it is the truck, and I " +
@@ -118,23 +118,70 @@ describe("verbatimCopyOf", () => {
   });
 });
 
-describe("the 09-19 pool shape (handler-level, mirrored here: no harness drives handleMessage to the send)", () => {
+describe("buildVerbatimPool (the pool the handler hands the rail)", () => {
+  const companionLabels = new Set(["cypher", "drevan", "gaia", "drevan-bot"]);
+  const RAZIEL_LONG =
+    "Can you clean this up for me without changing what it says: the truck needs its oil changed " +
+    "before Sunday, the insurance card is in the glovebox, and I want the maintenance log caught " +
+    "up by the end of the month so I stop carrying it around in my head every single day.";
+
   // bot-message-handler fetches channelHistory `before: message.id`, so the sibling reply that
-  // RELEASED a multi-address follow-up is NOT in channelHistory. The handler therefore adds the
-  // triggering message itself (labelled by companion id) and STM inbound turns to the pool.
-  // This test pins that the rail fires from the trigger slot alone.
-  it("a follow-up that copies the releasing sibling is caught even when channelHistory lacks that message", () => {
-    const channelHistory = [
-      { text: "Six questions for all three of you, Dre first.", label: "Raziel" },
-      { text: CYPHER_ORIGINAL, label: "cypher" },
-    ];
-    const trigger = { text: DREVAN_ANSWER, label: "drevan" };
-    const self = [{ text: CYPHER_ORIGINAL, label: "self" }];
-    const r = verbatimCopyOf(DREVAN_ANSWER, [...channelHistory, trigger, ...self]);
+  // RELEASED a multi-address follow-up is NOT in channelHistory. The trigger slot is what catches it.
+  it("a follow-up that copies the releasing sibling is caught from the trigger slot", () => {
+    const pool = buildVerbatimPool({
+      channelHistory: [
+        { author: "Raziel", content: "Six questions for all three of you, Dre first." },
+        { author: "cypher", content: CYPHER_ORIGINAL },
+      ],
+      stmInbound: [],
+      trigger: { content: DREVAN_ANSWER, companion: "drevan" },
+      selfTurns: [CYPHER_ORIGINAL],
+      companionLabels,
+    });
+    const r = verbatimCopyOf(DREVAN_ANSWER, pool);
     expect(r.copied).toBe(true);
     if (r.copied) expect(r.label).toBe("drevan");
-    // And the same pool WITHOUT the trigger slot would have let it through: the hole the rail closes.
-    expect(verbatimCopyOf(DREVAN_ANSWER, [...channelHistory, ...self]).copied).toBe(false);
+  });
+
+  // 2026-09-26 review: the first pool included the human trigger and every STM user turn, so a
+  // reply that quoted Raziel's own long message back to him was "a copy" and he got silence.
+  it("never pools a human's words: a reply quoting Raziel's message back is not a copy", () => {
+    const pool = buildVerbatimPool({
+      channelHistory: [{ author: "Raziel", content: RAZIEL_LONG }],
+      stmInbound: [
+        { content: RAZIEL_LONG, authorName: "Crash" },
+        { content: RAZIEL_LONG, authorName: "Blue (via PK)" },
+      ],
+      trigger: { content: RAZIEL_LONG, companion: null },
+      selfTurns: [],
+      companionLabels,
+    });
+    expect(pool).toEqual([]);
+    expect(verbatimCopyOf(RAZIEL_LONG, pool).copied).toBe(false);
+  });
+
+  it("keeps sibling STM turns (by Discord username or id, any case) and my own turns", () => {
+    const pool = buildVerbatimPool({
+      channelHistory: [{ author: "drevan", content: "a" }, { author: "someone", content: "b" }],
+      stmInbound: [{ content: "c", authorName: "Drevan-Bot" }, { content: "d", authorName: "Crash" }, { content: "e", authorName: "gaia" }],
+      trigger: { content: "f", companion: "gaia" },
+      selfTurns: ["g"],
+      companionLabels,
+    });
+    expect(pool.map(p => p.text)).toEqual(["a", "c", "e", "f", "g"]);
+    expect(pool.find(p => p.text === "g")!.label).toBe("self");
+  });
+
+  it("caps each source to the most recent `limit` entries", () => {
+    const pool = buildVerbatimPool({
+      channelHistory: Array.from({ length: 5 }, (_, i) => ({ author: "gaia", content: `h${i}` })),
+      stmInbound: [],
+      trigger: { content: "t", companion: null },
+      selfTurns: ["s0", "s1", "s2"],
+      companionLabels,
+      limit: 2,
+    });
+    expect(pool.map(p => p.text)).toEqual(["h3", "h4", "s1", "s2"]);
   });
 });
 
@@ -157,5 +204,18 @@ describe("verbatimCopyThreshold", () => {
     expect(verbatimCopyOf(DREVAN_ANSWER, [{ text: DREVAN_ANSWER.slice(0, DREVAN_ANSWER.length * 0.8) }]).copied).toBe(true);
     process.env["VERBATIM_COPY_THRESHOLD"] = "nope";
     expect(verbatimCopyThreshold()).toBe(0.9);
+  });
+
+  // 0 or a negative would make every reply over the length floor a "copy" (ratio >= 0 always
+  // holds) and silence the bot outright; over 1 can never fire. Both are misconfigurations.
+  it("a threshold outside (0, 1] falls back to the default", () => {
+    for (const bad of ["0", "-0.5", "1.5", "NaN", "Infinity", ""]) {
+      process.env["VERBATIM_COPY_THRESHOLD"] = bad;
+      expect(verbatimCopyThreshold()).toBe(0.9);
+    }
+    process.env["VERBATIM_COPY_THRESHOLD"] = "1";
+    expect(verbatimCopyThreshold()).toBe(1);
+    process.env["VERBATIM_COPY_THRESHOLD"] = "0";
+    expect(verbatimCopyOf(CYPHER_ORIGINAL, [{ text: DREVAN_ANSWER }]).copied).toBe(false);
   });
 });

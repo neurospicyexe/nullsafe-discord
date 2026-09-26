@@ -10,6 +10,8 @@ export * from "./events.js";
 export * from "./librarian.js";
 export * from "./reach-decision.js";
 export * from "./retract-command.js";
+export * from "./retract-bumps.js";
+export * from "./reply-index.js";
 export * from "./pluralkit.js";
 export * from "./pk-roster.js";
 export * from "./inference.js";

@@ -43,8 +43,9 @@ import { SessionWindowManager } from "./session-window.js";
 import { StmStore } from "./stm.js";
 import { WriteQueue } from "./write-queue.js";
 import { createRedisClient } from "./floor.js";
-import { wireEventSubscriptions, setPresence } from "./events.js";
-import { handleMessage } from "./bot-message-handler.js";
+import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js";
+import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
+import type { FollowUpEntitlement } from "./sequential-floor.js";
 import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
@@ -865,7 +866,45 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         authorIsHuman: !message.author.bot || message.webhookId !== null,
         content: message.content,
       },
-      (isSuperseded) => handleMessage(message, {
+      (isSuperseded) => runTurn(message, pkSenderId, isSuperseded),
+    );
+  });
+
+  // Follow-up PASS (2026-09-26 review). A predecessor in a multi-address order that a rail
+  // silenced publishes a pass; if it releases MY entitlement, run the entitled turn now, on the
+  // human origin message, through the same inbox as every other turn. Before this, the waiting
+  // companion held for FOLLOW_UP_TTL_MS and then said nothing: one rail hit silenced the chain.
+  // Enqueued as NOT human-authored so it cannot supersede a turn already in the queue; a newer
+  // human message still supersedes it, which is right.
+  let stopPassListener: (() => void) | null = null;
+  if (redis) {
+    const passSub = redis.duplicate();
+    const off = onFollowUpPass(passSub, (pass) => {
+      if (pass.fromCompanionId === companionId) return;
+      const entitlement = releaseFollowUpOnPass(pass);
+      if (!entitlement) return;
+      console.log(`[${companionId}] follow-up pass from ${pass.fromCompanionId} (${pass.reason}) released position ${entitlement.position} on ${pass.originMessageId}`);
+      void (async () => {
+        try {
+          const ch = await client.channels.fetch(pass.channelId) as { messages?: { fetch(id: string): Promise<Message> } } | null;
+          const origin = ch?.messages ? await ch.messages.fetch(pass.originMessageId) : null;
+          if (!origin) return;
+          inbox.enqueue(
+            { id: `${origin.id}:pass`, channelId: origin.channelId, authorIsHuman: false, content: origin.content },
+            (isSuperseded) => runTurn(origin, undefined, isSuperseded, entitlement),
+          );
+        } catch (e) {
+          console.warn(`[${companionId}] follow-up pass: could not load the origin message:`, e instanceof Error ? e.message : String(e));
+        }
+      })();
+    });
+    stopPassListener = () => { off(); passSub.quit().catch(() => {}); };
+  }
+
+  // One turn. Every per-process dependency, wired once; the MessageCreate path and the
+  // follow-up pass path above both come through here, so they cannot drift.
+  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: () => boolean, followUpPass?: FollowUpEntitlement): Promise<void> {
+    return handleMessage(message, {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       voiceClient, redis, librarian,
@@ -896,10 +935,10 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
       ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),
-        isSuperseded,
-      }),
-    );
-  });
+      isSuperseded,
+      ...(followUpPass ? { followUpPass } : {}),
+    });
+  }
 
   async function shutdown() {
     console.log(`[${companionId}] shutting down...`);
@@ -937,6 +976,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     if (presenceInterval) clearInterval(presenceInterval);
     clearInterval(dayDistillInterval);
     if (cleanupEventSubs) await cleanupEventSubs();
+    if (stopPassListener) stopPassListener();
     client.destroy();
     process.exit(0);
   }

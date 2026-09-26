@@ -23,7 +23,11 @@
 // share (the message text; the bid hash all bidders read), and the hand-off signal is the
 // predecessor's reply itself, which Discord delivers to everyone. An entitlement that never
 // fires (predecessor echo-gated, superseded, railed) expires silently -- sequence, never
-// deadlock. The rails (human-anchored cap, pingpong, chain depth) still apply to the entitled
+// deadlock. One exception (2026-09-26 review): a predecessor silenced by the VERBATIM rail on a
+// turn meant for the human publishes a PASS (events.ts followup_pass), and the waiting companion
+// answers the origin message then instead of never. Without it, a copied answer suppressed at
+// position 0 left positions 1+ holding for FOLLOW_UP_TTL_MS and then saying nothing: one rail
+// hit silenced the whole chain. The rails (human-anchored cap, pingpong, chain depth) still apply to the entitled
 // turn: an entitlement is a gate BYPASS for the vocative rule, never a rail bypass.
 
 import type { CompanionId } from "./types.js";
@@ -92,6 +96,29 @@ export function bidSpeakingOrder(
 }
 
 /**
+ * The pass a silenced turn publishes, or null when nobody can be waiting on it. Pure.
+ *
+ * A turn is in a chain only when it answers a human's multi-address: either I am an entitled
+ * follow-up (origin = the entitlement's origin), or the trigger is the human message itself
+ * (origin = that message; I may be position 0). A sibling-triggered turn that was not an entitled
+ * follow-up is peer talk, and no one holds a position behind it. Publishing for a position-0 turn
+ * that had no successors is harmless: a pass that matches no entitlement is dropped on arrival.
+ */
+export function followUpPassFor(p: {
+  isCompanionBot: boolean;
+  entitled: FollowUpEntitlement | null;
+  messageId: string;
+  channelId: string;
+  from: CompanionId;
+  reason: string;
+  now?: Date;
+}): { channelId: string; originMessageId: string; fromCompanionId: CompanionId; reason: string; at: string } | null {
+  const origin = p.entitled ? p.entitled.originMessageId : (p.isCompanionBot ? null : p.messageId);
+  if (!origin) return null;
+  return { channelId: p.channelId, originMessageId: origin, fromCompanionId: p.from, reason: p.reason, at: (p.now ?? new Date()).toISOString() };
+}
+
+/**
  * Per-process store of this companion's pending follow-up entitlements, one per channel.
  * One per channel is deliberate: a newer multi-address in the same channel supersedes the
  * older wait -- answering last hour's group call after this hour's is worse than dropping it.
@@ -125,6 +152,17 @@ export class FollowUpLedger {
     if (referencedMessageId !== e.originMessageId) return null;
     this.byChannel.delete(channelId);
     return e;
+  }
+
+  /**
+   * A pass from my predecessor (followUpPassFor): consume and return the entitlement it releases,
+   * under the same rules as match -- right channel, right companion, same origin, not expired.
+   */
+  releaseOnPass(
+    pass: { channelId: string; originMessageId: string; fromCompanionId: CompanionId },
+    now: number = Date.now(),
+  ): FollowUpEntitlement | null {
+    return this.match(pass.channelId, pass.fromCompanionId, pass.originMessageId, now);
   }
 
   /** Test hook + belt-and-braces for channel teardown. */

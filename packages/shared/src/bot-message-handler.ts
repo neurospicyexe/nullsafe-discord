@@ -40,7 +40,7 @@ import {
   setLastActivity, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK, closeBidLine,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
-  FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, type FollowUpEntitlement,
+  FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, shouldReactOnCareHold, REACTION_COOLDOWN_MS,
   resolveRoutingChannelId,
   clearConsolidation,
@@ -48,7 +48,7 @@ import {
   sendLong,
   liveIngest,
   reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
-  echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold,
+  echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold, buildVerbatimPool,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
   formWindowShape,
@@ -68,7 +68,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, ownNotesRecallMode, decideReach, handleRetractCommand, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
+  LibrarianClient, ownNotesRecallMode, decideReach, recallBlocksFor, executeRetract, RetractBumps, RETRACT_BUMPS_SETTING, ReplyIndex, type RetractMsg, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -121,27 +121,46 @@ const hermesLastSessionId = new Map<string, string>();
 // retract now also rotates the transcript (the id change trips the rotation edge below, which
 // re-sends the STM window, minus the retracted line) and clears the window. Persisted in the
 // companion setting `hermes_retract_bumps` ({ [channelId]: n }) so a restart cannot walk the
-// count back down and reopen the transcript that still holds the retracted reply.
-const hermesRetractBump = new Map<string, number>();
-let hermesBumpsLoad: Promise<void> | null = null;
+// count back down and reopen the transcript that still holds the retracted reply. The load and
+// the write live in retract-bumps.ts (2026-09-26 review: a failed load used to be cached as "no
+// bumps", and the next write then erased every other channel's count).
+let retractBumps: RetractBumps | null = null;
 
-/** Fills hermesRetractBump from the persisted setting once per process. Never throws: a miss or
- *  a malformed value means "no bumps", which is only ever the pre-retract state. */
-async function ensureRetractBumps(librarian: LibrarianClient): Promise<void> {
-  if (!hermesBumpsLoad) {
-    hermesBumpsLoad = (async () => {
-      const raw = await librarian.getSetting("hermes_retract_bumps").catch(() => null);
-      if (!raw) return;
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
-        for (const [channelId, n] of Object.entries(parsed as Record<string, unknown>)) {
-          if (typeof n === "number" && Number.isFinite(n) && n > 0) hermesRetractBump.set(channelId, Math.floor(n));
-        }
-      } catch { /* malformed setting: start from zero, the next retract rewrites it whole */ }
-    })();
+/** The process's bump store, built on first use (the librarian is the same object every turn). */
+function bumpsFor(librarian: LibrarianClient): RetractBumps {
+  if (!retractBumps) {
+    retractBumps = new RetractBumps({
+      read: () => librarian.getSettingStrict(RETRACT_BUMPS_SETTING),
+      write: (v) => librarian.setSetting(RETRACT_BUMPS_SETTING, v),
+    });
   }
-  await hermesBumpsLoad;
+  return retractBumps;
+}
+
+/** Load the persisted bumps if they are not in yet; never throws, retries after a failure. */
+async function ensureRetractBumps(librarian: LibrarianClient): Promise<RetractBumps> {
+  const b = bumpsFor(librarian);
+  await b.ensureLoaded();
+  return b;
+}
+
+// Reply index (2026-09-26 review, retract): every chunk id this bot sends -> its head chunk, its
+// full text, and the message that triggered the turn, so `<prefix>: retract` on any chunk reaches
+// the keys the stores actually used (see reply-index.ts). Redis-backed when configured, so a
+// reload does not forget; built on first send.
+let replyIndex: ReplyIndex | null = null;
+function replyIndexFor(companionId: string, redis: Redis | null): ReplyIndex {
+  if (!replyIndex) replyIndex = new ReplyIndex(companionId, redis);
+  return replyIndex;
+}
+
+/**
+ * A predecessor in a multi-address order passed (followup_pass, published when a rail silenced
+ * its turn). Returns the entitlement this releases, consumed, or null. Called by bot-core's
+ * listener, which then runs the entitled turn on the origin message.
+ */
+export function releaseFollowUpOnPass(pass: { channelId: string; originMessageId: string; fromCompanionId: CompanionId }): FollowUpEntitlement | null {
+  return followUps.releaseOnPass(pass);
 }
 
 // Director liveness gate (2026-09-03 review): when in `live` mode but the worker's
@@ -277,6 +296,10 @@ export interface MessageHandlerDeps {
    *  already absorbed into STM. Absent (e.g. tests calling handleMessage directly) =
    *  never superseded. */
   isSuperseded?: () => boolean;
+  /** Set when this turn is run because my predecessor in a multi-address order PASSED
+   *  (releaseFollowUpOnPass): `message` is then the human origin message, and the turn is an
+   *  entitled follow-up answering it. */
+  followUpPass?: FollowUpEntitlement;
   // bot-local closures (voice wiring + autonomous loop guards)
   connectVoice: (vc: VoiceBasedChannel) => string;
   leaveVoice: (guildId: string | null) => string | null;
@@ -354,7 +377,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
-    apiKeys, apiUrls, isSuperseded,
+    apiKeys, apiUrls, isSuperseded, followUpPass,
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
@@ -967,29 +990,42 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       } else {
         try {
           const target = await message.channel.messages.fetch(refId);
-          if (target.author.id !== message.client.user?.id) {
-            reply = "I can only retract my own messages; that one is not mine.";
-          } else {
-            const sbBase = (process.env["SECOND_BRAIN_URL"] ?? "").replace(/\/$/, "");
-            const sbKey = process.env["SB_INGEST_KEY"] ?? "";
-            const halsethBase = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
-            reply = await handleRetractCommand({
-              companionId: COMPANION_ID,
-              channelId: message.channelId,
-              botMessageId: target.id,
-              userMessageId: target.reference?.messageId ?? null,
-              halseth: { base: halsethBase, secret: cfg.halsethSecret },
-              secondBrain: sbBase && sbKey ? { base: sbBase, key: sbKey } : null,
-              stm: { channelId: message.channelId, content: target.content },
-            });
-            const dropped = stmStore.retract(message.channelId, target.content);
-            await ensureRetractBumps(librarian);
-            const n = (hermesRetractBump.get(message.channelId) ?? 0) + 1;
-            hermesRetractBump.set(message.channelId, n);
-            librarian.setSetting("hermes_retract_bumps", JSON.stringify(Object.fromEntries(hermesRetractBump)))
-              .catch((e) => console.warn(`[${COMPANION_ID}] hermes_retract_bumps persist failed (bump ${n} for ${message.channelId} is in-memory only until the next retract): ${e instanceof Error ? e.message : String(e)}`));
-            reply += ` transcript: rotated (next turn starts a fresh gateway session, window re-sent without it); my window: dropped ${dropped} line${dropped === 1 ? "" : "s"}.`;
-          }
+          const asRetractMsg = (m: Message): RetractMsg => ({
+            id: m.id,
+            authorId: m.author.id,
+            isBot: m.author.bot,
+            webhookId: m.webhookId ?? null,
+            content: m.content,
+            createdTimestamp: m.createdTimestamp,
+            referenceId: m.reference?.messageId ?? null,
+          });
+          const sbBase = (process.env["SECOND_BRAIN_URL"] ?? "").replace(/\/$/, "");
+          const sbKey = process.env["SB_INGEST_KEY"] ?? "";
+          const halsethBase = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
+          // Everything decidable without discord.js lives in executeRetract (retract-command.ts),
+          // tested there: chunk -> head, the judge key, the stores, the window, the rotation, the ack.
+          reply = await executeRetract({
+            companionId: COMPANION_ID,
+            channelId: message.channelId,
+            ownUserId: message.client.user?.id ?? "",
+            target: asRetractMsg(target),
+            replyIndex: replyIndexFor(COMPANION_ID, redis),
+            fetchNeighbours: async (id) => {
+              const [before, after] = await Promise.all([
+                message.channel.messages.fetch({ before: id, limit: 10 }),
+                message.channel.messages.fetch({ after: id, limit: 10 }),
+              ]);
+              // discord.js returns newest-first for both; `after` is wanted nearest-first (oldest-first).
+              return {
+                before: [...before.values()].map(asRetractMsg),
+                after: [...after.values()].reverse().map(asRetractMsg),
+              };
+            },
+            stmRetract: (channelId, text) => stmStore.retract(channelId, text),
+            bumps: await ensureRetractBumps(librarian),
+            halseth: { base: halsethBase, secret: cfg.halsethSecret },
+            secondBrain: sbBase && sbKey ? { base: sbBase, key: sbKey } : null,
+          });
         } catch (err) {
           reply = `retract failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`;
         }
@@ -1167,8 +1203,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // follow-up entitlement waits on? Consumed exactly once; an entitled turn bypasses the
     // vocative gate below (that is the whole point) but NONE of the rails -- caps, pingpong
     // and chain depth still apply to it like any sibling-triggered turn.
-    let entitledFollowUp: FollowUpEntitlement | null = null;
-    if (senderCtx.isCompanionBot) {
+    let entitledFollowUp: FollowUpEntitlement | null = followUpPass ?? null;
+    if (followUpPass) {
+      console.log(`[${COMPANION_ID}] follow-up entitlement released by a PASS from ${followUpPass.expectedPrior} (origin=${followUpPass.originMessageId}, position=${followUpPass.position})`);
+    } else if (senderCtx.isCompanionBot) {
       entitledFollowUp = followUps.match(
         message.channelId,
         BOT_ID_COMPANION[message.author.id] as CompanionId | undefined,
@@ -1572,14 +1610,16 @@ ${widened}`;
       // THE TWO-STEP (2026-09-25, reach-decision.ts). Ask him what he would look up, in his own
       // words, and run the recall with that. Anything short of a reach (NONE, timeout, error,
       // nothing found by the floors) falls back to the payload floors, so the worst case is today.
-      await ensureRetractBumps(librarian);
+      const reachBumps = await ensureRetractBumps(librarian);
       const { sessionId: reachSessionId, sessionKey: reachSessionKey } =
-        hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), hermesRetractBump.get(message.channelId) ?? 0);
+        hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), reachBumps.get(message.channelId));
       const reach = await decideReach({
         companionId: COMPANION_ID,
         message: effectiveContent,
         recentContext,
         floor: { notes: ownRecall.notes.length, vault: LibrarianClient.countSbHits(sbHit, message.channelId) },
+        messageId: message.id,
+        channelId: message.channelId,
         sessionId: reachSessionId,
         sessionKey: reachSessionKey,
         timeoutMs: Number(process.env["REACH_TIMEOUT_MS"]) > 0 ? Number(process.env["REACH_TIMEOUT_MS"]) : 20_000,
@@ -1587,11 +1627,9 @@ ${widened}`;
         librarian,
       });
       console.log(`[reach] companion=${COMPANION_ID} outcome=${reach.outcome} topic=${reach.topic ? JSON.stringify(reach.topic.slice(0, 80)) : "-"} ms=${reach.ms}`);
-      if (reach.outcome === "reached" && reach.block) {
-        contextPrompt += `\n\n${reach.block}`;
-      } else {
-        contextPrompt += sbPayloadBlock + ownNotesPayloadBlock;
-      }
+      // A reach that found nothing falls back to the floors (recallBlocksFor): they had hits, or
+      // the ask would not have run.
+      contextPrompt += recallBlocksFor(reach, sbPayloadBlock + ownNotesPayloadBlock);
     } else {
       contextPrompt += ownNotesPayloadBlock;
     }
@@ -1778,7 +1816,9 @@ ${widened}`;
     // exclusive lock, so there is nothing to hand back if this reply is later dropped. Running both
     // arbiters at once would mean two disagreeing authorities on who speaks. `claimFloor` itself
     // stays in floor.ts -- autonomous-core.ts still uses it legitimately to serialise seed posts.
-    if (!senderCtx.isCompanionBot) {
+    // A turn released by a predecessor's PASS runs on the human origin message, and must not
+    // re-enter the order it was released from (it would grant itself the same wait again).
+    if (!senderCtx.isCompanionBot && !entitledFollowUp) {
       // BID-THEN-SEQUENTIAL (2026-08-15). A message that addresses SEVERAL companions gets an
       // ORDER, not a lottery: named_multi produced two simultaneous replies (the comma-named
       // companion fast-pathed while the other won a one-bidder bid), group produced exactly one
@@ -1974,9 +2014,9 @@ ${widened}`;
     // The id also carries the per-channel retract bump (2026-09-26, rotate-on-retract): a
     // `<prefix>: retract` increments it, so the retracted reply's transcript is abandoned on the
     // very next turn instead of at 19:00 CDT. The rotation edge below does the rest.
-    await ensureRetractBumps(librarian);
+    const turnBumps = await ensureRetractBumps(librarian);
     const { sessionId: inferenceSessionId, sessionKey: inferenceSessionKey } =
-      hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), hermesRetractBump.get(message.channelId) ?? 0);
+      hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), turnBumps.get(message.channelId));
     const lastSessionId = hermesLastSessionId.get(message.channelId);
     if (lastSessionId !== undefined && lastSessionId !== inferenceSessionId) {
       // The gateway transcript just rotated -- it has no history, so the next hermesDelta must
@@ -2148,21 +2188,44 @@ ${widened}`;
     //
     // A copied answer to a human is worse than no answer: the sibling's real answer is already
     // in the room. Returning here skips the send, the STM append and the journal write together.
+    //
+    // The pool is siblings and me, NEVER a human (2026-09-26 review, buildVerbatimPool): the first
+    // cut pooled Raziel's own message and STM user turns, so a reply quoting him back was a "copy"
+    // and he got silence. Sibling STM turns are labelled with the sibling bot's Discord username,
+    // so the label set is the companion ids plus every sibling username this turn can see.
     if (response) {
-      const verbatimPool: Array<{ text: string; label?: string }> = [
-        ...channelHistory.slice(-30).map(m => ({ text: m.content, label: m.author })),
-        ...stmStore.get(message.channelId)
-          .filter(m => m.role === "user")
-          .slice(-30)
-          .map(m => ({ text: m.content, label: m.authorName ?? "user" })),
-        { text: message.content, label: BOT_ID_COMPANION[message.author.id] ?? message.author.username },
-        ...mergeSelfTurns(selfFromStm, selfFromChannel, 30).map(t => ({ text: t, label: "self" })),
-      ];
+      const companionLabels = new Set<string>(Object.values(BOT_ID_COMPANION));
+      for (const m of recentMessages?.values() ?? []) {
+        if (BOT_ID_COMPANION[m.author.id]) companionLabels.add(m.author.username.toLowerCase());
+      }
+      if (BOT_ID_COMPANION[message.author.id]) companionLabels.add(message.author.username.toLowerCase());
+      const verbatimPool = buildVerbatimPool({
+        channelHistory,
+        stmInbound: stmStore.get(message.channelId).filter(m => m.role === "user"),
+        trigger: { content: message.content, companion: BOT_ID_COMPANION[message.author.id] ?? null },
+        selfTurns: mergeSelfTurns(selfFromStm, selfFromChannel, 30),
+        companionLabels,
+      });
       const copy = verbatimCopyOf(response, verbatimPool);
       if (copy.copied) {
         console.warn(`[${COMPANION_ID}] verbatim-copy rail: reply is a copy of ${copy.label ?? "a recent message"} (ratio=${copy.ratio.toFixed(2)}) -- staying silent`);
         railSuppressed(COMPANION_ID, "verbatim", { score: copy.ratio, threshold: verbatimCopyThreshold(), channelId: message.channelId, detail: copy.label });
         distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+        // Release the chain (2026-09-26 review): whoever holds a position behind me waits for MY
+        // reply, which will now never come. Pass the turn so they answer the origin instead of
+        // timing out in silence (sequential-floor.ts followUpPassFor).
+        const pass = followUpPassFor({
+          isCompanionBot: senderCtx.isCompanionBot,
+          entitled: entitledFollowUp,
+          messageId: message.id,
+          channelId: message.channelId,
+          from: COMPANION_ID as CompanionId,
+          reason: "verbatim",
+        });
+        if (pass && redis) {
+          publishFollowUpPass(redis, pass).catch(() => {});
+          console.log(`[${COMPANION_ID}] follow-up pass published (origin=${pass.originMessageId})`);
+        }
         return;
       }
     }
@@ -2250,6 +2313,18 @@ ${widened}`;
     }
 
     for (const m of sent) sentIds.add(m.id);
+    // Retract bookkeeping (2026-09-26 review): which chunks are this reply, which is its head
+    // (what journalSpeech + liveIngest key on below), and which message triggered the turn (what
+    // the memory judge keys `judge:<id>` on). See reply-index.ts.
+    if (sent.length > 0) {
+      replyIndexFor(COMPANION_ID, redis).record({
+        headId: sent[0]!.id,
+        chunkIds: sent.map(m => m.id),
+        triggerMessageId: message.id,
+        channelId: message.channelId,
+        content: response,
+      });
+    }
 
     // Thread spine (task 10): append this companion's own reply as a turn on the thread,
     // then land it if the (already-stripped) marker parsed a resolution. Entirely

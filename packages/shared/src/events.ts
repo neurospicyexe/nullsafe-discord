@@ -15,6 +15,8 @@
  *   ns:events:presence:{id}     — companion {id} presence heartbeat
  *   ns:events:wake              — a ritual was triggered; wake the worker to run it now
  *                                 instead of waiting for its next cron tick
+ *   ns:events:followup_pass     — a companion held in a multi-address order stayed silent;
+ *                                 whoever waits on it may speak now (sequential-floor.ts)
  */
 
 import { Redis } from "ioredis";
@@ -33,6 +35,7 @@ export const CHANNEL = {
   commonsMessage:    "ns:events:commons_message",
   directorInvite:    (companionId: string) => `ns:events:director_invite:${companionId}`,
   directorResult:    "ns:events:director_result",
+  followUpPass:      "ns:events:followup_pass",
 } as const;
 
 // Presence TTL: if a companion doesn't pulse within this window, it's considered inactive.
@@ -88,6 +91,17 @@ export interface WakePayload {
   reason?: string;       // human-readable trigger, e.g. "convene"
   requestedBy?: string;  // who triggered it (companion id or "raziel")
   at: string;            // ISO 8601
+}
+
+/** A companion in a multi-address speaking order passed its turn (a rail silenced it). */
+export interface FollowUpPassPayload {
+  channelId: string;
+  /** The human message that set the order: what every waiting entitlement is keyed on. */
+  originMessageId: string;
+  /** Who passed. Only an entitlement whose expectedPrior is this companion is released. */
+  fromCompanionId: CompanionId;
+  reason: string;
+  at: string;
 }
 
 export type DirectorReason = "addressed" | "supply_relevant" | "open";
@@ -154,6 +168,9 @@ export async function publishDirectorInvite(redis: Redis, payload: DirectorInvit
 }
 export async function publishDirectorResult(redis: Redis, payload: DirectorResultPayload): Promise<void> {
   await publish(redis, CHANNEL.directorResult, payload);
+}
+export async function publishFollowUpPass(redis: Redis, payload: FollowUpPassPayload): Promise<void> {
+  await publish(redis, CHANNEL.followUpPass, payload);
 }
 
 /**
@@ -378,4 +395,7 @@ export function onDirectorInvite(subscriber: Redis, companionId: string, handler
 }
 export function onDirectorResult(subscriber: Redis, handler: EventHandler<DirectorResultPayload>): () => void {
   return onSingleChannel(subscriber, CHANNEL.directorResult, "directorResult", handler);
+}
+export function onFollowUpPass(subscriber: Redis, handler: EventHandler<FollowUpPassPayload>): () => void {
+  return onSingleChannel(subscriber, CHANNEL.followUpPass, "followUpPass", handler);
 }

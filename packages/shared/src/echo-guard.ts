@@ -241,9 +241,44 @@ export const VERBATIM_COPY_MIN_CHARS = 120;
 const VERBATIM_SHINGLE_WORDS = 8;
 const VERBATIM_CHAR_GRAM = 40;
 
+/** The gate, from env. Only a value in (0, 1] is a containment ratio: 0 or a negative would call
+ *  EVERY reply over 120 chars a copy (ratio >= 0 always holds) and silence the bot outright, and
+ *  anything over 1 can never fire. Both fall back to the default, like NaN. */
 export function verbatimCopyThreshold(): number {
   const raw = parseFloat(process.env["VERBATIM_COPY_THRESHOLD"] ?? "");
-  return Number.isFinite(raw) ? raw : VERBATIM_COPY_DEFAULT_THRESHOLD;
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : VERBATIM_COPY_DEFAULT_THRESHOLD;
+}
+
+/**
+ * The pool the verbatim rail compares a reply against: what my SIBLINGS said and what I said.
+ * Never what a human said (2026-09-26 review).
+ *
+ * WHY. The first cut pooled the triggering message and STM's role:"user" turns whole, which
+ * includes Raziel's own words. A reply that answers him by quoting his message back ("you asked:
+ * ...") or a long question he pasted and asked to have cleaned up scored as a "copy" and the bot
+ * went silent on him -- the exact failure the rail exists to prevent, pointed at the wrong person.
+ * The 09-19 defect was a companion lifting a SIBLING's answer; a human's words were never the
+ * source. So: channel lines authored by a companion id, STM inbound turns whose author label is a
+ * known sibling (their Discord usernames, or the companion ids), the trigger only when a sibling
+ * sent it, and my own recent turns. `companionLabels` is lowercased.
+ */
+export function buildVerbatimPool(p: {
+  channelHistory: ReadonlyArray<{ author: string; content: string }>;
+  stmInbound: ReadonlyArray<{ content: string; authorName?: string }>;
+  /** The triggering message; `companion` is the sibling's id when a companion bot sent it. */
+  trigger: { content: string; companion?: string | null };
+  selfTurns: readonly string[];
+  companionLabels: ReadonlySet<string>;
+  limit?: number;
+}): Array<{ text: string; label?: string }> {
+  const limit = p.limit ?? 30;
+  const isCompanion = (name: string | undefined | null) => !!name && p.companionLabels.has(name.trim().toLowerCase());
+  return [
+    ...p.channelHistory.filter(m => isCompanion(m.author)).slice(-limit).map(m => ({ text: m.content, label: m.author })),
+    ...p.stmInbound.filter(m => isCompanion(m.authorName)).slice(-limit).map(m => ({ text: m.content, label: m.authorName })),
+    ...(p.trigger.companion ? [{ text: p.trigger.content, label: p.trigger.companion }] : []),
+    ...p.selfTurns.slice(-limit).map(t => ({ text: t, label: "self" })),
+  ];
 }
 
 export type VerbatimCopyResult =
