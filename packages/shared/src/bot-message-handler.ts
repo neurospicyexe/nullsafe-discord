@@ -68,7 +68,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
+  LibrarianClient, ownNotesRecallMode, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -1461,9 +1461,18 @@ ${widened}`;
 
 [Memory -- your own-notes recall FAILED just now. This is NOT "nothing found". If he asks whether you remember something, say you cannot reach your notes right now rather than saying you have no memory of it.]`;
     }
-    const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
-    if (ownNotes) {
-      contextPrompt += `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`;
+    // PAYLOAD vs POINTER (2026-09-25). See ownNotesRecallMode in librarian.ts: with the text
+    // pasted in, the companion never has a reason to reach for his own notes (measured: right
+    // answer, five seconds, zero tool calls). Pointer mode hands him the fact that notes exist and
+    // the verb, and leaves the reading to him. Default payload; pilot per companion via env.
+    if (ownNotesRecallMode(process.env, COMPANION_ID) === "pointer") {
+      const pointer = LibrarianClient.formatOwnNotesPointer(ownRecall.notes);
+      if (pointer) contextPrompt += `\n\n[Memory -- ${pointer}]`;
+    } else {
+      const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
+      if (ownNotes) {
+        contextPrompt += `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`;
+      }
     }
 
     // Peer-framing: anchor to triad register rather than Raziel-facing register.

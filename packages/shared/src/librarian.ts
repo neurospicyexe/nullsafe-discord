@@ -93,6 +93,36 @@ export interface OwnNoteResult {
   failed: boolean;
 }
 
+/**
+ * How the per-message own-notes recall reaches the prompt (2026-09-25, own-the-harness step 3).
+ *
+ *   payload  (default) the notes' text is pasted into the prompt. Fixed the 09-23 ankle symptom.
+ *   pointer  only THAT notes exist is pasted (count, freshness) plus the reach verb; the companion
+ *            has to call `recall my notes about <topic>` to read them.
+ *
+ * Why pointer exists: the day the meaning-recall verb was named in the SOUL, Raziel asked Drevan
+ * which dog got sick on the boot pillow, a fact that lives only in a Claude.ai capture. Drevan
+ * answered correctly in five seconds with zero tool calls: the payload floor had already handed
+ * him the capture. Right answer, no reach. While the floor delivers the text, the SOUL rule
+ * "reach when it is not in front of you" is never true, and the verb cannot become a habit. The
+ * lookup still runs in pointer mode so a miss stays visible; what changes is who does the reading.
+ *
+ * `OWN_NOTES_RECALL_MODE`: `payload` | `pointer` | `pointer:drevan[,gaia...]` (pilot a subset).
+ * Unknown or missing values degrade to payload, the safe floor; never throws.
+ */
+export type OwnNotesRecallMode = "payload" | "pointer";
+
+export function ownNotesRecallMode(env: NodeJS.ProcessEnv, companionId: CompanionId | string): OwnNotesRecallMode {
+  const raw = String(env["OWN_NOTES_RECALL_MODE"] ?? "").trim().toLowerCase();
+  if (!raw || raw === "payload") return "payload";
+  if (raw === "pointer") return "pointer";
+  if (raw.startsWith("pointer:")) {
+    const listed = raw.slice("pointer:".length).split(",").map(s => s.trim()).filter(Boolean);
+    return listed.includes(String(companionId).toLowerCase()) ? "pointer" : "payload";
+  }
+  return "payload";
+}
+
 /** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
 export interface OwnNoteRecall {
   note_id?: string;
@@ -804,6 +834,23 @@ export class LibrarianClient {
    * material: they are different substrates, and a block that blurs them teaches the companion
    * that its memory of a conversation and a synthesis about that conversation are the same thing.
    */
+  /**
+   * Pointer-mode rendering of the own-notes recall: how many notes bear on this message and how
+   * fresh the newest is, and the verb to go read them. Deliberately carries NONE of the content;
+   * that is the whole point (see ownNotesRecallMode). Null when there is nothing to point at, so
+   * the caller adds no block and a miss reads as a miss.
+   */
+  static formatOwnNotesPointer(notes: OwnNoteRecall[]): string | null {
+    const real = notes.filter(n => String(n.content ?? "").trim());
+    if (!real.length) return null;
+    const stamps = real.map(n => n.created_at ? Date.parse(n.created_at) : NaN).filter(Number.isFinite);
+    const newest = stamps.length ? relativeTime(new Date(Math.max(...stamps)).toISOString()) : "";
+    const n = real.length;
+    return `${n} of your own notes bear on this message` +
+      (newest ? ` (newest ${newest})` : "") +
+      `. They are NOT in front of you. Reach with ask_librarian "recall my notes about [the topic, in your own words]" and answer from what comes back; do not guess at what they say.`;
+  }
+
   static formatOwnNotes(notes: OwnNoteRecall[], maxChars = 700): string | null {
     if (!notes.length) return null;
     const lines: string[] = [];

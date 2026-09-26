@@ -181,6 +181,10 @@ const shared = {
   JEV_DRIFT_THETA:           process.env.JEV_DRIFT_THETA,
   JEV_NOTABLE_SCORE:         process.env.JEV_NOTABLE_SCORE,
   JEV_SHADOW_LOG:            process.env.JEV_SHADOW_LOG,
+  // Own-notes recall delivery (2026-09-25, own-the-harness step 3): payload (default, the notes'
+  // text is pasted into the prompt) | pointer (only that notes exist, plus the reach verb) |
+  // pointer:drevan[,gaia] (pilot a subset). Listed here per the standing rule above.
+  OWN_NOTES_RECALL_MODE:     process.env.OWN_NOTES_RECALL_MODE,
 };
 
 module.exports = {

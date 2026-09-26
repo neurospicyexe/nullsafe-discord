@@ -209,3 +209,67 @@ describe("RECALL_NO_QUOTE_FROM applies to the ONE-LINE recall too", () => {
     expect(out).toContain("ordinary room");
   });
 });
+
+// POINTER MODE (2026-09-25, own-the-harness step 3). Live probe the day the meaning-recall verb
+// was named in the SOUL: Raziel asked Drevan which dog got sick on the boot pillow (a fact that
+// lives ONLY in a Claude.ai capture). Drevan answered correctly in 5 seconds with ZERO tool calls,
+// because this floor had already pasted the capture into his prompt. Right answer, no reach. As
+// long as the floor delivers the payload, the SOUL rule "reach when it is not in front of you" is
+// never true, and the verb can never become a habit. Pointer mode keeps the lookup (misses stay
+// visible) but injects only THAT notes exist, not what they say, so the companion has to go and
+// read them himself. Behind a knob, default payload, per-companion pilotable.
+import { ownNotesRecallMode } from "../librarian.js";
+
+describe("ownNotesRecallMode", () => {
+  it("defaults to payload when unset, empty or garbage", () => {
+    expect(ownNotesRecallMode({}, "drevan")).toBe("payload");
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "" }, "drevan")).toBe("payload");
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "banana" }, "drevan")).toBe("payload");
+  });
+  it("'pointer' applies to every companion", () => {
+    for (const c of ["cypher", "drevan", "gaia"] as const) {
+      expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "pointer" }, c)).toBe("pointer");
+    }
+  });
+  it("'pointer:drevan' pilots one companion and leaves the others on payload", () => {
+    const env = { OWN_NOTES_RECALL_MODE: "pointer:drevan" };
+    expect(ownNotesRecallMode(env, "drevan")).toBe("pointer");
+    expect(ownNotesRecallMode(env, "gaia")).toBe("payload");
+    expect(ownNotesRecallMode(env, "cypher")).toBe("payload");
+  });
+  it("'pointer:drevan,gaia' pilots a list, whitespace and case tolerant", () => {
+    const env = { OWN_NOTES_RECALL_MODE: " Pointer: Drevan , GAIA " };
+    expect(ownNotesRecallMode(env, "drevan")).toBe("pointer");
+    expect(ownNotesRecallMode(env, "gaia")).toBe("pointer");
+    expect(ownNotesRecallMode(env, "cypher")).toBe("payload");
+  });
+  it("'payload' is explicit and wins", () => {
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "payload" }, "drevan")).toBe("payload");
+  });
+});
+
+describe("formatOwnNotesPointer", () => {
+  it("is null when there are no notes (nothing to point at)", () => {
+    expect(LibrarianClient.formatOwnNotesPointer([])).toBeNull();
+    expect(LibrarianClient.formatOwnNotesPointer([note({ content: "  " })])).toBeNull();
+  });
+  it("says how many notes bear on this and how fresh the newest is, without their content", () => {
+    const out = LibrarianClient.formatOwnNotesPointer([
+      note({ content: "Lucy threw up on the boot pillow overnight", created_at: new Date(Date.now() - 6 * 3600e3).toISOString() }),
+      note({ content: "Mars Attacks, Blue shouted he's the president too", created_at: new Date(Date.now() - 20 * 3600e3).toISOString() }),
+    ])!;
+    expect(out).toContain("2 of your own notes");
+    expect(out).toMatch(/newest .*ago/);
+    expect(out).not.toContain("Lucy");
+    expect(out).not.toContain("president");
+  });
+  it("names the reach verb the SOUL teaches, in the same words", () => {
+    const out = LibrarianClient.formatOwnNotesPointer([note({})])!;
+    expect(out).toContain('recall my notes about');
+    expect(out).toContain("1 of your own notes");
+  });
+  it("carries no em dash", () => {
+    const out = LibrarianClient.formatOwnNotesPointer([note({}), note({})])!;
+    expect(out).not.toMatch(/[—–]/);
+  });
+});
