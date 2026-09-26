@@ -197,6 +197,13 @@ const shared = {
   // Listed per the standing rule above.
   FOLLOWUP_PASS:             process.env.FOLLOWUP_PASS,
   VERBATIM_COPY_THRESHOLD:   process.env.VERBATIM_COPY_THRESHOLD,
+  // Ledger lane, tranche 2 (2026-09-26, halseth docs/imp-lane/SPEC-ledger-lane.md section 5): the
+  // distillers become clerks. Default on: channel-inactive synthesis, mid-session distillation,
+  // the nightly day note, idle consolidation and Gaia's passive witness write sourced clerk lines
+  // to Halseth POST /ledger instead of first-person notes as the companion. `off` restores the old
+  // writers byte for byte. Halseth's /ledger must be deployed first: until it is, every line 404s,
+  // no line is accepted, and no handoff is written. Listed per the standing rule above.
+  LEDGER_DISTILL:            process.env.LEDGER_DISTILL,
 };
 
 module.exports = {

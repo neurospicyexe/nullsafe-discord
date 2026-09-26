@@ -155,6 +155,7 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | `DEEPINFRA_API_KEY` | bots | Direct-inference chain (judges, consolidation) **and** the image describe pass |
 | `FOLLOWUP_PASS` | bots | Multi-address follow-up pass (`pass-turn.ts`). Default ON; `off` stops the publish (a railed companion no longer passes its turn) and the listener (a pass never consumes an entitlement). pm2-allowlisted |
 | `VERBATIM_COPY_THRESHOLD` | bots | Verbatim-copy rail ratio, (0, 1], default `0.9`. pm2-allowlisted since 2026-09-26 (it was a dead knob before) |
+| `LEDGER_DISTILL` | bots | Ledger lane T2 (`ledger-clerk.ts`, 2026-09-26). Default ON: distillers (channel-inactive, mid-session, day note, consolidation) and Gaia's passive witness write sourced clerk lines to Halseth `POST /ledger`; the handoff summary is the accepted lines' marked content. `off` restores the first-person writers byte for byte. **Needs Halseth /ledger deployed first** (a 404 accepts nothing, so no handoff). SOMA update + feeling log still run either way. pm2-allowlisted |
 
 ## Identity Files
 

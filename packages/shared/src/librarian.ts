@@ -133,6 +133,30 @@ export function ownNotesRecallMode(env: NodeJS.ProcessEnv, companionId: Companio
   return "payload";
 }
 
+// ── Ledger lane (2026-09-26, imp lane tranche 2) ─────────────────────────────────────────────
+// Halseth POST /ledger is the one door for clerk records. The server stamps the mark and the
+// source tail; callers send only the body. See ledger-clerk.ts for the why.
+
+/** Clerk functions Halseth allowlists. Extending it is a code change on BOTH sides. */
+export type LedgerFunction = "distiller" | "gap-reader" | "pattern-counter" | "drift-reader" | "witness-log";
+export type LedgerSourceKind = "message" | "window" | "session" | "row";
+
+export interface LedgerEntryInput {
+  /** The SUBJECT of the line (not necessarily the writing bot -- Gaia's witness names the sibling). */
+  companion_id: CompanionId;
+  function: LedgerFunction;
+  body: string;
+  source_kind: LedgerSourceKind;
+  source_ref: string;
+  observed_on?: string;
+  dedup_key?: string;
+}
+
+export type LedgerWriteResult =
+  | { ok: true; id: string; content: string; duplicate?: false }
+  | { ok: true; id: string; duplicate: true }
+  | { ok: false; status: number; rule?: string; error?: string };
+
 /** One of this companion's own continuity notes, returned by `notes_recall_meaning`. */
 export interface OwnNoteRecall {
   note_id?: string;
@@ -406,6 +430,60 @@ export class LibrarianClient {
       console.warn("[librarian] journalSpeech failed:", String(e));
       throw e;
     }
+  }
+
+  /**
+   * POST one clerk line to Halseth's ledger lane (2026-09-26). Raw REST with the same bearer auth
+   * as journalSpeech: the Librarian NL path cannot carry the source fields, and the server must
+   * see them to enforce "no source, no write".
+   *
+   * Status split, same reasoning as journalSpeech:
+   *   201 -> {ok, id, content}  (content = server-stamped mark + body + source tail)
+   *   200 -> {ok, id, duplicate:true}  (dedup_key already written; no content)
+   *   422 -> loud warn naming the grammar rule, NO retry (a rejected body is a poison pill)
+   *   404 -> warn that Halseth's ledger route is not deployed yet, skip
+   *   other 4xx -> warn, skip
+   *   5xx / 429 / network -> THROW, so a writeQueue-wrapped caller buffers and retries
+   *     (dedup_key makes the retry safe).
+   */
+  async writeLedger(entry: LedgerEntryInput): Promise<LedgerWriteResult> {
+    let res: Response;
+    try {
+      res = await this._fetch(`${this.url}/ledger`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.secret}`,
+        },
+        body: JSON.stringify(entry),
+        signal: AbortSignal.timeout(8_000),
+      });
+    } catch (e) {
+      console.warn("[librarian] writeLedger failed (network):", String(e));
+      throw e;
+    }
+    if (res.status >= 500 || res.status === 429) {
+      throw new Error(`writeLedger transient ${res.status}`);
+    }
+    const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+    if (res.ok) {
+      const id = typeof data?.["id"] === "string" ? data["id"] as string : "";
+      if (data?.["duplicate"] === true) return { ok: true, id, duplicate: true };
+      return { ok: true, id, content: typeof data?.["content"] === "string" ? data["content"] as string : "" };
+    }
+    const rule = typeof data?.["rule"] === "string" ? data["rule"] as string : undefined;
+    const error = typeof data?.["error"] === "string" ? data["error"] as string : undefined;
+    if (res.status === 422) {
+      console.warn(
+        `[librarian] writeLedger REJECTED 422 rule=${rule ?? "?"} (${error ?? "no error text"}) -- ` +
+        `${entry.function} line about ${entry.companion_id} not written: ${entry.body.slice(0, 160)}`,
+      );
+    } else if (res.status === 404) {
+      console.warn(`[librarian] writeLedger 404 -- Halseth /ledger not deployed yet; ${entry.function} line skipped`);
+    } else {
+      console.warn(`[librarian] writeLedger ${res.status} -- line skipped: ${error ?? ""}`);
+    }
+    return { ok: false, status: res.status, ...(rule ? { rule } : {}), ...(error ? { error } : {}) };
   }
 
   async witnessLog(entry: string, channel?: string) {
