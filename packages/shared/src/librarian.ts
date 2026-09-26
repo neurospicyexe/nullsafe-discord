@@ -1,4 +1,5 @@
 import type { CompanionId } from "./types.js";
+import type { TaskCheckRow } from "./task-check.js";
 import { relativeTime } from "./relative-time.js";
 import { recallNoQuoteFrom } from "./recall-context.js";
 
@@ -1521,6 +1522,25 @@ export class LibrarianClient {
       },
     );
     if (!res.ok) throw new Error(`setSetting ${res.status}`);
+  }
+
+  /**
+   * GET /tasks?status=<open|in_progress|done> (2026-09-26): the task check reads the list before it
+   * speaks instead of asking the model to guess (see task-check.ts). Returns [] on any failure --
+   * a check that cannot read must stay silent, never invent a "clean slate".
+   */
+  async listTasks(status: "open" | "in_progress" | "done"): Promise<TaskCheckRow[]> {
+    try {
+      const res = await this._fetch(`${this.url}/tasks?status=${status}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return [];
+      const rows = await res.json() as unknown;
+      return Array.isArray(rows) ? rows as TaskCheckRow[] : [];
+    } catch {
+      return [];
+    }
   }
 
   async getHouseState(): Promise<{ autonomous_turn: string | null }> {

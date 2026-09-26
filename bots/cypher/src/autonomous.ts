@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { Client } from "discord.js";
+import { taskCheckPrompt } from "@nullsafe/shared";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, Redis,
 } from "@nullsafe/shared";
@@ -85,11 +86,18 @@ export function startAutonomous(
     if (!HEARTBEAT_CHANNEL_ID) return;
     if (skipIfActive(ctx, "taskCheck")) return;
     if (isOnCooldown(ctx, HEARTBEAT_CHANNEL_ID)) return;
+    // Read before speaking (2026-09-26): the prompt used to carry no tasks at all, so the model
+    // guessed ("16 open" one night, "No open tasks -- clean slate" the next) and every guess became
+    // a [metronome/task_check] continuity note. Raziel's first tray review found those ticks were
+    // the bulk of the drafts and none were memory. Nothing live -> no post, no note.
+    const [open, inProgress] = await Promise.all([librarian.listTasks("open"), librarian.listTasks("in_progress")]);
+    const prompt = taskCheckPrompt([...open, ...inProgress]);
+    if (prompt === null) {
+      console.log(`[${COMPANION_ID}] task_check: nothing live -- skipping the post and the note`);
+      return;
+    }
     await withFloor(ctx, async () => {
-      const msg = await inference.generate(
-        bootCtx.systemPrompt,
-        [{ role: "user", content: "Check in on open tasks. One line in Cypher's voice. Direct." }],
-      );
+      const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(ctx, HEARTBEAT_CHANNEL_ID!, msg, "task_check");
     });
   }));
