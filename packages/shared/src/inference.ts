@@ -726,19 +726,30 @@ export class DeepInfraAdapter implements InferenceAdapter {
 // Tries each adapter in order, returns first non-null result. Exported for direct-inference.ts
 // (chains DeepInfra-first, DeepSeek-direct-second for the tool-less judge/narrator path) so that
 // module doesn't duplicate this loop.
+/** The one line every drop onto direct DeepSeek prints -- same text in halseth, second-brain,
+ * the worker and Hearth, so one grep finds every drain of the emergency lane. */
+export const FELL_BACK_TAG = "[inference] FELL BACK to direct DeepSeek";
+
 export class FallbackAdapter implements InferenceAdapter {
   constructor(private adapters: Array<{ name: string; adapter: InferenceAdapter }>) {}
 
   async generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null> {
+    let priorFailed: string | null = null;
     for (const { name, adapter } of this.adapters) {
       // An aborted caller has stopped listening: trying the next provider would only spend it.
       if (signal?.aborted) return null;
+      // Direct DeepSeek is the ~$10 EMERGENCY lane (2026-09-26): a drop onto it after an earlier
+      // link failed prints one greppable line, so a drain shows up in the pm2 logs.
+      if (priorFailed !== null && name === "deepseek") {
+        console.warn(`${FELL_BACK_TAG} (${priorFailed} failed; its own line above has the status)`);
+      }
       const result = await adapter.generate(systemPrompt, messages, temperature, maxTokens, sessionId, sessionKey, signal);
       if (result !== null) {
         console.log(`[inference] ${name} responded`);
         return result;
       }
       console.warn(`[inference] ${name} failed, trying next`);
+      priorFailed = name;
     }
     return null;
   }
@@ -789,14 +800,17 @@ function buildAdapter(
 // Model id DeepInfra hosts for the same DeepSeek-V4-Flash weights as api.deepseek.com's
 // "deepseek-v4-flash". Exported so direct-inference.ts doesn't hardcode a second copy.
 export const DEEPINFRA_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731";
+/** DeepSeek FLASH under either platform id (`deepseek-chat` is the delisted alias of flash). */
+export const isDeepSeekFlash = (model: string): boolean => /^deepseek-(v\d+-flash|chat)$/i.test(model.trim());
 
 const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
-  // Flash, not the delisted `deepseek-chat` alias (2026-07-28) -- a resilience tail pointed at
-  // a model on the deprecation path is one silent retirement away from being no tail at all.
-  { provider: "deepseek", model: "deepseek-v4-flash" },
-  // Same weights, different vendor -- cheapest cross-vendor hop when DeepSeek itself is the
-  // one that failed (funds, peak-window flap). Only armed when DEEPINFRA_API_KEY is present.
+  // DeepInfra FIRST (2026-09-26, Raziel: ALL DeepSeek-model inference goes through DeepInfra;
+  // direct DeepSeek is a ~$10 emergency lane). Same V4-Flash weights. Only armed when
+  // DEEPINFRA_API_KEY is present.
   { provider: "deepinfra", model: DEEPINFRA_FLASH_MODEL },
+  // Direct DeepSeek: the emergency lane. Flash, not the delisted `deepseek-chat` alias
+  // (2026-07-28) -- a tail pointed at a model on the deprecation path is no tail at all.
+  { provider: "deepseek", model: "deepseek-v4-flash" },
   { provider: "kimi",     model: "kimi-k2" },
   { provider: "groq",     model: "llama-3.3-70b-versatile" },
   // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even
@@ -827,11 +841,22 @@ export function createAdapter(
     return new HermesAdapter(urls.hermes, keys.hermes ?? "", "", fetchFn);
   }
   const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
+  // A request for DeepSeek FLASH is served by DeepInfra first when this host holds a DeepInfra
+  // key (2026-09-26 rule: same weights; direct DeepSeek is the emergency lane). `deepseek-chat`
+  // is the delisted alias of the same model. Pro is NOT rerouted: DeepInfra hosting V4-Pro is
+  // unverified, and silently downgrading a "deep thinking" request to Flash would be a lie.
+  const reroutedToDeepInfra = provider === "deepseek" && !!keys.deepinfra && isDeepSeekFlash(model);
+  const handled = new Set<InferenceProvider>([provider]);
+  if (reroutedToDeepInfra) {
+    const di = buildAdapter("deepinfra", DEEPINFRA_FLASH_MODEL, keys, urls, fetchFn, cacheKey);
+    if (di) chain.push({ name: "deepinfra", adapter: di });
+    handled.add("deepinfra");
+  }
   const primary = buildAdapter(provider, model, keys, urls, fetchFn, cacheKey);
   if (primary) chain.push({ name: provider, adapter: primary });
 
   for (const fb of FALLBACK_ORDER) {
-    if (fb.provider === provider) continue;          // requested provider already handled
+    if (handled.has(fb.provider)) continue;          // requested provider already handled
     const adapter = buildAdapter(fb.provider, fb.model, keys, urls, fetchFn, cacheKey);
     if (adapter) chain.push({ name: fb.provider, adapter });
   }

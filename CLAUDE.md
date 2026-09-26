@@ -30,8 +30,12 @@ nullsafe-discord/
 
 ## Inference
 
-- **Primary:** DeepSeek V3 API (~$10-25/mo)
-- **Fallback:** Local Ollama / free cloud LLM
+- **Bots:** Hermes (`INFERENCE_MODE=hermes`); the in-process provider chain is dormant there.
+- **Every DeepSeek-model call goes through DeepInfra first** (2026-09-26 rule; same V4-Flash
+  weights, `deepseek-ai/DeepSeek-V4-Flash-0731`). Direct DeepSeek (api.deepseek.com) is a ~$10
+  EMERGENCY lane only, and every fall onto it logs `[inference] FELL BACK to direct DeepSeek`.
+  Worker precedence: `WORKER_INFERENCE_*` > `DEEPINFRA_API_KEY` > `DEEPSEEK_API_KEY` (config.ts).
+- **Last-resort tail:** Kimi / Groq / LM Studio / Ollama
 - Claude Max is NOT used for bot inference (ToS-clean separation -- Max stays for human-present sessions)
 
 ## Deployment

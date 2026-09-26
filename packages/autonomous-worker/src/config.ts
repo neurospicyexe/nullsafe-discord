@@ -13,16 +13,31 @@ export const HALSETH_SECRET = process.env["HALSETH_SECRET"] ?? "";
  * back to the real DeepSeek key and 401'd every DeepInfra call on cutover night (08-27).
  */
 const VENDOR_OVERRIDE_BASE_URL = process.env["WORKER_INFERENCE_BASE_URL"] ?? "";
-export const DEEPSEEK_API_KEY = (VENDOR_OVERRIDE_BASE_URL ? process.env["WORKER_INFERENCE_API_KEY"] : undefined)
-    ?? process.env["DEEPSEEK_API_KEY"] ?? "";
+/**
+ * DeepInfra-by-default (2026-09-26, Raziel: ALL DeepSeek-model inference goes through DeepInfra;
+ * direct DeepSeek is a ~$10 emergency lane only). Before this, removing the WORKER_INFERENCE_*
+ * override silently made direct DeepSeek PRIMARY even with DEEPINFRA_API_KEY sitting in the same
+ * .env. Precedence, primary first:
+ *   1. WORKER_INFERENCE_* override (unchanged behavior; live VPS points it at DeepInfra)
+ *   2. DEEPINFRA_API_KEY -> DeepInfra, same DeepSeek-V4-Flash weights
+ *   3. DEEPSEEK_API_KEY -> direct DeepSeek (only when no DeepInfra key exists at all)
+ * Whenever the primary is not direct DeepSeek, the direct-DeepSeek fallback lane is armed below.
+ */
+export const DEEPINFRA_BASE_URL = "https://api.deepinfra.com/v1/openai";
+export const DEEPINFRA_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731";
+const DEEPINFRA_KEY = (process.env["DEEPINFRA_API_KEY"] ?? "").trim().replace(/^=+/, "");
+const DEEPINFRA_DEFAULT = !VENDOR_OVERRIDE_BASE_URL && !!DEEPINFRA_KEY;
+export const DEEPSEEK_API_KEY = VENDOR_OVERRIDE_BASE_URL
+    ? (process.env["WORKER_INFERENCE_API_KEY"] ?? process.env["DEEPSEEK_API_KEY"] ?? "")
+    : DEEPINFRA_DEFAULT ? DEEPINFRA_KEY : (process.env["DEEPSEEK_API_KEY"] ?? "");
 export const DEEPSEEK_BASE_URL = VENDOR_OVERRIDE_BASE_URL
-    || (process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1");
-// 2026-07-27: DeepSeek retired "deepseek-chat" (supported: deepseek-v4-pro /
-// deepseek-v4-flash) and it began 400ing intermittently -- ~37% of runs failed for a day
-// before anyone noticed. Live value is set in the VPS .env (deepseek-v4-pro); this default
-// only matters for a fresh checkout, so it points at a name that actually exists.
-export const DEEPSEEK_MODEL = (VENDOR_OVERRIDE_BASE_URL ? process.env["WORKER_INFERENCE_MODEL"] : undefined)
-    ?? process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash";
+    || (DEEPINFRA_DEFAULT ? DEEPINFRA_BASE_URL : (process.env["DEEPSEEK_BASE_URL"] ?? "https://api.deepseek.com/v1"));
+export const DEEPSEEK_MODEL = VENDOR_OVERRIDE_BASE_URL
+    ? (process.env["WORKER_INFERENCE_MODEL"] ?? process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash")
+    : DEEPINFRA_DEFAULT
+      // DEEPSEEK_MODEL is a platform id (deepseek-v4-*) and must not be sent to DeepInfra.
+      ? (process.env["WORKER_INFERENCE_MODEL"] ?? DEEPINFRA_FLASH_MODEL)
+      : (process.env["DEEPSEEK_MODEL"] ?? "deepseek-v4-flash");
 
 /**
  * Output ceilings for the phases that actually THINK (2026-07-27, Raziel: "cut off thoughts
@@ -100,7 +115,9 @@ export const REASONING_HEADROOM = envInt("DEEPSEEK_REASONING_HEADROOM", 3000);
  * `morph-ds*` is Morph's serving of the same DeepSeek weights (morph-dsv4flash) -- same
  * reasoning architecture, so it needs the same headroom or reasoning starves content. */
 export function isReasoningModel(model: string = DEEPSEEK_MODEL): boolean {
-  return /^(deepseek-(v[4-9]|r)|morph-ds)/i.test(model.trim());
+  // `deepseek-ai/DeepSeek-V4-*` is DeepInfra's id for the same weights (2026-09-26: the live
+  // worker primary). Before this it matched nothing, so DeepInfra calls got NO headroom.
+  return /^((deepseek-ai\/)?deepseek-(v[4-9]|r)|morph-ds)/i.test(model.trim());
 }
 
 /** Turn a caller's intended CONTENT ceiling into a wire `max_tokens`. */
@@ -117,10 +134,13 @@ export function contentBudget(contentTokens: number, model: string = DEEPSEEK_MO
  * empty when the worker already talks to DeepSeek direct (same vendor = no fallback).
  * WORKER_FALLBACK_* remain as explicit overrides for pointing the lane somewhere else.
  */
+// Armed for the DeepInfra-by-default primary too (2026-09-26) -- same reasoning: the primary
+// is not DeepSeek direct, so DeepSeek direct is a genuinely different vendor to fall to.
+const FALLBACK_ARMED = !!VENDOR_OVERRIDE_BASE_URL || DEEPINFRA_DEFAULT;
 export const FALLBACK_BASE_URL = process.env["WORKER_FALLBACK_BASE_URL"]
-    ?? (VENDOR_OVERRIDE_BASE_URL ? "https://api.deepseek.com/v1" : "");
+    ?? (FALLBACK_ARMED ? "https://api.deepseek.com/v1" : "");
 export const FALLBACK_API_KEY = process.env["WORKER_FALLBACK_API_KEY"]
-    ?? (VENDOR_OVERRIDE_BASE_URL ? process.env["DEEPSEEK_API_KEY"] ?? "" : "");
+    ?? (FALLBACK_ARMED ? process.env["DEEPSEEK_API_KEY"] ?? "" : "");
 export const FALLBACK_MODEL = process.env["WORKER_FALLBACK_MODEL"] ?? "deepseek-v4-flash";
 
 export const TAVILY_API_KEY = process.env["TAVILY_API_KEY"] ?? "";

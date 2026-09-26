@@ -19,6 +19,15 @@ interface Vendor {
 }
 
 const PRIMARY: Vendor = { baseUrl: DEEPSEEK_BASE_URL, apiKey: DEEPSEEK_API_KEY, model: DEEPSEEK_MODEL, label: "primary" };
+/** The one line every drop onto direct DeepSeek prints (2026-09-26): direct DeepSeek is the
+ * ~$10 emergency lane, so a fall to it must be greppable in /app/logs/autonomous-worker-*.log. */
+export const FELL_BACK_TAG = "[inference] FELL BACK to direct DeepSeek";
+const isDirectDeepSeek = (v: Vendor): boolean => /api\.deepseek\.com/i.test(v.baseUrl);
+function announceFallback(reason: string): void {
+  if (FALLBACK && isDirectDeepSeek(FALLBACK)) {
+    console.warn(`${FELL_BACK_TAG} (DeepInfra failed: ${reason}) caller=autonomous-worker`);
+  }
+}
 // Same base URL would mean "fall back to the vendor that just failed" -- refuse to arm that.
 const FALLBACK: Vendor | null =
   FALLBACK_BASE_URL && FALLBACK_API_KEY && FALLBACK_BASE_URL !== DEEPSEEK_BASE_URL
@@ -70,7 +79,7 @@ interface ChatResult {
  * Returns the assistant message content + token count.
  */
 export async function chat(messages: Message[], opts: ChatOptions = {}): Promise<ChatResult> {
-  if (!DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY is not set");
+  if (!DEEPSEEK_API_KEY) throw new Error("no inference key set (DEEPINFRA_API_KEY / DEEPSEEK_API_KEY / WORKER_INFERENCE_API_KEY)");
 
   let contentTokens = opts.maxTokens ?? 1000;
 
@@ -81,7 +90,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
   // site, including ones added later that never think about the model tier. Without it this
   // whole class of failure surfaces only as downstream 400s ("summary is required") or as
   // sterile output ("0 finds gathered"), which is how it went unnoticed for a full day.
-  let attemptBudget = contentBudget(contentTokens);
+  let attemptBudget = contentBudget(contentTokens, PRIMARY.model);
   let lastTokens = 0;
   let vendor = PRIMARY;
 
@@ -108,7 +117,9 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
           `[deepseek] primary vendor unreachable (${e instanceof Error ? e.message : String(e)}) -- ` +
           `failing over to ${FALLBACK.model} at ${FALLBACK.baseUrl} for the rest of this call`,
         );
+        announceFallback(`network: ${(e instanceof Error ? e.message : String(e)).slice(0, 80)}`);
         vendor = FALLBACK;
+        attemptBudget = contentBudget(contentTokens, vendor.model);
         attempt--; // redo this attempt on the fallback vendor, not spend it
         continue;
       }
@@ -122,7 +133,9 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
           `[deepseek] primary vendor error ${res.status} (${text.slice(0, 120)}) -- ` +
           `failing over to ${FALLBACK.model} at ${FALLBACK.baseUrl} for the rest of this call`,
         );
+        announceFallback(`HTTP ${res.status}`);
         vendor = FALLBACK;
+        attemptBudget = contentBudget(contentTokens, vendor.model);
         attempt--; // redo this attempt on the fallback vendor, not spend it
         continue;
       }
@@ -158,7 +171,7 @@ export async function chat(messages: Message[], opts: ChatOptions = {}): Promise
         );
         if (willRetry) {
           contentTokens *= 2;
-          attemptBudget = contentBudget(contentTokens);
+          attemptBudget = contentBudget(contentTokens, vendor.model);
           continue;
         }
       }
