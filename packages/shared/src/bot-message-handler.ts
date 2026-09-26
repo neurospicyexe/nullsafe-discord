@@ -436,7 +436,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // author.bot alone made every proxied message look like bot traffic, so the autonomous
     // worker fired mid-conversation.
     const isHumanTraffic = !message.author.bot || message.webhookId !== null;
-    if (isHumanTraffic && redis) {
+    // A follow-up PASS replays the origin message for its REPLY only: everything a message does by
+    // arriving (activity marks, drive shedding, the spine turn, the commons publish, the autonomous
+    // buffer) already happened the first time it arrived, and running it twice double-counts.
+    const isArrival = !followUpPass;
+    if (isHumanTraffic && redis && isArrival) {
       setLastActivity(redis).catch(() => {});
       clearConsolidation(redis, COMPANION_ID).catch(() => {});
     }
@@ -481,7 +485,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Take 9 contact-hook: any real Raziel contact sheds this companion's relational
     // need, so the drive-driven reach-out only fires on genuine silence. Fire-and-forget
     // (shedDriveContact swallows its own errors) -- never blocks the message path.
-    if (attribution.isOwner) {
+    if (attribution.isOwner && isArrival) {
       // Was he talking to ME, or did I just watch him talk (2026-07-30)?
       //
       // Every bot runs this hook on every owner message, and in a shared channel all three see every
@@ -637,10 +641,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       //
       // It rides the TURN, not `participants`: fronts change mid-conversation, and the coarse token set
       // is what the attribution logic reads to ask "was Raziel here at all".
-      spine = await ensureThread(
-        librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor,
-        attribution.frontMember ?? null,
-      ).catch(() => null);
+      // A pass turn reads the active thread without appending the origin to it a second time.
+      spine = isArrival
+        ? await ensureThread(
+          librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor,
+          attribution.frontMember ?? null,
+        ).catch(() => null)
+        : await librarian.convoActive(message.channelId).catch(() => null);
     }
 
     // Voice STT: transcribe an audio attachment into effectiveContent BEFORE any content
@@ -1179,7 +1186,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // director's to route -- this bot does not self-select a reply. Human turns fall through unchanged.
     // Owner command/listen traffic returned above this point by design (2026-09-03 review, finding
     // 3): commands are not conversational turns and are never commons material.
-    if (directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
+    if (isArrival && directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
       const senderCompanion = BOT_ID_COMPANION[message.author.id] as CompanionId | undefined;
       publishCommonsMessage(redis, commonsMessageFor({
         channelId: message.channelId, messageId: message.id, authorId: message.author.id,
@@ -1374,7 +1381,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // rather than deleted so the command branches (search, listen) that reach this point by their own
     // route still record, and so a future refactor that moves the early call cannot silently drop it.
     stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: stmContent, authorName: memberLabel, timestamp: message.createdTimestamp });
-    if (attribution.isOwner) pushRazielMessage(stmContent);
+    if (attribution.isOwner && isArrival) pushRazielMessage(stmContent);
 
     // Streaming indexer: index the inbound message into Second Brain's vector store
     // right now (gated by SB_LIVE_INGEST). SB dedups by message_id, so all three bots
@@ -1838,6 +1845,7 @@ ${widened}`;
           expectedPrior: namedOrder[myNamedPos - 1],
           position: myNamedPos,
           expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
+          ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
         });
         console.log(`[${COMPANION_ID}] multi-address: holding position ${myNamedPos} behind ${namedOrder[myNamedPos - 1]} (order=${namedOrder.join(">")})`);
         return;
@@ -1941,6 +1949,7 @@ ${widened}`;
                 expectedPrior: order[myPos - 1],
                 position: myPos,
                 expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
+                ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
               });
               console.log(`[${COMPANION_ID}] group call: holding position ${myPos} behind ${order[myPos - 1]} (order=${order.join(">")})`);
               return;

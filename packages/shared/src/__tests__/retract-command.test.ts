@@ -95,7 +95,7 @@ describe("handleRetractCommand", () => {
     expect(calls).toHaveLength(2);
     expect(ack).toContain("nothing to archive");
     expect(ack).toContain("vault: nothing there");
-    expect(ack).toMatch(/^retract incomplete \(no journal row found yet/);
+    expect(ack).toMatch(/^retract incomplete \(no journal row found: not written yet \(retry in a minute\) or already retracted\)/);
   });
   it("a Halseth failure makes the headline incomplete, whatever the vault said", async () => {
     const { fn } = fakeFetch({

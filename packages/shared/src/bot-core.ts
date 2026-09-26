@@ -891,7 +891,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
           if (!origin) return;
           inbox.enqueue(
             { id: `${origin.id}:pass`, channelId: origin.channelId, authorIsHuman: false, content: origin.content },
-            (isSuperseded) => runTurn(origin, undefined, isSuperseded, entitlement),
+            (isSuperseded) => runTurn(origin, entitlement.pkSenderId, isSuperseded, entitlement),
           );
         } catch (e) {
           console.warn(`[${companionId}] follow-up pass: could not load the origin message:`, e instanceof Error ? e.message : String(e));

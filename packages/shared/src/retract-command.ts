@@ -122,8 +122,9 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
         : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}${window}`);
       // Every reply is journaled as speech under `discord:<head>`, so zero journal rows means the
       // write had not landed (writeQueue retries) or this was already retracted. Either way the
-      // headline must not say done.
-      if (nj === 0) incomplete.push("no journal row found yet (the speech write may still be queued; retry in a minute)");
+      // headline must not say done. A repeat retract also cannot reach the vault mirrors: Halseth
+      // returns only rows it archived in THIS call, so already-archived rows name no mirror.
+      if (nj === 0) incomplete.push("no journal row found: not written yet (retry in a minute) or already retracted");
     }
   } catch (e) {
     parts.push(`halseth: FAILED (${errText(e)})`);

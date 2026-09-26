@@ -48,6 +48,9 @@ export interface FollowUpEntitlement {
   /** 0 = spoke immediately (never stored); 1+ = waiting on position-1. */
   position: number;
   expiresAt: number;
+  /** The PluralKit sender captured when the origin arrived, so a turn run from a PASS
+   *  (re-reading the origin later) resolves attribution exactly as the first read did. */
+  pkSenderId?: string;
 }
 
 /**
