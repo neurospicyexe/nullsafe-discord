@@ -8,6 +8,7 @@ export * from "./sequential-floor.js";
 export * from "./reaction-tier.js";
 export * from "./events.js";
 export * from "./librarian.js";
+export * from "./reach-decision.js";
 export * from "./pluralkit.js";
 export * from "./pk-roster.js";
 export * from "./inference.js";

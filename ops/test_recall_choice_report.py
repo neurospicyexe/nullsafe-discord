@@ -89,8 +89,22 @@ check("renders each companion", "drevan" in text and "gaia" in text)
 check("renders the meaning-recall total", "recall-notes-meaning" in text)
 check("no em dash in output", "—" not in text)
 
+print("reach summary")
+reach_lines = [
+    {"ts": "2026-09-26T02:30:00Z", "companion": "drevan", "outcome": "reached", "topic": "the Subway sandwich", "ms": 1800},
+    {"ts": "2026-09-26T02:35:00Z", "companion": "drevan", "outcome": "declined", "topic": None, "ms": 900},
+    {"ts": "2026-09-26T02:40:00Z", "companion": "drevan", "outcome": "timeout", "topic": None, "ms": 20000},
+    {"ts": "2026-09-27T01:00:00Z", "companion": "gaia", "outcome": "reached", "topic": "the perimeter", "ms": 1500},
+]
+summ = rcr.summarize_reach(reach_lines)
+check("per companion per day outcomes", summ["drevan"]["2026-09-26"]["reached"] == 1 and summ["drevan"]["2026-09-26"]["declined"] == 1 and summ["drevan"]["2026-09-26"]["timeout"] == 1, summ)
+check("second companion", summ["gaia"]["2026-09-27"]["reached"] == 1, summ)
+text = rcr.render_reach(summ, [l for l in reach_lines if l.get("topic")])
+check("renders outcomes and the topics reached for", "reached=1" in text and "drevan" in text and "Subway" in text, text[:300])
+check("garbage lines are skipped, never raise", rcr.summarize_reach([{"nope": 1}, None, "x"]) == {})
+
 print()
 if FAILURES:
     print("%d FAILED: %s" % (len(FAILURES), ", ".join(FAILURES)))
     sys.exit(1)
-print("all ok")
+print("all ok (incl. reach)")

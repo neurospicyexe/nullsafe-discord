@@ -185,6 +185,10 @@ const shared = {
   // text is pasted into the prompt) | pointer (only that notes exist, plus the reach verb) |
   // pointer:drevan[,gaia] (pilot a subset). Listed here per the standing rule above.
   OWN_NOTES_RECALL_MODE:     process.env.OWN_NOTES_RECALL_MODE,
+  // `ask` mode's two-step (reach-decision.ts): how long the side question may take before the
+  // payload floor is used instead (default 20000), and where the decision log goes.
+  REACH_TIMEOUT_MS:          process.env.REACH_TIMEOUT_MS,
+  REACH_LOG:                 process.env.REACH_LOG,
 };
 
 module.exports = {

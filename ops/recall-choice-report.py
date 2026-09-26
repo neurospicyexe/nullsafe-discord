@@ -129,6 +129,60 @@ def read_profile(home, since_epoch):
         return None, str(e)[:120]
 
 
+REACH_LOG_DEFAULT = "/app/logs/reach-decisions.jsonl"
+REACH_OUTCOMES = ["reached", "declined", "skipped", "timeout", "error", "empty"]
+
+
+def summarize_reach(lines):
+    """reach-decision.ts jsonl lines -> {companion: {day: {outcome: n}}}. Garbage is skipped."""
+    out = collections.defaultdict(lambda: collections.defaultdict(collections.Counter))
+    for l in lines:
+        if not isinstance(l, dict):
+            continue
+        cid = l.get("companion"); outcome = l.get("outcome"); ts = str(l.get("ts") or "")
+        if not cid or not outcome or len(ts) < 10:
+            continue
+        out[cid][ts[:10]][outcome] += 1
+    return {c: {d: dict(n) for d, n in days.items()} for c, days in out.items()}
+
+
+def read_reach_log(path, since):
+    lines = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    l = json.loads(raw)
+                except Exception:
+                    continue
+                if str(l.get("ts") or "")[:10] >= since:
+                    lines.append(l)
+    except OSError:
+        return []
+    return lines
+
+
+def render_reach(summary, reached_lines=()):
+    out = ["# The two-step reach (ask mode): outcomes per companion per day", ""]
+    if not summary:
+        out.append("  (no decisions logged; ask mode is off or nothing was found to reach for)")
+    for cid in sorted(summary):
+        out.append("## %s" % cid)
+        for day in sorted(summary[cid]):
+            d = summary[cid][day]
+            out.append("  %s  %s" % (day, "  ".join("%s=%d" % (o, d.get(o, 0)) for o in REACH_OUTCOMES if d.get(o, 0))))
+    topics = [(l.get("companion"), l.get("topic")) for l in reached_lines if isinstance(l, dict) and l.get("topic")]
+    if topics:
+        out.append("")
+        out.append("## What he reached for (his words), newest last")
+        for cid, t in topics[-15:]:
+            out.append("  %-7s %s" % (cid, str(t)[:110]))
+    return "\n".join(out)
+
+
 def render(per_companion, since):
     out = ["# Chosen recall read-out (ask_librarian verbs, bots' lane) since %s" % since, ""]
     for cid in sorted(per_companion):
@@ -165,10 +219,14 @@ def main():
         per[cid] = agg or {}
         if err:
             errors[cid] = err
+    reach_lines = read_reach_log(os.environ.get("REACH_LOG", REACH_LOG_DEFAULT), since)
+    reach = summarize_reach(reach_lines)
     if "--json" in args:
-        print(json.dumps({"since": since, "per_companion": per, "errors": errors}, indent=2))
+        print(json.dumps({"since": since, "per_companion": per, "reach": reach, "errors": errors}, indent=2))
     else:
         print(render(per, since))
+        print()
+        print(render_reach(reach, [l for l in reach_lines if l.get("outcome") == "reached"]))
         for cid, err in errors.items():
             print("  (%s: could not read: %s)" % (cid, err), file=sys.stderr)
     return 1 if errors else 0

@@ -110,15 +110,24 @@ export interface OwnNoteResult {
  * `OWN_NOTES_RECALL_MODE`: `payload` | `pointer` | `pointer:drevan[,gaia...]` (pilot a subset).
  * Unknown or missing values degrade to payload, the safe floor; never throws.
  */
-export type OwnNotesRecallMode = "payload" | "pointer";
+export type OwnNotesRecallMode = "payload" | "pointer" | "ask";
 
+/**
+ * `ask` (2026-09-25, later the same night): the two-step. Pointer mode proved that telling him
+ * the notes exist does not make him reach (probe 3: fabricated with the pointer in his prompt).
+ * In `ask` mode the bot asks him one question first -- what would you look up, in your own
+ * words, or NONE -- and runs the recall with his words (reach-decision.ts). Anything short of a
+ * reach falls back to the payload floor, so the worst case is today. `ask:drevan[,gaia]` pilots.
+ */
 export function ownNotesRecallMode(env: NodeJS.ProcessEnv, companionId: CompanionId | string): OwnNotesRecallMode {
   const raw = String(env["OWN_NOTES_RECALL_MODE"] ?? "").trim().toLowerCase();
   if (!raw || raw === "payload") return "payload";
-  if (raw === "pointer") return "pointer";
-  if (raw.startsWith("pointer:")) {
-    const listed = raw.slice("pointer:".length).split(",").map(s => s.trim()).filter(Boolean);
-    return listed.includes(String(companionId).toLowerCase()) ? "pointer" : "payload";
+  for (const mode of ["pointer", "ask"] as const) {
+    if (raw === mode) return mode;
+    if (raw.startsWith(`${mode}:`)) {
+      const listed = raw.slice(mode.length + 1).split(",").map(s => s.trim()).filter(Boolean);
+      return listed.includes(String(companionId).toLowerCase()) ? mode : "payload";
+    }
   }
   return "payload";
 }
@@ -697,6 +706,24 @@ export class LibrarianClient {
    * that never happened, in six seconds, with zero tool calls. A pointer on one lane while another
    * still pastes text tests nothing and teaches nothing.
    */
+  /** How many usable vault hits a search returned, with the same room exclusions the renderers
+   *  apply. The two-step reach uses it to tell the companion what was found without showing it. */
+  static countSbHits(raw: string | null, excludeChannelId?: string): number {
+    if (!raw) return 0;
+    let parsed: { chunks?: Array<{ text?: string; vault_path?: string }> };
+    try { parsed = JSON.parse(raw) as typeof parsed; } catch { return 0; }
+    if (!Array.isArray(parsed.chunks)) return 0;
+    const seen = new Set<string>();
+    for (const c of parsed.chunks) {
+      const text = (c.text ?? "").trim();
+      if (!text) continue;
+      if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
+      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
+      seen.add(text.slice(0, 80));
+    }
+    return seen.size;
+  }
+
   static formatSbRecallPointer(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
     type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
     let parsed: { chunks?: Chunk[] };

@@ -68,7 +68,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, ownNotesRecallMode, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
+  LibrarianClient, ownNotesRecallMode, decideReach, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -1419,15 +1419,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     }
 
     const sbHit = await sbSearchPromise;
-    // PAYLOAD vs POINTER applies to the vault floor as well (2026-09-25): see ownNotesRecallMode.
-    if (ownNotesRecallMode(process.env, COMPANION_ID) === "pointer") {
+    // PAYLOAD vs POINTER vs ASK applies to the vault floor as well (2026-09-25): see
+    // ownNotesRecallMode. In `ask` mode this block is deferred to the two-step below, which
+    // decides with the own-notes result in hand and falls back to this same payload.
+    const recallMode = ownNotesRecallMode(process.env, COMPANION_ID);
+    const sbRecallPayload = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
+    const sbPayloadBlock = sbRecallPayload
+      ? `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecallPayload.slice(0, 1200)}]`
+      : "";
+    if (recallMode === "pointer") {
       const sbPointer = sbHit ? LibrarianClient.formatSbRecallPointer(sbHit, message.channelId) : null;
       if (sbPointer) contextPrompt += `\n\n[Memory -- ${sbPointer}]`;
-    } else {
-      const sbRecall = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
-      if (sbRecall) {
-        contextPrompt += `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecall.slice(0, 1200)}]`;
-      }
+    } else if (recallMode === "payload") {
+      contextPrompt += sbPayloadBlock;
     }
 
     // A SEPARATE block from the vault, deliberately. These are the companion's own notes -- what
@@ -1471,14 +1475,40 @@ ${widened}`;
     // pasted in, the companion never has a reason to reach for his own notes (measured: right
     // answer, five seconds, zero tool calls). Pointer mode hands him the fact that notes exist and
     // the verb, and leaves the reading to him. Default payload; pilot per companion via env.
-    if (ownNotesRecallMode(process.env, COMPANION_ID) === "pointer") {
+    const ownNotesPayloadBlock = (() => {
+      const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
+      return ownNotes
+        ? `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`
+        : "";
+    })();
+    if (recallMode === "pointer") {
       const pointer = LibrarianClient.formatOwnNotesPointer(ownRecall.notes);
       if (pointer) contextPrompt += `\n\n[Memory -- ${pointer}]`;
-    } else {
-      const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
-      if (ownNotes) {
-        contextPrompt += `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`;
+    } else if (recallMode === "ask") {
+      // THE TWO-STEP (2026-09-25, reach-decision.ts). Ask him what he would look up, in his own
+      // words, and run the recall with that. Anything short of a reach (NONE, timeout, error,
+      // nothing found by the floors) falls back to the payload floors, so the worst case is today.
+      const { sessionId: reachSessionId, sessionKey: reachSessionKey } =
+        hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode());
+      const reach = await decideReach({
+        companionId: COMPANION_ID,
+        message: effectiveContent,
+        recentContext,
+        floor: { notes: ownRecall.notes.length, vault: LibrarianClient.countSbHits(sbHit, message.channelId) },
+        sessionId: reachSessionId,
+        sessionKey: reachSessionKey,
+        timeoutMs: Number(process.env["REACH_TIMEOUT_MS"]) > 0 ? Number(process.env["REACH_TIMEOUT_MS"]) : 20_000,
+        adapter: deps.adapterRef.current,
+        librarian,
+      });
+      console.log(`[reach] companion=${COMPANION_ID} outcome=${reach.outcome} topic=${reach.topic ? JSON.stringify(reach.topic.slice(0, 80)) : "-"} ms=${reach.ms}`);
+      if (reach.outcome === "reached" && reach.block) {
+        contextPrompt += `\n\n${reach.block}`;
+      } else {
+        contextPrompt += sbPayloadBlock + ownNotesPayloadBlock;
       }
+    } else {
+      contextPrompt += ownNotesPayloadBlock;
     }
 
     // Peer-framing: anchor to triad register rather than Raziel-facing register.

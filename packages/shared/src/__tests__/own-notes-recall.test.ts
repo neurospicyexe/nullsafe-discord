@@ -325,3 +325,27 @@ describe("formatSbRecallPointer", () => {
     expect(out).not.toMatch(/[—–]/);
   });
 });
+
+describe("ownNotesRecallMode -- ask (the two-step)", () => {
+  it("'ask' applies to everyone; 'ask:drevan' pilots one", () => {
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "ask" }, "gaia")).toBe("ask");
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "ask:drevan" }, "drevan")).toBe("ask");
+    expect(ownNotesRecallMode({ OWN_NOTES_RECALL_MODE: "ask:drevan" }, "cypher")).toBe("payload");
+  });
+});
+
+describe("countSbHits", () => {
+  const raw = (chunks: Array<{ text: string; vault_path?: string }>) => JSON.stringify({ chunks });
+  it("counts usable, de-duplicated hits with the room exclusions applied", () => {
+    expect(LibrarianClient.countSbHits(null)).toBe(0);
+    expect(LibrarianClient.countSbHits("nope")).toBe(0);
+    expect(LibrarianClient.countSbHits(raw([]))).toBe(0);
+    expect(LibrarianClient.countSbHits(raw([
+      { text: "a", vault_path: "x/1.md" },
+      { text: "a", vault_path: "x/2.md" },
+      { text: "  ", vault_path: "x/3.md" },
+      { text: "this room", vault_path: "discord-live/123/4.md" },
+      { text: "b", vault_path: "y/5.md" },
+    ]), "123")).toBe(2);
+  });
+});
