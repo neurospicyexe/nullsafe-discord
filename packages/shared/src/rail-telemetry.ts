@@ -38,6 +38,7 @@ export type RailName =
   | "seed_echo"      // inter-seed-gate: the seed restates the live thread
   | "form_ratchet"   // form drift detected
   | "superseded"     // a newer human message arrived mid-inference
+  | "verbatim"       // verbatim-copy rail: reply is a byte copy of a sibling's or my own recent message (09-26)
   | "cooldown";      // any timed hold
 
 export interface RailEvent {

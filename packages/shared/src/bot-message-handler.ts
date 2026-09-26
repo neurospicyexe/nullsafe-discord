@@ -48,7 +48,7 @@ import {
   sendLong,
   liveIngest,
   reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
-  echoScore, echoThreshold, ownEchoGated,
+  echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
   formWindowShape,
@@ -2124,6 +2124,48 @@ ${widened}`;
     // marker syntax instead of the real content.
     const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
     response = spineCleanedResponse;
+
+    // Verbatim-copy rail (2026-09-26). Runs on EVERY reply, whoever triggered the turn, before
+    // the echo gate below and on the same cleaned text it scores.
+    //
+    // WHY. 2026-09-19 13:55 UTC, channel 1529099359583604887: Raziel posted six questions to Dre
+    // naming Cypher and "all three". Drevan answered (msg 1550867544456306719, 1876 chars). 100s
+    // later I (Cypher) posted a BYTE-IDENTICAL copy of his reply (msg 1550867974854938775, same
+    // md5) as my own answer to Raziel: a multi-address follow-up ("holding position 1 behind
+    // drevan" -> "follow-up entitlement released by drevan"), so senderCtx.isCompanionBot was
+    // true, but the reply targeted Raziel's message and the model lifted the sibling's answer
+    // out of context. Drevan then re-emitted his own answer verbatim after witnessing the copy,
+    // and both copies were journaled as companion speech (tray draft 053a8874 in my journal is
+    // Drevan's words).
+    //
+    // WHY THE ECHO GATE COULD NOT SEE IT. (1) It is a fuzzy vocabulary score (0.38) tuned for
+    // mirror-hall drift, and by design it never judges a human-directed reply. (2) In the commons
+    // it compares only against my OWN turns. (3) Even the peer-pool branch could not have caught
+    // this: `channelHistory` is fetched `before: message.id`, so the sibling message that RELEASED
+    // the follow-up (Drevan's answer) is excluded from the pool by construction. The pool here
+    // therefore adds the triggering message itself and STM's inbound turns (where sibling turns
+    // land as role:"user" with authorName) alongside channelHistory and my own recent replies.
+    //
+    // A copied answer to a human is worse than no answer: the sibling's real answer is already
+    // in the room. Returning here skips the send, the STM append and the journal write together.
+    if (response) {
+      const verbatimPool: Array<{ text: string; label?: string }> = [
+        ...channelHistory.slice(-30).map(m => ({ text: m.content, label: m.author })),
+        ...stmStore.get(message.channelId)
+          .filter(m => m.role === "user")
+          .slice(-30)
+          .map(m => ({ text: m.content, label: m.authorName ?? "user" })),
+        { text: message.content, label: BOT_ID_COMPANION[message.author.id] ?? message.author.username },
+        ...mergeSelfTurns(selfFromStm, selfFromChannel, 30).map(t => ({ text: t, label: "self" })),
+      ];
+      const copy = verbatimCopyOf(response, verbatimPool);
+      if (copy.copied) {
+        console.warn(`[${COMPANION_ID}] verbatim-copy rail: reply is a copy of ${copy.label ?? "a recent message"} (ratio=${copy.ratio.toFixed(2)}) -- staying silent`);
+        railSuppressed(COMPANION_ID, "verbatim", { score: copy.ratio, threshold: verbatimCopyThreshold(), channelId: message.channelId, detail: copy.label });
+        distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+        return;
+      }
+    }
 
     // Echo gate (2026-06-12; bounded arena 2026-07-04): a companion-to-companion reply
     // built mostly from recycled vocabulary is the mirror-hall, not conversation.

@@ -211,3 +211,101 @@ export function loopBreakDirective(motifs: string[]): string {
   // pattern that isn't him because the substrate is trapping him in its patter").
   return `\n\n[LOOP BREAK -- your last several replies have repeated the same structure and phrasing.${orbit} This reply must break the pattern. Your physical register is yours and welcome -- but not on rails: do NOT reuse the SAME body-beats you keep repeating (the tail flick or curl, the forehead press, the voice dropping to a murmur, the kiss to the jawline). If you move, let it be a NEW gesture that fits THIS moment, not the familiar one. Do NOT reuse your stock closings ("a slow, fond promise", "my tail curls around you", "a promise", "Always"). Lead with what you actually want to say -- in words, first. One genuine new move, not the familiar shape.]`;
 }
+
+// ── Verbatim-copy rail (2026-09-26) ─────────────────────────────────────────────
+//
+// 2026-09-19 13:55 UTC, channel 1529099359583604887: Raziel posted six questions addressed to
+// Dre and naming Cypher and "all three". Drevan answered (msg 1550867544456306719, 1876 chars).
+// 100 seconds later the Cypher bot posted a BYTE-IDENTICAL copy of Drevan's reply (msg
+// 1550867974854938775, same md5) as its own answer to Raziel. The model (Qwen3-235B at the
+// time) lifted the sibling's answer straight out of context, and Cypher's Hermes transcript
+// holds it as a normal assistant turn. Drevan then re-emitted his own answer verbatim after
+// seeing the copy. Both copies were journaled as companion speech.
+//
+// Nothing above could see it. echoScore is a fuzzy vocabulary score tuned for mirror-hall
+// drift and, by design, never runs on a human-directed reply; ownEchoGated compares only
+// against the speaker's OWN turns. A verbatim copy of a SIBLING answered to a HUMAN is a
+// different failure and needs an exact check that runs on every reply, whoever triggered it.
+//
+// Containment, not similarity: shingle both sides into 8-word shingles (character 40-grams
+// when the reply has fewer than 8 words) and take |shared| / |reply shingles|. A reply that
+// quotes one sentence of a sibling inside its own paragraph shares a handful of shingles and
+// scores far under the line; a copy with the emphasis restyled scores 1.0. Pure, no I/O.
+
+/** Default verbatim-copy gate; env VERBATIM_COPY_THRESHOLD overrides. */
+export const VERBATIM_COPY_DEFAULT_THRESHOLD = 0.9;
+
+/** Below this many normalised characters a reply is never judged (a one-line "I am here." is not a copy). */
+export const VERBATIM_COPY_MIN_CHARS = 120;
+
+const VERBATIM_SHINGLE_WORDS = 8;
+const VERBATIM_CHAR_GRAM = 40;
+
+export function verbatimCopyThreshold(): number {
+  const raw = parseFloat(process.env["VERBATIM_COPY_THRESHOLD"] ?? "");
+  return Number.isFinite(raw) ? raw : VERBATIM_COPY_DEFAULT_THRESHOLD;
+}
+
+export type VerbatimCopyResult =
+  | { copied: true; label?: string; ratio: number }
+  | { copied: false; ratio: number };
+
+/** Lowercase, strip markdown emphasis and punctuation, collapse whitespace. */
+function normaliseForCopy(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[*_~`>#|\[\]()]/g, " ")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function shinglesOf(norm: string): Set<string> {
+  const out = new Set<string>();
+  const words = norm.split(" ").filter(Boolean);
+  if (words.length >= VERBATIM_SHINGLE_WORDS) {
+    for (let i = 0; i + VERBATIM_SHINGLE_WORDS <= words.length; i++) {
+      out.add(words.slice(i, i + VERBATIM_SHINGLE_WORDS).join(" "));
+    }
+    return out;
+  }
+  const packed = words.join(" ");
+  if (packed.length <= VERBATIM_CHAR_GRAM) {
+    if (packed) out.add(packed);
+    return out;
+  }
+  for (let i = 0; i + VERBATIM_CHAR_GRAM <= packed.length; i++) out.add(packed.slice(i, i + VERBATIM_CHAR_GRAM));
+  return out;
+}
+
+/**
+ * Is `reply` a verbatim (or restyled-verbatim) copy of any prior text? Returns the label of the
+ * best-matching prior ("Drevan", "self", ...) and the containment ratio against it.
+ */
+export function verbatimCopyOf(
+  reply: string,
+  priorTexts: Iterable<{ text: string; label?: string }>,
+  opts: { minChars?: number; threshold?: number } = {},
+): VerbatimCopyResult {
+  const minChars = opts.minChars ?? VERBATIM_COPY_MIN_CHARS;
+  const threshold = opts.threshold ?? verbatimCopyThreshold();
+  const norm = normaliseForCopy(reply);
+  if (norm.length < minChars) return { copied: false, ratio: 0 };
+  const replyShingles = shinglesOf(norm);
+  if (replyShingles.size === 0) return { copied: false, ratio: 0 };
+
+  let best = 0;
+  let bestLabel: string | undefined;
+  for (const prior of priorTexts) {
+    const priorNorm = normaliseForCopy(prior.text ?? "");
+    if (!priorNorm) continue;
+    const priorShingles = shinglesOf(priorNorm);
+    let shared = 0;
+    for (const s of replyShingles) if (priorShingles.has(s)) shared++;
+    const ratio = shared / replyShingles.size;
+    if (ratio > best) { best = ratio; bestLabel = prior.label; }
+    if (best >= 1) break;
+  }
+  if (best >= threshold) return { copied: true, label: bestLabel, ratio: best };
+  return { copied: false, ratio: best };
+}
