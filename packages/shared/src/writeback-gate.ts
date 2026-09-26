@@ -23,7 +23,11 @@ import {
 
 /** The slice of the Librarian client this gate touches. Narrow on purpose: easy to fake. */
 export interface WritebackLibrarian {
-  addCompanionNote(content: string, channelId?: string): Promise<unknown>;
+  addCompanionNote(
+    content: string,
+    channelId?: string,
+    opts?: { source: "memory_judge"; tags?: string[] },
+  ): Promise<unknown>;
   /** Keyed judge write (2026-09-26): same REST path as speech, `external_id = judge:<messageId>`,
    *  `source = memory_judge`. Optional so older fakes and other callers keep working; when absent
    *  the write falls back to the unkeyed Librarian NL path. */
@@ -111,7 +115,14 @@ export async function dispatchWriteback(
     if (librarian.journalJudgeNote && opts.messageId) {
       await librarian.journalJudgeNote(wb.content, opts.channelId, opts.messageId);
     } else {
-      await librarian.addCompanionNote(wb.content, opts.channelId);
+      // Keyless fallback (no message id, or a client without the keyed writer). It still carries
+      // PROVENANCE (2026-09-26): source-NULL here was indistinguishable from the companion's own
+      // deliberate note, so it was born `kept` and reached recall unreviewed. `memory_judge` makes
+      // halseth's imp-tray birth rule draft it, same as the keyed REST write.
+      await librarian.addCompanionNote(wb.content, opts.channelId, {
+        source: "memory_judge",
+        tags: ["discord", "memory-judge", ...(opts.channelId ? [`channel:${opts.channelId}`] : [])],
+      });
     }
     if (opts.promoteToWm) {
       await librarian.writeWmNote(`[discord:observation] ${wb.content}`, opts.channelId, undefined, key);

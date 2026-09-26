@@ -295,8 +295,27 @@ export class LibrarianClient {
     return this.askWrite("state update", "update my state", JSON.stringify({ prompt_context: text }));
   }
 
-  async addCompanionNote(note: string, _channel?: string) {
-    return this.askWrite("companion note", "add companion note", note);
+  /**
+   * Librarian NL companion note. Default (no `opts.source`): the raw text is the context, exactly as
+   * before -- a companion's own note, born `kept`.
+   *
+   * `opts.source` (2026-09-26): a machine writer declares itself. The context becomes the JSON shape
+   * metronome already sends down this path ({content, tags, source}), and halseth forwards an
+   * allowlisted machine source to the journal insert, where the imp-tray birth rule drafts it. Used
+   * by the memory judge's KEYLESS fallback: without it that row was source-NULL, indistinguishable
+   * from a deliberate note, and reached recall unreviewed.
+   */
+  async addCompanionNote(
+    note: string,
+    channel?: string,
+    opts?: { source: "memory_judge"; tags?: string[] },
+  ) {
+    if (!opts?.source) return this.askWrite("companion note", "add companion note", note);
+    return this.askWrite("companion note", "add companion note", JSON.stringify({
+      content: note,
+      tags: opts.tags ?? (channel ? [`channel:${channel}`] : []),
+      source: opts.source,
+    }));
   }
 
   /**

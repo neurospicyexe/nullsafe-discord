@@ -359,4 +359,35 @@ describe("dispatchWriteback -- keyed judge writes", () => {
     await dispatchWriteback({ type: "companion_note", content: "x" }, lib, { promoteToWm: false, channelId: "chan", messageId: "M1" });
     expect(calls.map(c => c[0])).toEqual(["addCompanionNote"]);
   });
+
+  // 2026-09-26: the keyless fallback was source-NULL -> born `kept` in halseth -> recall, unreviewed.
+  // It must declare itself memory_judge so the imp-tray birth rule drafts it.
+  it("the KEYLESS fallback (no message id) carries source memory_judge", async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const lib: WritebackLibrarian = {
+      addCompanionNote: async (...a) => { calls.push(["addCompanionNote", a]); },
+      journalJudgeNote: async (...a) => { calls.push(["journalJudgeNote", a]); },
+      writeWmNote: async (...a) => { calls.push(["writeWmNote", a]); },
+      witnessLog: async (...a) => { calls.push(["witnessLog", a]); },
+      addLiveThread: async (p) => { calls.push(["addLiveThread", [p]]); },
+    };
+    await dispatchWriteback({ type: "companion_note", content: "he said 208" }, lib, { promoteToWm: false, channelId: "chan", messageId: "" });
+    expect(calls.map(c => c[0])).toEqual(["addCompanionNote"]);
+    expect(calls[0]![1]).toEqual([
+      "he said 208", "chan",
+      { source: "memory_judge", tags: ["discord", "memory-judge", "channel:chan"] },
+    ]);
+  });
+
+  it("the fallback without a keyed writer also carries source memory_judge", async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const lib: WritebackLibrarian = {
+      addCompanionNote: async (...a) => { calls.push(["addCompanionNote", a]); },
+      writeWmNote: async (...a) => { calls.push(["writeWmNote", a]); },
+      witnessLog: async (...a) => { calls.push(["witnessLog", a]); },
+      addLiveThread: async (p) => { calls.push(["addLiveThread", [p]]); },
+    };
+    await dispatchWriteback({ type: "companion_note", content: "x" }, lib, { promoteToWm: false, messageId: "M1" });
+    expect(calls[0]![1][2]).toEqual({ source: "memory_judge", tags: ["discord", "memory-judge"] });
+  });
 });

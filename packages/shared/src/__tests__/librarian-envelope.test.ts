@@ -73,6 +73,29 @@ describe("LibrarianClient write wrappers throw on decline envelopes", () => {
     await expect(c.addCompanionNote("note")).resolves.toMatchObject({ ack: true });
   });
 
+  // 2026-09-26: provenance on the NL path. Default stays the raw text (a companion's own note,
+  // born kept); a declared machine source rides as the {content, tags, source} JSON metronome uses.
+  it("addCompanionNote: plain call sends the raw note as context; with a source sends JSON", async () => {
+    const bodies: Array<Record<string, any>> = [];
+    const fetchMock = jest.fn(async (_u: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ack: true, id: "n1" }) }] },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as FetchFn;
+    const c = new LibrarianClient({ url: "https://halseth.test", secret: "s", companionId: "drevan", fetch: fetchMock });
+
+    await c.addCompanionNote("my own note", "chan");
+    expect(bodies[0]!.params.arguments.request).toBe("add companion note");
+    expect(bodies[0]!.params.arguments.context).toBe("my own note");
+
+    await c.addCompanionNote("judge wrote this", "chan", { source: "memory_judge", tags: ["discord", "memory-judge"] });
+    expect(bodies[1]!.params.arguments.request).toBe("add companion note");
+    expect(JSON.parse(bodies[1]!.params.arguments.context)).toEqual({
+      content: "judge wrote this", tags: ["discord", "memory-judge"], source: "memory_judge",
+    });
+  });
+
   it("addCompanionNote throws on { error }", async () => {
     const c = clientWithEnvelope({ error: "companion_note_add_failed", reason: "no note_text" });
     await expect(c.addCompanionNote("note")).rejects.toThrow(/companion_note_add_failed/);
