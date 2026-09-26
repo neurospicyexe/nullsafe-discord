@@ -296,6 +296,8 @@ export interface RunBotConfig {
   /** Command-shaped-but-unparsed catcher; usage reply instead of inference. */
   logTrigger?: RegExp;
   intoTrigger?: RegExp;
+  /** `<prefix>: retract` as a reply to one of this bot's messages (2026-09-26). */
+  retractTrigger?: RegExp;
   watchTrigger?: RegExp;
   commandGuard?: RegExp;
   redisUrl: string | undefined;
@@ -330,7 +332,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, watchTrigger, commandGuard,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, retractTrigger, watchTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig, surface,
   } = brc;
@@ -888,6 +890,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       ...(hexTrigger ? { HEX_TRIGGER: hexTrigger } : {}),
       ...(logTrigger ? { LOG_TRIGGER: logTrigger } : {}),
       ...(intoTrigger ? { INTO_TRIGGER: intoTrigger } : {}),
+      ...(retractTrigger ? { RETRACT_TRIGGER: retractTrigger } : {}),
       ...(watchTrigger ? { WATCH_TRIGGER: watchTrigger } : {}),
       ...(commandGuard ? { COMMAND_GUARD: commandGuard } : {}),
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,

@@ -24,6 +24,7 @@ export interface CommandTriggers {
   imps: RegExp;
   hex: RegExp;
   log: RegExp;
+  retract: RegExp;
   into: RegExp;
   watch: RegExp;
   guard: RegExp;
@@ -52,6 +53,10 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // Hearth write layer (0092). Form: "<prefix>: log <thought>". Arg required so a bare
     // "log" misses -> guard -> usage, never inference. Drops a 'global' commons post.
     log: new RegExp(`^(?:${alt})\\b[,:]?\\s*log\\b[,:]?\\s+([\\s\\S]+)`, "is"),
+    // Retract (2026-09-26). "<prefix>: retract" as a REPLY to one of the bot's own messages pulls
+    // that reply back out of every memory store it reached. The target is the reply reference, so
+    // the arg is OPTIONAL and a bare form is the main form; "retractor"/"retracted" must miss.
+    retract: new RegExp(`^(?:${alt})\\b[,:]?\\s*retract\\b(?:\\s+([\\s\\S]*))?$`, "is"),
     // Obsession shelf (0094). "<prefix>: into <thing>" / "into list" / "into drop <frag>".
     // Arg required so a bare "into" misses -> guard -> usage.
     into: new RegExp(`^(?:${alt})\\b[,:]?\\s*into\\b[,:]?\\s+([\\s\\S]+)`, "is"),
@@ -135,6 +140,7 @@ export function commandUsage(companionId: string): string {
     `\`${p}: listen <url>\` (or \`${p} listen: <url>\` -- the link just has to follow the word listen)`,
     `\`${p}: club vote <title fragment> [because <reason>]\``,
     `\`${p}: club status\``,
+    `\`${p}: retract\` (as a reply to one of my messages: pulls it out of my memory, reversibly)`,
     `\`${p}: search <query>\` (web search)`,
     `\`${p}: imagine <prompt>\` (generate an image)`,
     `\`${p}: pet <name>\` (a creature -- add \`feed|play|talk|give\` + a note to vary it)`,

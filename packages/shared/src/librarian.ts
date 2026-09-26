@@ -318,6 +318,36 @@ export class LibrarianClient {
    * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
    * reply. The same key lets the 06-25 speech backfill be re-run safely.
    */
+  /**
+   * Journal the memory-judge's note through the REST path (2026-09-26), keyed and sourced.
+   *
+   * Until now the judge's companion_note went through the Librarian NL path, which cannot set
+   * `external_id` or `source`: its rows landed unkeyed and source-NULL, so the note memorialising
+   * Drevan's fabricated blood-sugar number had to be found by content and archived by hand, and it
+   * had weighed 0.85 in recall, above the true capture. Now: `external_id = judge:<user message id>`
+   * (what `<prefix>: retract` keys on) and `source = memory_judge` (halseth weighs it as machine
+   * output, 0.6). Same transient/rejected handling as journalSpeech below.
+   */
+  async journalJudgeNote(content: string, channelId?: string, messageId?: string): Promise<void> {
+    const text = content.trim();
+    if (!text) return;
+    const res = await this._fetch(`${this.url}/companion-journal`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${this.secret}` },
+      body: JSON.stringify({
+        agent: this.companionId,
+        note_text: text.slice(0, 4000),
+        tags: ["discord", "memory-judge", ...(channelId ? [`channel:${channelId}`] : [])],
+        source: "memory_judge",
+        ...(messageId ? { external_id: `judge:${messageId}` } : {}),
+      }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (res.ok) return;
+    if (res.status >= 500 || res.status === 429) throw new Error(`journalJudgeNote transient ${res.status}`);
+    console.error(`[librarian] journalJudgeNote REJECTED ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
+  }
+
   async journalSpeech(replyText: string, channelId: string, messageId: string): Promise<void> {
     const text = replyText.trim();
     if (!text) return;
@@ -543,7 +573,7 @@ export class LibrarianClient {
    * session orient -- bridging Discord activity into Claude.ai companions at next boot.
    * Non-throwing; failures are logged but never bubble up.
    */
-  async writeWmNote(content: string, threadKey?: string, noteType = "discord_session"): Promise<void> {
+  async writeWmNote(content: string, threadKey?: string, noteType = "discord_session", correlationId?: string): Promise<void> {
     try {
       const res = await this._fetch(`${this.url}/mind/note`, {
         method: "POST",
@@ -558,6 +588,9 @@ export class LibrarianClient {
           note_type: noteType,
           source: "discord",
           ...(threadKey ? { thread_key: threadKey } : {}),
+          // 2026-09-26: the retract key. A promoted judge note carries `judge:<message id>` so
+          // POST /admin/retract can archive it alongside the journal row it was promoted from.
+          ...(correlationId ? { correlation_id: correlationId } : {}),
         }),
         signal: AbortSignal.timeout(8_000),
       });

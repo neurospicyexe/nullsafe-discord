@@ -24,7 +24,11 @@ import {
 /** The slice of the Librarian client this gate touches. Narrow on purpose: easy to fake. */
 export interface WritebackLibrarian {
   addCompanionNote(content: string, channelId?: string): Promise<unknown>;
-  writeWmNote(content: string, channelId?: string): Promise<unknown>;
+  /** Keyed judge write (2026-09-26): same REST path as speech, `external_id = judge:<messageId>`,
+   *  `source = memory_judge`. Optional so older fakes and other callers keep working; when absent
+   *  the write falls back to the unkeyed Librarian NL path. */
+  journalJudgeNote?(content: string, channelId?: string, messageId?: string): Promise<unknown>;
+  writeWmNote(content: string, channelId?: string, noteType?: string, correlationId?: string): Promise<unknown>;
   witnessLog(content: string, channelId?: string): Promise<unknown>;
   addLiveThread(params: { name: string; notes?: string }): Promise<unknown>;
 }
@@ -98,12 +102,19 @@ export function __resetShadowLogWarning(): void {
 export async function dispatchWriteback(
   wb: Exclude<Writeback, null>,
   librarian: WritebackLibrarian,
-  opts: { promoteToWm: boolean; channelId?: string },
+  opts: { promoteToWm: boolean; channelId?: string; messageId?: string },
 ): Promise<void> {
   if (wb.type === "companion_note") {
-    await librarian.addCompanionNote(wb.content, opts.channelId);
+    // KEYED when possible (2026-09-26): the judge's note memorialising a fabricated number could
+    // only be found by content and archived by hand. With the key, `<prefix>: retract` reaches it.
+    const key = opts.messageId ? `judge:${opts.messageId}` : undefined;
+    if (librarian.journalJudgeNote && opts.messageId) {
+      await librarian.journalJudgeNote(wb.content, opts.channelId, opts.messageId);
+    } else {
+      await librarian.addCompanionNote(wb.content, opts.channelId);
+    }
     if (opts.promoteToWm) {
-      await librarian.writeWmNote(`[discord:observation] ${wb.content}`, opts.channelId);
+      await librarian.writeWmNote(`[discord:observation] ${wb.content}`, opts.channelId, undefined, key);
     }
   } else if (wb.type === "witness_log") {
     await librarian.witnessLog(wb.content, opts.channelId);
@@ -128,7 +139,7 @@ export async function runWritebackGate(ctx: WritebackGateCtx): Promise<void> {
   const dispatch = (wb: Writeback, promoteToWm: boolean) => {
     if (!wb) return;
     enqueue(`writeback:${channelId}`, async () => {
-      await dispatchWriteback(wb, librarian, { promoteToWm, channelId });
+      await dispatchWriteback(wb, librarian, { promoteToWm, channelId, messageId });
     });
   };
 

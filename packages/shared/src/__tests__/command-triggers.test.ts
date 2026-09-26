@@ -163,3 +163,22 @@ describe("commandUsage", () => {
     expect(commandUsage("gaia")).toContain("`gaia: model");
   });
 });
+
+// retract (2026-09-26): "<prefix>: retract" as a REPLY to one of the bot's own messages pulls that
+// reply back out of every memory store it reached (Halseth journal/notes archived + logged release,
+// Second Brain discord-live doc dropped). Bare form is the main form -- the target is the reply
+// reference, not an argument -- so unlike log/into the arg is optional.
+describe("buildCommandTriggers -- retract", () => {
+  test("bare and with a trailing word both match, for every alias", () => {
+    expect("dre: retract").toMatch(drevan.retract);
+    expect("Dre retract that").toMatch(drevan.retract);
+    expect("drevan, retract").toMatch(drevan.retract);
+    expect("cy: retract").toMatch(cypher.retract);
+    expect("gaia retract that one").toMatch(gaia.retract);
+  });
+  test("prose that merely contains the word does not match", () => {
+    expect("dre I retracted my earlier statement").not.toMatch(drevan.retract);
+    expect("retract that").not.toMatch(drevan.retract);
+    expect("dre: retractor").not.toMatch(drevan.retract);
+  });
+});

@@ -219,6 +219,8 @@ export const IMPS_TRIGGER = COMMAND_TRIGGERS.imps;
 export const HEX_TRIGGER = COMMAND_TRIGGERS.hex;
 // Hearth write layer (0092): "log <thought>" drops a global commons post (async wall).
 export const LOG_TRIGGER = COMMAND_TRIGGERS.log;
+// Retract (2026-09-26): "<prefix>: retract" as a reply to one of my messages.
+export const RETRACT_TRIGGER = COMMAND_TRIGGERS.retract;
 // Obsession shelf (0094): "into <thing>" / "into list" / "into drop <frag>".
 export const INTO_TRIGGER = COMMAND_TRIGGERS.into;
 export const WATCH_TRIGGER = COMMAND_TRIGGERS.watch;

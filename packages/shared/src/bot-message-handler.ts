@@ -68,7 +68,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, ownNotesRecallMode, decideReach, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
+  LibrarianClient, ownNotesRecallMode, decideReach, handleRetractCommand, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -269,6 +269,7 @@ export interface MessageHandlerDeps {
   HEX_TRIGGER?: RegExp;
   LOG_TRIGGER?: RegExp;
   INTO_TRIGGER?: RegExp;
+  RETRACT_TRIGGER?: RegExp;
   WATCH_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
@@ -326,7 +327,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, WATCH_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, RETRACT_TRIGGER, WATCH_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -912,6 +913,43 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         await (message.channel as TextChannel).send(reply);
         return;
       }
+    }
+
+    // Owner retract command: <prefix>: retract, as a REPLY to one of this bot's own messages
+    // (2026-09-26). Pulls that reply back out of every memory store it reached: Halseth journal
+    // rows keyed on the reply id (speech) and on the human message it answered (the judge's note),
+    // the promoted wm note, and the Second Brain discord-live doc. Deterministic writes + literal,
+    // itemised ack; a retraction that says "done" while one store still carries the mistake is
+    // worse than none. Not a reply to me -> usage, never inference.
+    if (attribution.isOwner && RETRACT_TRIGGER && RETRACT_TRIGGER.test(effectiveContent)) {
+      const refId = message.reference?.messageId ?? null;
+      let reply: string;
+      if (!refId) {
+        reply = `reply to the message of mine you want gone, then \`${COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID}: retract\`.`;
+      } else {
+        try {
+          const target = await message.channel.messages.fetch(refId);
+          if (target.author.id !== message.client.user?.id) {
+            reply = "I can only retract my own messages; that one is not mine.";
+          } else {
+            const sbBase = (process.env["SECOND_BRAIN_URL"] ?? "").replace(/\/$/, "");
+            const sbKey = process.env["SB_INGEST_KEY"] ?? "";
+            const halsethBase = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
+            reply = await handleRetractCommand({
+              companionId: COMPANION_ID,
+              channelId: message.channelId,
+              botMessageId: target.id,
+              userMessageId: target.reference?.messageId ?? null,
+              halseth: { base: halsethBase, secret: cfg.halsethSecret },
+              secondBrain: sbBase && sbKey ? { base: sbBase, key: sbKey } : null,
+            });
+          }
+        } catch (err) {
+          reply = `retract failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`;
+        }
+      }
+      await (message.channel as TextChannel).send(reply);
+      return;
     }
 
     // Owner shelf command: <prefix>: into <thing> | into list | into drop <frag> (0094).

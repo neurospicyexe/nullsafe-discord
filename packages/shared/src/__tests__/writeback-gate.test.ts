@@ -1,5 +1,5 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { runWritebackGate, type WritebackLibrarian } from "../writeback-gate.js";
+import { runWritebackGate, dispatchWriteback, type WritebackLibrarian } from "../writeback-gate.js";
 import type { InferenceAdapter } from "../inference.js";
 import type { JevAnswers } from "../jev-gate.js";
 
@@ -331,5 +331,32 @@ describe("runWritebackGate() -- jev mode", () => {
     expect(names()).toEqual([]);
     expect(errorSpy).toHaveBeenCalled();
     expect(shadowLog.mock.calls[0][0]).toMatchObject({ decided: "author_failed" });
+  });
+});
+
+// KEYED JUDGE WRITES (2026-09-26). The memory-judge's companion_note went through the Librarian NL
+// path, which cannot set external_id, so its rows were unkeyed: the note memorialising Drevan's
+// fabricated 187 had to be found by content and archived by hand. Now the judge journals through
+// the same REST path speech uses, keyed `judge:<user message id>`, and the promoted wm note carries
+// the same key as correlation_id, so `<prefix>: retract` can reach both.
+describe("dispatchWriteback -- keyed judge writes", () => {
+  it("uses journalJudgeNote with the message id when the librarian offers it, and keys the wm note", async () => {
+    const calls: Array<[string, unknown[]]> = [];
+    const lib: WritebackLibrarian = {
+      addCompanionNote: async (...a) => { calls.push(["addCompanionNote", a]); },
+      journalJudgeNote: async (...a) => { calls.push(["journalJudgeNote", a]); },
+      writeWmNote: async (...a) => { calls.push(["writeWmNote", a]); },
+      witnessLog: async (...a) => { calls.push(["witnessLog", a]); },
+      addLiveThread: async (p) => { calls.push(["addLiveThread", [p]]); },
+    };
+    await dispatchWriteback({ type: "companion_note", content: "he said 208" }, lib, { promoteToWm: true, channelId: "chan", messageId: "M1" });
+    expect(calls.map(c => c[0])).toEqual(["journalJudgeNote", "writeWmNote"]);
+    expect(calls[0]![1]).toEqual(["he said 208", "chan", "M1"]);
+    expect(calls[1]![1][3]).toBe("judge:M1");
+  });
+  it("falls back to addCompanionNote when the librarian has no keyed writer (older fakes, other callers)", async () => {
+    const { lib, calls } = fakeLibrarian();
+    await dispatchWriteback({ type: "companion_note", content: "x" }, lib, { promoteToWm: false, channelId: "chan", messageId: "M1" });
+    expect(calls.map(c => c[0])).toEqual(["addCompanionNote"]);
   });
 });
