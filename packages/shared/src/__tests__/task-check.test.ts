@@ -1,6 +1,7 @@
 // The task check reads the task list before it speaks (2026-09-26). Raziel's first tray review
 // found the model-guessed "No open tasks -- clean slate" ticks were the bulk of the drafts.
-import { taskCheckPrompt, liveTasks, TASK_CHECK_MAX_LISTED, type TaskCheckRow } from "../task-check.js";
+import { taskCheckPrompt, taskCheckPlan, liveTasks, TASK_CHECK_MAX_LISTED, type TaskCheckRow } from "../task-check.js";
+import { LibrarianClient } from "../librarian.js";
 
 const row = (o: Partial<TaskCheckRow>): TaskCheckRow => ({
   id: "t", title: "thing", priority: "normal", status: "open", due_at: null, assigned_to: null, ...o,
@@ -43,5 +44,45 @@ describe("liveTasks", () => {
       row({ id: "c", due_at: "2026-10-01" }),
     ]);
     expect(out.map(t => t.id)).toEqual(["c", "a"]);
+  });
+});
+
+// 2026-09-26 review: listTasks returned [] on failure, so a Halseth outage read as a clear board,
+// and with two GETs one failure produced a partial list reported as the whole.
+describe("taskCheckPlan", () => {
+  it("a failed read is 'unavailable', never 'quiet'", () => {
+    expect(taskCheckPlan(null)).toEqual({ kind: "unavailable" });
+  });
+  it("an empty (or all-done) list is quiet", () => {
+    expect(taskCheckPlan([])).toEqual({ kind: "quiet" });
+    expect(taskCheckPlan([row({ status: "done" })])).toEqual({ kind: "quiet" });
+  });
+  it("a live list speaks with the real prompt", () => {
+    const plan = taskCheckPlan([row({ title: "the deck" })]);
+    expect(plan.kind).toBe("speak");
+    if (plan.kind === "speak") expect(plan.prompt).toContain("the deck");
+  });
+});
+
+describe("LibrarianClient.listTasks", () => {
+  const client = (fetchImpl: (url: string) => Promise<Response>) =>
+    new LibrarianClient({ url: "https://h.example", secret: "s", companionId: "cypher", fetch: fetchImpl as unknown as typeof fetch });
+
+  it("with no status, makes ONE GET for everything not done", async () => {
+    const urls: string[] = [];
+    const rows = await client(async (url) => {
+      urls.push(url);
+      return { ok: true, status: 200, json: async () => [row({ status: "open" }), row({ status: "in_progress" })] } as unknown as Response;
+    }).listTasks();
+    expect(urls).toEqual(["https://h.example/tasks"]);
+    expect(rows).toHaveLength(2);
+  });
+  it("returns null on a non-2xx, a network error, or a non-list body -- never []", async () => {
+    expect(await client(async () => ({ ok: false, status: 503, json: async () => ({}) } as unknown as Response)).listTasks()).toBeNull();
+    expect(await client(async () => { throw new Error("ECONNRESET"); }).listTasks()).toBeNull();
+    expect(await client(async () => ({ ok: true, status: 200, json: async () => ({ error: "x" }) } as unknown as Response)).listTasks()).toBeNull();
+  });
+  it("an empty list is still an empty list", async () => {
+    expect(await client(async () => ({ ok: true, status: 200, json: async () => [] } as unknown as Response)).listTasks()).toEqual([]);
   });
 });

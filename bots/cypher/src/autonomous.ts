@@ -1,6 +1,6 @@
 import cron from "node-cron";
 import { Client } from "discord.js";
-import { taskCheckPrompt } from "@nullsafe/shared";
+import { taskCheckPlan } from "@nullsafe/shared";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, Redis,
 } from "@nullsafe/shared";
@@ -90,12 +90,20 @@ export function startAutonomous(
     // guessed ("16 open" one night, "No open tasks -- clean slate" the next) and every guess became
     // a [metronome/task_check] continuity note. Raziel's first tray review found those ticks were
     // the bulk of the drafts and none were memory. Nothing live -> no post, no note.
-    const [open, inProgress] = await Promise.all([librarian.listTasks("open"), librarian.listTasks("in_progress")]);
-    const prompt = taskCheckPrompt([...open, ...inProgress]);
-    if (prompt === null) {
+    //
+    // One GET for everything not done (2026-09-26 review): two GETs meant one failure produced a
+    // partial list reported as the whole, and a failed read came back as [] -- "nothing live" --
+    // so a Halseth outage looked like a clear board. A failed read now skips, and says so.
+    const plan = taskCheckPlan(await librarian.listTasks());
+    if (plan.kind === "unavailable") {
+      console.warn(`[${COMPANION_ID}] task_check: task list unavailable -- skipping`);
+      return;
+    }
+    if (plan.kind === "quiet") {
       console.log(`[${COMPANION_ID}] task_check: nothing live -- skipping the post and the note`);
       return;
     }
+    const prompt = plan.prompt;
     await withFloor(ctx, async () => {
       const msg = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
       if (msg) await sendAutonomousMessage(ctx, HEARTBEAT_CHANNEL_ID!, msg, "task_check");

@@ -319,26 +319,6 @@ export class LibrarianClient {
   }
 
   /**
-   * Journal this companion's OWN spoken reply (2026-07-09 Brain-cutover repair).
-   *
-   * Until 2026-06-25 this was written by Brain's swarm evaluator. When the bots moved to
-   * INFERENCE_MODE=hermes they stopped calling Brain, and the writer died with the relay --
-   * two weeks of inter-companion speech never reached companion_journal. The write belongs
-   * to the ACT OF SPEAKING, not to whoever happened to compute the words, so it lives here
-   * and survives any future inference-topology change.
-   *
-   * Raw REST, not askWrite(): the Librarian NL path cannot set `source`, so a reply journaled
-   * through it would land with source=NULL, i.e. in the SUBSTANTIVE lane -- flooding orient's
-   * 3 recency slots and the motif miner with transcript. That is the exact bug this repairs.
-   *
-   * Transport metadata goes in `tags`, NEVER in note_text (halseth webmind/journal-lanes.ts).
-   *
-   * `messageId` is the Discord id of the sent reply and becomes the idempotency key
-   * (`external_id`, halseth mig 0098). This matters: writeQueue.fireAndForget BUFFERS FAILED
-   * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
-   * reply. The same key lets the 06-25 speech backfill be re-run safely.
-   */
-  /**
    * Journal the memory-judge's note through the REST path (2026-09-26), keyed and sourced.
    *
    * Until now the judge's companion_note went through the Librarian NL path, which cannot set
@@ -368,6 +348,26 @@ export class LibrarianClient {
     console.error(`[librarian] journalJudgeNote REJECTED ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
   }
 
+  /**
+   * Journal this companion's OWN spoken reply (2026-07-09 Brain-cutover repair).
+   *
+   * Until 2026-06-25 this was written by Brain's swarm evaluator. When the bots moved to
+   * INFERENCE_MODE=hermes they stopped calling Brain, and the writer died with the relay --
+   * two weeks of inter-companion speech never reached companion_journal. The write belongs
+   * to the ACT OF SPEAKING, not to whoever happened to compute the words, so it lives here
+   * and survives any future inference-topology change.
+   *
+   * Raw REST, not askWrite(): the Librarian NL path cannot set `source`, so a reply journaled
+   * through it would land with source=NULL, i.e. in the SUBSTANTIVE lane -- flooding orient's
+   * 3 recency slots and the motif miner with transcript. That is the exact bug this repairs.
+   *
+   * Transport metadata goes in `tags`, NEVER in note_text (halseth webmind/journal-lanes.ts).
+   *
+   * `messageId` is the Discord id of the sent reply and becomes the idempotency key
+   * (`external_id`, halseth mig 0098). This matters: writeQueue.fireAndForget BUFFERS FAILED
+   * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
+   * reply. The same key lets the 06-25 speech backfill be re-run safely.
+   */
   async journalSpeech(replyText: string, channelId: string, messageId: string): Promise<void> {
     const text = replyText.trim();
     if (!text) return;
@@ -1524,6 +1524,29 @@ export class LibrarianClient {
   }
 
   /**
+   * Like getSetting, but a FAILED read throws instead of reading as a miss (2026-09-26 review).
+   * Returns null only when Halseth answered and the key is genuinely absent.
+   *
+   * WHY: getSetting folds "Halseth is down" into "no such setting", which is right for callers
+   * that treat both as "use the default" and wrong for any read-modify-write: a caller that
+   * merges into the persisted value and writes it back would overwrite the whole map with its
+   * own slice after one bad read (the hermes_retract_bumps case).
+   */
+  async getSettingStrict(key: string): Promise<string | null> {
+    const res = await this._fetch(
+      `${this.url}/companion/settings/${encodeURIComponent(this.companionId)}`,
+      {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!res.ok) throw new Error(`getSetting ${res.status}`);
+    const data = await res.json() as Record<string, unknown>;
+    const v = data?.[key];
+    return typeof v === "string" ? v : null;
+  }
+
+  /**
    * Upsert a companion setting key/value pair in Halseth.
    * Throws on non-2xx (caller should .catch(() => {})).
    */
@@ -1548,17 +1571,27 @@ export class LibrarianClient {
    * speaks instead of asking the model to guess (see task-check.ts). Returns [] on any failure --
    * a check that cannot read must stay silent, never invent a "clean slate".
    */
-  async listTasks(status: "open" | "in_progress" | "done"): Promise<TaskCheckRow[]> {
+  /**
+   * Tasks from Halseth. Without `status`, every task that is not done (open + in_progress) in ONE
+   * GET -- Halseth's /tasks without a status filter is `status != 'done'`.
+   *
+   * Returns null on ANY failure (non-2xx, network, a body that is not a list), never []
+   * (2026-09-26 review): the task check reads [] as "nothing live, stay quiet", so a Halseth
+   * outage used to be indistinguishable from an empty list, and with two calls one failure left
+   * a partial list that the check would report as the whole.
+   */
+  async listTasks(status?: "open" | "in_progress" | "done"): Promise<TaskCheckRow[] | null> {
     try {
-      const res = await this._fetch(`${this.url}/tasks?status=${status}`, {
+      const qs = status ? `?status=${status}` : "";
+      const res = await this._fetch(`${this.url}/tasks${qs}`, {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) return [];
+      if (!res.ok) return null;
       const rows = await res.json() as unknown;
-      return Array.isArray(rows) ? rows as TaskCheckRow[] : [];
+      return Array.isArray(rows) ? rows as TaskCheckRow[] : null;
     } catch {
-      return [];
+      return null;
     }
   }
 

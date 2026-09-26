@@ -54,3 +54,21 @@ export function taskCheckPrompt(rows: readonly TaskCheckRow[], now: Date = new D
     "Check in on these. One line in Cypher's voice. Direct. Name what actually moves the needle; do not list them back.",
   ].filter(Boolean).join("\n");
 }
+
+export type TaskCheckPlan =
+  | { kind: "unavailable" }
+  | { kind: "quiet" }
+  | { kind: "speak"; prompt: string };
+
+/**
+ * What the task-check cron does with what the task read returned (2026-09-26 review). `null` is
+ * a FAILED read (LibrarianClient.listTasks), and it must not be read as "nothing live": a Halseth
+ * outage would otherwise look exactly like a clear board, and the next night's check would be
+ * judging a list it never saw. Unavailable -> the caller logs and skips; quiet -> nothing live,
+ * no post and no note; speak -> the real list, in the prompt.
+ */
+export function taskCheckPlan(rows: readonly TaskCheckRow[] | null, now: Date = new Date()): TaskCheckPlan {
+  if (rows === null) return { kind: "unavailable" };
+  const prompt = taskCheckPrompt(rows, now);
+  return prompt === null ? { kind: "quiet" } : { kind: "speak", prompt };
+}
