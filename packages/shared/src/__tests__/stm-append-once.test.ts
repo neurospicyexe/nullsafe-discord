@@ -91,3 +91,57 @@ describe("appendInboundOnce", () => {
     expect(store.get("chan")).toHaveLength(2);
   });
 });
+
+// StmStore.retract -- rotate-on-retract (2026-09-26).
+//
+// `<prefix>: retract` archived the journal rows, the wm note and the vault doc, and the mistake
+// still echoed back: the bot's own STM window re-sent the retracted reply to the gateway on every
+// turn until the 19:00 CDT rotation. This drops the in-memory copy; Halseth drops its own
+// stm_entries rows in POST /admin/retract, so this deliberately does NOT touch the DB.
+describe("retract", () => {
+  const bot = (content: string): Entry => ({ role: "assistant", content, timestamp: 2 });
+  const long = "the number was 187, and I said it with confidence";
+
+  it("drops assistant entries whose content contains the retracted text, and reports the count", () => {
+    const { store, written } = makeStore();
+    store.append("chan", msg("what was it"));
+    store.append("chan", bot(long));
+    store.append("chan", bot(`[Drevan] ${long} (and more)`));
+    store.append("chan", bot("something unrelated that stays in the window"));
+    const before = written.length;
+    expect(store.retract("chan", long)).toBe(2);
+    expect(store.get("chan").map(m => m.content)).toEqual(["what was it", "something unrelated that stays in the window"]);
+    // No DB write for a retract: Halseth owns its own rows.
+    expect(written).toHaveLength(before);
+  });
+
+  it("also drops an entry the retracted text CONTAINS (a chunked reply's shorter fragment)", () => {
+    const { store } = makeStore();
+    store.append("chan", bot("the number was 187, and I said it"));
+    expect(store.retract("chan", `${long} -- and then a second chunk followed`)).toBe(1);
+    expect(store.get("chan")).toHaveLength(0);
+  });
+
+  it("never drops a user turn, even one that quotes the retracted words", () => {
+    const { store } = makeStore();
+    store.append("chan", msg(long));
+    store.append("chan", bot(long));
+    expect(store.retract("chan", long)).toBe(1);
+    expect(store.get("chan").map(m => m.role)).toEqual(["user"]);
+  });
+
+  it("refuses a needle under 20 chars so a tiny chunk cannot wipe the window", () => {
+    const { store } = makeStore();
+    store.append("chan", bot("ok."));
+    store.append("chan", bot("sure, done."));
+    expect(store.retract("chan", "  ok.  ")).toBe(0);
+    expect(store.get("chan")).toHaveLength(2);
+  });
+
+  it("is scoped to the channel and returns 0 on an unknown one", () => {
+    const { store } = makeStore();
+    store.append("chan", bot(long));
+    expect(store.retract("other", long)).toBe(0);
+    expect(store.get("chan")).toHaveLength(1);
+  });
+});

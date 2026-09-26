@@ -113,6 +113,37 @@ const hermesDeliveredMark = new Map<string, number>();
 // delta must re-send the recent window instead of folding nothing.
 const hermesLastSessionId = new Map<string, string>();
 
+// Rotate-on-retract (2026-09-26): per-channel count of `<prefix>: retract` gestures, folded into
+// the transcript id as `:r<n>` (hermesSessionIds). Module-level = per-process = per companion bot,
+// same idiom as hermesDeliveredMark above. WHY: the retract command archived the journal rows,
+// the wm note and the vault doc, and the mistake still echoed from the gateway transcript until
+// the 19:00 CDT rotation -- the model kept answering from a reply Raziel had already pulled. One
+// retract now also rotates the transcript (the id change trips the rotation edge below, which
+// re-sends the STM window, minus the retracted line) and clears the window. Persisted in the
+// companion setting `hermes_retract_bumps` ({ [channelId]: n }) so a restart cannot walk the
+// count back down and reopen the transcript that still holds the retracted reply.
+const hermesRetractBump = new Map<string, number>();
+let hermesBumpsLoad: Promise<void> | null = null;
+
+/** Fills hermesRetractBump from the persisted setting once per process. Never throws: a miss or
+ *  a malformed value means "no bumps", which is only ever the pre-retract state. */
+async function ensureRetractBumps(librarian: LibrarianClient): Promise<void> {
+  if (!hermesBumpsLoad) {
+    hermesBumpsLoad = (async () => {
+      const raw = await librarian.getSetting("hermes_retract_bumps").catch(() => null);
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+        for (const [channelId, n] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof n === "number" && Number.isFinite(n) && n > 0) hermesRetractBump.set(channelId, Math.floor(n));
+        }
+      } catch { /* malformed setting: start from zero, the next retract rewrites it whole */ }
+    })();
+  }
+  await hermesBumpsLoad;
+}
+
 // Director liveness gate (2026-09-03 review): when in `live` mode but the worker's
 // `director:alive` key has lapsed, this bot must fall back to its own reply path rather than
 // silently deferring into a void. Module-level = per-process = per companion bot, so this warns
@@ -921,6 +952,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // the promoted wm note, and the Second Brain discord-live doc. Deterministic writes + literal,
     // itemised ack; a retraction that says "done" while one store still carries the mistake is
     // worse than none. Not a reply to me -> usage, never inference.
+    //
+    // Rotate-on-retract (2026-09-26): the four stores above were not the whole story. The
+    // retracted reply kept echoing from two transcript stores until the 19:00 CDT Hermes rotation:
+    // this bot's own STM window (re-sent to the gateway by hermesDelta) and the gateway transcript
+    // itself. So one retract now also (a) forwards the reply text so Halseth drops its stm_entries
+    // rows, (b) drops the in-memory window lines, and (c) bumps the per-channel transcript id, so
+    // the next turn starts a fresh gateway session and re-sends the window without it.
     if (attribution.isOwner && RETRACT_TRIGGER && RETRACT_TRIGGER.test(effectiveContent)) {
       const refId = message.reference?.messageId ?? null;
       let reply: string;
@@ -942,7 +980,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               userMessageId: target.reference?.messageId ?? null,
               halseth: { base: halsethBase, secret: cfg.halsethSecret },
               secondBrain: sbBase && sbKey ? { base: sbBase, key: sbKey } : null,
+              stm: { channelId: message.channelId, content: target.content },
             });
+            const dropped = stmStore.retract(message.channelId, target.content);
+            await ensureRetractBumps(librarian);
+            const n = (hermesRetractBump.get(message.channelId) ?? 0) + 1;
+            hermesRetractBump.set(message.channelId, n);
+            librarian.setSetting("hermes_retract_bumps", JSON.stringify(Object.fromEntries(hermesRetractBump)))
+              .catch((e) => console.warn(`[${COMPANION_ID}] hermes_retract_bumps persist failed (bump ${n} for ${message.channelId} is in-memory only until the next retract): ${e instanceof Error ? e.message : String(e)}`));
+            reply += ` transcript: rotated (next turn starts a fresh gateway session, window re-sent without it); my window: dropped ${dropped} line${dropped === 1 ? "" : "s"}.`;
           }
         } catch (err) {
           reply = `retract failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`;
@@ -1526,8 +1572,9 @@ ${widened}`;
       // THE TWO-STEP (2026-09-25, reach-decision.ts). Ask him what he would look up, in his own
       // words, and run the recall with that. Anything short of a reach (NONE, timeout, error,
       // nothing found by the floors) falls back to the payload floors, so the worst case is today.
+      await ensureRetractBumps(librarian);
       const { sessionId: reachSessionId, sessionKey: reachSessionKey } =
-        hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode());
+        hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), hermesRetractBump.get(message.channelId) ?? 0);
       const reach = await decideReach({
         companionId: COMPANION_ID,
         message: effectiveContent,
@@ -1923,8 +1970,13 @@ ${widened}`;
     // compacted it on the critical path (3-12 minutes observed), the compaction itself adding to
     // the session it was trying to shrink. The key (long-term-memory scope) stays the stable
     // `companionId:channelId` across every rotation.
+    //
+    // The id also carries the per-channel retract bump (2026-09-26, rotate-on-retract): a
+    // `<prefix>: retract` increments it, so the retracted reply's transcript is abandoned on the
+    // very next turn instead of at 19:00 CDT. The rotation edge below does the rest.
+    await ensureRetractBumps(librarian);
     const { sessionId: inferenceSessionId, sessionKey: inferenceSessionKey } =
-      hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode());
+      hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), hermesRetractBump.get(message.channelId) ?? 0);
     const lastSessionId = hermesLastSessionId.get(message.channelId);
     if (lastSessionId !== undefined && lastSessionId !== inferenceSessionId) {
       // The gateway transcript just rotated -- it has no history, so the next hermesDelta must

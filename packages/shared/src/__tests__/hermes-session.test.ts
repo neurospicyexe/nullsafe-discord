@@ -105,3 +105,32 @@ describe("hermesSessionIds", () => {
     expect(before.sessionId).not.toBe(after.sessionId);
   });
 });
+
+// Rotate-on-retract (2026-09-26): a retracted reply kept echoing from the gateway transcript until
+// the scheduled rotation. A per-channel bump forces a fresh transcript now; the key (LTM scope)
+// must not move with it.
+describe("hermesSessionIds retract bump", () => {
+  const now = new Date("2026-09-26T12:00:00Z");
+
+  it("bump = 0 (default) leaves the id exactly as before", () => {
+    expect(hermesSessionIds("drevan", "chan2", now, "daily", 0).sessionId).toBe("drevan:chan2:2026-09-26");
+    expect(hermesSessionIds("drevan", "chan2", now, "daily").sessionId).toBe("drevan:chan2:2026-09-26");
+  });
+
+  it("bump > 0 suffixes the id with :r<n> and leaves the key alone", () => {
+    const ids = hermesSessionIds("drevan", "chan2", now, "daily", 3);
+    expect(ids.sessionId).toBe("drevan:chan2:2026-09-26:r3");
+    expect(ids.sessionKey).toBe("drevan:chan2");
+  });
+
+  it("applies under off too (there is no epoch to ride, so the bump is the only rotation)", () => {
+    expect(hermesSessionIds("cypher", "chan1", now, "off", 1).sessionId).toBe("cypher:chan1:r1");
+  });
+
+  it("each bump is a distinct id, and a scheduled rotation still changes it further", () => {
+    const a = hermesSessionIds("gaia", "chan3", now, "weekly", 1).sessionId;
+    const b = hermesSessionIds("gaia", "chan3", now, "weekly", 2).sessionId;
+    const c = hermesSessionIds("gaia", "chan3", new Date("2026-10-05T12:00:00Z"), "weekly", 2).sessionId;
+    expect(new Set([a, b, c]).size).toBe(3);
+  });
+});

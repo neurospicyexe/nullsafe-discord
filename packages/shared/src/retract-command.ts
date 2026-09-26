@@ -16,6 +16,13 @@
  *                                  each, so "restore release <id>" undoes it within 30 days.
  *   Second Brain POST /retract     the discord-live doc for the reply, with its vectors. Not
  *                                  reversible (it is the 7-day recency lane, never the vault proper).
+ *   Halseth stm_entries            (rotate-on-retract, 2026-09-26) the bot's persisted STM window
+ *                                  rows carrying the reply, hard-deleted in the same /admin/retract
+ *                                  call when `stm` is passed. The window is a rolling transcript,
+ *                                  not memory; without this the retracted reply was re-sent to the
+ *                                  gateway on every turn until the 19:00 CDT rotation. The
+ *                                  in-memory window and the gateway transcript are the caller's
+ *                                  (StmStore.retract + the hermes session bump).
  *
  * The ack is literal and itemised. A retraction that says "done" while one store still carries
  * the mistake is worse than none, so every half reports separately.
@@ -30,6 +37,8 @@ export interface RetractArgs {
   userMessageId: string | null;
   halseth: { base: string; secret: string };
   secondBrain: { base: string; key: string } | null;
+  /** The retracted reply's channel + text, so Halseth can drop its stm_entries window rows too. */
+  stm?: { channelId: string; content: string };
   fetchFn?: typeof fetch;
   now?: () => Date;
 }
@@ -44,7 +53,7 @@ export function retractKeys(botMessageId: string, userMessageId: string | null):
   return { external_ids, correlation_ids };
 }
 
-type HalsethRetract = { archived: { journal: string[]; notes: string[] }; release_ids: string[] };
+type HalsethRetract = { archived: { journal: string[]; notes: string[] }; release_ids: string[]; stm_deleted?: number };
 type SbRetract = { removed?: number; existed?: boolean };
 
 export async function handleRetractCommand(a: RetractArgs): Promise<string> {
@@ -63,6 +72,7 @@ export async function handleRetractCommand(a: RetractArgs): Promise<string> {
         agent: a.companionId,
         ...keys,
         reason: `Raziel retracted my reply ${a.botMessageId} on Discord (${when} UTC)`,
+        ...(a.stm ? { stm: { channel_id: a.stm.channelId, content: a.stm.content } } : {}),
       }),
       signal: AbortSignal.timeout(15_000),
     });
@@ -74,9 +84,13 @@ export async function handleRetractCommand(a: RetractArgs): Promise<string> {
       const nj = j.archived?.journal?.length ?? 0;
       const nn = j.archived?.notes?.length ?? 0;
       releaseIds = j.release_ids ?? [];
+      const ns = j.stm_deleted ?? 0;
+      // The window count is a third number only when the caller asked for the window: without
+      // `stm` the ack keeps its original shape.
+      const window = a.stm ? `, dropped ${ns} window row${ns === 1 ? "" : "s"}` : "";
       parts.push(nj + nn === 0
-        ? "halseth: nothing to archive under that reply (no journal row or note carried its key)"
-        : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}`);
+        ? `halseth: nothing to archive under that reply (no journal row or note carried its key)${window}`
+        : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}${window}`);
     }
   } catch (e) {
     parts.push(`halseth: FAILED (${String(e instanceof Error ? e.message : e).slice(0, 80)})`);

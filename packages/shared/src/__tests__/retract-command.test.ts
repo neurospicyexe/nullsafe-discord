@@ -86,6 +86,37 @@ describe("handleRetractCommand", () => {
     expect(ack).toContain("halseth: FAILED");
     expect(ack).toContain("vault: dropped");
   });
+  // Rotate-on-retract (2026-09-26): the retracted reply kept echoing from the STM window until the
+  // 19:00 CDT rotation. The bot forwards the reply text so Halseth drops its stm_entries rows in
+  // the same call, and the ack reports that count as a third number.
+  it("forwards `stm` to Halseth as {channel_id, content} and acks the dropped window rows", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: ["n1"] }, release_ids: ["r1", "r2"], stm_deleted: 1 } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187" } });
+    expect(calls[0]!.body["stm"]).toEqual({ channel_id: "1497734427298762828", content: "the number was 187" });
+    expect(ack).toContain("halseth: archived 1 journal row and 1 note, dropped 1 window row");
+  });
+  it("without `stm`, sends no stm field and the ack keeps its old shape", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: [] }, release_ids: ["r1"], stm_deleted: 0 } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn });
+    expect(calls[0]!.body["stm"]).toBeUndefined();
+    expect(ack).toContain("halseth: archived 1 journal row and 0 notes;");
+  });
+  it("counts window rows even when nothing was archived, and pluralises", async () => {
+    const { fn } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: [], notes: [] }, release_ids: [], stm_deleted: 2 } },
+      "/retract": { status: 200, json: { removed: 0, existed: false } },
+    });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187" } });
+    expect(ack).toContain("nothing to archive under that reply");
+    expect(ack).toContain("dropped 2 window rows");
+  });
+
   it("without Second Brain configured, does the Halseth half and says the vault was not reached", async () => {
     const { fn, calls } = fakeFetch({
       "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: [] }, release_ids: ["r1"] } },

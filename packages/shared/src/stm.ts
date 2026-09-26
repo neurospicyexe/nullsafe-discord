@@ -134,6 +134,37 @@ export class StmStore {
   }
 
   /**
+   * Drop this bot's own `assistant` entries that carry a retracted reply, in memory only.
+   *
+   * WHY (2026-09-26, rotate-on-retract): `<prefix>: retract` archived the journal rows, the wm
+   * note and the vault doc, and the mistake still echoed back on the next turn -- this window is
+   * what hermesDelta re-sends to the gateway, so a retracted reply stayed in the model's context
+   * until the 19:00 CDT rotation. Matching is containment in BOTH directions: a long reply lands
+   * in Discord as several chunks, so the retracted message may be a fragment of the stored entry
+   * or the entry may be a fragment of it. Under 20 chars is refused outright -- a chunk that short
+   * ("ok.") would match half the window.
+   *
+   * Deliberately no DB write: Halseth drops its own stm_entries rows inside POST /admin/retract
+   * (owner + channel scoped), so the persisted window and this one converge without a second
+   * round trip. User turns are never touched, even when they quote the retracted words.
+   *
+   * Returns the number of entries removed.
+   */
+  retract(channelId: string, text: string): number {
+    const needle = text.trim();
+    if (needle.length < 20) return 0;
+    const history = this.memory.get(channelId);
+    if (!history?.length) return 0;
+    const kept = history.filter(entry => {
+      if (entry.role !== "assistant") return true;
+      return !(entry.content.includes(needle) || needle.includes(entry.content));
+    });
+    const dropped = history.length - kept.length;
+    if (dropped > 0) this.memory.set(channelId, kept);
+    return dropped;
+  }
+
+  /**
    * Clears in-memory history for a channel (called after synthesis on timeout).
    * DB entries remain for potential restart recovery until pruned on next write.
    */

@@ -60,14 +60,25 @@ export function hermesSessionEpoch(now: Date, mode: HermesRotation): string | nu
   return isoWeekString(now);
 }
 
-/** The two Hermes gateway ids for one companion+channel turn at time `now` under `mode`. */
+/**
+ * The two Hermes gateway ids for one companion+channel turn at time `now` under `mode`.
+ *
+ * `bump` (2026-09-26, rotate-on-retract): a per-channel counter that forces a fresh transcript
+ * NOW instead of at the next scheduled epoch. `<prefix>: retract` pulled a mistaken reply out of
+ * every memory store, and the gateway transcript still carried it -- so the model kept seeing (and
+ * re-answering from) a reply Raziel had already retracted, until the 19:00 CDT rotation. A bump
+ * > 0 suffixes the id with `:r<n>`; the key (LTM scope) never moves, and the next scheduled
+ * epoch still changes the id further, so bumps and the schedule compose rather than collide.
+ */
 export function hermesSessionIds(
   companionId: string,
   channelId: string,
   now: Date,
   mode: HermesRotation,
+  bump = 0,
 ): { sessionId: string; sessionKey: string } {
   const sessionKey = `${companionId}:${channelId}`;
   const epoch = hermesSessionEpoch(now, mode);
-  return { sessionId: epoch === null ? sessionKey : `${sessionKey}:${epoch}`, sessionKey };
+  const base = epoch === null ? sessionKey : `${sessionKey}:${epoch}`;
+  return { sessionId: bump > 0 ? `${base}:r${bump}` : base, sessionKey };
 }
