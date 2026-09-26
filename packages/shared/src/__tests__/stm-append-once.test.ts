@@ -138,6 +138,18 @@ describe("retract", () => {
     expect(store.get("chan")).toHaveLength(2);
   });
 
+  // 2026-09-26 review: the reverse direction (`needle.includes(entry)`) had no floor, and
+  // `anything.includes("")` is true, so an empty or short assistant entry was dropped by EVERY
+  // retract in its channel, whatever was being retracted.
+  it("never drops an empty or short entry through the reverse direction", () => {
+    const { store } = makeStore();
+    store.append("chan", bot(""));
+    store.append("chan", bot("ok."));
+    store.append("chan", bot("the number"));
+    expect(store.retract("chan", `${long} -- and then a second chunk followed`)).toBe(0);
+    expect(store.get("chan").map(m => m.content)).toEqual(["", "ok.", "the number"]);
+  });
+
   it("is scoped to the channel and returns 0 on an unknown one", () => {
     const { store } = makeStore();
     store.append("chan", bot(long));

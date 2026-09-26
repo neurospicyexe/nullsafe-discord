@@ -18,6 +18,8 @@ import type { WriteQueue } from "./write-queue.js";
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 
 export const STM_BUFFER_SIZE = 100;
+/** Shortest text StmStore.retract will match on, in either direction (see retract). */
+export const RETRACT_MIN_CHARS = 20;
 
 export class StmStore {
   private memory = new Map<string, ChatMessage[]>();
@@ -152,12 +154,16 @@ export class StmStore {
    */
   retract(channelId: string, text: string): number {
     const needle = text.trim();
-    if (needle.length < 20) return 0;
+    if (needle.length < RETRACT_MIN_CHARS) return 0;
     const history = this.memory.get(channelId);
     if (!history?.length) return 0;
     const kept = history.filter(entry => {
       if (entry.role !== "assistant") return true;
-      return !(entry.content.includes(needle) || needle.includes(entry.content));
+      const stored = entry.content.trim();
+      if (stored.includes(needle)) return false;
+      // The reverse direction gets the same floor (2026-09-26 review): `needle.includes("")` is
+      // always true, so an empty or three-word assistant entry was dropped by every retract.
+      return !(stored.length >= RETRACT_MIN_CHARS && needle.includes(stored));
     });
     const dropped = history.length - kept.length;
     if (dropped > 0) this.memory.set(channelId, kept);
