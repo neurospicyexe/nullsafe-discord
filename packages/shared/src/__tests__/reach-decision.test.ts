@@ -135,3 +135,16 @@ describe("decideReach", () => {
     expect(typeof lines[0]!["ts"]).toBe("string");
   });
 });
+
+// FIDELITY (2026-09-26, probe 5). The reach finally worked end to end: his own topic, the true note
+// ("Blue found the knee scooter from the prior ankle surgery in storage") in his prompt. He wrote a
+// purple mobility scooter dug out from under tarps in a barn. The block now carries the rule for a
+// retrieved fact: report what the notes say; invented detail is a lie in his own voice.
+describe("reach block fidelity clause", () => {
+  it("tells him to report the notes and not to add detail they do not contain", async () => {
+    const r = await decideReach({ ...base, adapter: fakeAdapter("the scooter"), librarian: fakeLibrarian() });
+    expect(r.block).toContain("Answer from these notes");
+    expect(r.block).toMatch(/do not add|no detail they do not contain/i);
+    expect(r.block).not.toMatch(/[—–]/);
+  });
+});

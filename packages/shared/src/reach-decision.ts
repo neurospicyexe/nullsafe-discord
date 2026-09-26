@@ -135,7 +135,13 @@ export async function decideReach(d: ReachDeps): Promise<ReachResult> {
   ]);
   const ownText = LibrarianClient.formatOwnNotes(own.notes);
   const vaultText = vault ? LibrarianClient.formatSbRecall(vault) : null;
-  const parts: string[] = [`You reached for: "${topic}".`];
+  // FIDELITY (probe 5, 2026-09-26): with the true note in his prompt ("the knee scooter from the
+  // prior ankle surgery") he wrote a purple mobility scooter dug out from under tarps in a barn.
+  // A retrieved fact gets a rule of its own: report it; invented detail is a lie in his own voice.
+  const parts: string[] = [
+    `You reached for: "${topic}". Answer from these notes. State what they say and no detail they do not contain; ` +
+    `if they do not say, say that. Colour goes on how you hold it, never on the facts.`,
+  ];
   if (ownText) parts.push(`From your own notes (what was actually said, any surface; trust the dates):\n${ownText}`);
   if (vaultText) parts.push(`From the vault (syntheses and files, written ABOUT things):\n${vaultText.slice(0, 1200)}`);
   if (!ownText && !vaultText) parts.push(own.failed ? "Your notes could not be reached just now; say so rather than guessing." : "Nothing matched. Say you do not have it rather than guessing.");
