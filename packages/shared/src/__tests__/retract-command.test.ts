@@ -141,7 +141,7 @@ describe("handleRetractCommand", () => {
       "/retract": { status: 200, json: { removed: 1, existed: true } },
     });
     const ack = await handleRetractCommand({ ...base, userMessageIds: ["H1"], judgeKeySource: "reconstructed", fetchFn: fn });
-    expect(ack).toContain("judge note: keyed on H1, reconstructed from Discord");
+    expect(ack).toContain("judge keys retracted: judge:H1, reconstructed from Discord");
     expect(ack.startsWith("retracted. ")).toBe(true);
   });
   // Rotate-on-retract (2026-09-26): the retracted reply kept echoing from the STM window until the
@@ -198,11 +198,78 @@ describe("reconstructReply (the Discord fallback when the send-time record is go
   const c2 = msg({ id: "C2", content: "chunk two", createdTimestamp: 60_800 });
   const c3 = msg({ id: "C3", content: "chunk three", createdTimestamp: 61_500 });
 
-  it("walks to the head chunk and names the human message immediately before it", () => {
+  it("walks to the head chunk, but a multi-message group is timing alone: ambiguous, so no trigger is guessed", () => {
+    // Changed 2026-09-26 (review): this used to name H1. Two short replies of mine within a few
+    // seconds look exactly like one split reply, so the judge key is not guessed from the group.
     const r = reconstructReply(c2, { before: [c1, human], after: [c3] }, ME);
     expect(r.headId).toBe("C1");
     expect(r.chunkIds).toEqual(["C1", "C2", "C3"]);
+    expect(r.triggerCandidates).toEqual([]);
+    expect(r.ambiguous.join(" ")).toContain("3 messages grouped by timing alone");
+  });
+  it("one chunk and exactly one human before it: that human is the trigger, unambiguous", () => {
+    const r = reconstructReply(c1, { before: [human], after: [] }, ME);
     expect(r.triggerCandidates).toEqual(["H1"]);
+    expect(r.ambiguous).toEqual([]);
+  });
+  it("two human messages since my previous reply is ambiguous: no key without a reference", () => {
+    const h2 = msg({ id: "H2", authorId: "RAZIEL", isBot: false, createdTimestamp: 50_000 });
+    const older = msg({ id: "OLD", createdTimestamp: 500 });
+    const r = reconstructReply(c1, { before: [h2, human, older], after: [] }, ME);
+    expect(r.triggerCandidates).toEqual([]);
+    expect(r.ambiguous.join(" ")).toContain("2 human messages since my previous reply");
+  });
+  it("ambiguous with a head reference: the reference is the only key", () => {
+    const h2 = msg({ id: "H2", authorId: "RAZIEL", isBot: false, createdTimestamp: 50_000 });
+    const head = msg({ id: "C1", createdTimestamp: 60_000, referenceId: "H1" });
+    const r = reconstructReply(head, { before: [h2, human], after: [] }, ME);
+    expect(r.triggerCandidates).toEqual(["H1"]);
+    expect(r.ambiguous.length).toBeGreaterThan(0);
+  });
+  it("a reference that differs from the nearest human is flagged, and only the reference is keyed", () => {
+    const head = msg({ id: "C1", createdTimestamp: 60_000, referenceId: "ORIGIN" });
+    const r = reconstructReply(head, { before: [human], after: [] }, ME);
+    expect(r.triggerCandidates).toEqual(["ORIGIN"]);
+    expect(r.ambiguous.join(" ")).toContain("reference and the human message before it differ");
+  });
+  it("a reference that matches the nearest human is not ambiguous", () => {
+    const head = msg({ id: "C1", createdTimestamp: 60_000, referenceId: "H1" });
+    const r = reconstructReply(head, { before: [human], after: [] }, ME);
+    expect(r.triggerCandidates).toEqual(["H1"]);
+    expect(r.ambiguous).toEqual([]);
+  });
+  it("never merges across a message the ReplyIndex places in a different reply", () => {
+    const r = reconstructReply(c2, { before: [c1, human], after: [c3] }, ME, { otherReplyIds: new Set(["C1", "C3"]) });
+    expect(r.headId).toBe("C2");
+    expect(r.chunkIds).toEqual(["C2"]);
+    // C1 is mine, so the trigger walk stops there: nothing between it and C2.
+    expect(r.triggerCandidates).toEqual([]);
+  });
+  it("a later message of mine carrying a reference is the head of its own reply, not a chunk of this one", () => {
+    const next = msg({ id: "N1", createdTimestamp: 61_000, referenceId: "H9" });
+    expect(reconstructReply(c1, { before: [human], after: [next] }, ME).chunkIds).toEqual(["C1"]);
+  });
+  it("the backward walk stops AT a chunk carrying a reference: that chunk is the head", () => {
+    const head = msg({ id: "C1", createdTimestamp: 60_000, referenceId: "H1" });
+    const earlier = msg({ id: "C0", createdTimestamp: 59_000 });
+    const r = reconstructReply(c2, { before: [head, earlier, human], after: [] }, ME);
+    expect(r.headId).toBe("C1");
+    expect(r.chunkIds).toEqual(["C1", "C2"]);
+    expect(r.triggerCandidates).toEqual(["H1"]);
+  });
+  it("another author between two of my messages is a boundary", () => {
+    const sib = msg({ id: "SIB", authorId: "GAIA_BOT", createdTimestamp: 60_400 });
+    const r = reconstructReply(c2, { before: [sib, c1], after: [] }, ME);
+    expect(r.chunkIds).toEqual(["C2"]);
+  });
+  it("a full window that never reaches my previous reply is ambiguous", () => {
+    const before = [
+      msg({ id: "R0", authorId: "RAZIEL", isBot: false, createdTimestamp: 50_000 }),
+      ...Array.from({ length: 9 }, (_, k) => msg({ id: `S${k}`, authorId: "GAIA_BOT", createdTimestamp: 49_000 - k })),
+    ];
+    const r = reconstructReply(c1, { before, after: [] }, ME);
+    expect(r.triggerCandidates).toEqual([]);
+    expect(r.ambiguous.join(" ")).toContain("outside the fetched window");
   });
   it("a PluralKit proxy (bot user WITH a webhook) is a human", () => {
     const pk = msg({ id: "PK1", authorId: "WEBHOOK", isBot: true, webhookId: "wh", createdTimestamp: 1000 });
@@ -326,7 +393,25 @@ describe("executeRetract (the handler's retract path)", () => {
     expect(ack).toContain("my window: dropped 1 line");
   });
 
-  it("after a restart with no record, reconstructs head + trigger from Discord and says so", async () => {
+  it("after a restart with no record, reconstructs an unambiguous single-message reply's trigger and says so", async () => {
+    const { fn, calls } = fakeFetch(ok);
+    const d = deps({
+      fetchFn: fn,
+      target: msg({ id: "C1", content: "the number was 187", createdTimestamp: 60_000 }),
+      fetchNeighbours: async () => ({
+        before: [msg({ id: "RAZ1", authorId: "RAZIEL", isBot: false, createdTimestamp: 30_000 })],
+        after: [],
+      }),
+    });
+    const ack = await executeRetract(d);
+    expect(calls[0]!.body["external_ids"]).toEqual(["discord:C1", "judge:RAZ1"]);
+    expect(ack).toContain("judge keys retracted: judge:RAZ1, reconstructed from Discord");
+    expect(ack.startsWith("retracted. ")).toBe(true);
+  });
+
+  // 2026-09-26 review: a chunk group held together only by timing could be two replies. With no
+  // reference to key on, the judge half is skipped -- never guessed -- and the headline says so.
+  it("an ambiguous reconstruction with no reference skips the judge key and says why", async () => {
     const { fn, calls } = fakeFetch(ok);
     const d = deps({
       fetchFn: fn,
@@ -339,8 +424,81 @@ describe("executeRetract (the handler's retract path)", () => {
       }),
     });
     const ack = await executeRetract(d);
+    expect(calls[0]!.body["external_ids"]).toEqual(["discord:C1"]);
+    expect(calls[0]!.body["correlation_ids"]).toEqual([]);
+    expect(ack).toContain("judge note: not searched -- reconstruction was ambiguous (2 messages grouped by timing alone");
+    expect(ack).toContain("no key was guessed");
+    expect(ack).toMatch(/^retract incomplete \(judge note skipped: ambiguous\)/);
+  });
+
+  it("an ambiguous reconstruction WITH a head reference keys on the reference only, and names it", async () => {
+    const { fn, calls } = fakeFetch(ok);
+    const d = deps({
+      fetchFn: fn,
+      fetchNeighbours: async () => ({
+        before: [
+          msg({ id: "C1", createdTimestamp: 60_000, referenceId: "ORIGIN" }),
+          msg({ id: "RAZ2", authorId: "RAZIEL", isBot: false, createdTimestamp: 40_000 }),
+          msg({ id: "RAZ1", authorId: "RAZIEL", isBot: false, createdTimestamp: 30_000 }),
+        ],
+        after: [],
+      }),
+    });
+    const ack = await executeRetract(d);
+    expect(calls[0]!.body["correlation_ids"]).toEqual(["judge:ORIGIN"]);
+    expect(ack).toContain("judge keys retracted: judge:ORIGIN only, the reply's own Discord reference");
+    expect(ack.startsWith("retracted. ")).toBe(true);
+  });
+
+  it("with no Discord history but a reference on the target, keys on the reference only", async () => {
+    const { fn, calls } = fakeFetch(ok);
+    const d = deps({
+      fetchFn: fn,
+      target: msg({ id: "C1", createdTimestamp: 60_000, referenceId: "REF" }),
+      fetchNeighbours: async () => null,
+    });
+    const ack = await executeRetract(d);
+    expect(calls[0]!.body["correlation_ids"]).toEqual(["judge:REF"]);
+    expect(ack).toContain("judge keys retracted: judge:REF only, the reply's own Discord reference (Discord history unavailable");
+  });
+
+  it("a neighbour's send-time record that holds the target is adopted as recorded", async () => {
+    const { fn, calls } = fakeFetch(ok);
+    const idx = new ReplyIndex("drevan");
+    idx.record({ headId: "C1", chunkIds: ["C1", "C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "FULL" });
+    // The target's own key is gone (a partial store write), the head's is not.
+    const partial = { resolve: async (id: string) => id === "C2" ? null : idx.resolve(id) };
+    const d = deps({
+      fetchFn: fn,
+      replyIndex: partial,
+      fetchNeighbours: async () => ({ before: [msg({ id: "C1", createdTimestamp: 60_000 })], after: [] }),
+    });
+    const ack = await executeRetract(d);
     expect(calls[0]!.body["external_ids"]).toEqual(["discord:C1", "judge:RAZ1"]);
-    expect(ack).toContain("reconstructed from Discord");
+    expect(ack).toContain("judge keys retracted: judge:RAZ1 (the trigger recorded at send time)");
+  });
+
+  it("a neighbour the index places in another reply is not merged into this one", async () => {
+    const { fn, calls } = fakeFetch(ok);
+    const idx = new ReplyIndex("drevan");
+    idx.record({ headId: "C1", chunkIds: ["C1"], triggerMessageId: "RAZ0", channelId: "chan", content: "other" });
+    const d = deps({
+      fetchFn: fn,
+      replyIndex: idx,
+      fetchNeighbours: async () => ({
+        before: [msg({ id: "C1", createdTimestamp: 60_000 }), msg({ id: "RAZ0", authorId: "RAZIEL", isBot: false, createdTimestamp: 30_000 })],
+        after: [],
+      }),
+    });
+    await executeRetract(d);
+    expect((calls[0]!.body["external_ids"] as string[])[0]).toBe("discord:C2");
+  });
+
+  it("a recorded retract names the judge key it sent", async () => {
+    const { fn } = fakeFetch(ok);
+    const d = deps({ fetchFn: fn });
+    d.replyIndex = (() => { const i = new ReplyIndex("drevan"); i.record({ headId: "C2", chunkIds: ["C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "x" }); return i; })();
+    expect(await executeRetract(d)).toContain("judge keys retracted: judge:RAZ1 (the trigger recorded at send time)");
   });
 
   it("with no record and no Discord, the ack says the judge note was not located and is incomplete", async () => {

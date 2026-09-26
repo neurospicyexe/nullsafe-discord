@@ -31,7 +31,10 @@
  * replies to Raziel carry no reference at all, and an entitled follow-up references the origin
  * while the judge ran on the sibling message that released it. The key is whatever triggered the
  * turn, recorded at send time (reply-index.ts). When that record is gone, the keys are
- * reconstructed from Discord and the ack says so.
+ * reconstructed from Discord and the ack says so -- and when the reconstruction is AMBIGUOUS
+ * (several plausible triggers, or a chunk group only timing holds together) nothing is guessed:
+ * the judge half is keyed on the reply's own Discord reference or skipped, and the ack says which.
+ * Every judge key sent is named in the ack.
  *
  * The ack is literal and itemised, and its HEADLINE is too: "retracted." only when every store
  * answered and nothing expected was missing, "retract incomplete (...)" otherwise. A retraction
@@ -49,7 +52,9 @@ export interface RetractArgs {
   /** Candidate trigger ids for the judge key. Empty = unknown, and the ack says it was not searched. */
   userMessageIds: string[];
   /** How the trigger ids were found; drives the ack's honesty about the judge half. */
-  judgeKeySource?: "recorded" | "reconstructed" | "unknown";
+  judgeKeySource?: JudgeKeySource;
+  /** Why a reconstruction was ambiguous (source "reference" or "ambiguous"); named in the ack. */
+  judgeAmbiguity?: string[];
   halseth: { base: string; secret: string };
   secondBrain: { base: string; key: string } | null;
   /** The retracted reply's channel + text, so Halseth can drop its stm_entries window rows too. */
@@ -57,6 +62,17 @@ export interface RetractArgs {
   fetchFn?: typeof fetch;
   now?: () => Date;
 }
+
+/**
+ * Where the judge key came from.
+ *   recorded       the trigger recorded at send time (reply-index.ts)
+ *   reconstructed  one unambiguous trigger rebuilt from Discord
+ *   reference      reconstruction was ambiguous or impossible; keyed ONLY on the reply's own
+ *                  Discord reference, never a guess
+ *   ambiguous      reconstruction was ambiguous and the reply carries no reference: not searched
+ *   unknown        nothing located the trigger: not searched
+ */
+export type JudgeKeySource = "recorded" | "reconstructed" | "reference" | "ambiguous" | "unknown";
 
 export function retractKeys(botMessageId: string, userMessageIds: readonly string[]): { external_ids: string[]; correlation_ids: string[] } {
   const users = [...new Set(userMessageIds.filter(Boolean))];
@@ -131,12 +147,11 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
     incomplete.push("halseth failed");
   }
 
-  // The judge half is only as good as its key.
-  if (a.judgeKeySource === "reconstructed") {
-    parts.push(`judge note: keyed on ${a.userMessageIds.join(", ")}, reconstructed from Discord (no send-time record of what this answered)`);
-  } else if (!a.userMessageIds.length || a.judgeKeySource === "unknown") {
-    parts.push("judge note: could not locate the message this answered; not searched");
-    incomplete.push("judge note not located");
+  // The judge half is only as good as its key, and the ack names every key it sent.
+  parts.push(judgeKeyPart(a));
+  if (!keys.correlation_ids.length || a.judgeKeySource === "unknown" || a.judgeKeySource === "ambiguous") {
+    const skippedAsAmbiguous = a.judgeKeySource === "ambiguous" || !!a.judgeAmbiguity?.length;
+    incomplete.push(skippedAsAmbiguous ? "judge note skipped: ambiguous" : "judge note not located");
   }
 
   // Vault half.
@@ -183,6 +198,27 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
   return { parts, incomplete, releaseIds };
 }
 
+/** The judge line of the ack: which `judge:` keys were sent, and how they were found. */
+export function judgeKeyPart(a: Pick<RetractArgs, "userMessageIds" | "judgeKeySource" | "judgeAmbiguity">): string {
+  const keys = retractKeys("-", a.userMessageIds).correlation_ids;
+  const why = a.judgeAmbiguity?.length ? a.judgeAmbiguity.join("; ") : "no send-time record";
+  if (a.judgeKeySource === "ambiguous" || (!keys.length && a.judgeAmbiguity?.length)) {
+    return `judge note: not searched -- reconstruction was ambiguous (${why}) and the reply carries no Discord reference, so no key was guessed`;
+  }
+  if (!keys.length || a.judgeKeySource === "unknown") {
+    return "judge note: could not locate the message this answered; not searched";
+  }
+  const list = keys.join(", ");
+  switch (a.judgeKeySource) {
+    case "reconstructed":
+      return `judge keys retracted: ${list}, reconstructed from Discord (no send-time record of what this answered)`;
+    case "reference":
+      return `judge keys retracted: ${list} only, the reply's own Discord reference (${why}; no other key was guessed)`;
+    default:
+      return `judge keys retracted: ${list} (the trigger recorded at send time)`;
+  }
+}
+
 /** The ack. The headline says what actually happened. */
 export function composeRetractAck(o: StoresOutcome): string {
   const undo = o.releaseIds.length
@@ -219,37 +255,66 @@ export const CHUNK_GAP_MS = 5_000;
 const isHuman = (m: RetractMsg) => !m.isBot || m.webhookId !== null;
 
 /**
- * Rebuild a reply's chunk group and its likely trigger from Discord alone, for when the send-time
- * record is gone (a restart without Redis, a reply older than the index). Pure.
+ * Rebuild a reply's chunk group and its trigger from Discord alone, for when the send-time record
+ * is gone (a restart without Redis, a reply older than the index). Pure. DOES NOT GUESS.
  *
- * Chunks: contiguous messages of mine within CHUNK_GAP_MS of each other around the target.
- * Trigger candidates: the head's reply reference (companion-triggered turns and spine channels
- * always carry one), and the nearest earlier message if a human sent it (PK proxies count: they
- * are bot users with a webhook). The walk stops at an earlier message of MINE: the human message
- * behind that one answered that reply, not this one. Over-including costs nothing -- `judge:` keys
- * are agent-scoped, and a message with no judge note of mine matches no row.
+ * Chunks: contiguous messages of mine (no other author between) within CHUNK_GAP_MS of each other
+ * around the target, and never across a boundary the evidence draws:
+ *   - a message the ReplyIndex places in a DIFFERENT reply (`otherReplyIds`);
+ *   - a Discord reference: sendLong references chunk 0 only, so a message of mine carrying one is
+ *     the head of its own reply -- the backward walk stops AT it, the forward walk stops BEFORE it.
+ * A group of more than one chunk is still only timing: two short replies of mine sent within a
+ * few seconds look exactly like one split reply (splitForDiscord can emit short chunks too), so a
+ * multi-chunk group counts as ambiguous for the judge key.
+ *
+ * Trigger: the human messages between my previous message and the head (PK proxies count: bot
+ * users with a webhook). Exactly one, no conflicting reference, and a one-chunk group: that is the
+ * trigger. Anything else is AMBIGUOUS, and then the only key is the head's own Discord reference if
+ * it has one -- a guessed key could archive a judge note about a different exchange.
  */
-export function reconstructReply(target: RetractMsg, n: RetractNeighbours, ownUserId: string): {
-  headId: string; chunkIds: string[]; triggerCandidates: string[];
-} {
+export function reconstructReply(
+  target: RetractMsg,
+  n: RetractNeighbours,
+  ownUserId: string,
+  opts: { otherReplyIds?: ReadonlySet<string>; windowLimit?: number } = {},
+): { headId: string; chunkIds: string[]; triggerCandidates: string[]; ambiguous: string[] } {
+  const other = opts.otherReplyIds ?? new Set<string>();
+  const windowLimit = opts.windowLimit ?? 10;
+  const mineInGroup = (m: RetractMsg, next: RetractMsg) =>
+    m.authorId === ownUserId && !other.has(m.id) && Math.abs(next.createdTimestamp - m.createdTimestamp) <= CHUNK_GAP_MS;
+
   const chunks: RetractMsg[] = [target];
   let i = 0;
   for (; i < n.before.length; i++) {
+    if (chunks[0]!.referenceId) break; // the earliest chunk so far is a head
     const m = n.before[i]!;
-    if (m.authorId !== ownUserId || chunks[0]!.createdTimestamp - m.createdTimestamp > CHUNK_GAP_MS) break;
+    if (!mineInGroup(m, chunks[0]!)) break;
     chunks.unshift(m);
   }
   for (const m of n.after) {
-    const last = chunks[chunks.length - 1]!;
-    if (m.authorId !== ownUserId || m.createdTimestamp - last.createdTimestamp > CHUNK_GAP_MS) break;
+    if (m.referenceId || !mineInGroup(m, chunks[chunks.length - 1]!)) break;
     chunks.push(m);
   }
   const head = chunks[0]!;
-  const candidates: string[] = [];
-  if (head.referenceId) candidates.push(head.referenceId);
-  const prior = n.before[i];
-  if (prior && prior.authorId !== ownUserId && isHuman(prior)) candidates.push(prior.id);
-  return { headId: head.id, chunkIds: chunks.map(c => c.id), triggerCandidates: [...new Set(candidates)] };
+
+  const humans: string[] = [];
+  let reachedMine = false;
+  for (let j = i; j < n.before.length; j++) {
+    const m = n.before[j]!;
+    if (m.authorId === ownUserId) { reachedMine = true; break; }
+    if (isHuman(m)) humans.push(m.id);
+  }
+
+  const ambiguous: string[] = [];
+  if (chunks.length > 1) ambiguous.push(`${chunks.length} messages grouped by timing alone, which could be two replies`);
+  if (humans.length > 1) ambiguous.push(`${humans.length} human messages since my previous reply`);
+  if (head.referenceId && humans.length === 1 && humans[0] !== head.referenceId) {
+    ambiguous.push("the reply's reference and the human message before it differ");
+  }
+  if (!reachedMine && n.before.length >= windowLimit) ambiguous.push("my previous reply is outside the fetched window");
+
+  const triggerCandidates = head.referenceId ? [head.referenceId] : (ambiguous.length ? [] : humans);
+  return { headId: head.id, chunkIds: chunks.map(c => c.id), triggerCandidates, ambiguous };
 }
 
 export interface ExecuteRetractDeps {
@@ -279,26 +344,47 @@ export async function executeRetract(d: ExecuteRetractDeps): Promise<string> {
   let headId = d.target.id;
   let content = d.target.content;
   let userMessageIds: string[] = [];
-  let judgeKeySource: RetractArgs["judgeKeySource"] = "unknown";
+  let judgeKeySource: JudgeKeySource = "unknown";
+  let judgeAmbiguity: string[] = [];
+
+  const adopt = (r: ReplyRecord) => {
+    headId = r.headId;
+    content = r.content || content;
+    userMessageIds = [r.triggerMessageId];
+    judgeKeySource = "recorded";
+  };
 
   const rec = await d.replyIndex.resolve(d.target.id).catch(() => null);
   if (rec) {
-    headId = rec.headId;
-    content = rec.content || content;
-    userMessageIds = [rec.triggerMessageId];
-    judgeKeySource = "recorded";
+    adopt(rec);
   } else {
     const n = d.fetchNeighbours ? await d.fetchNeighbours(d.target.id).catch(() => null) : null;
     if (n) {
-      const r = reconstructReply(d.target, n, d.ownUserId);
-      headId = r.headId;
-      userMessageIds = r.triggerCandidates;
+      // Ask the index about my neighbours: a record that holds the target is this reply (a partial
+      // store write can index one chunk and not another); any other record is a different reply,
+      // and the group must not merge across it.
+      const mine = [...n.before, ...n.after].filter(m => m.authorId === d.ownUserId);
+      const recs = await Promise.all(mine.map(m => d.replyIndex.resolve(m.id).catch(() => null)));
+      const holder = recs.find(r => r?.chunkIds.includes(d.target.id)) ?? null;
+      if (holder) {
+        adopt(holder);
+      } else {
+        const otherReplyIds = new Set(mine.filter((_, k) => recs[k] !== null).map(m => m.id));
+        const r = reconstructReply(d.target, n, d.ownUserId, { otherReplyIds });
+        headId = r.headId;
+        userMessageIds = r.triggerCandidates;
+        judgeAmbiguity = r.ambiguous;
+        judgeKeySource = r.ambiguous.length
+          ? (userMessageIds.length ? "reference" : "ambiguous")
+          : (userMessageIds.length ? "reconstructed" : "unknown");
+      }
     } else if (d.target.referenceId) {
       userMessageIds = [d.target.referenceId];
+      judgeAmbiguity = ["Discord history unavailable"];
+      judgeKeySource = "reference";
     }
     // Reconstructed content stays the one chunk Raziel replied to: every chunk is a substring of
     // the full reply, and both window drops match by containment.
-    judgeKeySource = userMessageIds.length ? "reconstructed" : "unknown";
   }
 
   const stores = await retractFromStores({
@@ -307,6 +393,7 @@ export async function executeRetract(d: ExecuteRetractDeps): Promise<string> {
     botMessageId: headId,
     userMessageIds,
     judgeKeySource,
+    judgeAmbiguity,
     halseth: d.halseth,
     secondBrain: d.secondBrain,
     stm: { channelId: d.channelId, content },
