@@ -1131,6 +1131,27 @@ export async function postVibeCheck(): Promise<{ written: boolean; reason: strin
   return await hFetch("/mind/vibecheck/run", "POST", {}) as { written: boolean; reason: string; journal_id?: string; text: string };
 }
 
+export interface CompanionUtteranceRow {
+  id: string;
+  created_at: string;
+  agent: string;
+  note_text: string;
+  source: string | null;
+}
+
+/**
+ * A companion's newest companion_journal rows, ANY review_state (drafts included: speech is born
+ * draft since mig 0132, and a draft line is exactly what must not be re-spoken). Newest first; no
+ * `since`, because with `since` the endpoint returns the OLDEST rows first. Input window for the
+ * vibe-check quoted-line guard.
+ */
+export async function getCompanionUtterances(companionId: string, limit = 100): Promise<CompanionUtteranceRow[]> {
+  const r = await hFetch(
+    `/companion-journal?agent=${encodeURIComponent(companionId)}&limit=${limit}&review_state=all`,
+  ) as CompanionUtteranceRow[];
+  return Array.isArray(r) ? r : [];
+}
+
 // ---------------------------------------------------------------------------
 // Vibe-check reflection loop (guardian flags, tensions, deliberate recall)
 // ---------------------------------------------------------------------------

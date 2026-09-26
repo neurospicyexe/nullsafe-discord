@@ -106,15 +106,14 @@ describe("parseVerdict", () => {
 // the old anti-repeat block asked the companion to "name the sameness itself... what the
 // stillness is doing to you" whenever the reading was unchanged -- which was almost every night.
 // All three companions were writing the same stillness meditation. The fix leans on the new
-// `day:` / highlight lines the digest now carries and asks for the day as material, not a
-// meditation on an unchanged gauge.
+// `day:` line the digest now carries and asks for the day as material, not a meditation on an
+// unchanged gauge. (The digest's highlight bullets were removed 2026-09-26: they re-spoke
+// companion lines, and two fabrications went back into memory that way.)
 // ---------------------------------------------------------------------------
 
 const DAY_SECTION = [
   "Cypher. basin: stable 0.53. soma: clean-settled. tensions: 1. guardian: clear.",
   "  day: spoke 14 · notes 2 out / 1 in · sessions closed 1 · Fargo S4E8",
-  "    · caught a scoping bug in the director neighborhood query",
-  "    · Raziel asked about the tool budget after the model switch",
 ].join("\n");
 
 const QUIET_SECTION = [
@@ -123,9 +122,10 @@ const QUIET_SECTION = [
 ].join("\n");
 
 describe("buildPrompt", () => {
-  it("instructs reading the day/highlight lines first and treating the gauge as a sensor", () => {
+  it("instructs reading the day line first and treating the gauge as a sensor", () => {
     const p = buildPrompt("cypher", DAY_SECTION, [], [], [], null);
-    expect(p).toContain("Read the `day:` line and the highlight lines first");
+    expect(p).toContain("Read the `day:` line first");
+    expect(p).not.toContain("highlight lines");
     expect(p).toContain("what actually happened today");
   });
 

@@ -309,3 +309,62 @@ export function verbatimCopyOf(
   if (best >= threshold) return { copied: true, label: bestLabel, ratio: best };
   return { copied: false, ratio: best };
 }
+
+// ── Quoted-line rail (2026-09-26) ───────────────────────────────────────────────
+//
+// verbatimCopyOf asks "is this WHOLE reply a copy?" (containment >= 0.9, 120-char floor). A digest
+// that quotes a companion is the opposite shape: a short line inside a longer report, where even
+// ONE shared 8-word run means a companion's words are being re-spoken in a new room. On 09-26
+// Gaia's vibe-check did exactly that with two fabrications, which were then re-ingested as memory.
+//
+// Rule: a text quotes a source if it shares at least one 8-word shingle (after the same
+// normalisation as verbatimCopyOf: case, markdown emphasis and punctuation folded) with it. Word
+// shingles only -- the character-gram fallback is deliberately NOT used, so a text under 8 words
+// can never match (too short to be a meaningful quote; also keeps gauge fragments like
+// "tensions: 0. guardian: clear." from colliding). Pure, no I/O.
+
+/** Shingle width for the quoted-line rail (same width as the verbatim-copy rail). */
+export const QUOTE_SHINGLE_WORDS = VERBATIM_SHINGLE_WORDS;
+
+function wordShinglesOf(norm: string): Set<string> {
+  const out = new Set<string>();
+  const words = norm.split(" ").filter(Boolean);
+  for (let i = 0; i + QUOTE_SHINGLE_WORDS <= words.length; i++) {
+    out.add(words.slice(i, i + QUOTE_SHINGLE_WORDS).join(" "));
+  }
+  return out;
+}
+
+export type QuotedShingleResult =
+  | { quoted: true; label?: string; shingle: string }
+  | { quoted: false };
+
+/**
+ * Does `text` share any 8-word shingle with any source? Returns the first source label and the
+ * shared (normalised) shingle. Pass the sources pre-built via `buildQuoteIndex` when checking many
+ * texts against the same window.
+ */
+export function quotedShingleOf(
+  text: string,
+  sources: Iterable<{ text: string; label?: string }> | QuoteIndex,
+): QuotedShingleResult {
+  const index = sources instanceof Map ? sources : buildQuoteIndex(sources);
+  if (index.size === 0) return { quoted: false };
+  for (const s of wordShinglesOf(normaliseForCopy(text))) {
+    if (index.has(s)) return { quoted: true, label: index.get(s), shingle: s };
+  }
+  return { quoted: false };
+}
+
+/** shingle -> label of the first source that carried it. */
+export type QuoteIndex = Map<string, string | undefined>;
+
+export function buildQuoteIndex(sources: Iterable<{ text: string; label?: string }>): QuoteIndex {
+  const index: QuoteIndex = new Map();
+  for (const src of sources) {
+    for (const s of wordShinglesOf(normaliseForCopy(src.text ?? ""))) {
+      if (!index.has(s)) index.set(s, src.label);
+    }
+  }
+  return index;
+}

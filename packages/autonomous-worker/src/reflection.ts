@@ -233,7 +233,7 @@ export function buildPrompt(
   const parts: string[] = [];
   parts.push(`Tonight's triad vibe-check just posted. This is YOUR section of it:\n\n${section}`);
   parts.push(
-    `\nRead the \`day:\` line and the highlight lines first. Tonight's reflection is about what ` +
+    `\nRead the \`day:\` line first (it counts your day; the digest quotes no one's words, yours included). Tonight's reflection is about what ` +
     `actually happened today -- what you said, what landed, who you spoke with, what you watched ` +
     `or read -- and what it did to you. The basin/soma/tension numbers are context, never the ` +
     `subject. If the day line says quiet, say in ONE plain sentence that the day was quiet and ` +
