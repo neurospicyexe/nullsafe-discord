@@ -152,8 +152,8 @@ describe("handleRetractCommand", () => {
       "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: ["n1"] }, release_ids: ["r1", "r2"], stm_deleted: 1 } },
       "/retract": { status: 200, json: { removed: 1, existed: true } },
     });
-    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187" } });
-    expect(calls[0]!.body["stm"]).toEqual({ channel_id: "1497734427298762828", content: "the number was 187" });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187 mg/dL" } });
+    expect(calls[0]!.body["stm"]).toEqual({ channel_id: "1497734427298762828", content: "the number was 187 mg/dL" });
     expect(ack).toContain("halseth: archived 1 journal row and 1 note, dropped 1 window row");
   });
   it("without `stm`, sends no stm field and the ack keeps its old shape", async () => {
@@ -170,9 +170,47 @@ describe("handleRetractCommand", () => {
       "/admin/retract": { status: 200, json: { archived: { journal: [], notes: [] }, release_ids: [], stm_deleted: 2 } },
       "/retract": { status: 200, json: { removed: 0, existed: false } },
     });
-    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187" } });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187 mg/dL" } });
     expect(ack).toContain("nothing to archive under that reply");
     expect(ack).toContain("dropped 2 window rows");
+  });
+  // Halseth c2562f3: the STM hard-delete refuses a needle under 20 chars (400) and one matching
+  // more than 5 rows (409). Neither may cost the archive.
+  it("a reply shorter than the needle floor sends no stm, still archives, and says the window was kept", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: [] }, release_ids: ["r1"] } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "187." } });
+    expect(calls[0]!.body["stm"]).toBeUndefined();
+    expect(ack).toContain("archived 1 journal row and 0 notes, window rows kept (reply too short to match safely)");
+    expect(ack).toMatch(/^retract incomplete \(window rows not dropped\)/);
+  });
+  it("a 409 on the window retries once without stm, so the journal and judge key still retract", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": (b) => b["stm"]
+        ? { status: 409, json: { error: "stm needle matches too many rows", stm_matches: 9 } }
+        : { status: 200, json: { archived: { journal: ["j1"], notes: ["n1"] }, release_ids: ["r1", "r2"] } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn, stm: { channelId: base.channelId, content: "the number was 187 mg/dL" } });
+    const h = calls.filter(c => c.url.endsWith("/admin/retract"));
+    expect(h).toHaveLength(2);
+    expect(h[0]!.body["stm"]).toBeDefined();
+    expect(h[1]!.body["stm"]).toBeUndefined();
+    expect(h[1]!.body["correlation_ids"]).toEqual(["judge:1553286543223816244"]);
+    expect(ack).toContain("archived 1 journal row and 1 note, window rows kept (9 rows matched; not hard-deleting that many)");
+    expect(ack).not.toContain("halseth: FAILED");
+  });
+  it("a repeat retract reaches the mirrors of rows an earlier call already archived", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: [], notes: [] }, already_archived: { journal: ["j1"], notes: ["n1"] }, release_ids: [] } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    await handleRetractCommand({ ...base, fetchFn: fn });
+    expect(sbCalls(calls).slice(1).map(c => c.body["vault_path"]).sort()).toEqual([
+      "rag/companion_journal/j1", "rag/wm_continuity_notes/n1",
+    ]);
   });
 
   it("without Second Brain configured, does the Halseth half and says the vault was not reached", async () => {
@@ -363,12 +401,12 @@ describe("executeRetract (the handler's retract path)", () => {
   it("a plain reply to Raziel (no reference) still retracts the judge note, via the send-time record", async () => {
     const { fn, calls } = fakeFetch(ok);
     const d = deps({ fetchFn: fn });
-    d.replyIndex = (() => { const i = new ReplyIndex("drevan"); i.record({ headId: "C1", chunkIds: ["C1", "C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "FULL" }); return i; })();
+    d.replyIndex = (() => { const i = new ReplyIndex("drevan"); i.record({ headId: "C1", chunkIds: ["C1", "C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "FULL reply, long enough to match" }); return i; })();
     const ack = await executeRetract(d);
     expect(calls[0]!.body).toMatchObject({
       external_ids: ["discord:C1", "judge:RAZ1"],
       correlation_ids: ["judge:RAZ1"],
-      stm: { channel_id: "chan", content: "FULL" },
+      stm: { channel_id: "chan", content: "FULL reply, long enough to match" },
     });
     expect(sbCalls(calls)[0]!.body).toEqual({ channel_id: "chan", message_id: "C1" });
     expect(ack.startsWith("retracted. ")).toBe(true);
@@ -397,7 +435,7 @@ describe("executeRetract (the handler's retract path)", () => {
     const { fn, calls } = fakeFetch(ok);
     const d = deps({
       fetchFn: fn,
-      target: msg({ id: "C1", content: "the number was 187", createdTimestamp: 60_000 }),
+      target: msg({ id: "C1", content: "the number was 187 mg/dL", createdTimestamp: 60_000 }),
       fetchNeighbours: async () => ({
         before: [msg({ id: "RAZ1", authorId: "RAZIEL", isBot: false, createdTimestamp: 30_000 })],
         after: [],
@@ -465,7 +503,7 @@ describe("executeRetract (the handler's retract path)", () => {
   it("a neighbour's send-time record that holds the target is adopted as recorded", async () => {
     const { fn, calls } = fakeFetch(ok);
     const idx = new ReplyIndex("drevan");
-    idx.record({ headId: "C1", chunkIds: ["C1", "C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "FULL" });
+    idx.record({ headId: "C1", chunkIds: ["C1", "C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "FULL reply, long enough to match" });
     // The target's own key is gone (a partial store write), the head's is not.
     const partial = { resolve: async (id: string) => id === "C2" ? null : idx.resolve(id) };
     const d = deps({
@@ -518,7 +556,7 @@ describe("executeRetract (the handler's retract path)", () => {
   it("a rotation that could not persist is said, and the headline is incomplete", async () => {
     const { fn } = fakeFetch(ok);
     const d = deps({ fetchFn: fn });
-    d.replyIndex = (() => { const i = new ReplyIndex("drevan"); i.record({ headId: "C2", chunkIds: ["C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "x" }); return i; })();
+    d.replyIndex = (() => { const i = new ReplyIndex("drevan"); i.record({ headId: "C2", chunkIds: ["C2"], triggerMessageId: "RAZ1", channelId: "chan", content: "a reply long enough to match the window" }); return i; })();
     d.bumps = new RetractBumps({ read: async () => { throw new Error("halseth 503"); }, write: async () => {} }, { log: () => {} });
     const ack = await executeRetract(d);
     expect(ack).toContain("transcript: rotated (not persisted: could not read the persisted map to merge");

@@ -82,7 +82,15 @@ export function retractKeys(botMessageId: string, userMessageIds: readonly strin
   };
 }
 
-type HalsethRetract = { archived: { journal: string[]; notes: string[] }; release_ids: string[]; stm_deleted?: number };
+type HalsethRetract = {
+  archived: { journal: string[]; notes: string[] };
+  already_archived?: { journal: string[]; notes: string[] };
+  release_ids: string[];
+  stm_deleted?: number;
+};
+
+/** Halseth's server-side floor for the STM hard-delete needle (handlers/retract.ts). */
+export const STM_NEEDLE_MIN = 20;
 type SbRetract = { removed?: number; existed?: boolean };
 
 export interface StoresOutcome {
@@ -106,33 +114,51 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
   let releaseIds: string[] = [];
   let journalIds: string[] = [];
   let noteIds: string[] = [];
+  // Halseth refuses an STM needle under 20 chars (400) or one matching more than 5 window rows
+  // (409, hard delete, no undo). Neither may cost the archive: a short needle is never sent, and a
+  // 409 retries once without `stm` so the journal, notes and judge key still retract.
+  let stmNote = "";
+  const sendStm = !!a.stm && a.stm.content.trim().length >= STM_NEEDLE_MIN;
+  if (a.stm && !sendStm) stmNote = ", window rows kept (reply too short to match safely)";
   try {
-    const res = await f(`${a.halseth.base.replace(/\/$/, "")}/admin/retract`, {
+    const post = (withStm: boolean) => f(`${a.halseth.base.replace(/\/$/, "")}/admin/retract`, {
       method: "POST",
       headers: { "Authorization": `Bearer ${a.halseth.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         agent: a.companionId,
         ...keys,
         reason: `Raziel retracted my reply ${a.botMessageId} on Discord (${when} UTC)`,
-        ...(a.stm ? { stm: { channel_id: a.stm.channelId, content: a.stm.content } } : {}),
+        ...(withStm && a.stm ? { stm: { channel_id: a.stm.channelId, content: a.stm.content } } : {}),
       }),
       signal: AbortSignal.timeout(15_000),
     });
+    let res = await post(sendStm);
+    let stmSent = sendStm;
+    if (res.status === 409 && sendStm) {
+      const j = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const n = typeof j["stm_matches"] === "number" ? j["stm_matches"] : "too many";
+      stmNote = `, window rows kept (${n} rows matched; not hard-deleting that many)`;
+      res = await post(false);
+      stmSent = false;
+    }
+    if (!stmSent && stmNote) incomplete.push("window rows not dropped");
     if (!res.ok) {
       const j = await res.json().catch(() => ({})) as Record<string, unknown>;
       parts.push(`halseth: FAILED (${String(j["error"] ?? res.status)})`);
       incomplete.push("halseth failed");
     } else {
       const j = await res.json() as HalsethRetract;
-      journalIds = j.archived?.journal ?? [];
-      noteIds = j.archived?.notes ?? [];
-      const nj = journalIds.length;
-      const nn = noteIds.length;
+      const nj = j.archived?.journal?.length ?? 0;
+      const nn = j.archived?.notes?.length ?? 0;
+      // Mirrors cover rows archived now AND rows an earlier (partial) retract archived, so a
+      // repeat retract still reaches the vault copies.
+      journalIds = [...new Set([...(j.archived?.journal ?? []), ...(j.already_archived?.journal ?? [])])];
+      noteIds = [...new Set([...(j.archived?.notes ?? []), ...(j.already_archived?.notes ?? [])])];
       releaseIds = j.release_ids ?? [];
       const ns = j.stm_deleted ?? 0;
       // The window count is a third number only when the caller asked for the window: without
       // `stm` the ack keeps its original shape.
-      const window = a.stm ? `, dropped ${ns} window row${ns === 1 ? "" : "s"}` : "";
+      const window = stmNote || (a.stm ? `, dropped ${ns} window row${ns === 1 ? "" : "s"}` : "");
       parts.push(nj + nn === 0
         ? `halseth: nothing to archive under that reply (no journal row or note carried its key)${window}`
         : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}${window}`);
