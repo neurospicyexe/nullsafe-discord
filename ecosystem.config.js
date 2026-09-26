@@ -189,6 +189,14 @@ const shared = {
   // payload floor is used instead (default 20000), and where the decision log goes.
   REACH_TIMEOUT_MS:          process.env.REACH_TIMEOUT_MS,
   REACH_LOG:                 process.env.REACH_LOG,
+  // Multi-address follow-up PASS (2026-09-26, pass-turn.ts): when a rail silences a companion
+  // holding a position in a multi-address order, the companion behind it answers the origin
+  // instead of waiting out FOLLOW_UP_TTL_MS in silence. Default on; `off` stops both the publish
+  // and the listener. VERBATIM_COPY_THRESHOLD is the verbatim rail's copy ratio (default 0.9) --
+  // it was read by echo-guard.ts since 3a44025 but never listed here, so it was a dead knob.
+  // Listed per the standing rule above.
+  FOLLOWUP_PASS:             process.env.FOLLOWUP_PASS,
+  VERBATIM_COPY_THRESHOLD:   process.env.VERBATIM_COPY_THRESHOLD,
 };
 
 module.exports = {

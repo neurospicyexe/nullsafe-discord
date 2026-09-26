@@ -149,6 +149,8 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | `VISION_ENABLED` | bots | Kill switch for describing image attachments. Default ON; set `false` to disable |
 | `VISION_MODEL` | bots | Override the describe model (default `Qwen/Qwen3-VL-30B-A3B-Instruct` on DeepInfra) |
 | `DEEPINFRA_API_KEY` | bots | Direct-inference chain (judges, consolidation) **and** the image describe pass |
+| `FOLLOWUP_PASS` | bots | Multi-address follow-up pass (`pass-turn.ts`). Default ON; `off` stops the publish (a railed companion no longer passes its turn) and the listener (a pass never consumes an entitlement). pm2-allowlisted |
+| `VERBATIM_COPY_THRESHOLD` | bots | Verbatim-copy rail ratio, (0, 1], default `0.9`. pm2-allowlisted since 2026-09-26 (it was a dead knob before) |
 
 ## Identity Files
 

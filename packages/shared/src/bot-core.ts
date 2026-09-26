@@ -46,6 +46,7 @@ import { createRedisClient } from "./floor.js";
 import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js";
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
 import type { FollowUpEntitlement } from "./sequential-floor.js";
+import { followUpPassEnabled } from "./pass-turn.js";
 import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
@@ -876,8 +877,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // companion held for FOLLOW_UP_TTL_MS and then said nothing: one rail hit silenced the chain.
   // Enqueued as NOT human-authored so it cannot supersede a turn already in the queue; a newer
   // human message still supersedes it, which is right.
+  //
+  // FOLLOWUP_PASS=off (pass-turn.ts followUpPassEnabled) stops this listener from subscribing, so a
+  // pass that still arrives (a sibling on the old build) never consumes my entitlement.
   let stopPassListener: (() => void) | null = null;
-  if (redis) {
+  if (!followUpPassEnabled()) console.log(`[${companionId}] FOLLOWUP_PASS=off -- follow-up pass listener not started`);
+  if (redis && followUpPassEnabled()) {
     const passSub = redis.duplicate();
     const off = onFollowUpPass(passSub, (pass) => {
       if (pass.fromCompanionId === companionId) return;

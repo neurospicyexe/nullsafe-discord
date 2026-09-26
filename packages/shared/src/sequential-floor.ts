@@ -28,7 +28,9 @@
 // answers the origin message then instead of never. Without it, a copied answer suppressed at
 // position 0 left positions 1+ holding for FOLLOW_UP_TTL_MS and then saying nothing: one rail
 // hit silenced the whole chain. The rails (human-anchored cap, pingpong, chain depth) still apply to the entitled
-// turn: an entitlement is a gate BYPASS for the vocative rule, never a rail bypass.
+// turn: an entitlement is a gate BYPASS for the vocative rule, never a rail bypass. A pass turn runs
+// on the human origin, so what it may and may not repeat of an arrival is decided in pass-turn.ts;
+// FOLLOWUP_PASS=off disables the pass entirely (publish and listener).
 
 import type { CompanionId } from "./types.js";
 import { VOCATIVE_ALIASES } from "./channel-config.js";

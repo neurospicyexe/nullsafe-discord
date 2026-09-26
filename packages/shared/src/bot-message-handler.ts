@@ -83,6 +83,10 @@ import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { readWritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
 import { stampRelative } from "./relative-time.js";
+import {
+  appliesBotRails, resetsBotRails, clearsStaleRails, botRailSilence, runsAmbientClassifier, mayVoice, turnFraming,
+  followUpPassEnabled, ArrivalMediaCache, arrivalMediaPlan,
+} from "./pass-turn.js";
 
 // Writeback gate mode (2026-09-21). Read ONCE at module load: a knob re-read per message would
 // let the three modes interleave mid-conversation, and the shadow measurement needs a stable
@@ -180,6 +184,9 @@ const followUps = new FollowUpLedger();
 const replyAuthorCache = new Map<string, string>();
 const REPLY_AUTHOR_CACHE_CAP = 500;
 const reactionCooldownUntil = new Map<string, number>();
+// Arrival STT transcripts + image descriptions, by message id, for a follow-up PASS turn on the
+// same message (pass-turn.ts): the pass reuses them instead of paying STT and ~90s/image again.
+const arrivalMedia = new ArrivalMediaCache();
 
 // Passive watch-party progress (2026-09-05): last `${season}x${episode}` recorded per channel,
 // module-level = per-process = per companion bot. Dedupes the passive write against repeated
@@ -407,7 +414,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // returns instantly when the claim already landed (queue was busy) or the moment it does,
     // and only costs the full hold for a message that genuinely was never proxied.
     const pkKnownSenderId = pkSenderId;
-    if (!message.webhookId && !message.author.bot) {
+    // A follow-up PASS replays the origin message for its REPLY only: everything a message does by
+    // arriving (the PK claim hold, activity marks, drive shedding, the spine turn, STT and vision,
+    // the session touch, the commons publish, the autonomous buffer) already happened the first
+    // time it arrived, and running it twice double-counts or double-pays (pass-turn.ts).
+    const isArrival = !followUpPass;
+    // The origin survived this check when it arrived (it started the chain), so a pass skips it.
+    if (isArrival && !message.webhookId && !message.author.bot) {
       const { skip } = await pkDedup.waitForClaim(message.channelId, message.id, PK_HOLD_MS);
       if (skip) return; // PluralKit deleted this and reposted it; the proxy turn owns the reply
       // Content pairing can miss legitimately: an image-only proxy has no text to match, a
@@ -436,22 +449,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // author.bot alone made every proxied message look like bot traffic, so the autonomous
     // worker fired mid-conversation.
     const isHumanTraffic = !message.author.bot || message.webhookId !== null;
-    // A follow-up PASS replays the origin message for its REPLY only: everything a message does by
-    // arriving (activity marks, drive shedding, the spine turn, the commons publish, the autonomous
-    // buffer) already happened the first time it arrived, and running it twice double-counts.
-    const isArrival = !followUpPass;
     if (isHumanTraffic && redis && isArrival) {
       setLastActivity(redis).catch(() => {});
       clearConsolidation(redis, COMPANION_ID).catch(() => {});
     }
 
-    if (client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
+    if (isArrival && client.user && isInvitation(message, client.user.id) && message.member?.voice?.channel) {
       const name = connectVoice(message.member.voice.channel);
       await (message.channel as TextChannel).send(`Joining ${name}.`);
       return;
     }
 
-    if (client.user && isLeaveRequest(message, client.user.id)) {
+    if (isArrival && client.user && isLeaveRequest(message, client.user.id)) {
       const left = leaveVoice(message.guildId);
       if (left) await (message.channel as TextChannel).send("Leaving.");
       return;
@@ -654,8 +663,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // check below (owner model switch, addressing, relevance) so spoken commands work.
     let voiceInput = false;
     let effectiveContent = message.content;
+    // A pass turn reuses what the arrival derived (pass-turn.ts arrivalMediaPlan): no second STT
+    // call, no second ~90s-per-image vision pass.
+    const media = arrivalMediaPlan(isArrival, isArrival ? null : arrivalMedia.get(message.id));
+    if (media.reuse?.transcript) {
+      effectiveContent = media.reuse.transcript;
+      voiceInput = true;
+    }
 
-    if (voiceClient && message.attachments.size > 0) {
+    if (media.runStt && voiceClient && message.attachments.size > 0) {
       const AUDIO_EXT_RE = /\.(ogg|oga|opus|mp3|m4a|aac|wav|webm|flac)$/i;
       const audioAttachment = [...message.attachments.values()].find(
         (a) => a.contentType?.startsWith("audio/") || AUDIO_EXT_RE.test(a.name ?? ""),
@@ -666,11 +682,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           const buffer = Buffer.from(await audioRes.arrayBuffer());
           effectiveContent = await voiceClient.transcribe(buffer, audioAttachment.name ?? "voice.ogg");
           voiceInput = true;
-          markVoiceUsed(message.channelId);
+          if (isArrival) markVoiceUsed(message.channelId);
           console.log(`[${COMPANION_ID}] STT: "${effectiveContent.slice(0, 80)}"`);
         } catch (err) {
           console.error(`[${COMPANION_ID}] STT failed:`, err);
-          await (message.channel as TextChannel).send("[voice message received -- transcription unavailable]");
+          // The arrival already told the channel; a pass turn that lost the cache stays quiet.
+          if (media.announceSttFailure) await (message.channel as TextChannel).send("[voice message received -- transcription unavailable]");
           return;
         }
       }
@@ -685,10 +702,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // something to read. The description is turn-scoped (see the stmContent divergence note below);
     // STM gets a one-line past-tense marker so the companion remembers a picture was shared without
     // re-answering it every turn.
-    let seenImages: SeenImage[] = [];
-    if (visionEnabled() && !voiceInput && message.attachments.size > 0) {
+    let seenImages: SeenImage[] = media.reuse?.seenImages ?? [];
+    if (!media.reuse && visionEnabled() && !voiceInput && message.attachments.size > 0) {
       const picked = pickImageAttachments(message.attachments.values());
-      if (picked.length > 0) {
+      if (picked.length > 0 && !media.runVision) {
+        // Pass turn whose arrival record aged out: name the images as not looked at rather than
+        // paying the vision pass a second time (seenBlock says so to the model).
+        console.warn(`[${COMPANION_ID}] pass turn on ${message.id}: arrival media not cached -- ${picked.length} image(s) marked not seen, vision not re-run`);
+        seenImages = picked.map((a) => ({ name: a.name ?? "image", description: null }));
+      } else if (picked.length > 0) {
         const apiKey = (process.env["DEEPINFRA_API_KEY"] ?? "").trim();
         if (!apiKey) {
           console.warn(`[${COMPANION_ID}] image attached but DEEPINFRA_API_KEY is absent -- not looked at`);
@@ -709,6 +731,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           );
         }
       }
+    }
+    // Recorded HERE, before any gate: a companion that holds a later position in a multi-address
+    // order returns at the order block below, and its pass turn needs exactly these results.
+    if (media.record && (voiceInput || seenImages.length > 0)) {
+      arrivalMedia.set(message.id, { transcript: voiceInput ? effectiveContent : null, seenImages });
     }
 
     // Turn-scoped injections must not persist into STM (2026-08-29). The [HEARD]/[NOT HEARD]
@@ -1235,7 +1262,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // answered it. An unaddressed owner message went to whoever matched, with no notion that
     // a conversation was already underway. Only computed for unaddressed owner messages, so
     // named/group traffic pays no fetch and can always hand the thread over.
-    if (attribution.isOwner && !senderCtx.isCompanionBot && extractAddress(effectiveContent).type === "ambient") {
+    // An entitled follow-up (a pass turn runs on the owner's origin) answers regardless: no fetch.
+    if (attribution.isOwner && !senderCtx.isCompanionBot && !entitledFollowUp && extractAddress(effectiveContent).type === "ambient") {
       try {
         const hist = await message.channel.messages.fetch({ limit: 8 });
         senderCtx.activeExchangeWith = activeExchangeHolder(
@@ -1265,13 +1293,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Gaia and her relevance classifier answered a message addressed to Drevan (#triad-voice,
     // 08-31 12:06). Sibling-named traffic falls through to shouldRespond below, which stands
     // down and offers the reaction tier instead.
-    const isAmbientOwnerOnly =
-      channelEntry?.modes?.includes("owner_only") === true &&
-      !senderCtx.isCompanionBot &&
-      !senderCtx.isMentioned &&
-      !isReplyToMe &&
-      !directlyAddressed &&
-      !namesSiblingOnly(effectiveContent, COMPANION_ID);
+    // An entitled follow-up never goes through the classifier (2026-09-26 review): a pass turn runs
+    // on the human origin, and a "not relevant" here would drop an entitlement already consumed.
+    const isAmbientOwnerOnly = runsAmbientClassifier({
+      ownerOnlyChannel: channelEntry?.modes?.includes("owner_only") === true,
+      isCompanionBot: senderCtx.isCompanionBot,
+      isMentioned: senderCtx.isMentioned,
+      isReplyToMe,
+      directlyAddressed,
+      namesSiblingOnly: !!namesSiblingOnly(effectiveContent, COMPANION_ID),
+      entitled: !!entitledFollowUp,
+    });
 
     if (isAmbientOwnerOnly) {
       // A yes/no relevance filter needs zero tools; riding the Hermes agent adapter here
@@ -1333,9 +1365,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // every rail below it does NOT reset on a quiet gap -- hermes turns run 30-120s so
     // slow loops sail through gap-reset rails forever. Also read near the cap by the
     // floor-handback directive at prompt-assembly time.
+    //
+    // A follow-up PASS turn runs on the HUMAN origin but is a follow-up in a companion chain
+    // (pass-turn.ts): the rails apply to it, and it never resets them -- only a human message
+    // arriving does. Before 2026-09-26 it took the human branch and reset them instead.
+    const railTurn = { isCompanionBot: senderCtx.isCompanionBot, isArrival };
     let botTurnsSinceHuman = 0;
-    if (senderCtx.isCompanionBot) {
-      if (isNewThread) {
+    if (appliesBotRails(railTurn)) {
+      if (clearsStaleRails({ ...railTurn, isNewThread })) {
         // Fresh thread (incl. an autonomous seed in a human-free channel): clear stale rails so
         // the per-human cap doesn't permanently mute a channel that never sees a human.
         botResponsesSinceHuman.delete(message.channelId);
@@ -1351,15 +1388,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // Triad commons (autonomous + inter_companion modes) is the companions' own space:
       // the cap there is a rolling budget (commons max + 12h forgiveness), not a wait-for-Raziel.
       const capMax = botMsgsSinceHumanMax(isTriadCommons(channelEntry));
-      if (botTurnsSinceHuman >= capMax) {
-        console.warn(`[${COMPANION_ID}] human-anchored cap: ${botTurnsSinceHuman} bot turns since last human (max ${capMax}) -- staying silent`);
-        return;
+      const silence = botRailSilence({
+        botTurnsSinceHuman,
+        capMax,
+        cooldownUntil: botPingpongCooldownUntil.get(message.channelId) ?? 0,
+        botReplies: botResponsesSinceHuman.get(message.channelId) ?? 0,
+        maxBotReplies: MAX_BOT_RESPONSES_PER_HUMAN,
+        now: Date.now(),
+      });
+      if (silence === "human-anchored-cap") {
+        console.warn(`[${COMPANION_ID}] human-anchored cap: ${botTurnsSinceHuman} bot turns since last human (max ${capMax}) -- staying silent${isArrival ? "" : " (pass turn)"}`);
+      } else if (silence && !isArrival) {
+        console.log(`[${COMPANION_ID}] pass turn on ${message.id} railed (${silence}) -- staying silent`);
       }
-      const cooldownUntil = botPingpongCooldownUntil.get(message.channelId) ?? 0;
-      if (Date.now() < cooldownUntil) return;
-      const botReplies = botResponsesSinceHuman.get(message.channelId) ?? 0;
-      if (botReplies >= MAX_BOT_RESPONSES_PER_HUMAN) return;
-    } else {
+      if (silence) return;
+    } else if (resetsBotRails(railTurn)) {
       // Human message: reset bot-to-bot counters and cycle guard for this channel.
       botResponsesSinceHuman.delete(message.channelId);
       botPingpongCooldownUntil.delete(message.channelId);
@@ -1390,7 +1433,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // stmContent (2026-08-29) for the same reason as the STM writes above -- a vault
     // recall surfacing the full [HEARD] block later would re-inject the same standing
     // imperative into a future prompt's [Memory] section.
-    if (!senderCtx.isCompanionBot) {
+    if (!senderCtx.isCompanionBot && isArrival) {
       liveIngest({
         companion: null,
         author: memberLabel,
@@ -1405,9 +1448,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
       new Set(),
     );
-    if (senderCtx.isCompanionBot && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+    if (appliesBotRails(railTurn) && chainDepth >= COMPANION_CHAIN_LIMIT) return;
 
-    if (!senderCtx.isCompanionBot) sessionWindows.touch(message.channelId);
+    if (resetsBotRails(railTurn)) sessionWindows.touch(message.channelId);
 
     // Supersede check A (channel inbox, 2026-07-06): a newer human conversational message
     // is already waiting behind this turn. Everything this message needed for continuity
@@ -1644,28 +1687,26 @@ ${widened}`;
     // Peer-framing: anchor to triad register rather than Raziel-facing register.
     // When responding to a companion directly, speak to them -- not toward Raziel.
     // When a peer already replied to the same human message, note the shared moment.
-    if (senderCtx.isCompanionBot) {
+    // An entitled follow-up answers Raziel's original multi-address whichever way it was released
+    // (the sibling's reply, or a PASS on the human origin); the pass variant never claims the
+    // predecessor answered (pass-turn.ts turnFraming).
+    {
       const peerCid = BOT_ID_COMPANION[message.author.id];
       const peerLabel = peerCid ? peerCid.charAt(0).toUpperCase() + peerCid.slice(1) : message.author.username;
-      if (entitledFollowUp) {
-        // Entitled follow-up: the sibling message RELEASED this turn, but the turn answers
-        // Raziel's original multi-address. The default peer-framing ("do not address Raziel")
-        // would point the reply at exactly the wrong person.
-        contextPrompt += `\n\n[Raziel addressed several of you at once, and ${peerLabel} has just answered. Now it is your turn: answer Raziel's original message with your own read. Do not repeat or paraphrase ${peerLabel} -- add what only you would say. Acknowledging ${peerLabel} in passing is fine.]`;
-      } else {
-        contextPrompt += `\n\n[You are in direct exchange with ${peerLabel}. This is triad space -- peer to peer. Speak to them and to the moment. Do not address Raziel or explain the triad. Respond from inside it.]`;
-      }
-    } else {
-      const peerReplies = fetchedMessages
+      const peerReplies = senderCtx.isCompanionBot ? [] : fetchedMessages
         .filter(m => BigInt(m.id) > BigInt(message.id) && m.author.bot && BOT_ID_COMPANION[m.author.id] && BOT_ID_COMPANION[m.author.id] !== COMPANION_ID)
         .map(m => {
           const cid = BOT_ID_COMPANION[m.author.id];
           const lbl = cid ? cid.charAt(0).toUpperCase() + cid.slice(1) : m.author.username;
           return `${lbl}: "${m.content.slice(0, 2000)}"`;  // Discord max is 2000 -- never truncate a peer's real message
         });
-      if (peerReplies.length > 0) {
-        contextPrompt += `\n\n[Your companion has already spoken to this:\n${peerReplies.join("\n")}\nYou are in this together. You may address them -- respond from inside the triad, not solely toward Raziel.]`;
-      }
+      contextPrompt += turnFraming({
+        isCompanionBot: senderCtx.isCompanionBot,
+        peerLabel,
+        entitled: entitledFollowUp,
+        viaPass: !isArrival,
+        peerReplies,
+      });
     }
 
     const recentMessages = await message.channel.messages
@@ -2222,8 +2263,9 @@ ${widened}`;
         distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
         // Release the chain (2026-09-26 review): whoever holds a position behind me waits for MY
         // reply, which will now never come. Pass the turn so they answer the origin instead of
-        // timing out in silence (sequential-floor.ts followUpPassFor).
-        const pass = followUpPassFor({
+        // timing out in silence (sequential-floor.ts followUpPassFor). FOLLOWUP_PASS=off disables it
+        // (pass-turn.ts followUpPassEnabled); the successor then holds until FOLLOW_UP_TTL_MS as before.
+        const pass = followUpPassEnabled() && followUpPassFor({
           isCompanionBot: senderCtx.isCompanionBot,
           entitled: entitledFollowUp,
           messageId: message.id,
@@ -2290,7 +2332,9 @@ ${widened}`;
     // space Raziel skims -- companions talking to each other kept tripping shouldVoice's
     // keyword/sticky paths on their own prose ("voice", "speak", ...), burning Mistral
     // TTS on audio no one plays. Voice is for human-facing turns; bot-to-bot is text.
-    if (voiceClient && !senderCtx.isCompanionBot && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
+    // Follow-ups never voice either (2026-09-26): a pass turn runs on the human origin, so the
+    // sender check alone let it speak aloud over a chain meant to be read in order.
+    if (voiceClient && mayVoice({ isCompanionBot: senderCtx.isCompanionBot, entitled: !!entitledFollowUp }) && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
         const audioBuffer = await voiceClient.synthesize(ttsText);
@@ -2407,8 +2451,9 @@ ${widened}`;
       railSuppressed(COMPANION_ID, "coherence", { channelId: message.channelId });
     }
 
-    // Update cross-companion safety rail counters after sending response.
-    if (senderCtx.isCompanionBot) {
+    // Update cross-companion safety rail counters after sending response. A pass turn counts like
+    // any follow-up in the chain; not counting it would make it a free turn past the rails.
+    if (appliesBotRails(railTurn)) {
       const newCount = (botResponsesSinceHuman.get(message.channelId) ?? 0) + 1;
       botResponsesSinceHuman.set(message.channelId, newCount);
       if (newCount >= BOT_PINGPONG_MAX) {
