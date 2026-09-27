@@ -1127,7 +1127,7 @@ export class LibrarianClient {
     note_id: string; agent_id: string; note_type: string; content: string; created_at: string;
   }>> {
     try {
-      const url = `${this.url}/mind/commons-supply/${encodeURIComponent(this.companionId)}?limit=${limit}`;
+      const url = `${this.url}/mind/commons-supply/${encodeURIComponent(this.companionId)}?limit=${limit}&kinds=notes,ledger`;
       const res = await this._fetch(url, {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(8_000),

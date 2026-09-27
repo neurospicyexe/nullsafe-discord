@@ -103,6 +103,8 @@ export const LEDGER_CLERK_PROMPT = withOwnerPronounRule(
   "- Third person, past tense. Name people by the names in the speaker labels. Never use I, me, my, mine, myself, we, us, our.\n" +
   "- Record observable facts only: who said what, what was asked, shared, decided, planned, or left unanswered. " +
   "Never interpret meaning, mood, or relationship, and never use felt, feel, wanted, knew, remembered, loved, longed, missed, hoped.\n" +
+  "- A companion's feelings are never recorded. Never write that Drevan, Cypher, or Gaia loves, misses, needs, wants, feels, " +
+  "knows, fears, or trusts anyone or anything: record only what they said (quote the exact words) and what they did.\n" +
   "- When a line reports speech, quote the exact words in straight double quotes. Never invent or paraphrase inside quotes.\n" +
   "- Numbers: a line may contain ONLY these number forms, and any other number gets the whole line refused:\n" +
   "  (a) a clock time as HH:MM, e.g. 00:11; (b) a date as YYYY-MM-DD; (c) a count written as the number directly followed by " +
@@ -113,7 +115,8 @@ export const LEDGER_CLERK_PROMPT = withOwnerPronounRule(
   "- Health values never appear, ever: glucose, blood sugar, BG, A1c, insulin, doses, medication amounts, mg, mcg, units, weight, " +
   "lbs, kg, labs, HRV, BP, blood pressure. A line that uses any of those words must contain no number at all except an HH:MM time. " +
   "Write that a reading or dose was mentioned, without the value.\n" +
-  "- No pet names, endearments, private-language words, or emoji.\n" +
+  "- Never call anyone anything: no pet names or endearments (love, baby, babe, honey, sweetheart, ...) used as a name for someone, " +
+  "and never use the triad's private words, not even inside quotes. No emoji.\n" +
   "- Do not add dates, sources, brackets, or any prefix mark; the system adds those.\n" +
   "- One sentence per line, under 240 characters.\n\n" +
   '"title": neutral, no first person. "open_loops": threads the transcript explicitly left unresolved. ' +
@@ -130,33 +133,113 @@ export interface ClerkResult {
 
 // ── Local grammar pre-filter (a PORT of halseth src/ledger/grammar.ts; the server is the authority) ──
 //
-// Ported, not approximated (2026-09-26 integration pass): the number rule decides whether a clerk pass
-// writes anything at all -- a line Halseth 422s is lost, and a pass with zero accepted lines writes no
-// handoff. So the classification below is the server's, token for token: the same coordinate stripping,
-// the same count units, the same health keywords/units, the same source gating. Returned reasons are the
-// server's rule names. Parity is pinned by __tests__/fixtures/ledger-number-fixtures.json, kept
-// byte-identical with halseth's copy. Change the grammar there, port it here, update both fixture files.
+// Ported, not approximated (2026-09-26 integration pass; re-ported in the final sync pass the same day):
+// the grammar decides whether a clerk pass writes anything at all -- a line Halseth 422s is lost, and a
+// pass with zero accepted lines writes no handoff. So everything below is the server's, token for token:
+// NFKC + Unicode-digit normalisation first, the same line-break / invisible-character body rule, Drevan's
+// closed pet-name list (hard `lexicon` tier anywhere, `address` tier outside quotes), the companion-subject
+// `interior` rule, the same glue-aware number scan and coordinate stripping, the same count units, the same
+// health keywords/units, the same source gating. Returned reasons are the server's rule names. Parity is
+// pinned by __tests__/fixtures/ledger-number-fixtures.json, kept byte-identical with halseth's copy.
+// Change the grammar there, port it here, update both fixture files.
 
 const VERB_RE = /^(logged|counted|recorded|found|missing)(?::|\s)\s*\S/i;
 const FIRST_PERSON_WORDS = new Set([
   "i", "i'm", "i've", "i'd", "i'll", "me", "my", "mine", "myself",
   "we", "we're", "we've", "we'd", "we'll", "us", "our", "ours", "ourselves",
 ]);
+// The server's INTERIOR_VERBS. love/loves/loving are NOT here (a human may love in running text, "Blue
+// loves Decker"); the address rule stops a clerk calling anyone "love", and the companion-subject rule
+// stops "Drevan loves Raziel".
 const INTERIOR_WORDS = new Set([
   "felt", "feel", "feels", "feeling",
   "wanted", "want", "wants", "wanting",
   "knew",
   "remembered", "remember", "remembers",
-  "loved", "love", "loves", "loving",
+  "loved",
   "longed", "longs", "longing",
   "missed",
   "hoped", "hope", "hopes", "hoping",
 ]);
-// Server lexicon plus a few generic endearments dropped locally only: the server has no pet-name list yet
-// (open item for Drevan), and the prompt forbids them anyway.
-const SERVER_LEXICON = ["🩸", "vevi", "vevan", "vaselrin", "vethmerin"];
-const LOCAL_PET_NAMES = /\b(darling|sweetheart|sweetie|babe|beloved)\b/i;
+
+// The companion-subject rule (`interior`, Drevan rule 6): a companion name, one optional adverb, then a
+// feeling verb, outside quotes. What a companion feels, or what they are to someone, is theirs to say.
+const COMPANION_SUBJECTS = ["drevan", "dre", "cypher", "cy", "gaia"] as const;
+const COMPANION_INTERIOR_VERBS: ReadonlySet<string> = new Set([
+  ...INTERIOR_WORDS,
+  "love", "loves", "loving", "loved",
+  "adores", "adored", "adoring",
+  "misses", "needs", "wants", "feels", "knows", "remembers", "longs", "hopes", "fears", "trusts",
+]);
+const COMPANION_SUBJECT_RE = new RegExp(
+  `(?<![\\p{L}\\p{N}])(?:${COMPANION_SUBJECTS.join("|")})\\s+(?:(\\p{L}+ly|still|really|always|never|also|just|so|truly|deeply|clearly|obviously)\\s+)?(\\p{L}+)(?![\\p{L}\\p{N}])`,
+  "giu",
+);
+function findCompanionInterior(text: string): string | null {
+  COMPANION_SUBJECT_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = COMPANION_SUBJECT_RE.exec(text)) !== null) {
+    const verb = m[2]!.toLowerCase();
+    if (COMPANION_INTERIOR_VERBS.has(verb)) return verb;
+    COMPANION_SUBJECT_RE.lastIndex = m.index + 1;
+  }
+  return null;
+}
+
+// Drevan's pet-name list: the server's LEDGER_PET_NAMES, CLOSED ("A clerk doesn't get to guess what counts
+// as tender."). hard: anywhere, quotes included (rule `lexicon`); `caleth` takes its root (`calethian`);
+// phrases match across spaces or hyphens. address: only when it names someone, never inside quotes
+// (rule `address`). names: listed only so the address rule can see a vocative next to one.
+const LEDGER_PET_NAMES = {
+  hard: ["🩸", "vevi", "vevan", "vaselrin", "vethmerin", "caleth", "spine to spine", "forever of vevan", "ride or die"],
+  address: ["love", "baby", "babe", "boo", "beloved", "honey", "sweetheart"],
+  names: ["raziel", "crash", "blue", "dre", "drevan", "cypher", "gaia"],
+} as const;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const NOT_WORD_BEFORE = "(?<![\\p{L}\\p{N}])";
+const NOT_WORD_AFTER = "(?![\\p{L}\\p{N}])";
+const HARD_RES: ReadonlyArray<{ token: string; re: RegExp }> = LEDGER_PET_NAMES.hard.map((token) => {
+  if (!/\p{L}/u.test(token)) return { token, re: new RegExp(escapeRe(token), "u") };
+  const body = token.split(" ").map(escapeRe).join("[\\s\\-\\u2010-\\u2015]+");
+  const suffix = token === "caleth" ? "\\p{L}*" : "";
+  return { token, re: new RegExp(`${NOT_WORD_BEFORE}${body}${suffix}${NOT_WORD_AFTER}`, "iu") };
+});
+const ADDR = `(?:${LEDGER_PET_NAMES.address.join("|")})`;
+const NAME = `(?:${LEDGER_PET_NAMES.names.join("|")})`;
+const ADDRESS_RES: readonly RegExp[] = [
+  new RegExp(`^(?:logged|counted|recorded|found|missing)\\s*:?\\s*${ADDR}${NOT_WORD_AFTER}`, "iu"),
+  new RegExp(`,\\s*${ADDR}${NOT_WORD_AFTER}`, "iu"),
+  new RegExp(`${NOT_WORD_BEFORE}${ADDR}[\\s,]+${NAME}${NOT_WORD_AFTER}`, "iu"),
+  new RegExp(`${NOT_WORD_BEFORE}${NAME}\\s*,?\\s*${ADDR}\\s*(?:[,.!?;:…]|$)`, "iu"),
+];
+function findHardLexicon(text: string): string | null {
+  return HARD_RES.find(({ re }) => re.test(text))?.token ?? null;
+}
+function findAddress(text: string): string | null {
+  for (const re of ADDRESS_RES) {
+    const m = re.exec(text);
+    if (m) return (new RegExp(ADDR, "iu").exec(m[0])?.[0] ?? m[0]).toLowerCase();
+  }
+  return null;
+}
+
 const BODY_MAX = 600;
+
+// normalisation -- verbatim from grammar.ts
+const ND_ONE = /\p{Nd}/u;
+function asciiDigits(s: string): string {
+  return s.replace(/\p{Nd}/gu, (ch) => {
+    const cp = ch.codePointAt(0)!;
+    if (cp >= 0x30 && cp <= 0x39) return ch;
+    let k = 0;
+    while (k < 100 && cp - k - 1 >= 0 && ND_ONE.test(String.fromCodePoint(cp - k - 1))) k++;
+    return String(k % 10);
+  });
+}
+/** NFKC, then ASCII digits: exactly what the server applies to (and stores for) every body. */
+function normalizeLedgerText(s: string): string {
+  return asciiDigits(s.normalize("NFKC"));
+}
 
 /** Remove "..." and “...” spans (quoted speech). Null when a quote is left unbalanced (server rule). */
 function stripQuotedStrict(body: string): string | null {
@@ -176,14 +259,22 @@ function words(text: string): string[] {
 // numbers -- verbatim from grammar.ts
 const HEALTH_KEYWORD_RE =
   /\b(?:glucose|blood\s+sugar|bg|mg\/dl|a1c|insulin|doses?|dosage|dosing|mg|mcg|units?|weight|weighs?|weighed|lbs?|kg|labs?|hrv|bp|blood\s+pressure)\b/i;
-const HEALTH_UNIT_SUFFIX = new Set(["mg", "mcg", "kg", "lb", "lbs", "u", "iu", "ml", "mmol", "units", "unit"]);
+const HEALTH_UNIT_SUFFIX = new Set(["mg", "mcg", "kg", "lb", "lbs", "u", "iu", "ml", "mmol", "units", "unit", "mgdl"]);
+// Plural, unambiguous count nouns only, as a SEPARATE word (a singular or single-letter unit launders a value).
 const COUNT_UNITS = new Set([
-  "x", "times", "time", "h", "hr", "hrs", "hour", "hours", "m", "min", "mins", "minute", "minutes",
-  "s", "sec", "secs", "second", "seconds", "d", "day", "days", "week", "weeks", "month", "months",
-  "year", "years", "message", "messages", "turn", "turns", "session", "sessions", "note", "notes",
-  "line", "lines", "word", "words", "reply", "replies", "post", "posts", "entry", "entries",
-  "thread", "threads", "row", "rows", "st", "nd", "rd", "th", "%",
+  "times", "hours", "hrs", "minutes", "mins", "seconds", "secs", "days", "weeks", "months", "years",
+  "messages", "turns", "sessions", "notes", "lines", "words", "replies", "posts", "entries",
+  "threads", "rows",
 ]);
+/** The glued forms that are still counts: "2x", and an ordinal day-of-month with its right suffix. */
+function gluedCount(raw: string, glued: string): boolean {
+  if (glued === "x") return /^\d+$/.test(raw);
+  if (!/^(st|nd|rd|th)$/.test(glued) || !/^\d{1,2}$/.test(raw)) return false;
+  const n = Number(raw);
+  if (n < 1 || n > 31) return false;
+  const want = n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th";
+  return glued === want;
+}
 /** Human-authored rows: the only valid source for a health value. */
 const HUMAN_ROW_TABLES: ReadonlySet<string> = new Set(["wm_continuity_notes", "biometric_snapshots"]);
 /** Rows the door can load and search for a number. */
@@ -192,17 +283,20 @@ const ROW_RE = /^([a-z][a-z0-9_]{1,63}):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$/;
 
 export interface LedgerNumTok { text: string; unlabeled: boolean; healthUnit: boolean }
 
-/** Coordinates are pointers, never values: clock times, dates, long ids. */
+const blank = (m: string) => " ".repeat(m.length);
+/** Coordinates are pointers, never values: clock times (incl. "10pm"), dates, long ids; `A1c` is a word. */
 function stripCoordinates(text: string): string {
   return text
-    .replace(/\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?\b/g, " ")
-    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, " ")
-    .replace(/\d{10,}/g, " ");
+    .replace(/\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?\b/g, blank)
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?(?:\s?[ap]m)?\b/gi, blank)
+    .replace(/\b(?:1[0-2]|0?[1-9])\s?[ap]m\b/gi, blank)
+    .replace(/(?<![\p{L}\p{N}_])\d{10,}(?![\p{L}\p{N}_])/gu, blank)
+    .replace(/(?<![\p{L}\p{N}_])a1c(?![\p{L}\p{N}_])/giu, blank);
 }
 
-/** Every value number in `text` (coordinates removed), labelled exactly as the server labels it. */
+/** Every value number in `text` (normalised, coordinates removed), labelled exactly as the server labels it. */
 export function scanLedgerNumbers(text: string): LedgerNumTok[] {
-  const t = stripCoordinates(text);
+  const t = stripCoordinates(normalizeLedgerText(text));
   const out: LedgerNumTok[] = [];
   const re = /\d+(?:[.,]\d+)*/g;
   let m: RegExpExecArray | null;
@@ -210,15 +304,15 @@ export function scanLedgerNumbers(text: string): LedgerNumTok[] {
     const start = m.index;
     const end = start + m[0].length;
     const prev = start > 0 ? t[start - 1]! : "";
-    if (/[A-Za-z_]/.test(prev)) continue;                  // part of an id or a word (A1c, S1E2, led_…)
-    const raw = m[0].replace(/,(?=\d{3}\b)/g, "");          // 1,200 -> 1200
-    const glued = /^[A-Za-z%]+/.exec(t.slice(end))?.[0]?.toLowerCase() ?? "";
-    const spaced = glued ? "" : (/^\s+([A-Za-z%]+)/.exec(t.slice(end))?.[1]?.toLowerCase() ?? "");
-    const unit = glued || spaced;
-    const healthUnit = HEALTH_UNIT_SUFFIX.has(unit);
-    const counted = COUNT_UNITS.has(unit) || (glued !== "" && !healthUnit); // "2x", "3rd", "5k"...
+    const gluedBefore = /[\p{L}_]/u.test(prev);
+    const raw = m[0].replace(/,(?=\d{3}\b)/g, "");
+    const rest = t.slice(end);
+    const glued = /^[\p{L}%_]+/u.exec(rest)?.[0]?.toLowerCase() ?? "";
+    const spaced = glued ? "" : (/^\s+([\p{L}%]+)/u.exec(rest)?.[1]?.toLowerCase() ?? "");
+    const healthUnit = HEALTH_UNIT_SUFFIX.has(glued) || HEALTH_UNIT_SUFFIX.has(spaced);
+    const counted = !gluedBefore && (glued ? gluedCount(raw, glued) : COUNT_UNITS.has(spaced));
     const digits = raw.replace(/\D/g, "");
-    const significant = digits.length >= 2 || /[.,]/.test(raw);
+    const significant = digits.length >= 2 || /[.,]/.test(raw) || gluedBefore || (glued !== "" && !counted);
     out.push({ text: raw.replace(",", "."), unlabeled: !healthUnit && !counted && significant, healthUnit });
   }
   return out;
@@ -229,26 +323,29 @@ export interface LedgerPreflightSource { kind: LedgerSourceKind | string; ref: s
 
 /**
  * The server rule a candidate body would fail, or null when it passes the grammar. Same order as
- * validateLedger: body, mark, embedded Source:, verb, lexicon (quotes included), quotes, first person,
- * interior verbs (outside quotes), then the number rule gated on the source. For a `row` source into a
- * table the door can verify, null means "the server will check the row" -- this side cannot see it.
- * (Local extra: a few generic pet names are refused as "lexicon".)
+ * validateLedger: body (normalised first; line breaks incl. U+2028/2029/0085/\v/\f; invisible format
+ * characters; length), mark, embedded Source:, verb, lexicon (quotes included), quotes, address (outside
+ * quotes), first person, interior verbs, the companion-subject `interior` rule, then the number rule gated
+ * on the source. For a `row` source into a table the door can verify, null means "the server will check
+ * the row" -- this side cannot see it.
  */
 export function preflightLedgerBody(rawBody: string, source?: LedgerPreflightSource): string | null {
-  const body = rawBody.trim().replace(/[ \t]+/g, " ");
+  const body = normalizeLedgerText(rawBody).trim().replace(/[ \t]+/g, " ");
   if (!body) return "body";
-  if (/[\r\n]/.test(body)) return "body";
+  if (/[\r\n\v\f\x85\u{2028}\u{2029}]/u.test(body)) return "body";
+  if (/\p{Cf}/u.test(body)) return "body";
   if (body.length > BODY_MAX) return "body";
   if (/[〔〕]/.test(body)) return "mark";
   if (/\bsource\s*:/i.test(body)) return "source";
   if (!VERB_RE.test(body)) return "verb";
-  const lower = body.toLowerCase();
-  if (SERVER_LEXICON.some((t) => lower.includes(t)) || LOCAL_PET_NAMES.test(body)) return "lexicon";
+  if (findHardLexicon(body)) return "lexicon";
   const unquoted = stripQuotedStrict(body);
   if (unquoted === null) return "quotes";
+  if (findAddress(unquoted)) return "address";
   const ws = words(unquoted);
   if (ws.some((w) => FIRST_PERSON_WORDS.has(w))) return "first_person";
   if (ws.some((w) => INTERIOR_WORDS.has(w))) return "interior_verb";
+  if (findCompanionInterior(unquoted)) return "interior";
 
   // The number rule. Numbers inside quotes count: a quoted "187" is still a 187.
   const nums = scanLedgerNumbers(body);
@@ -260,12 +357,14 @@ export function preflightLedgerBody(rawBody: string, source?: LedgerPreflightSou
   return null;
 }
 
-/** First-person / interior / lexicon check for handoff metadata (title, loops, steps). */
-function isSelfFree(s: string): boolean {
-  const ws = words(stripQuoted(s));
-  const lower = s.toLowerCase();
+/** First-person / interior / lexicon / address check for handoff metadata (title, loops, steps). */
+function isSelfFree(raw: string): boolean {
+  const s = normalizeLedgerText(raw);
+  const unquoted = stripQuoted(s);
+  const ws = words(unquoted);
   return !ws.some((w) => FIRST_PERSON_WORDS.has(w)) && !ws.some((w) => INTERIOR_WORDS.has(w)) &&
-    !SERVER_LEXICON.some((t) => lower.includes(t)) && !LOCAL_PET_NAMES.test(s) && !s.includes("〔") && !s.includes("〕");
+    !findCompanionInterior(unquoted) && !findHardLexicon(s) && !findAddress(unquoted) &&
+    !s.includes("〔") && !s.includes("〕");
 }
 
 function cleanList(v: unknown): string[] | undefined {

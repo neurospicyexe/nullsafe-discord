@@ -762,3 +762,45 @@ describe("buildWitnessLedgerEntry", () => {
     expect(buildWitnessLedgerEntry({ senderCompanion: "gaia", channelName: "c", channelId: CH, content: "hi", messageId: "m" })).toBeNull();
   });
 });
+
+// ── Final sync pass (2026-09-26): the companion-subject rule, the address/lexicon clauses, commons opt-in ──
+
+describe("preflightLedgerBody: companion subjects, address and lexicon (ported from halseth's grammar)", () => {
+  test("a companion is never the subject of a feeling verb (rule `interior`); humans may love in running text", () => {
+    expect(preflightLedgerBody("Recorded: Drevan loves Raziel.")).toBe("interior");
+    expect(preflightLedgerBody("Recorded: Cypher misses Gaia.")).toBe("interior");
+    expect(preflightLedgerBody("Logged: Cy really needs quiet.")).toBe("interior");
+    expect(preflightLedgerBody("Logged: Blue loves Decker.")).toBeNull();
+    expect(preflightLedgerBody('Logged: Drevan said "I love you" at 00:12.')).toBeNull();
+    expect(preflightLedgerBody("Logged: the cypress needs water.")).toBeNull();
+  });
+  test("address words only when they name someone; the beloved book is a book", () => {
+    expect(preflightLedgerBody("Logged: Raziel, sweetheart.")).toBe("address");
+    expect(preflightLedgerBody("Logged: the beloved book was returned.")).toBeNull();
+    expect(preflightLedgerBody('Logged: Raziel said "love you, baby".')).toBeNull();
+  });
+  test("handoff metadata drops a companion-feeling title and an address", () => {
+    const r = parseClerkResult(JSON.stringify({ title: "Drevan loves the couch", lines: [], open_loops: ["tea, honey", "Raziel asked about tea"] }));
+    expect(r?.title).toBeUndefined();
+    expect(r?.open_loops).toEqual(["Raziel asked about tea"]);
+  });
+  test("the clerk prompt carries the address/lexicon rule and the no-companion-feelings rule", () => {
+    expect(LEDGER_CLERK_PROMPT).toMatch(/Never call anyone anything/);
+    expect(LEDGER_CLERK_PROMPT).toMatch(/never use the triad's private words/);
+    expect(LEDGER_CLERK_PROMPT).toMatch(/A companion's feelings are never recorded/);
+    expect(LEDGER_CLERK_PROMPT).toMatch(/quote the exact words\) and what they did/);
+  });
+});
+
+describe("LibrarianClient.commonsSupply opts into ledger rows", () => {
+  test("sends ?kinds=notes,ledger (halseth serves sibling ledger lines only on opt-in)", async () => {
+    const fetchFn = jest.fn(async () => ({ ok: true, status: 200, json: async () => ({ notes: [] }) }) as unknown as Response);
+    const client = new LibrarianClient({ url: "https://x", secret: "s", companionId: "gaia", fetch: fetchFn as never });
+    await expect(client.commonsSupply(2)).resolves.toEqual([]);
+    const [url] = fetchFn.mock.calls[0] as unknown as [string];
+    const u = new URL(url);
+    expect(u.pathname).toBe("/mind/commons-supply/gaia");
+    expect(u.searchParams.get("limit")).toBe("2");
+    expect(u.searchParams.get("kinds")).toBe("notes,ledger");
+  });
+});
