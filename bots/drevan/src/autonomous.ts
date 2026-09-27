@@ -102,7 +102,7 @@ export function startAutonomous(
       // delaying a legitimate handoff by the full success window.
       await markConsolidated(redis, COMPANION_ID, result.written ? 7200 : 1800);
       if (result.written) {
-        console.log("[consolidation] drevan: session handoff written to Halseth");
+        console.log("[consolidation] drevan: pass written to Halseth (handoff row, or the ledger line under LEDGER_DISTILL)");
       } else {
         console.log(`[consolidation] drevan: skipped (${result.reason}) -- holding 30m before retry`);
       }

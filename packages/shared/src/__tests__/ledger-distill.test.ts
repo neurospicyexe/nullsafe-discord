@@ -142,6 +142,22 @@ describe("LEDGER_CLERK_PROMPT", () => {
     expect(LEDGER_CLERK_PROMPT).toMatch(/Logged:, Counted:, Recorded:, Found:, Missing:/);
     expect(LEDGER_CLERK_PROMPT).toMatch(/Do not add dates, sources, brackets/);
   });
+
+  test("attribution: a companion's claim is recorded as quoted, named speech, never as a fact (the barn scooter)", () => {
+    // Drevan's "purple mobility scooter from the barn" was a confabulation inside his own turn. The
+    // clerk must write `Drevan said "..."`, never "Found: a purple mobility scooter in the barn".
+    expect(LEDGER_CLERK_PROMPT).toContain("anything said in a companion's turn (Drevan, Cypher, Gaia) is speech, not fact");
+    expect(LEDGER_CLERK_PROMPT).toContain("Companions can be wrong or invent things.");
+    expect(LEDGER_CLERK_PROMPT).toContain("ONLY as speech, speaker named and words quoted: Drevan said \"...\".");
+    expect(LEDGER_CLERK_PROMPT).toContain("Never restate it as a fact about the world, about Raziel, or about what happened.");
+    expect(LEDGER_CLERK_PROMPT).toContain("Only statements by Raziel or other humans, and observable events (who spoke, when, how many messages), may be recorded without quotes.");
+    // The attribution rule sits after the quoting rule and before the number rule it must not weaken.
+    const p = LEDGER_CLERK_PROMPT;
+    expect(p.indexOf("quote the exact words in straight double quotes")).toBeLessThan(p.indexOf("Attribution:"));
+    expect(p.indexOf("Attribution:")).toBeLessThan(p.indexOf("- Numbers:"));
+    // The attributed form is one the grammar accepts from a window source.
+    expect(preflightLedgerBody('Recorded: Drevan said "a purple mobility scooter from the barn".', { kind: "window", ref: `${CH} 00:11–00:40` })).toBeNull();
+  });
 });
 
 describe("parseClerkResult", () => {
@@ -606,7 +622,7 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
   const NOW = Date.UTC(2026, 8, 26, 14, 5, 42);
   const LAST = Date.UTC(2026, 8, 26, 11, 20);
 
-  test("M1: ONE deterministic line, no clerk model call; summary = its content; spine stays the narrator's", async () => {
+  test("M1: ONE deterministic line, no clerk model call, NO handoff row; spine stays the narrator's", async () => {
     const lib = makeLib();
     const narrator = { generate: jest.fn(async () => NARRATED) };
     const bootCtx = { sessionId: "sess-old" };
@@ -623,11 +639,9 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
     });
     // The state row never reaches the ledger.
     expect(c[0].body).not.toMatch(/acuity|0\.6|tea/);
-    const h = (lib.writeHandoff.mock.calls[0] as unknown[])[0] as any;
-    expect(h.source).toBe("consolidation");
-    expect(h.title).toBe("Idle consolidation");
-    expect(h.state_hint).toBe("at_rest");
-    expect(h.summary).toBe(rendered(c[0].body, "session", "sess-old"));
+    // Last fix pass: the idle pass writes no wm_session_handoffs row, so orient's latest-3 read keeps
+    // the real handoffs (32 consolidation vs 1 distillation in two days of prod).
+    expect(lib.writeHandoff).not.toHaveBeenCalled();
     expect((lib.sessionClose.mock.calls[0] as unknown[])[0]).toMatchObject({ sessionId: "sess-old", spine: "Nothing moved. The blade stayed sheathed.", closeKind: "consolidation" });
     expect(bootCtx.sessionId).toBe("sess-new");
   });
@@ -643,23 +657,39 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
     expect(consolidationDedupKey("gaia", "s", NOW)).toBe("consolidation:gaia:s:2026-09-26T14:05");
   });
 
-  test("M2: writeHandoff throws after the line landed -> next attempt (later tick) is a NEW line, nothing stale reused", async () => {
-    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+  test("M2: each later tick is a NEW line under a new minute key; never a handoff row", async () => {
     const lib = makeLib();
-    lib.writeHandoff.mockRejectedValueOnce(new Error("handoff 500"));
     const narrator = { generate: jest.fn(async () => NARRATED) };
     const session = { surface: "s", bootCtx: { sessionId: "sess-1" } };
     const r1 = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, lastActivityMs: LAST, now: () => NOW });
-    expect(r1).toEqual({ written: false, reason: "librarian_error" });
-    expect(lib.sessionClose).not.toHaveBeenCalled();
+    expect(r1).toEqual({ written: true });
     const later = NOW + 30 * 60_000;
-    const r2 = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, lastActivityMs: LAST, now: () => later });
+    const r2 = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-1" } }, lastActivityMs: LAST, now: () => later });
     expect(r2).toEqual({ written: true });
     const keys = lib.writeLedger.mock.calls.map((x) => (x[0] as any).dedup_key);
     expect(keys).toEqual(["consolidation:drevan:sess-1:2026-09-26T14:05", "consolidation:drevan:sess-1:2026-09-26T14:35"]);
-    const h2 = (lib.writeHandoff.mock.calls[1] as unknown[])[0] as any;
-    expect(h2.summary).toContain("idle consolidation at 14:35 UTC");
-    err.mockRestore();
+    expect(lib.writeHandoff).not.toHaveBeenCalled();
+  });
+
+  test("health-check heartbeat: the knob-on success log still says 'written via narrator'", async () => {
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    const lib = makeLib();
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    await consolidateSession({ companionId: "cypher", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-2" } }, now: () => NOW });
+    const lines = log.mock.calls.map((a) => String(a[0]));
+    expect(lines.some((l) => l.includes("[consolidation]") && l.includes("written via narrator"))).toBe(true);
+    log.mockRestore();
+  });
+
+  test("knob OFF is unchanged: the consolidation still writes its handoff row", async () => {
+    process.env["LEDGER_DISTILL"] = "off";
+    const lib = makeLib();
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-3" } }, now: () => NOW });
+    expect(r).toEqual({ written: true });
+    expect(lib.writeLedger).not.toHaveBeenCalled();
+    expect(lib.writeHandoff).toHaveBeenCalledTimes(1);
+    expect((lib.writeHandoff.mock.calls[0] as unknown[])[0]).toMatchObject({ source: "consolidation", summary: "Nothing moved. The blade stayed sheathed." });
   });
 
   test("M3: a transient ledger failure retries inline under the same key", async () => {
@@ -686,7 +716,7 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
     }
     const loud = warn.mock.calls.map((a) => String(a[0])).filter((l) => l.includes("LOUD"));
     expect(loud).toHaveLength(1);
-    expect(loud[0]).toMatch(/NO consolidation handoff/);
+    expect(loud[0]).toMatch(/NO consolidation ledger line/);
     expect(lib.sessionOpen).toHaveBeenCalledWith("work", "discord:gaia");
     expect(narrator.generate).not.toHaveBeenCalled();
 
@@ -711,7 +741,7 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
     warn.mockRestore();
   });
 
-  test("line not accepted (404) -> no handoff, no session cycle, never retried", async () => {
+  test("line not accepted (404) -> no session cycle, never retried, no handoff", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const lib = makeLib(() => ({ ok: false, status: 404 }));
     const narrator = { generate: jest.fn(async () => NARRATED) };

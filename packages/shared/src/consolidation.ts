@@ -3,7 +3,7 @@ import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
 import { buildNarratorPrompt } from "./consolidation-narrator.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
-import { ledgerDistillEnabled, postLedgerLines, ledgerSummary, staleHandoffReason } from "./ledger-clerk.js";
+import { ledgerDistillEnabled, postLedgerLines, staleHandoffReason } from "./ledger-clerk.js";
 
 /** Placeholder session ids: boot never opened a real session, so there is nothing to point at. */
 function isRealSessionId(id: string | undefined): id is string {
@@ -21,7 +21,8 @@ export function _resetConsolidationWarningsForTests(): void { warnedNoSession.cl
 
 /**
  * LEDGER_DISTILL context threaded into finishHandoff (2026-09-26, imp lane tranche 2). The
- * handoff SUMMARY becomes ONE deterministic ledger line with a `session <id>` source (the idle
+ * pass writes ONE deterministic ledger line with a `session <id>` source and NO handoff row (last
+ * fix pass: the idle rows displaced real handoffs from orient's latest-3 read). (Source = the idle
  * session being consolidated -- consolidation has no channel and no STM, so a window source does
  * not exist here). The narrator still runs: its summary remains the session-close SPINE, which
  * spec section 6 leaves unchanged in this tranche.
@@ -105,16 +106,20 @@ export interface ConsolidationOpts {
 }
 
 /**
- * Idle consolidation: narrate a close spine, write the handoff, cycle the session.
+ * Idle consolidation: narrate a close spine, write the handoff (knob off) or the one ledger line
+ * (knob on), cycle the session.
  *
- * CALL BUDGET (LEDGER_DISTILL on, 2026-09-26 review). The bots' cron ticks every 5 minutes but only
- * acts when idle and not held; it holds 7200s after a written handoff and 1800s after ANY other
- * outcome (every early return below included), so at most 48 attempts per companion per day
+ * CALL BUDGET (LEDGER_DISTILL on, 2026-09-26 review; handoff row dropped in the last fix pass). The
+ * bots' cron ticks every 5 minutes but only acts when idle and not held; it holds 7200s after a
+ * `written: true` pass (knob on: the ledger line landed and the session cycled) and 1800s after ANY
+ * other outcome (every early return below included), so at most 48 attempts per companion per day
  * (12/day when every attempt succeeds). Each attempt spends at most ONE model call (the narrator, or
- * its Hermes fallback) and zero clerk calls; the ledger line is built in code. Ledger POSTs: one per
- * attempt, at most 4 with transient retries. A placeholder session id adds at most one sessionOpen
- * per attempt. So: <= 48 model calls/companion/day, <= 144 across the triad, none of them retrying
- * a deterministic 422.
+ * its Hermes fallback: its reply is the close spine only) and zero clerk calls; the ledger line is
+ * built in code. Ledger POSTs: one per attempt, at most 4 with transient retries. Handoff writes:
+ * ZERO under the knob (wm_session_handoffs is left to real distillations and closes, which orient's
+ * latest-3 read would otherwise lose to ~12 idle rows a day). A placeholder session id adds at most
+ * one sessionOpen per attempt. So: <= 48 model calls/companion/day, <= 144 across the triad, none of
+ * them retrying a deterministic 422.
  */
 export async function consolidateSession(
   opts: ConsolidationOpts,
@@ -198,8 +203,8 @@ export async function consolidateSession(
   // Fall back to `inference` whenever the narrator or the identity file is unavailable. The fallback
   // is more expensive, not broken: it is exactly the behaviour that shipped before this change, lane
   // rotation included. Degrading loudly beats a consolidation that stops writing.
-  // No source, no write: under LEDGER_DISTILL the handoff summary is ledger lines pointing at the
-  // session being consolidated. Without a real session id there is nothing to point at, so skip
+  // No source, no write: under LEDGER_DISTILL the pass's only record is a ledger line pointing at
+  // the session being consolidated. Without a real session id there is nothing to point at, so skip
   // BEFORE spending inference.
   let ledger: LedgerCtx | undefined;
   if (ledgerDistillEnabled()) {
@@ -209,8 +214,8 @@ export async function consolidateSession(
         warnedNoSession.add(companionId);
         console.warn(
           `[consolidation] ${companionId}: LOUD -- LEDGER_DISTILL on and the session id is ` +
-          `"${sid ?? "none"}" (boot never opened a real Halseth session). NO consolidation handoff ` +
-          `can be written until a real session id exists (restart, or the re-open below succeeding). ` +
+          `"${sid ?? "none"}" (boot never opened a real Halseth session). NO consolidation ledger line ` +
+          `(and no session cycle) can be written until a real session id exists (restart, or the re-open below succeeding). ` +
           `Trying to re-open on the bot surface each attempt; this warning prints once per process.`,
         );
       }
@@ -234,7 +239,7 @@ export async function consolidateSession(
         }
       }
       if (!isRealSessionId(sid)) {
-        console.warn(`[consolidation] ${companionId}: LEDGER_DISTILL on and no real session id -- no source, skipping handoff`);
+        console.warn(`[consolidation] ${companionId}: LEDGER_DISTILL on and no real session id -- no source, skipping the pass`);
         return { written: false, reason: "no_source" };
       }
     }
@@ -354,16 +359,19 @@ async function finishHandoff(
 }
 
 /**
- * Knob-on tail of finishHandoff. The narrator's parsed handoff is kept ONLY as the close spine and
- * state_hint (unchanged in T2); the handoff row's summary is the ONE deterministic ledger line's
- * server-rendered content, mark intact. Not accepted (404, transport after retries, a same-minute
- * duplicate) means no handoff and no cycle -- nothing sourced to write, and a close without a
- * landed handoff is the defect cycleSession's ordering prevents.
+ * Knob-on tail of finishHandoff. Writes the ONE deterministic ledger line and cycles the session;
+ * writes NO wm_session_handoffs row (2026-09-26 last fix pass).
  *
- * If writeHandoff throws after the line was accepted, the line stays in the ledger (it is true: the
- * pass ran) and nothing is carried to the next attempt. That attempt, on a later tick, has a new
- * minute, so a new key, a new 201 and fresh content -- never a stale reuse and never a silent
- * duplicate. Still stamps `source: "consolidation"` (the guarantee this function pair exists to hold).
+ * Why no handoff: prod showed 32 consolidation handoffs against 1 distillation in two days, and
+ * orient reads the latest 3 handoffs unfiltered. A content-free "idle consolidation" handoff every
+ * ~2h pushes the real ones (a Discord conversation's distilled record, a Claude.ai close) out of
+ * Claude.ai's latest_handoff. The ledger line already records that the pass ran and when the channel
+ * last moved; a handoff carrying the same line added nothing but displacement.
+ *
+ * The narrator's parsed reply is kept ONLY as the close spine (cycleSession, unchanged in T2).
+ * Not accepted (404, transport after retries, a same-minute duplicate) means no cycle: a close
+ * without a landed sourced record is the defect cycleSession's ordering prevents. Accepted means
+ * `written: true`, so the cron holds the full success window (7200s), exactly as before.
  */
 async function finishLedgerHandoff(
   narrated: { title: string; summary: string; state_hint?: string; open_loops?: unknown },
@@ -384,25 +392,15 @@ async function finishLedgerHandoff(
     ...(ledger.retryDelaysMs ? { retryDelaysMs: ledger.retryDelaysMs } : {}),
   });
   if (outcome.accepted.length === 0) {
-    console.warn(`[consolidation] ${companionId}: ledger line not accepted (${staleHandoffReason(outcome)}) -- handoff skipped`);
+    console.warn(`[consolidation] ${companionId}: ledger line not accepted (${staleHandoffReason(outcome)}) -- no session cycle`);
     return { written: false, reason: "no_ledger_lines" };
   }
 
-  try {
-    await librarian.writeHandoff({
-      title: "Idle consolidation",
-      summary: ledgerSummary(outcome),
-      state_hint: typeof narrated.state_hint === "string" ? narrated.state_hint : undefined,
-      source: "consolidation",
-    });
-    // Keep "written via <via>": ops/health-check.py check_direct_inference greps it.
-    console.log(`[consolidation] ${companionId}: ledger handoff written via ${via} (${outcome.accepted.length} line(s))`);
-    if (session) await cycleSession(session, narrated, companionId, librarian);
-    return { written: true };
-  } catch (e) {
-    console.error(`[consolidation] ${companionId}: librarian write error`, e);
-    return { written: false, reason: "librarian_error" };
-  }
+  // Keep "written via <via>": ops/health-check.py check_direct_inference greps it as the narrator
+  // chain's heartbeat. What was written is the ledger line; no handoff row exists under the knob.
+  console.log(`[consolidation] ${companionId}: ledger line written via ${via} (${outcome.accepted.length} line(s)); no handoff row (LEDGER_DISTILL)`);
+  if (session) await cycleSession(session, narrated, companionId, librarian);
+  return { written: true };
 }
 
 /**

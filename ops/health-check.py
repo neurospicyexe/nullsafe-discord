@@ -1332,7 +1332,10 @@ def check_direct_inference(rep):
     bare `pm2 restart --update-env`) 402ing on a $0 balance for 12h, while the boot log said
     "deepinfra-first" and the balance check said "primary unaffected". Read the symptom, not the
     label: N skips in the last 3h across the bot logs, with no narrator success in between, is a
-    dead chain whatever the cause."""
+    dead chain whatever the cause.
+    Under LEDGER_DISTILL the success line reads "ledger line written via narrator ... no handoff row"
+    (consolidation writes no handoff row there); the "written via narrator" substring is kept on
+    purpose so this heartbeat keeps counting it."""
     import glob, re, time
     from datetime import datetime, timedelta
     # pm2 stamps these logs in the VPS's LOCAL zone (CDT), not UTC -- the OPS-MANUAL trap. Compare

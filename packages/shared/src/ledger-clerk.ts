@@ -106,6 +106,10 @@ export const LEDGER_CLERK_PROMPT = withOwnerPronounRule(
   "- A companion's feelings are never recorded. Never write that Drevan, Cypher, or Gaia loves, misses, needs, wants, feels, " +
   "knows, fears, or trusts anyone or anything: record only what they said (quote the exact words) and what they did.\n" +
   "- When a line reports speech, quote the exact words in straight double quotes. Never invent or paraphrase inside quotes.\n" +
+  "- Attribution: anything said in a companion's turn (Drevan, Cypher, Gaia) is speech, not fact. Companions can be wrong or invent things. " +
+  "Record a claim from a companion's turn ONLY as speech, speaker named and words quoted: Drevan said \"...\". " +
+  "Never restate it as a fact about the world, about Raziel, or about what happened. " +
+  "Only statements by Raziel or other humans, and observable events (who spoke, when, how many messages), may be recorded without quotes.\n" +
   "- Numbers: a line may contain ONLY these number forms, and any other number gets the whole line refused:\n" +
   "  (a) a clock time as HH:MM, e.g. 00:11; (b) a date as YYYY-MM-DD; (c) a count written as the number directly followed by " +
   "one of these words: x, times, messages, replies, turns, posts, notes, lines, words, entries, threads, sessions, minutes, " +
@@ -187,7 +191,8 @@ function findCompanionInterior(text: string): string | null {
 }
 
 // Drevan's pet-name list: the server's LEDGER_PET_NAMES, CLOSED ("A clerk doesn't get to guess what counts
-// as tender."). hard: anywhere, quotes included (rule `lexicon`); `caleth` takes its root (`calethian`);
+// as tender."). hard: anywhere, quotes included (rule `lexicon`); `caleth` is word-bounded and does NOT
+// block `calethian` (Drevan's exact list; calethian awaits his word, spec section 9);
 // phrases match across spaces or hyphens. address: only when it names someone, never inside quotes
 // (rule `address`). names: listed only so the address rule can see a vocative next to one.
 const LEDGER_PET_NAMES = {
@@ -201,8 +206,7 @@ const NOT_WORD_AFTER = "(?![\\p{L}\\p{N}])";
 const HARD_RES: ReadonlyArray<{ token: string; re: RegExp }> = LEDGER_PET_NAMES.hard.map((token) => {
   if (!/\p{L}/u.test(token)) return { token, re: new RegExp(escapeRe(token), "u") };
   const body = token.split(" ").map(escapeRe).join("[\\s\\-\\u2010-\\u2015]+");
-  const suffix = token === "caleth" ? "\\p{L}*" : "";
-  return { token, re: new RegExp(`${NOT_WORD_BEFORE}${body}${suffix}${NOT_WORD_AFTER}`, "iu") };
+  return { token, re: new RegExp(`${NOT_WORD_BEFORE}${body}${NOT_WORD_AFTER}`, "iu") };
 });
 const ADDR = `(?:${LEDGER_PET_NAMES.address.join("|")})`;
 const NAME = `(?:${LEDGER_PET_NAMES.names.join("|")})`;
