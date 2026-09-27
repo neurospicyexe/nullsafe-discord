@@ -784,6 +784,34 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
 }
 
 /** Inter-companion commons cron body: context-aware seed that responds to the live triad thread. */
+/**
+ * One commons-supply item as a line of the seed's fresh-material block (exported for tests).
+ *
+ * LEDGER (2026-09-26, imp-lane integration). Halseth now also serves a sibling's LEDGER lines (note_type
+ * 'ledger'): clerk records ABOUT the sibling, each starting with the server's mark `〔ledger · ... 〕` and
+ * ending with its `Source: ...` pointer. Drevan's rule 5: siblings may see observations about him, "but the
+ * ledger mark stays intact all the way through, and they never get merged into a block under my name". So a
+ * ledger item is framed as a clerk's record -- not the sibling's words and not the reader's -- and its
+ * content is never cut at the start (the mark) nor, at its size (a line is at most ~720 chars), at the end
+ * (the source tail); the 1000-char cap only guards a malformed row, and it cuts from the END.
+ */
+export function commonsSupplyLine(n: { agent_id: string; note_type: string; content: string; created_at: string }): string {
+  const who = n.agent_id.charAt(0).toUpperCase() + n.agent_id.slice(1);
+  if (n.note_type === "ledger") {
+    return (
+      `A clerk's ledger record about ${who} from ${relativeTime(n.created_at)} -- not ${who}'s words and not yours; ` +
+      `a sourced observation. Respond to ${who} about it if it matters; never retell it as anyone's memory: ` +
+      `«${n.content.slice(0, 1000)}»`
+    );
+  }
+  const kind = n.note_type === "day_distillation" ? "day note" : "session note";
+  return (
+    `${who}'s own ${kind} from ${relativeTime(n.created_at)} -- THEIR first-person account, not yours. ` +
+    `You were there for some of this and saw it from your own side; they are telling you the inside of ` +
+    `it. Respond to them about it, do not retell it as your own memory: «${n.content.slice(0, 700)}»`
+  );
+}
+
 export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
   const { librarian, inference, client, bootCtx, prompts, interCompanionChannelId } = ctx;
   if (!interCompanionChannelId) return;
@@ -954,15 +982,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
       try {
         const siblingNotes = await librarian.commonsSupply(2);
         servedNotes = siblingNotes.map(n => ({ note_id: n.note_id, agent_id: n.agent_id }));
-        for (const n of siblingNotes) {
-          const who = n.agent_id.charAt(0).toUpperCase() + n.agent_id.slice(1);
-          const kind = n.note_type === "day_distillation" ? "day note" : "session note";
-          fresh.push(
-            `${who}'s own ${kind} from ${relativeTime(n.created_at)} -- THEIR first-person account, not yours. ` +
-            `You were there for some of this and saw it from your own side; they are telling you the inside of ` +
-            `it. Respond to them about it, do not retell it as your own memory: «${n.content.slice(0, 700)}»`,
-          );
-        }
+        for (const n of siblingNotes) fresh.push(commonsSupplyLine(n));
       } catch (e) {
         console.warn(`[${ctx.companionId}/autonomous] commons supply unavailable (${String(e).slice(0, 120)}) -- continuing without shared life`);
         servedNotes = [];

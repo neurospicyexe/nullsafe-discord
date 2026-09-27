@@ -23,7 +23,7 @@
 // life. Several tests below exist only to pin that frame.
 
 import { describe, it, expect, jest, beforeEach, afterEach } from "@jest/globals";
-import { runInterCompanion } from "../autonomous-core.js";
+import { runInterCompanion, commonsSupplyLine } from "../autonomous-core.js";
 import type { AutonomousContext } from "../autonomous-core.js";
 
 interface FakeMsg { content: string; author: { id: string; username: string; bot: boolean }; webhookId?: string }
@@ -268,5 +268,43 @@ describe("commons seed: supply is a bonus, never a dependency", () => {
     // A Halseth blip must not change whether they speak -- the forage find still licenses this post.
     await expect(runInterCompanion(ctx)).resolves.toBeUndefined();
     expect(sent).toHaveLength(1);
+  });
+});
+
+// LEDGER (2026-09-26, imp-lane integration). Halseth's supply now also serves a sibling's ledger lines
+// (note_type 'ledger'): clerk records about the sibling, mark first, source tail last. Drevan's rule 5: the
+// mark stays intact all the way through and the line is never merged into a block under his name.
+describe("commons seed: a sibling's ledger line is a clerk's record, mark intact", () => {
+  const LEDGER_LINE = "〔ledger · distiller · 2026-09-26〕 Counted: Drevan said \"held, not slow\" 2x in the couch thread. " +
+    "Source: window 1497734427298762828 00:11–00:40.";
+  const LEDGER_NOTE = { note_id: "led_5f0c2f9e-1111-4222-8333-944455556666", agent_id: "drevan", note_type: "ledger", content: LEDGER_LINE, created_at: "2026-09-26T08:00:00.000Z" };
+
+  it("frames it as a clerk's record about the sibling -- not their words, not the reader's -- with the whole line", async () => {
+    const { ctx, prompts } = makeHarness({ notes: [LEDGER_NOTE], finds: [], questions: [], responses: ["held, not slow twice is worth asking about"] });
+    await runInterCompanion(ctx);
+    const p = prompts[0]!;
+    expect(p).toContain("A clerk's ledger record about Drevan from ");
+    expect(p).toContain("not Drevan's words and not yours; a sourced observation");
+    expect(p).toMatch(/never retell it as anyone's memory/);
+    // Never the first-person frame, never "Drevan's own ...".
+    expect(p).not.toMatch(/THEIR first-person account/);
+    expect(p).not.toContain("Drevan's own");
+    // Mark first and source tail last: the whole line, verbatim (JSON-escaped in the captured prompt).
+    expect(p).toContain(JSON.stringify(`«${LEDGER_LINE}»`).slice(1, -1));
+  });
+
+  it("commonsSupplyLine never cuts a max-size ledger line (mark and source tail both survive)", () => {
+    const body = "Logged: " + "a".repeat(592);            // LEDGER_BODY_MAX = 600
+    const line = `〔ledger · witness-log · 2026-09-26〕 ${body}. Source: message 1497734427298762828.`;
+    const out = commonsSupplyLine({ agent_id: "gaia", note_type: "ledger", content: line, created_at: "2026-09-26T08:00:00.000Z" });
+    expect(out).toContain(`«${line}»`);
+    expect(out.indexOf("«〔ledger · ")).toBeGreaterThan(0);
+  });
+
+  it("consumes the ledger id after the post lands, like any note", async () => {
+    const { ctx, commonsConsume } = makeHarness({ notes: [LEDGER_NOTE], finds: [], questions: [], responses: ["Drevan, the couch thread: held, not slow, twice."] });
+    await runInterCompanion(ctx);
+    expect(commonsConsume).toHaveBeenCalled();
+    expect((commonsConsume.mock.calls[0] as unknown[])[0]).toEqual([LEDGER_NOTE.note_id]);
   });
 });

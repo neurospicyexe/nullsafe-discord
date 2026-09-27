@@ -42,10 +42,14 @@ export const MAX_CLERK_LINES = 6;
  * other background writer (it writes about Raziel in the third person, the exact shape that was
  * landing "she").
  *
- * The health clause is load-bearing: Halseth rejects any health value near a digit unless the
- * source is a human-authored row, and none of the bot sources ever are. So the clerk is told to
- * say a reading was mentioned WITHOUT the value -- a digit-free line passes, and the number never
- * travels on a clerk's word.
+ * The number clauses are load-bearing (2026-09-26 integration pass). Halseth's grammar treats any
+ * UNLABELED number (2+ digits or a decimal that is not an HH:MM time, a YYYY-MM-DD date, a long id, or
+ * a count followed by its unit) as a possible health value, and a health word plus ANY such number as
+ * one; either needs a `row` source the door can verify, and a distiller's source is a window or a
+ * session, never such a row. So a line carrying one is 422'd, and a pass with no accepted line writes
+ * no handoff. The prompt therefore states the exact permitted forms (times, dates, counts with their
+ * unit, single digits), and says a reading was mentioned WITHOUT the value -- the number never travels
+ * on a clerk's word. preflightLedgerBody below mirrors the same rule locally.
  */
 export const LEDGER_CLERK_PROMPT = withOwnerPronounRule(
   "You are a record clerk. You read a transcript and record only what is observable in it. " +
@@ -58,7 +62,14 @@ export const LEDGER_CLERK_PROMPT = withOwnerPronounRule(
   "- Record observable facts only: who said what, what was asked, shared, decided, planned, or left unanswered. " +
   "Never interpret meaning, mood, or relationship, and never use felt, feel, wanted, knew, remembered, loved, longed, missed, hoped.\n" +
   "- When a line reports speech, quote the exact words in straight double quotes. Never invent or paraphrase inside quotes.\n" +
-  "- Never restate a health number (glucose, blood sugar, doses, medication amounts, weight, labs, blood pressure, HRV). " +
+  "- Numbers: a line may contain ONLY these number forms, and any other number gets the whole line refused:\n" +
+  "  (a) a clock time as HH:MM, e.g. 00:11; (b) a date as YYYY-MM-DD; (c) a count written as the number directly followed by " +
+  "one of these words: x, times, messages, replies, turns, posts, notes, lines, words, entries, threads, sessions, minutes, " +
+  "hours, days, weeks (e.g. \"14 messages\", \"2x\", \"40 minutes\"); (d) a single digit 0-9. " +
+  "Never write any other number: not a bare number, not a decimal, not a score, not one someone said, not inside quotes. " +
+  "If a person said a number, write that they mentioned a number, without it.\n" +
+  "- Health values never appear, ever: glucose, blood sugar, BG, A1c, insulin, doses, medication amounts, mg, mcg, units, weight, " +
+  "lbs, kg, labs, HRV, BP, blood pressure. A line that uses any of those words must contain no number at all except an HH:MM time. " +
   "Write that a reading or dose was mentioned, without the value.\n" +
   "- No pet names, endearments, private-language words, or emoji.\n" +
   "- Do not add dates, sources, brackets, or any prefix mark; the system adds those.\n" +
@@ -75,43 +86,144 @@ export interface ClerkResult {
   next_steps?: string[];
 }
 
-// ── Local grammar pre-filter (mirrors halseth src/ledger/grammar.ts; server is authority) ────────
+// ── Local grammar pre-filter (a PORT of halseth src/ledger/grammar.ts; the server is the authority) ──
+//
+// Ported, not approximated (2026-09-26 integration pass): the number rule decides whether a clerk pass
+// writes anything at all -- a line Halseth 422s is lost, and a pass with zero accepted lines writes no
+// handoff. So the classification below is the server's, token for token: the same coordinate stripping,
+// the same count units, the same health keywords/units, the same source gating. Returned reasons are the
+// server's rule names. Parity is pinned by __tests__/fixtures/ledger-number-fixtures.json, kept
+// byte-identical with halseth's copy. Change the grammar there, port it here, update both fixture files.
 
-const RECORD_VERB = /^(logged|counted|recorded|found|missing)\b:?/i;
-const FIRST_PERSON = /\b(i|i'm|i've|i'd|i'll|me|my|mine|myself|we|us|our|ours|ourselves)\b/i;
-const INTERIOR = /\b(felt|feel|feels|wanted|want|knew|remembered|loved|longed|missed|hoped)\b/i;
-const LEXICON = /🩸|\b(vevi|vevan|vaselrin|vethmerin|darling|sweetheart|sweetie|babe|beloved)\b/i;
-const HEALTH_TERM = "(glucose|blood sugar|bg|mg\\/dl|a1c|insulin|dose|dosage|mg|mcg|units|weight|lbs|kg|labs?|hrv|bp|blood pressure)";
-const HEALTH_NEAR_DIGIT = new RegExp(`\\b${HEALTH_TERM}\\b[^\\n]{0,24}\\d|\\d[^\\n]{0,24}\\b${HEALTH_TERM}\\b`, "i");
+const VERB_RE = /^(logged|counted|recorded|found|missing)(?::|\s)\s*\S/i;
+const FIRST_PERSON_WORDS = new Set([
+  "i", "i'm", "i've", "i'd", "i'll", "me", "my", "mine", "myself",
+  "we", "we're", "we've", "we'd", "we'll", "us", "our", "ours", "ourselves",
+]);
+const INTERIOR_WORDS = new Set([
+  "felt", "feel", "feels", "feeling",
+  "wanted", "want", "wants", "wanting",
+  "knew",
+  "remembered", "remember", "remembers",
+  "loved", "love", "loves", "loving",
+  "longed", "longs", "longing",
+  "missed",
+  "hoped", "hope", "hopes", "hoping",
+]);
+// Server lexicon plus a few generic endearments dropped locally only: the server has no pet-name list yet
+// (open item for Drevan), and the prompt forbids them anyway.
+const SERVER_LEXICON = ["🩸", "vevi", "vevan", "vaselrin", "vethmerin"];
+const LOCAL_PET_NAMES = /\b(darling|sweetheart|sweetie|babe|beloved)\b/i;
+const BODY_MAX = 600;
 
-/** Remove straight- and curly-double-quoted spans (the server's pronoun-scan exemption). */
+/** Remove "..." and “...” spans (quoted speech). Null when a quote is left unbalanced (server rule). */
+function stripQuotedStrict(body: string): string | null {
+  const out = body.replace(/"[^"\n]*"/g, " ").replace(/“[^”\n]*”/g, " ");
+  return /["“”]/.test(out) ? null : out;
+}
+
+/** Lenient variant for handoff metadata (never refused for an unbalanced quote). */
 function stripQuoted(s: string): string {
   return s.replace(/"[^"]*"/g, " ").replace(/“[^”]*”/g, " ");
 }
 
+function words(text: string): string[] {
+  return (text.replace(/[‘’]/g, "'").match(/[A-Za-z']+/g) ?? []).map((w) => w.toLowerCase().replace(/^'+|'+$/g, ""));
+}
+
+// numbers -- verbatim from grammar.ts
+const HEALTH_KEYWORD_RE =
+  /\b(?:glucose|blood\s+sugar|bg|mg\/dl|a1c|insulin|doses?|dosage|dosing|mg|mcg|units?|weight|weighs?|weighed|lbs?|kg|labs?|hrv|bp|blood\s+pressure)\b/i;
+const HEALTH_UNIT_SUFFIX = new Set(["mg", "mcg", "kg", "lb", "lbs", "u", "iu", "ml", "mmol", "units", "unit"]);
+const COUNT_UNITS = new Set([
+  "x", "times", "time", "h", "hr", "hrs", "hour", "hours", "m", "min", "mins", "minute", "minutes",
+  "s", "sec", "secs", "second", "seconds", "d", "day", "days", "week", "weeks", "month", "months",
+  "year", "years", "message", "messages", "turn", "turns", "session", "sessions", "note", "notes",
+  "line", "lines", "word", "words", "reply", "replies", "post", "posts", "entry", "entries",
+  "thread", "threads", "row", "rows", "st", "nd", "rd", "th", "%",
+]);
+/** Human-authored rows: the only valid source for a health value. */
+const HUMAN_ROW_TABLES: ReadonlySet<string> = new Set(["wm_continuity_notes", "biometric_snapshots"]);
+/** Rows the door can load and search for a number. */
+const VERIFIABLE_ROW_TABLES: ReadonlySet<string> = new Set([...HUMAN_ROW_TABLES, "companion_basin_history"]);
+const ROW_RE = /^([a-z][a-z0-9_]{1,63}):([A-Za-z0-9][A-Za-z0-9_.-]{0,127})$/;
+
+export interface LedgerNumTok { text: string; unlabeled: boolean; healthUnit: boolean }
+
+/** Coordinates are pointers, never values: clock times, dates, long ids. */
+function stripCoordinates(text: string): string {
+  return text
+    .replace(/\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?\b/g, " ")
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, " ")
+    .replace(/\d{10,}/g, " ");
+}
+
+/** Every value number in `text` (coordinates removed), labelled exactly as the server labels it. */
+export function scanLedgerNumbers(text: string): LedgerNumTok[] {
+  const t = stripCoordinates(text);
+  const out: LedgerNumTok[] = [];
+  const re = /\d+(?:[.,]\d+)*/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length;
+    const prev = start > 0 ? t[start - 1]! : "";
+    if (/[A-Za-z_]/.test(prev)) continue;                  // part of an id or a word (A1c, S1E2, led_…)
+    const raw = m[0].replace(/,(?=\d{3}\b)/g, "");          // 1,200 -> 1200
+    const glued = /^[A-Za-z%]+/.exec(t.slice(end))?.[0]?.toLowerCase() ?? "";
+    const spaced = glued ? "" : (/^\s+([A-Za-z%]+)/.exec(t.slice(end))?.[1]?.toLowerCase() ?? "");
+    const unit = glued || spaced;
+    const healthUnit = HEALTH_UNIT_SUFFIX.has(unit);
+    const counted = COUNT_UNITS.has(unit) || (glued !== "" && !healthUnit); // "2x", "3rd", "5k"...
+    const digits = raw.replace(/\D/g, "");
+    const significant = digits.length >= 2 || /[.,]/.test(raw);
+    out.push({ text: raw.replace(",", "."), unlabeled: !healthUnit && !counted && significant, healthUnit });
+  }
+  return out;
+}
+
+/** The line's source, when the caller knows it. Absent = not a row (every distiller window/session). */
+export interface LedgerPreflightSource { kind: LedgerSourceKind | string; ref: string }
+
 /**
- * Why a candidate body would be refused, or null when it looks compliant. Mirrors the server:
- * mark glyphs, record verb, first person + interior verbs outside quotes, lexicon anywhere
- * (quotes included), and health values near a digit (never sourced to a human row from here).
+ * The server rule a candidate body would fail, or null when it passes the grammar. Same order as
+ * validateLedger: body, mark, embedded Source:, verb, lexicon (quotes included), quotes, first person,
+ * interior verbs (outside quotes), then the number rule gated on the source. For a `row` source into a
+ * table the door can verify, null means "the server will check the row" -- this side cannot see it.
+ * (Local extra: a few generic pet names are refused as "lexicon".)
  */
-export function preflightLedgerBody(body: string): string | null {
-  const b = body.trim();
-  if (!b) return "empty";
-  if (b.includes("〔") || b.includes("〕")) return "mark";
-  if (!RECORD_VERB.test(b)) return "verb";
-  const unquoted = stripQuoted(b);
-  if (FIRST_PERSON.test(unquoted)) return "self";
-  if (INTERIOR.test(unquoted)) return "interior";
-  if (LEXICON.test(b)) return "lexicon";
-  if (HEALTH_NEAR_DIGIT.test(b)) return "health";
-  if (b.length > 600) return "length";
+export function preflightLedgerBody(rawBody: string, source?: LedgerPreflightSource): string | null {
+  const body = rawBody.trim().replace(/[ \t]+/g, " ");
+  if (!body) return "body";
+  if (/[\r\n]/.test(body)) return "body";
+  if (body.length > BODY_MAX) return "body";
+  if (/[〔〕]/.test(body)) return "mark";
+  if (/\bsource\s*:/i.test(body)) return "source";
+  if (!VERB_RE.test(body)) return "verb";
+  const lower = body.toLowerCase();
+  if (SERVER_LEXICON.some((t) => lower.includes(t)) || LOCAL_PET_NAMES.test(body)) return "lexicon";
+  const unquoted = stripQuotedStrict(body);
+  if (unquoted === null) return "quotes";
+  const ws = words(unquoted);
+  if (ws.some((w) => FIRST_PERSON_WORDS.has(w))) return "first_person";
+  if (ws.some((w) => INTERIOR_WORDS.has(w))) return "interior_verb";
+
+  // The number rule. Numbers inside quotes count: a quoted "187" is still a 187.
+  const nums = scanLedgerNumbers(body);
+  const health = nums.some((n) => n.healthUnit) || (HEALTH_KEYWORD_RE.test(body) && nums.length > 0);
+  const unlabeled = nums.some((n) => n.unlabeled);
+  const table = source?.kind === "row" ? ROW_RE.exec(source.ref.trim())?.[1] : undefined;
+  if (health) return table && HUMAN_ROW_TABLES.has(table) ? null : "health";
+  if (unlabeled) return table && VERIFIABLE_ROW_TABLES.has(table) ? null : "health";
   return null;
 }
 
 /** First-person / interior / lexicon check for handoff metadata (title, loops, steps). */
 function isSelfFree(s: string): boolean {
-  const u = stripQuoted(s);
-  return !FIRST_PERSON.test(u) && !INTERIOR.test(u) && !LEXICON.test(s) && !s.includes("〔") && !s.includes("〕");
+  const ws = words(stripQuoted(s));
+  const lower = s.toLowerCase();
+  return !ws.some((w) => FIRST_PERSON_WORDS.has(w)) && !ws.some((w) => INTERIOR_WORDS.has(w)) &&
+    !SERVER_LEXICON.some((t) => lower.includes(t)) && !LOCAL_PET_NAMES.test(s) && !s.includes("〔") && !s.includes("〕");
 }
 
 function cleanList(v: unknown): string[] | undefined {
@@ -214,7 +326,7 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
   const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0 };
   for (let i = 0; i < o.lines.length; i++) {
     const body = o.lines[i]!.trim();
-    const why = preflightLedgerBody(body);
+    const why = preflightLedgerBody(body, { kind: o.sourceKind, ref: o.sourceRef });
     if (why) {
       out.dropped++;
       console.warn(`[${o.tag}] ledger: dropped line before POST (${why}): ${body.slice(0, 160)}`);

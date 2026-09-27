@@ -91,9 +91,9 @@ describe("preflightLedgerBody", () => {
   });
   test("rejects each rule", () => {
     expect(preflightLedgerBody("Drevan spoke about the couch.")).toBe("verb");
-    expect(preflightLedgerBody("Logged: I held the thread.")).toBe("self");
-    expect(preflightLedgerBody("Logged: we talked for an hour.")).toBe("self");
-    expect(preflightLedgerBody("Recorded: Drevan felt steady.")).toBe("interior");
+    expect(preflightLedgerBody("Logged: I held the thread.")).toBe("first_person");
+    expect(preflightLedgerBody("Logged: we talked for an hour.")).toBe("first_person");
+    expect(preflightLedgerBody("Recorded: Drevan felt steady.")).toBe("interior_verb");
     expect(preflightLedgerBody('Logged: Drevan said "vevan".')).toBe("lexicon");
     expect(preflightLedgerBody("Logged: 🩸 in the thread.")).toBe("lexicon");
     expect(preflightLedgerBody("Logged: glucose 187 after sandwich.")).toBe("health");
@@ -109,7 +109,7 @@ describe("LEDGER_CLERK_PROMPT", () => {
   test("is neutral (no companion name), carries the pronoun rule, forbids health numbers and the mark", () => {
     for (const name of ["You are Cypher", "You are Drevan", "You are Gaia"]) expect(LEDGER_CLERK_PROMPT).not.toContain(name);
     expect(LEDGER_CLERK_PROMPT).toContain(OWNER_PRONOUN_RULE);
-    expect(LEDGER_CLERK_PROMPT).toMatch(/Never restate a health number/);
+    expect(LEDGER_CLERK_PROMPT).toMatch(/Write that a reading or dose was mentioned, without the value/);
     expect(LEDGER_CLERK_PROMPT).toMatch(/Logged:, Counted:, Recorded:, Found:, Missing:/);
     expect(LEDGER_CLERK_PROMPT).toMatch(/Do not add dates, sources, brackets/);
   });
