@@ -107,6 +107,7 @@ export type HeartbeatOutcome =
   | "chose_to_act"            // a metronome action ran
   | "chose_to_hold"           // the model decided silence; the right answer is often this
   | "suppressed_quiet_hours"  // the local-clock window is in force and nothing was quiet-hours-allowed
+  | "suppressed_verdict_unknown" // no quiet-hours verdict available; treated as in force, which is NOT the same event
   | "suppressed_care_hold"    // care_hold: production quiets, presence stays
   | "no_eligible_actions"     // the palette had nothing eligible (cooldowns, caps, silence windows)
   | "no_reach_justified"      // the justification gate left only actions that could not fire

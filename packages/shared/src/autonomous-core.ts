@@ -690,8 +690,17 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
       // Quiet hours filter SERVER-side, so an in-force window looks exactly like "no palette
       // configured" and would otherwise drop into the legacy temperature post below (the 4am ping
       // this rail exists to stop). Name it and stop here instead.
-      console.log(`[${companionId}/heartbeat] quiet hours in force (local hour ${quiet?.local_hour ?? "unknown"} ${quiet?.tz ?? ""}) -- staying silent`);
-      mark("suppressed_quiet_hours", { localHour: quiet?.local_hour ?? undefined, tz: quiet?.tz });
+      if (!quiet) {
+        // A Halseth outage at 15:00 and a real 03:00 window must NOT log as the same event; that
+        // is the audit's own finding (a rail and a crash indistinguishable) reproduced one level
+        // up. Behaviour change worth naming: before today an outage produced a legacy temperature
+        // post, and now it produces silence. That is the chosen direction, not an accident.
+        console.warn(`[${companionId}/heartbeat] no quiet-hours verdict available -- treating as in force, staying silent`);
+        mark("suppressed_verdict_unknown", { reason: "Halseth unreachable or pre-field response; treated as in force" });
+        return;
+      }
+      console.log(`[${companionId}/heartbeat] quiet hours in force (local hour ${quiet.local_hour ?? "unknown"} ${quiet.tz}) -- staying silent`);
+      mark("suppressed_quiet_hours", { localHour: quiet.local_hour ?? undefined, tz: quiet.tz });
       return;
     }
 
