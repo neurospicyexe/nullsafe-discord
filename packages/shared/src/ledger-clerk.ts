@@ -430,8 +430,12 @@ export function _setLedgerRetrySleepForTests(fn: ((ms: number) => Promise<void>)
  */
 export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerOpts): Promise<PostLedgerOutcome> {
   const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [], notFound: 0 };
-  const delays = o.retryDelaysMs ?? LEDGER_RETRY_DELAYS_MS;
+  const fullDelays = o.retryDelaysMs ?? LEDGER_RETRY_DELAYS_MS;
   const sleep = o.sleep ?? defaultSleep;
+  // Once one line has exhausted its retries, Halseth is down, not flaky: the remaining lines get ONE
+  // attempt each. Without this, 6 lines x ~40s kept the awaited inactive path (and its STM clear)
+  // waiting ~4 minutes; with it the worst case is one line's backoff plus a round trip per line.
+  let exhausted = false;
   for (let i = 0; i < o.lines.length; i++) {
     const body = o.lines[i]!.trim();
     const why = preflightLedgerBody(body, { kind: o.sourceKind, ref: o.sourceRef });
@@ -452,6 +456,7 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
       ...(o.observedOn ? { observed_on: o.observedOn } : {}),
       dedup_key: dedupKey,
     };
+    const delays = exhausted ? [] : fullDelays;
     for (let attempt = 0; ; attempt++) {
       try {
         const res = await librarian.writeLedger(entry);
@@ -466,6 +471,7 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
         const msg = e instanceof Error ? e.message : String(e);
         if (attempt >= delays.length) {
           out.failed++;
+          if (delays.length > 0) exhausted = true;
           console.warn(`[${o.tag}] ledger: POST failed (transient) for line ${i} after ${attempt + 1} attempt(s), giving up: ${msg}`);
           break;
         }

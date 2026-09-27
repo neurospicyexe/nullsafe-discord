@@ -398,7 +398,7 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     try {
       const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
       const { lib } = await run(CLERK_JSON, makeLibrarian(() => { throw new Error("writeLedger transient 503"); }));
-      expect(lib.writeLedger).toHaveBeenCalledTimes(2 * 4); // two lines, 1 + 3 retries each
+      expect(lib.writeLedger).toHaveBeenCalledTimes(4 + 1); // line 0: 1 + 3 retries; line 1: one attempt (Halseth is down)
       expect(staleLines(warn)).toEqual([`[ledger] STALE_HANDOFF companion=drevan channel=${CH} reason=transport`]);
       warn.mockClear();
       await run(CLERK_JSON);

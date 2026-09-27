@@ -215,7 +215,10 @@ export async function consolidateSession(
         );
       }
       // L1: the one cheap existing call that yields a real id -- the boot's own session open on
-      // the bot surface. Mig 0113 dedups on (companion, surface), so this reuses an open row rather
+      // the bot surface. This is NOT the "no session INSERT" the state-read comment above forbids:
+      // that rule is about the state READ (a read phrasing that routed to session_open on every
+      // tick). This runs only while the id is a placeholder, i.e. the boot open itself failed, and
+      // it is that same boot call. Mig 0113 dedups on (companion, surface), so this reuses an open row rather
       // than stacking one (cycleSession relies on the same guarantee after every close).
       if (session) {
         try {
