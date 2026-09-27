@@ -1726,6 +1726,30 @@ export class LibrarianClient {
     requires_signal: string | null; signal_lookback_hours: number | null;
     last_fired_at: string | null; fire_count_today: number;
   }>> {
+    return (await this.getEligibleMetronomePalette(silenceHours)).actions;
+  }
+
+  /**
+   * The same call, plus Halseth's quiet-hours verdict (B7 step 1, 2026-09-27).
+   *
+   * WHY THE VERDICT HAS TO RIDE ALONG. Quiet hours filter server-side, so an in-force window
+   * produces an EMPTY action list, which the heartbeat reads as "no palette configured" and
+   * answers with its legacy temperature post straight into the channel. Without the verdict, a
+   * correct Halseth change would make the 4am ping MORE likely, not less. `quietHours` is null
+   * when the verdict is unknown (Halseth unreachable, or a worker that predates this field);
+   * the caller treats unknown as IN FORCE for anything that reaches Raziel, because the
+   * fail-closed direction is the one that cannot wake him.
+   */
+  async getEligibleMetronomePalette(silenceHours: number | null): Promise<{
+    actions: Array<{
+      id: string; name: string; action_type: string;
+      target: string | null; prompt: string | null;
+      quiet_hours_allowed: number; status: "on" | "off";
+      requires_signal: string | null; signal_lookback_hours: number | null;
+      last_fired_at: string | null; fire_count_today: number;
+    }>;
+    quietHours: { active: boolean; in_force: boolean; local_hour: number | null; tz: string } | null;
+  }> {
     try {
       const url = new URL(`${this.url}/mind/metronome/actions/${encodeURIComponent(this.companionId)}/eligible`);
       if (silenceHours !== null) url.searchParams.set("silence_hours", silenceHours.toFixed(3));
@@ -1733,12 +1757,17 @@ export class LibrarianClient {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) return [];
+      if (!res.ok) return { actions: [], quietHours: null };
       type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off"; requires_signal: string | null; signal_lookback_hours: number | null; last_fired_at: string | null; fire_count_today: number };
-      const data = await res.json() as { actions?: MA[] };
-      return Array.isArray(data.actions) ? data.actions : [];
+      type QH = { active: boolean; in_force: boolean; local_hour: number | null; tz: string };
+      const data = await res.json() as { actions?: MA[]; quiet_hours?: QH };
+      const qh = data.quiet_hours;
+      return {
+        actions: Array.isArray(data.actions) ? data.actions : [],
+        quietHours: qh && typeof qh.in_force === "boolean" ? qh : null,
+      };
     } catch {
-      return [];
+      return { actions: [], quietHours: null };
     }
   }
 

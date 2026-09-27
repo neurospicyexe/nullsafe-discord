@@ -20,7 +20,8 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
   ownEchoGated, relativeTime,
@@ -626,15 +627,40 @@ export async function detectSignals(
   return [...new Set([...literalMatches, ...semanticMatches])];
 }
 
-/** Heartbeat cron body: palette-driven metronome decision, with a temperature-based legacy fallback. */
+/**
+ * Heartbeat cron body: palette-driven metronome decision, with a temperature-based legacy fallback.
+ *
+ * Wrapper only (B7 step 1, 2026-09-27): every tick emits EXACTLY ONE `[tick]` line naming how it
+ * ended, including the pre-window skips, because a tick that never ran is still a tick and the
+ * audit's finding was that a chosen silence and a crashed turn look identical from outside. The
+ * body marks its outcome on each path; the emit happens once, here, in a finally.
+ */
 export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
+  let outcome: HeartbeatOutcome = "error";
+  let info: HeartbeatTickInfo = {};
+  const mark: MarkTick = (o, i = {}) => { outcome = o; info = { ...info, ...i }; };
+  try {
+    await runHeartbeatBody(ctx, mark);
+  } catch (e) {
+    // Control flow unchanged: the throw still propagates exactly as before, it just gets named first.
+    mark("error", { reason: e instanceof Error ? e.message : String(e) });
+    throw e;
+  } finally {
+    heartbeatTick(ctx.companionId, outcome, info);
+  }
+}
+
+type MarkTick = (outcome: HeartbeatOutcome, info?: HeartbeatTickInfo) => void;
+
+async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise<void> {
   const { librarian, inference, bootCtx, redis, cycleGuard, prompts, companionId, heartbeatChannelId } = ctx;
-  if (!heartbeatChannelId) return;
-  if (skipIfActive(ctx, "heartbeat")) return;
+  if (!heartbeatChannelId) { mark("no_eligible_actions", { reason: "no heartbeat channel configured" }); return; }
+  if (skipIfActive(ctx, "heartbeat")) { mark("conversation_active"); return; }
   if (redis) {
     const lastActivityTs = await getLastActivityMs(redis).catch(() => null);
     if (lastActivityTs !== null && Date.now() - lastActivityTs < 15 * 60 * 1000) {
       console.log(`[${companionId}/autonomous] recent activity, skipping heartbeat`);
+      mark("recent_activity");
       return;
     }
   }
@@ -642,16 +668,47 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
   // advanced via the Claude.ai ritual, so it stranded the heartbeat on one companion for days).
   if (!isMyHeartbeatWindow(companionId, ALL_COMPANIONS)) {
     console.log(`[${companionId}/autonomous] not my heartbeat window, skipping`);
+    mark("not_my_window");
     return;
   }
+  mark("floor_held"); // withFloor logs and returns without entering the body if a sibling holds it
   await withFloor(ctx, async () => {
+    mark("no_eligible_actions");
     const lastActivityTs = redis ? await getLastActivityMs(redis).catch(() => null) : null;
     const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
 
-    const actions = await librarian.getEligibleMetronomeActions(silenceHours).catch(() => []);
+    const palette = await librarian.getEligibleMetronomePalette(silenceHours)
+      .catch(() => ({ actions: [], quietHours: null }));
+    const actions = palette.actions;
+    const quiet = palette.quietHours;
+    // UNKNOWN IS IN FORCE. A null verdict means Halseth was unreachable or predates the field, and
+    // the only thing downstream of "not in force" is a message into a channel Raziel reads. We
+    // cannot tell 03:00 from 15:00 without the verdict, so the fail-closed reading is the one that
+    // cannot wake him; when Halseth is down the palette is empty anyway and there is nothing to lose.
+    const quietInForce = quiet ? quiet.in_force : true;
+    if (quietInForce && actions.length === 0) {
+      // Quiet hours filter SERVER-side, so an in-force window looks exactly like "no palette
+      // configured" and would otherwise drop into the legacy temperature post below (the 4am ping
+      // this rail exists to stop). Name it and stop here instead.
+      console.log(`[${companionId}/heartbeat] quiet hours in force (local hour ${quiet?.local_hour ?? "unknown"} ${quiet?.tz ?? ""}) -- staying silent`);
+      mark("suppressed_quiet_hours", { localHour: quiet?.local_hour ?? undefined, tz: quiet?.tz });
+      return;
+    }
+
+    // care_hold: production quiets, presence stays (care-state.ts). Read here because the
+    // autonomous path never consulted it, so a DM lane wired through the metronome would have
+    // inherited that blindness. The reply path is untouched; direct address still answers.
+    const careHold = careHoldActive(companionId);
 
     if (actions.length === 0) {
-      // Legacy path: no palette configured, fall back to temperature-based post
+      // Legacy path: no palette configured, fall back to temperature-based post.
+      // It is an unprompted post into a channel Raziel reads, so it is production and care_hold
+      // quiets it; there is no presence variant of it to keep.
+      if (careHold) {
+        railSuppressed(companionId, "care_hold", { detail: "legacy temperature heartbeat" });
+        mark("suppressed_care_hold", { action: "post_heartbeat (legacy)" });
+        return;
+      }
       let temperature: HeartbeatTemperature = "warm";
       try {
         const state = await librarian.getState();
@@ -664,9 +721,10 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       if (cycleResult === "escalate") {
         console.warn(`[${companionId}/cycle-guard] loop detected`);
         await librarianWriteChecked(librarian, companionId, "loop-guard note", "journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles");
+        mark("chose_to_hold", { reason: "cycle guard: loop detected" });
         return;
       }
-      if (cycleResult === "skip") return;
+      if (cycleResult === "skip") { mark("chose_to_hold", { reason: "cycle guard: skip" }); return; }
       const recentNotes = await librarian.getRecentNotes({ sinceHours: 8, limit: 6 }).catch(() => []);
       // Tone/continuity only -- subject matter must NOT be sourced from the triad's own
       // recent output (that loop is what produced the sealed-basin echo register).
@@ -679,6 +737,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
         companionId, "heartbeat",
       );
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId!, msg, "heartbeat");
+      mark(msg ? "chose_to_act" : "chose_to_hold", { action: "post_heartbeat (legacy)", reason: msg ? undefined : "generation returned empty" });
       return;
     }
 
@@ -693,6 +752,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
 
     if (signalFiltered.length === 0) {
       console.log(`[${companionId}/heartbeat] all eligible actions require undetected signals, skipping`);
+      mark("signals_undetected");
       return;
     }
 
@@ -738,10 +798,27 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       detectedSignals.length > 0 ||
       decisionCtx.razielStateSummary != null ||
       Boolean(decisionCtx.relationalNeedFired);
-    const candidateActions = filterReachOutWhenUnjustified(signalFiltered, reachOutJustified);
+    const justifiedActions = filterReachOutWhenUnjustified(signalFiltered, reachOutJustified);
+    // care_hold, applied to the PALETTE rather than to the send: the companion is never offered a
+    // production move on a bad night, so what he picks from is presence, internal acts, or nothing.
+    // That is the floor's own shape ("what softens is ambient self-selection"), and it keeps the
+    // choice his rather than generating a message and then swallowing it.
+    const candidateActions = filterProductionWhenCareHold(justifiedActions, careHold);
     if (candidateActions.length === 0) {
+      if (careHold && justifiedActions.length > 0) {
+        railSuppressed(companionId, "care_hold", { detail: `${justifiedActions.length} production action(s) dropped` });
+        console.log(`[${companionId}/heartbeat] care_hold: only production actions were eligible -- staying silent`);
+        mark("suppressed_care_hold");
+        return;
+      }
       console.log(`[${companionId}/heartbeat] no reach-out justified and no commons/internal action eligible -- staying silent`);
+      mark("no_reach_justified");
       return;
+    }
+    if (careHold && candidateActions.length < justifiedActions.length) {
+      railSuppressed(companionId, "care_hold", {
+        detail: `${justifiedActions.length - candidateActions.length} production action(s) dropped`,
+      });
     }
 
     const decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
@@ -758,10 +835,18 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     const decision = rawDecision ? parseDecision(rawDecision, candidateActions) : null;
 
     if (!decision) {
-      console.warn(`[${companionId}/heartbeat] decision parse failed, skipping -- raw: ${String(rawDecision).slice(0, 120)}`);
+      // console.error, not warn (B7 step 1): this is a DEFECT, not a shrug. The 09-27 readout
+      // found two heartbeats dying here and it read as ordinary quiet. Control flow unchanged.
+      console.error(`[${companionId}/heartbeat] decision parse failed, skipping -- raw: ${String(rawDecision).slice(0, 120)}`);
+      mark("parse_failed", { reason: String(rawDecision).slice(0, 120) });
       return;
     }
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
+    // A chosen silence is a SUCCESS and is recorded as one; it is the outcome Cadence's design
+    // calls first-class and ours could not previously distinguish from a crash.
+    mark(decision.action.action_type === "nothing" ? "chose_to_hold" : "chose_to_act", {
+      action: decision.action.action_type, reason: decision.reason,
+    });
 
     const runId = await librarian.writeAutonomyRun("continuation").catch(e => {
       onWriteError(companionId, "continuation run record lost")(e);
@@ -778,6 +863,7 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
       if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(companionId, "autonomy run completion"));
     } catch (e) {
       console.error(`[${companionId}/heartbeat] metronome action threw: ${e instanceof Error ? e.message : String(e)}`);
+      mark("error", { action: decision.action.action_type, reason: e instanceof Error ? e.message : String(e) });
       if (runId) await librarian.patchAutonomyRun(runId, "failed").catch(onWriteError(companionId, "autonomy run failure"));
     }
   });

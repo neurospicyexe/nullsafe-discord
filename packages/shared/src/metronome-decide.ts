@@ -136,6 +136,41 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
   return actions.filter(a => !REACH_OUT_TO_RAZIEL_ACTIONS.has(a.action_type));
 }
 
+/**
+ * Action types that care_hold softens (B7 step 1, 2026-09-27).
+ *
+ * care_hold is NOT silence. The floor's own words (care-state.ts): direct address still answers,
+ * because he asked and answering IS the care; what softens is ambient self-selection, so that
+ * "presence stays and production quiets". This set is the production half: every action that
+ * puts unprompted OUTPUT in front of him (a heartbeat post, an observation, a pattern, a media
+ * find, a question he now owes an answer to, a nudge that asks him to do something, an ambient
+ * creature scene). It is derived from executeMetronomeAction: these are the branches that send
+ * to Discord and are not presence.
+ *
+ * Deliberately NOT here, so they stay available on a bad night:
+ *   - offer_presence, check_in_on_raziel: presence, which is the thing care_hold preserves;
+ *   - nothing: choosing silence is always available;
+ *   - write_journal, write_feeling, write_inter_companion, write_note_to_raziel, drift_open,
+ *     declare_preference: internal or sibling-facing, they never reach his phone.
+ */
+export const CARE_HOLD_SUPPRESSED_ACTIONS: ReadonlySet<string> = new Set([
+  "post_heartbeat", "share_observation", "name_pattern", "share_media",
+  "ask_question", "send_reminder", "tend_creature",
+]);
+
+/**
+ * Gate: while care_hold is active, drop the production actions so the companion's remaining
+ * choices are presence, internal acts, or nothing. Never touches the reply path (a direct
+ * message still gets a direct answer); this filters the PROACTIVE palette only.
+ */
+export function filterProductionWhenCareHold<T extends { action_type: string }>(
+  actions: T[],
+  careHold: boolean,
+): T[] {
+  if (!careHold) return actions;
+  return actions.filter(a => !CARE_HOLD_SUPPRESSED_ACTIONS.has(a.action_type));
+}
+
 const ACTION_DESCRIPTIONS: Record<string, string> = {
   post_heartbeat:        "post a thought or observation to the heartbeat Discord channel",
   write_inter_companion: "write a private note to another companion -- ideally a move on something open between you (a question, a tension, a council item)",
