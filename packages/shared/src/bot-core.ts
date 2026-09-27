@@ -19,6 +19,7 @@ import { setCareState } from "./care-state.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
+import { ledgerClerkAdapterWarning } from "./ledger-clerk.js";
 import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { createDirectAdapter, directChainNames } from "./direct-inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
@@ -99,6 +100,9 @@ export async function bootSession(opts: BootSessionOptions): Promise<BootSession
   const { companionId, halsethUrl, halsethSecret, prefix, fallbackPrompt, identityCache, surface } = opts;
   const tag = `[${companionId}]`;
   const cache = identityCache;
+  // L2a: a clerk without a direct adapter writes nothing, silently. Say so once, at boot.
+  const clerkWarning = ledgerClerkAdapterWarning();
+  if (clerkWarning) console.warn(`${tag} ${clerkWarning}`);
 
   const librarian =
     opts.librarian ?? new LibrarianClient({ url: halsethUrl, secret: halsethSecret, companionId });

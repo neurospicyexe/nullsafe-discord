@@ -17,6 +17,7 @@ import { withOwnerPronounRule } from "./pronoun-rule.js";
 import type { ChatMessage, CompanionId } from "./types.js";
 import {
   ledgerDistillEnabled, LEDGER_CLERK_PROMPT, parseClerkResult, windowSource, postLedgerLines, ledgerSummary,
+  clerkTranscript, staleHandoffReason, logStaleHandoff,
 } from "./ledger-clerk.js";
 
 /**
@@ -162,7 +163,9 @@ async function distillSessionToLedger(
   const tag = prompts.companionId;
   const companionId = prompts.companionId as CompanionId;
 
-  const clerkRaw = await clerk.generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: summaryInput }]);
+  // The clerk gets its own transcript: this bot's turns named, not "assistant" (L4b). The extract
+  // below keeps summaryInput unchanged.
+  const clerkRaw = await clerk.generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: clerkTranscript(history, companionId) }]);
   const clerkResult = parseClerkResult(clerkRaw);
   if (clerkResult === null) {
     console.warn(`[${tag}] onChannelInactive: clerk returned no JSON, no ledger lines -- raw: ${rawPreview(clerkRaw ?? "")}`);
@@ -171,11 +174,12 @@ async function distillSessionToLedger(
   // The ledger POSTs are awaited, not queued: the handoff needs their returned `content`.
   const win = windowSource(channelId, history);
   if (win.fallback) console.warn(`[${tag}] onChannelInactive: no STM timestamps, window source is the distillation instant`);
+  if (win.clamped) console.warn(`[${tag}] onChannelInactive: window spans >24h, source ref shows its final 24h only`);
   const outcome = clerkResult && clerkResult.lines.length
     ? await postLedgerLines(librarian, {
         companionId, fn: "distiller", lines: clerkResult.lines,
         sourceKind: "window", sourceRef: win.ref,
-        dedupPrefix: `distill:${companionId}:${channelId}:${win.firstTs}`,
+        dedupPrefix: `distill:${companionId}:${channelId}:${win.keyTs}`,
         observedOn: win.observedOn, tag,
       })
     : null;
@@ -199,6 +203,10 @@ async function distillSessionToLedger(
     });
   } else {
     console.warn(`[${tag}] onChannelInactive: no ledger line accepted -- handoff skipped (nothing sourced to summarize) channel=${channelId}`);
+    // Every line a 200 duplicate = a restart re-ran a pass whose lines already landed; that is not a
+    // stale handoff, so it is not counted as one.
+    const allDuplicates = !!outcome && outcome.duplicates > 0 && outcome.rejected === 0 && outcome.failed === 0 && outcome.dropped === 0;
+    if (!allDuplicates) logStaleHandoff(companionId, channelId, staleHandoffReason(outcome));
   }
 
   if (ext) {
@@ -270,7 +278,7 @@ export async function runDistillation(
         if (companionId) {
           // Inference runs OUTSIDE the write queue: a queued thunk that throws is retried as a failed
           // write, which would re-bill the clerk call. Only the (never-throwing) POST loop is queued.
-          const raw = await (clerk ?? inference).generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: conversationText }]);
+          const raw = await (clerk ?? inference).generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: clerkTranscript(window, companionId) }]);
           const res = parseClerkResult(raw);
           if (res && res.lines.length) {
             const win = windowSource(channelId, window);
@@ -278,7 +286,7 @@ export async function runDistillation(
               await postLedgerLines(librarian, {
                 companionId, fn: "distiller", lines: res.lines,
                 sourceKind: "window", sourceRef: win.ref,
-                dedupPrefix: `distill-mid:${companionId}:${channelId}:${win.firstTs}`,
+                dedupPrefix: `distill-mid:${companionId}:${channelId}:${win.keyTs}`,
                 observedOn: win.observedOn, tag: companionId,
               });
             });

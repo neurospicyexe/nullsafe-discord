@@ -28,9 +28,51 @@ import type { LibrarianClient, LedgerFunction, LedgerSourceKind } from "./librar
 import { extractJson } from "./json-extract.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
 
-/** LEDGER_DISTILL: default on; exactly "off" (trimmed, any case) restores the pre-ledger writers. */
+/** Knob values that mean OFF (trimmed, case-insensitive). Anything else, including unset, is ON. */
+const LEDGER_OFF_VALUES: ReadonlySet<string> = new Set(["off", "0", "false", "no"]);
+
+/**
+ * LEDGER_DISTILL: default ON. `off`, `0`, `false` or `no` (trimmed, any case) restore the pre-ledger
+ * writers; every other value -- `on`, `1`, `true`, `yes`, a typo, empty -- leaves the clerks on.
+ * (2026-09-26 review: `false` used to read as ON, the opposite of what anyone typing it meant.)
+ */
 export function ledgerDistillEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return (env["LEDGER_DISTILL"] ?? "").trim().toLowerCase() !== "off";
+  return !LEDGER_OFF_VALUES.has((env["LEDGER_DISTILL"] ?? "").trim().toLowerCase());
+}
+
+/**
+ * L2a (2026-09-26 review): the boot warning for a clerk with no direct adapter. With neither
+ * DEEPINFRA_API_KEY nor DEEPSEEK_API_KEY the clerk falls back to the Hermes agent adapter, where the
+ * companion's SOUL overrides the clerk prompt; the lines come back first-person, the door rejects
+ * every one, and no distillation handoff is ever written. Nothing errors, so say it at boot.
+ * Null when the knob is off or a key is present.
+ */
+export function ledgerClerkAdapterWarning(env: Record<string, string | undefined> = process.env): string | null {
+  if (!ledgerDistillEnabled(env)) return null;
+  const has = (k: string) => !!(env[k] ?? "").trim().replace(/^=+/, "");
+  if (has("DEEPINFRA_API_KEY") || has("DEEPSEEK_API_KEY")) return null;
+  return (
+    "[ledger] LOUD -- LEDGER_DISTILL is on but neither DEEPINFRA_API_KEY nor DEEPSEEK_API_KEY is set: " +
+    "the ledger clerk will run on the Hermes agent path, whose SOUL overrides the clerk prompt -> " +
+    "first-person lines -> every line rejected -> NO distillation handoffs (Claude.ai latest_handoff goes stale). " +
+    "Set a direct key, or LEDGER_DISTILL=off."
+  );
+}
+
+/** "drevan" -> "Drevan". The name a clerk transcript and a witness line use for a companion. */
+export function companionDisplayName(id: string): string {
+  return id ? id.charAt(0).toUpperCase() + id.slice(1) : id;
+}
+
+/**
+ * The transcript a CLERK reads (knob on only). Inbound rows carry authorName; this bot's own turns
+ * are role:"assistant" with none, and used to reach the clerk labelled "assistant" -- a speaker the
+ * clerk cannot name, so it either wrote "the assistant said" or guessed. Label them with the
+ * companion's display name. The legacy (knob-off) prompts keep their own byte-identical transcript.
+ */
+export function clerkTranscript(msgs: ChatMessage[], companionId: string): string {
+  const self = companionDisplayName(companionId);
+  return msgs.map((m) => `${m.authorName ?? (m.role === "assistant" ? self : m.role)}: ${m.content}`).join("\n");
 }
 
 /** Max record lines per clerk pass (spec section 5). */
@@ -266,30 +308,59 @@ function hhmm(ms: number): string {
   return new Date(ms).toISOString().slice(11, 16);
 }
 
+/** A window longer than this cannot be said as `HH:MM–HH:MM`, so the ref is clamped to its final 24h. */
+export const WINDOW_REF_MAX_MS = 24 * 60 * 60 * 1000;
+
 export interface WindowSource {
-  /** `<channelId> HH:MM–HH:MM` (UTC, en dash). */
+  /** `<channelId> HH:MM–HH:MM` (UTC, en dash). At most the final 24h of the window. */
   ref: string;
-  /** Epoch ms of the first message (or `now` when no message carried a timestamp). */
+  /** Epoch ms of the first message (or `now` when no message carried a timestamp). Unclamped. */
   firstTs: number;
-  /** YYYY-MM-DD (UTC) of the first message, for observed_on. */
+  /**
+   * Epoch SECONDS (floored) of the first message: the dedup-key coordinate. Unclamped, so the key
+   * names the whole window even when the ref cannot.
+   */
+  keyTs: number;
+  /** YYYY-MM-DD (UTC) of the ref's start, for observed_on. */
   observedOn: string;
   /** True when no STM timestamp existed and the range is the distillation instant instead. */
   fallback: boolean;
+  /** True when the window spanned more than 24h and the ref shows only its final 24h. */
+  clamped: boolean;
 }
 
 /**
  * Build the window source ref from STM timestamps (first/last, UTC). When no message carries a
  * timestamp the range collapses to the distillation instant -- the source is never omitted,
  * because no source means no write.
+ *
+ * keyTs (L3, 2026-09-26 review): a live STM row's timestamp is Discord's createdTimestamp (ms), but
+ * after a pm2 restart the same row comes back from Halseth with `created_at` (second precision), so
+ * a key built from raw ms forked across a restart and the same window wrote twice. Flooring to
+ * epoch seconds removes the sub-second half of that. It cannot remove all of it: stmWrite sends no
+ * timestamp, so a reloaded created_at is Halseth's INSERT time, which can land a second after the
+ * Discord stamp. That is a Halseth/stmWrite fix, not one this function can make.
+ *
+ * Clamp: `HH:MM–HH:MM` carries no date, so a window over 24h (a channel that went quiet for a day
+ * and resumed inside the same STM) cannot be expressed and would read as a wrong same-day range.
+ * The ref and observed_on show the FINAL 24h; the key keeps the true first stamp.
  */
 export function windowSource(channelId: string, msgs: ChatMessage[], now: number = Date.now()): WindowSource {
   const stamps = msgs.map((m) => m.timestamp).filter((t): t is number => typeof t === "number" && Number.isFinite(t));
   if (stamps.length === 0) {
-    return { ref: `${channelId} ${hhmm(now)}–${hhmm(now)}`, firstTs: now, observedOn: new Date(now).toISOString().slice(0, 10), fallback: true };
+    return {
+      ref: `${channelId} ${hhmm(now)}–${hhmm(now)}`, firstTs: now, keyTs: Math.floor(now / 1000),
+      observedOn: new Date(now).toISOString().slice(0, 10), fallback: true, clamped: false,
+    };
   }
   const first = Math.min(...stamps);
   const last = Math.max(...stamps);
-  return { ref: `${channelId} ${hhmm(first)}–${hhmm(last)}`, firstTs: first, observedOn: new Date(first).toISOString().slice(0, 10), fallback: false };
+  const clamped = last - first > WINDOW_REF_MAX_MS;
+  const refStart = clamped ? last - WINDOW_REF_MAX_MS : first;
+  return {
+    ref: `${channelId} ${hhmm(refStart)}–${hhmm(last)}`, firstTs: first, keyTs: Math.floor(first / 1000),
+    observedOn: new Date(refStart).toISOString().slice(0, 10), fallback: false, clamped,
+  };
 }
 
 // ── POST loop ────────────────────────────────────────────────────────────────────────────────
@@ -303,9 +374,18 @@ export interface PostLedgerOpts {
   sourceRef: string;
   /** Per-line dedup key = `${dedupPrefix}:${index}`. One key for all lines would collide (UNIQUE). */
   dedupPrefix: string;
+  /**
+   * Explicit per-line keys, overriding the `${dedupPrefix}:${i}` shape (index-aligned with `lines`).
+   * Consolidation's one deterministic line uses this so its key is exactly the spec'd shape.
+   */
+  dedupKeys?: string[];
   observedOn?: string;
   /** Log tag. */
   tag: string;
+  /** Backoff before each RETRY of a transient failure. Default LEDGER_RETRY_DELAYS_MS. Tests pass zeros. */
+  retryDelaysMs?: readonly number[];
+  /** Injectable sleep (tests). */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export interface PostLedgerOutcome {
@@ -315,39 +395,83 @@ export interface PostLedgerOutcome {
   rejected: number;
   dropped: number;
   failed: number;
+  /** Rule names of 422 rejections AND local pre-filter drops (the pre-filter returns server rule names). */
+  rules: string[];
+  /** Lines that got a 404 (Halseth /ledger not deployed). Counted inside `rejected`. */
+  notFound: number;
 }
 
 /**
- * Pre-filter, then POST each line to /ledger. Never throws: a transient failure on one line is
- * counted and the rest still go. Only 201 `content` is returned for the handoff; a duplicate has
- * no content and is counted separately.
+ * Transient-failure backoff (M3, 2026-09-26 review): up to three RETRIES after the first attempt,
+ * 2s / 8s / 30s apart (~40s worst case per line). writeLedger throws only on 5xx / 429 / network,
+ * so those are the only failures that retry; a 422 (deterministic grammar reject) and a 404 (route
+ * not deployed) RETURN and are never retried. Inline rather than via the write queue because
+ * postLedgerLines never throws, so a queue wrapped around it could never see a failure to retry --
+ * the mid-session path and the inactive path both used to lose a 503'd line outright.
+ */
+export const LEDGER_RETRY_DELAYS_MS: readonly number[] = [2_000, 8_000, 30_000];
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+let defaultSleep: (ms: number) => Promise<void> = realSleep;
+/**
+ * Test hook: replace the default retry sleep for call sites that do not thread `sleep` through
+ * (runDistillation, distillSessionOnInactive). Pass null to restore the real timer.
+ */
+export function _setLedgerRetrySleepForTests(fn: ((ms: number) => Promise<void>) | null): void {
+  defaultSleep = fn ?? realSleep;
+}
+
+/**
+ * Pre-filter, then POST each line to /ledger. Never throws: a transient failure is retried with
+ * bounded backoff, then counted, and the rest still go. The dedup key is fixed per line BEFORE the
+ * first attempt, so every retry of a line carries the same key and a retry after a lost 201 lands
+ * as a 200 duplicate instead of a second row. Only 201 `content` is returned for the handoff; a
+ * duplicate has no content and is counted separately.
  */
 export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerOpts): Promise<PostLedgerOutcome> {
-  const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0 };
+  const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [], notFound: 0 };
+  const delays = o.retryDelaysMs ?? LEDGER_RETRY_DELAYS_MS;
+  const sleep = o.sleep ?? defaultSleep;
   for (let i = 0; i < o.lines.length; i++) {
     const body = o.lines[i]!.trim();
     const why = preflightLedgerBody(body, { kind: o.sourceKind, ref: o.sourceRef });
     if (why) {
       out.dropped++;
+      out.rules.push(why);
       console.warn(`[${o.tag}] ledger: dropped line before POST (${why}): ${body.slice(0, 160)}`);
       continue;
     }
-    try {
-      const res = await librarian.writeLedger({
-        companion_id: o.companionId,
-        function: o.fn,
-        body,
-        source_kind: o.sourceKind,
-        source_ref: o.sourceRef,
-        ...(o.observedOn ? { observed_on: o.observedOn } : {}),
-        dedup_key: `${o.dedupPrefix}:${i}`,
-      });
-      if (!res.ok) out.rejected++;
-      else if (res.duplicate) out.duplicates++;
-      else out.accepted.push({ id: res.id, content: res.content });
-    } catch (e) {
-      out.failed++;
-      console.warn(`[${o.tag}] ledger: POST failed (transient) for line ${i}:`, e instanceof Error ? e.message : String(e));
+    // Captured ONCE, outside the attempt loop: the idempotency of every retry rests on this.
+    const dedupKey = o.dedupKeys?.[i] ?? `${o.dedupPrefix}:${i}`;
+    const entry = {
+      companion_id: o.companionId,
+      function: o.fn,
+      body,
+      source_kind: o.sourceKind,
+      source_ref: o.sourceRef,
+      ...(o.observedOn ? { observed_on: o.observedOn } : {}),
+      dedup_key: dedupKey,
+    };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await librarian.writeLedger(entry);
+        if (!res.ok) {
+          out.rejected++;
+          if (res.status === 404) out.notFound++;
+          else if (res.status === 422) out.rules.push(res.rule ?? "?");
+        } else if (res.duplicate) out.duplicates++;
+        else out.accepted.push({ id: res.id, content: res.content });
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (attempt >= delays.length) {
+          out.failed++;
+          console.warn(`[${o.tag}] ledger: POST failed (transient) for line ${i} after ${attempt + 1} attempt(s), giving up: ${msg}`);
+          break;
+        }
+        console.warn(`[${o.tag}] ledger: POST failed (transient) for line ${i}, retry ${attempt + 1}/${delays.length} in ${delays[attempt]}ms: ${msg}`);
+        await sleep(delays[attempt]!);
+      }
     }
   }
   console.log(
@@ -355,6 +479,29 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
     `${out.rejected} rejected, ${out.dropped} dropped, ${out.failed} failed (source ${o.sourceKind} ${o.sourceRef})`,
   );
   return out;
+}
+
+/**
+ * Why a pass that ended with zero accepted lines wrote no handoff, in the STALE_HANDOFF vocabulary:
+ * `404` (route not deployed), `422:<rules>` (grammar rejects, local pre-filter drops included, since
+ * they name the same server rules), `transport` (5xx/429/network after every retry), or `no_lines`
+ * (the clerk returned nothing, or nothing but duplicates). Precedence: the reason an operator can
+ * act on first.
+ */
+export function staleHandoffReason(outcome: PostLedgerOutcome | null): string {
+  if (!outcome) return "no_lines";
+  if (outcome.notFound > 0) return "404";
+  if (outcome.rules.length > 0) return `422:${[...new Set(outcome.rules)].join(",")}`;
+  if (outcome.failed > 0) return "transport";
+  return "no_lines";
+}
+
+/**
+ * The one greppable line for "an inactive distillation ended and wrote no handoff" (L2b). Claude.ai's
+ * latest_handoff then goes silently stale; ops/health-check.py (check_ledger_handoffs) counts it.
+ */
+export function logStaleHandoff(companionId: string, channelId: string, reason: string): void {
+  console.warn(`[ledger] STALE_HANDOFF companion=${companionId} channel=${channelId} reason=${reason}`);
 }
 
 /** Handoff summary = accepted contents joined by newlines, marks intact. */

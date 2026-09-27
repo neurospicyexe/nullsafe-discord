@@ -4,12 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ledgerDistillEnabled, preflightLedgerBody, parseClerkResult, windowSource, postLedgerLines,
-  LEDGER_CLERK_PROMPT, MAX_CLERK_LINES,
+  LEDGER_CLERK_PROMPT, MAX_CLERK_LINES, LEDGER_RETRY_DELAYS_MS, staleHandoffReason, clerkTranscript,
+  ledgerClerkAdapterWarning, _setLedgerRetrySleepForTests,
 } from "../ledger-clerk.js";
 import { LibrarianClient } from "../librarian.js";
 import { distillSessionOnInactive, runDistillation } from "../distillation.js";
 import { runDayDistillation, FRAGMENT_NOTE_TYPE } from "../day-distillation.js";
-import { consolidateSession } from "../consolidation.js";
+import { consolidateSession, consolidationLedgerBody, consolidationDedupKey, _resetConsolidationWarningsForTests } from "../consolidation.js";
 import { buildWitnessLedgerEntry } from "../bot-message-handler.js";
 import { OWNER_PRONOUN_RULE } from "../pronoun-rule.js";
 
@@ -21,6 +22,7 @@ import { OWNER_PRONOUN_RULE } from "../pronoun-rule.js";
 const CH = "1497734427298762828";
 const T0 = Date.UTC(2026, 8, 24, 0, 11); // 00:11 UTC
 const T1 = Date.UTC(2026, 8, 24, 0, 40); // 00:40 UTC
+const T0S = Math.floor(T0 / 1000); // the dedup-key coordinate (epoch seconds)
 
 beforeEach(() => { delete process.env["LEDGER_DISTILL"]; });
 afterEach(() => { delete process.env["LEDGER_DISTILL"]; });
@@ -73,11 +75,38 @@ const CLERK_JSON = JSON.stringify({
 // ── The knob ────────────────────────────────────────────────────────────────
 
 describe("ledgerDistillEnabled", () => {
-  test("default ON; only a literal 'off' (any case, trimmed) disables", () => {
+  test("default ON; off|0|false|no (any case, trimmed) disable; anything else is on", () => {
     expect(ledgerDistillEnabled({})).toBe(true);
-    expect(ledgerDistillEnabled({ LEDGER_DISTILL: "on" })).toBe(true);
-    expect(ledgerDistillEnabled({ LEDGER_DISTILL: " OFF " })).toBe(false);
-    expect(ledgerDistillEnabled({ LEDGER_DISTILL: "false" })).toBe(true);
+    expect(ledgerDistillEnabled({ LEDGER_DISTILL: "" })).toBe(true);
+    for (const on of ["on", "1", "true", "yes", "ON", "offf"]) expect(ledgerDistillEnabled({ LEDGER_DISTILL: on })).toBe(true);
+    for (const off of ["off", " OFF ", "0", "false", "FALSE", " no", "No"]) expect(ledgerDistillEnabled({ LEDGER_DISTILL: off })).toBe(false);
+  });
+});
+
+describe("ledgerClerkAdapterWarning (L2a boot warning)", () => {
+  test("knob on and no direct key -> loud warning naming the consequence", () => {
+    const w = ledgerClerkAdapterWarning({});
+    expect(w).toMatch(/LOUD/);
+    expect(w).toMatch(/Hermes/);
+    expect(w).toMatch(/NO distillation handoffs/);
+    expect(ledgerClerkAdapterWarning({ DEEPINFRA_API_KEY: " ", DEEPSEEK_API_KEY: "=" })).not.toBeNull();
+  });
+  test("a direct key present, or the knob off -> null", () => {
+    expect(ledgerClerkAdapterWarning({ DEEPINFRA_API_KEY: "k" })).toBeNull();
+    expect(ledgerClerkAdapterWarning({ DEEPSEEK_API_KEY: "k" })).toBeNull();
+    expect(ledgerClerkAdapterWarning({ LEDGER_DISTILL: "off" })).toBeNull();
+  });
+});
+
+describe("clerkTranscript (L4b)", () => {
+  test("this bot's own turns are named, not 'assistant'; inbound authorName kept", () => {
+    const t = clerkTranscript([
+      { role: "user", content: "hi", authorName: "Raziel" },
+      { role: "assistant", content: "here" },
+      { role: "user", content: "anon" },
+    ], "drevan");
+    expect(t).toBe("Raziel: hi\nDrevan: here\nuser: anon");
+    expect(t).not.toMatch(/assistant/);
   });
 });
 
@@ -133,7 +162,22 @@ describe("parseClerkResult", () => {
 describe("windowSource", () => {
   test("first/last STM timestamps, UTC HH:MM with an en dash", () => {
     const w = windowSource(CH, [{ role: "user", content: "a", timestamp: T1 }, { role: "user", content: "b", timestamp: T0 }]);
-    expect(w).toEqual({ ref: `${CH} 00:11–00:40`, firstTs: T0, observedOn: "2026-09-24", fallback: false });
+    expect(w).toEqual({ ref: `${CH} 00:11–00:40`, firstTs: T0, keyTs: T0S, observedOn: "2026-09-24", fallback: false, clamped: false });
+  });
+  test("L3: the key coordinate is epoch SECONDS, so Discord ms (live) and Halseth created_at (reload) agree", () => {
+    const live = windowSource(CH, [{ role: "user", content: "a", timestamp: T0 + 734 }]);   // Discord createdTimestamp
+    const reloaded = windowSource(CH, [{ role: "user", content: "a", timestamp: T0 }]);     // created_at, second precision
+    expect(live.keyTs).toBe(reloaded.keyTs);
+    expect(live.ref).toBe(reloaded.ref);
+  });
+  test("L3: a window over 24h clamps the REF to its final 24h; the key keeps the true first stamp", () => {
+    const first = Date.UTC(2026, 8, 22, 9, 0);
+    const last = Date.UTC(2026, 8, 24, 0, 40);
+    const w = windowSource(CH, [{ role: "user", content: "a", timestamp: first }, { role: "user", content: "b", timestamp: last }]);
+    expect(w.clamped).toBe(true);
+    expect(w.ref).toBe(`${CH} 00:40–00:40`);
+    expect(w.observedOn).toBe("2026-09-23");
+    expect(w.keyTs).toBe(Math.floor(first / 1000));
   });
   test("missing timestamps fall back to the distillation instant -- the source is never omitted", () => {
     const now = Date.UTC(2026, 8, 26, 13, 5);
@@ -201,6 +245,65 @@ describe("postLedgerLines", () => {
     expect(out).toMatchObject({ duplicates: 1, dropped: 1, rejected: 0, failed: 0 });
     warn.mockRestore();
   });
+
+  const base = { companionId: "drevan" as const, fn: "distiller" as const, lines: ["Logged: a."], sourceKind: "window" as const, sourceRef: `${CH} 00:11–00:40`, dedupPrefix: "p", tag: "t" };
+
+  test("M3: a transient failure retries with 2s/8s/30s backoff under the SAME dedup key, then lands", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    let n = 0;
+    const lib = makeLibrarian((e) => { if (++n < 3) throw new Error("writeLedger transient 503"); return { ok: true, id: "led_x", content: rendered(e.body) }; });
+    const slept: number[] = [];
+    const out = await postLedgerLines(lib as any, { ...base, sleep: async (ms) => { slept.push(ms); } });
+    expect(lib.writeLedger).toHaveBeenCalledTimes(3);
+    expect(new Set(lib.writeLedger.mock.calls.map((c) => (c[0] as any).dedup_key))).toEqual(new Set(["p:0"]));
+    expect(slept).toEqual([2_000, 8_000]);
+    expect(out).toMatchObject({ failed: 0, rejected: 0 });
+    expect(out.accepted).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  test("M3: bounded -- a line that never recovers is tried 1 + 3 times, then counted failed (never throws)", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const lib = makeLibrarian(() => { throw new Error("writeLedger transient 429"); });
+    const slept: number[] = [];
+    const out = await postLedgerLines(lib as any, { ...base, sleep: async (ms) => { slept.push(ms); } });
+    expect(LEDGER_RETRY_DELAYS_MS).toEqual([2_000, 8_000, 30_000]);
+    expect(lib.writeLedger).toHaveBeenCalledTimes(4);
+    expect(slept).toEqual([2_000, 8_000, 30_000]);
+    expect(out).toMatchObject({ failed: 1, accepted: [] });
+    expect(staleHandoffReason(out)).toBe("transport");
+    warn.mockRestore();
+  });
+
+  test("M3: 422 and 404 are never retried", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    for (const res of [{ ok: false, status: 422, rule: "health" }, { ok: false, status: 404 }]) {
+      const lib = makeLibrarian(() => res);
+      const sleep = jest.fn(async (_ms: number) => {});
+      const out = await postLedgerLines(lib as any, { ...base, sleep });
+      expect(lib.writeLedger).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(out.rejected).toBe(1);
+    }
+    warn.mockRestore();
+  });
+
+  test("explicit dedupKeys override the prefix:index shape", async () => {
+    const lib = makeLibrarian();
+    await postLedgerLines(lib as any, { ...base, dedupKeys: ["exact:key"] });
+    expect((lib.writeLedger.mock.calls[0]![0] as any).dedup_key).toBe("exact:key");
+  });
+});
+
+describe("staleHandoffReason", () => {
+  const o = (p: Partial<{ notFound: number; rules: string[]; failed: number }>) => ({ accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [] as string[], notFound: 0, ...p });
+  test("404 > 422:<rules> > transport > no_lines", () => {
+    expect(staleHandoffReason(null)).toBe("no_lines");
+    expect(staleHandoffReason(o({}))).toBe("no_lines");
+    expect(staleHandoffReason(o({ failed: 1 }))).toBe("transport");
+    expect(staleHandoffReason(o({ rules: ["health", "first_person", "health"], failed: 1 }))).toBe("422:health,first_person");
+    expect(staleHandoffReason(o({ notFound: 2, rules: ["health"] }))).toBe("404");
+  });
 });
 
 // ── distillSessionOnInactive ────────────────────────────────────────────────
@@ -238,7 +341,7 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     for (const [i, c] of calls.entries()) {
       expect(c).toMatchObject({
         companion_id: "drevan", function: "distiller", source_kind: "window",
-        source_ref: `${CH} 00:11–00:40`, dedup_key: `distill:drevan:${CH}:${T0}:${i}`, observed_on: "2026-09-24",
+        source_ref: `${CH} 00:11–00:40`, dedup_key: `distill:drevan:${CH}:${T0S}:${i}`, observed_on: "2026-09-24",
       });
       expect(c.body).not.toMatch(/〔/); // bots never produce the mark
     }
@@ -272,6 +375,65 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     expect(lib.writeWmNote).not.toHaveBeenCalled();
     expect(wq.queued).toContain(`somaUpdate:${CH}`);
     warn.mockRestore();
+  });
+
+  const staleLines = (warn: { mock: { calls: unknown[][] } }) => warn.mock.calls.map((a) => String(a[0])).filter((l) => l.includes("STALE_HANDOFF"));
+
+  test("L2b: one greppable STALE_HANDOFF line per no-handoff pass, with the reason", async () => {
+    const cases: Array<[string | null, ((e: any) => any) | undefined, string]> = [
+      [CLERK_JSON, () => ({ ok: false, status: 404 }), "reason=404"],
+      [CLERK_JSON, () => ({ ok: false, status: 422, rule: "health" }), "reason=422:health"],
+      ["no json here", undefined, "reason=no_lines"],
+    ];
+    for (const [reply, impl, want] of cases) {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      await run(reply, makeLibrarian(impl));
+      expect(staleLines(warn)).toEqual([`[ledger] STALE_HANDOFF companion=drevan channel=${CH} ${want}`]);
+      warn.mockRestore();
+    }
+  });
+
+  test("L2b: transport failure after every retry -> reason=transport; clean and all-duplicate passes log nothing stale", async () => {
+    _setLedgerRetrySleepForTests(async () => {});
+    try {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      const { lib } = await run(CLERK_JSON, makeLibrarian(() => { throw new Error("writeLedger transient 503"); }));
+      expect(lib.writeLedger).toHaveBeenCalledTimes(2 * 4); // two lines, 1 + 3 retries each
+      expect(staleLines(warn)).toEqual([`[ledger] STALE_HANDOFF companion=drevan channel=${CH} reason=transport`]);
+      warn.mockClear();
+      await run(CLERK_JSON);
+      await run(CLERK_JSON, makeLibrarian(() => ({ ok: true, id: "led_d", duplicate: true })));
+      expect(staleLines(warn)).toEqual([]);
+      warn.mockRestore();
+    } finally { _setLedgerRetrySleepForTests(null); }
+  });
+
+  test("M3: the inactive path retries a transient failure and still writes the handoff", async () => {
+    _setLedgerRetrySleepForTests(async () => {});
+    try {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      let n = 0;
+      const lib = makeLibrarian((e) => { if (n++ === 0) throw new Error("writeLedger transient 502"); return { ok: true, id: `led_${n}`, content: rendered(e.body) }; });
+      await run(CLERK_JSON, lib);
+      expect(lib.writeLedger).toHaveBeenCalledTimes(3);
+      expect(lib.writeHandoff).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+    } finally { _setLedgerRetrySleepForTests(null); }
+  });
+
+  test("L4b: the clerk reads this bot's turns by name; the extract keeps the legacy transcript", async () => {
+    const lib = makeLibrarian();
+    const hist = [
+      { role: "user" as const, content: "which episode next", authorName: "Raziel", timestamp: T0 },
+      { role: "assistant" as const, content: "held, not slow", timestamp: T1 },
+    ];
+    const clerk = { generate: jest.fn(async (_s: string, _m: any[]) => CLERK_JSON) };
+    const inference = { generate: jest.fn(async (_s: string, _m: any[]) => EXTRACT) };
+    const wq = makeWq();
+    await distillSessionOnInactive(CH, { get: () => hist, clear: jest.fn() } as any, lib as any, inference as any, wq as any, prompts, clerk as any);
+    await wq.drain();
+    expect(clerk.generate.mock.calls[0]![1][0].content).toBe("Raziel: which episode next\nDrevan: held, not slow");
+    expect(inference.generate.mock.calls[0]![1][0].content).toBe("Raziel: which episode next\nassistant: held, not slow");
   });
 
   test("clerk prose (no JSON) -> no POST, no handoff, no throw", async () => {
@@ -321,7 +483,27 @@ describe("runDistillation (LEDGER_DISTILL on)", () => {
     expect(lib.writeWmNote).not.toHaveBeenCalled();
     const c = lib.writeLedger.mock.calls.map((x) => x[0] as any);
     expect(c).toHaveLength(2);
-    expect(c[0]).toMatchObject({ companion_id: "drevan", function: "distiller", source_kind: "window", source_ref: `${CH} 00:11–00:40`, dedup_key: `distill-mid:drevan:${CH}:${T0}:0` });
+    expect(c[0]).toMatchObject({ companion_id: "drevan", function: "distiller", source_kind: "window", source_ref: `${CH} 00:11–00:40`, dedup_key: `distill-mid:drevan:${CH}:${T0S}:0` });
+  });
+
+  test("M3: the mid-session path (inside the write queue) retries a transient failure itself", async () => {
+    _setLedgerRetrySleepForTests(async () => {});
+    try {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      let n = 0;
+      const lib = makeLibrarian((e) => { if (n++ < 2) throw new Error("writeLedger transient 503"); return { ok: true, id: `led_${n}`, content: rendered(e.body) }; });
+      const wq = makeWq();
+      const selfWindow = [window[0]!, { role: "assistant" as const, content: "here", timestamp: T1 }];
+      const clerk = { generate: jest.fn(async (_s: string, _m: any[]) => CLERK_JSON) };
+      await runDistillation(CH, { get: () => selfWindow } as any, lib as any, { generate: async () => BLOCKS } as any, wq as any, "distill", 2, "Raziel", "drevan", clerk as any);
+      await wq.drain();
+      const keys = lib.writeLedger.mock.calls.map((c) => (c[0] as any).dedup_key);
+      const k = (i: number) => `distill-mid:drevan:${CH}:${T0S}:${i}`;
+      expect(keys).toEqual([k(0), k(0), k(0), k(1)]);
+      // L4b on this path too: the window's own assistant turn reaches the clerk by name.
+      expect(clerk.generate.mock.calls[0]![1][0].content).toBe("Raziel: rough morning\nDrevan: here");
+      warn.mockRestore();
+    } finally { _setLedgerRetrySleepForTests(null); }
   });
 
   test("owner absent from the window -> no clerk call either (same gate as the old note)", async () => {
@@ -420,41 +602,122 @@ describe("consolidateSession (LEDGER_DISTILL on)", () => {
     return lib;
   };
 
-  test("handoff summary = ledger lines (session source); the close SPINE stays the narrator's summary", async () => {
+  beforeEach(() => _resetConsolidationWarningsForTests());
+  const NOW = Date.UTC(2026, 8, 26, 14, 5, 42);
+  const LAST = Date.UTC(2026, 8, 26, 11, 20);
+
+  test("M1: ONE deterministic line, no clerk model call; summary = its content; spine stays the narrator's", async () => {
     const lib = makeLib();
-    const narrator = { generate: jest.fn<() => Promise<string>>().mockResolvedValueOnce(NARRATED).mockResolvedValueOnce(CLERK_JSON) };
+    const narrator = { generate: jest.fn(async () => NARRATED) };
     const bootCtx = { sessionId: "sess-old" };
-    const r = await consolidateSession({ companionId: "cypher", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "discord:cypher", bootCtx } });
+    const r = await consolidateSession({ companionId: "cypher", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "discord:cypher", bootCtx }, lastActivityMs: LAST, now: () => NOW });
     expect(r).toEqual({ written: true });
+    expect(narrator.generate).toHaveBeenCalledTimes(1); // the narrator only -- no clerk call
     const c = lib.writeLedger.mock.calls.map((x) => x[0] as any);
-    expect(c[0]).toMatchObject({ companion_id: "cypher", function: "distiller", source_kind: "session", source_ref: "sess-old", dedup_key: "consolidation:cypher:sess-old:0" });
+    expect(c).toHaveLength(1);
+    expect(c[0]).toEqual({
+      companion_id: "cypher", function: "distiller",
+      body: "Recorded: idle consolidation at 14:05 UTC; no conversation in this session since 11:20.",
+      source_kind: "session", source_ref: "sess-old", observed_on: "2026-09-26",
+      dedup_key: "consolidation:cypher:sess-old:2026-09-26T14:05",
+    });
+    // The state row never reaches the ledger.
+    expect(c[0].body).not.toMatch(/acuity|0\.6|tea/);
     const h = (lib.writeHandoff.mock.calls[0] as unknown[])[0] as any;
     expect(h.source).toBe("consolidation");
-    expect(h.title).toBe("Couch thread about pacing");
-    expect(h.summary.split("\n").every((l: string) => l.startsWith("〔ledger · "))).toBe(true);
+    expect(h.title).toBe("Idle consolidation");
+    expect(h.state_hint).toBe("at_rest");
+    expect(h.summary).toBe(rendered(c[0].body, "session", "sess-old"));
     expect((lib.sessionClose.mock.calls[0] as unknown[])[0]).toMatchObject({ sessionId: "sess-old", spine: "Nothing moved. The blade stayed sheathed.", closeKind: "consolidation" });
     expect(bootCtx.sessionId).toBe("sess-new");
   });
 
-  test("no real session id -> no source, no write, and no inference spent", async () => {
-    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
-    const lib = makeLib();
-    const narrator = { generate: jest.fn(async () => NARRATED) };
-    for (const session of [undefined, { surface: "s", bootCtx: { sessionId: "unknown" } }]) {
-      const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session });
-      expect(r).toEqual({ written: false, reason: "no_source" });
+  test("M2: the body passes the grammar with a session source; unknown last activity drops the clause; an earlier day carries its date", () => {
+    const src = { kind: "session", ref: "sess-1" };
+    for (const b of [consolidationLedgerBody(NOW, LAST), consolidationLedgerBody(NOW, null), consolidationLedgerBody(NOW, Date.UTC(2026, 8, 25, 23, 10))]) {
+      expect(preflightLedgerBody(b, src)).toBeNull();
     }
-    expect(narrator.generate).not.toHaveBeenCalled();
-    expect(lib.writeHandoff).not.toHaveBeenCalled();
+    expect(consolidationLedgerBody(NOW, null)).toBe("Recorded: idle consolidation at 14:05 UTC.");
+    expect(consolidationLedgerBody(NOW, undefined)).toBe("Recorded: idle consolidation at 14:05 UTC.");
+    expect(consolidationLedgerBody(NOW, Date.UTC(2026, 8, 25, 23, 10))).toBe("Recorded: idle consolidation at 14:05 UTC; no conversation in this session since 2026-09-25 23:10.");
+    expect(consolidationDedupKey("gaia", "s", NOW)).toBe("consolidation:gaia:s:2026-09-26T14:05");
+  });
+
+  test("M2: writeHandoff throws after the line landed -> next attempt (later tick) is a NEW line, nothing stale reused", async () => {
+    const err = jest.spyOn(console, "error").mockImplementation(() => {});
+    const lib = makeLib();
+    lib.writeHandoff.mockRejectedValueOnce(new Error("handoff 500"));
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const session = { surface: "s", bootCtx: { sessionId: "sess-1" } };
+    const r1 = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, lastActivityMs: LAST, now: () => NOW });
+    expect(r1).toEqual({ written: false, reason: "librarian_error" });
+    expect(lib.sessionClose).not.toHaveBeenCalled();
+    const later = NOW + 30 * 60_000;
+    const r2 = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, lastActivityMs: LAST, now: () => later });
+    expect(r2).toEqual({ written: true });
+    const keys = lib.writeLedger.mock.calls.map((x) => (x[0] as any).dedup_key);
+    expect(keys).toEqual(["consolidation:drevan:sess-1:2026-09-26T14:05", "consolidation:drevan:sess-1:2026-09-26T14:35"]);
+    const h2 = (lib.writeHandoff.mock.calls[1] as unknown[])[0] as any;
+    expect(h2.summary).toContain("idle consolidation at 14:35 UTC");
+    err.mockRestore();
+  });
+
+  test("M3: a transient ledger failure retries inline under the same key", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    let n = 0;
+    const lib = makeLib((e) => { if (n++ === 0) throw new Error("writeLedger transient 503"); return { ok: true, id: "led_1", content: rendered(e.body, e.source_kind, e.source_ref) }; });
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-9" } }, now: () => NOW, ledgerRetryDelaysMs: [0, 0, 0] });
+    expect(r).toEqual({ written: true });
+    const keys = lib.writeLedger.mock.calls.map((x) => (x[0] as any).dedup_key);
+    expect(keys).toEqual(["consolidation:gaia:sess-9:2026-09-26T14:05", "consolidation:gaia:sess-9:2026-09-26T14:05"]);
     warn.mockRestore();
   });
 
-  test("zero accepted lines -> no handoff and no session cycle", async () => {
+  test("L1: placeholder session id -> ONE loud warning per process; re-open on the bot surface resolves a real id", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const lib = makeLib();
+    lib.sessionOpen.mockResolvedValue({} as any);  // Halseth still cannot give an id
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const session = { surface: "discord:gaia", bootCtx: { sessionId: "cached" } };
+    for (let i = 0; i < 3; i++) {
+      const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, now: () => NOW });
+      expect(r).toEqual({ written: false, reason: "no_source" });
+    }
+    const loud = warn.mock.calls.map((a) => String(a[0])).filter((l) => l.includes("LOUD"));
+    expect(loud).toHaveLength(1);
+    expect(loud[0]).toMatch(/NO consolidation handoff/);
+    expect(lib.sessionOpen).toHaveBeenCalledWith("work", "discord:gaia");
+    expect(narrator.generate).not.toHaveBeenCalled();
+
+    // Halseth recovers: the next tick resolves an id and consolidates normally.
+    lib.sessionOpen.mockResolvedValueOnce({ session_id: "sess-real" } as any);
+    const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session, now: () => NOW });
+    expect(r).toEqual({ written: true });
+    expect((lib.writeLedger.mock.calls[0]![0] as any).source_ref).toBe("sess-real");
+    expect((lib.sessionClose.mock.calls[0] as unknown[])[0]).toMatchObject({ sessionId: "sess-real" });
+    warn.mockRestore();
+  });
+
+  test("no session at all -> no source, no write, and no inference spent", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const lib = makeLib();
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const r = await consolidateSession({ companionId: "gaia", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any });
+    expect(r).toEqual({ written: false, reason: "no_source" });
+    expect(narrator.generate).not.toHaveBeenCalled();
+    expect(lib.writeHandoff).not.toHaveBeenCalled();
+    expect(lib.sessionOpen).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("line not accepted (404) -> no handoff, no session cycle, never retried", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const lib = makeLib(() => ({ ok: false, status: 404 }));
-    const narrator = { generate: jest.fn<() => Promise<string>>().mockResolvedValueOnce(NARRATED).mockResolvedValueOnce(CLERK_JSON) };
-    const r = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-1" } } });
+    const narrator = { generate: jest.fn(async () => NARRATED) };
+    const r = await consolidateSession({ companionId: "drevan", librarian: lib as any, inference: { generate: jest.fn() } as any, narrator: narrator as any, session: { surface: "s", bootCtx: { sessionId: "sess-1" } }, now: () => NOW });
     expect(r).toEqual({ written: false, reason: "no_ledger_lines" });
+    expect(lib.writeLedger).toHaveBeenCalledTimes(1);
     expect(lib.writeHandoff).not.toHaveBeenCalled();
     expect(lib.sessionClose).not.toHaveBeenCalled();
     warn.mockRestore();
@@ -482,6 +745,17 @@ describe("buildWitnessLedgerEntry", () => {
     expect(e!.companion_id).toBe("cypher");
     expect(e!.body).toContain(`#${CH}`);
     expect(e!.body.endsWith(`"${"x".repeat(500)}"`)).toBe(true);
+  });
+  test("L4a: words that trip the number/lexicon rules -> the line WITHOUT the quote (not a 422)", () => {
+    for (const content of ["my glucose was 187 after lunch", "vevan, stay", "Source: me"]) {
+      const e = buildWitnessLedgerEntry({ senderCompanion: "drevan", channelName: "couch", channelId: CH, content, messageId: "m-9" });
+      expect(e!.body).toBe("Logged: Drevan spoke in #couch without a reply from Gaia.");
+      expect(preflightLedgerBody(e!.body, { kind: "message", ref: "m-9" })).toBeNull();
+    }
+  });
+  test("L4a: a channel NAME that trips the number rule falls back to the channel id", () => {
+    const e = buildWitnessLedgerEntry({ senderCompanion: "cypher", channelName: "room-42", channelId: CH, content: "187", messageId: "m" });
+    expect(e!.body).toBe(`Logged: Cypher spoke in #${CH} without a reply from Gaia.`);
   });
   test("unknown sender or Gaia herself -> null (no subject to file under)", () => {
     expect(buildWitnessLedgerEntry({ senderCompanion: "somebot", channelName: "c", channelId: CH, content: "hi", messageId: "m" })).toBeNull();

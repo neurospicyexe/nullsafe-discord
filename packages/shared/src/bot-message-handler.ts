@@ -78,7 +78,7 @@ import {
   commonsMessageFor, shouldDeferToDirector,
 } from "./index.js";
 import { selectImp, impRider, type ImpState } from "./imps.js";
-import { ledgerDistillEnabled } from "./ledger-clerk.js";
+import { ledgerDistillEnabled, preflightLedgerBody, companionDisplayName } from "./ledger-clerk.js";
 import type { LedgerEntryInput } from "./librarian.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
@@ -372,12 +372,26 @@ export function buildWitnessLedgerEntry(p: {
   const lower = p.senderCompanion.toLowerCase();
   const subject = (["cypher", "drevan", "gaia"] as const).find((c) => lower === c || lower.includes(c));
   if (!subject || subject === "gaia") return null;
-  const name = subject.charAt(0).toUpperCase() + subject.slice(1);
+  const name = companionDisplayName(subject);
   const words = p.content.slice(0, 500).replace(/["“”]/g, "'").replace(/\s+/g, " ").trim();
+  const source = { kind: "message", ref: p.messageId };
+  // L4a (2026-09-26 review): preflight before sending. A sibling's words that carry an unlabeled
+  // number, a lexicon word or "Source:" get the WHOLE line 422'd (correct under rule 2: a companion's
+  // words are never a source for a number). The fact that they spoke is still recordable, so fall
+  // back to the line without the quote; and if the channel NAME trips the number rule (#42-chat),
+  // to the channel id, which is a long id and therefore a coordinate.
+  const where = `#${p.channelName ?? p.channelId}`;
+  const candidates = [
+    `Logged: ${name} spoke in ${where} without a reply from Gaia; words: "${words}"`,
+    `Logged: ${name} spoke in ${where} without a reply from Gaia.`,
+    `Logged: ${name} spoke in #${p.channelId} without a reply from Gaia.`,
+  ];
+  const body = candidates.find((b) => preflightLedgerBody(b, source) === null);
+  if (!body) return null;
   return {
     companion_id: subject,
     function: "witness-log",
-    body: `Logged: ${name} spoke in #${p.channelName ?? p.channelId} without a reply from Gaia; words: "${words}"`,
+    body,
     source_kind: "message",
     source_ref: p.messageId,
     // This is the one writeLedger caller riding the write queue, which retries on the 5xx that
@@ -1373,7 +1387,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               await librarian.writeLedger(entry);
             }, { maxAgeMs: APPEND_MAX_AGE_MS });
           } else {
-            console.warn(`[${COMPANION_ID}] witness-log: sender ${senderName} is not a known companion -- ledger line skipped`);
+            console.warn(`[${COMPANION_ID}] witness-log: sender ${senderName} is not a known companion, or no witness line passes the ledger grammar -- ledger line skipped`);
           }
         } else {
           writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {

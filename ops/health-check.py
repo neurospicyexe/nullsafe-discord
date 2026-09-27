@@ -1376,6 +1376,92 @@ def check_direct_inference(rep):
         rep.add("inference:direct_chain", "ok", "narrator written %d in 3h, no skips" % wins)
 
 
+LEDGER_BOT_LOGS = {
+    c: ("/app/logs/%s-bot-out.log" % c, "/app/logs/%s-bot-error.log" % c)
+    for c in ("cypher", "drevan", "gaia")
+}
+LEDGER_TAIL_BYTES = 2_000_000   # a busy bot writes well over 400KB a day; this window must span 24h
+
+def _ledger_scan(lines, horizon):
+    """Count, from pm2 log lines newer than `horizon` (a naive LOCAL datetime):
+      activity -- `onChannelInactive: channel=` (a Discord session with messages ended),
+      wins     -- accepted DISTILLER ledger lines from Discord passes (consolidation excluded: its
+                  deterministic line lands with nobody talking, so it would mask a dead clerk),
+      stale    -- `[ledger] STALE_HANDOFF` lines, with their reasons.
+    Pure, so ops/test_ledger_handoff_check.py can drive it with fixture lines."""
+    import re
+    from datetime import datetime
+    ts_re = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}): ")
+    win_re = re.compile(r"\[(?!consolidation:)[a-z]+\] ledger distiller: (\d+) accepted")
+    reason_re = re.compile(r"STALE_HANDOFF .*reason=(\S+)")
+    activity, wins, reasons = 0, 0, []
+    for line in lines:
+        m = ts_re.match(line)
+        if not m:
+            continue
+        try:
+            ts = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        if ts < horizon:
+            continue
+        if "onChannelInactive: channel=" in line:
+            activity += 1
+        w = win_re.search(line)
+        if w:
+            wins += int(w.group(1))
+        r = reason_re.search(line)
+        if r:
+            reasons.append(r.group(1))
+    return activity, wins, reasons
+
+
+def check_ledger_handoffs(rep, logs=None, now=None):
+    """Ledger lane (2026-09-26 review, L2b): a companion that had Discord activity in the last 24h
+    but got ZERO accepted distiller ledger lines has a silently stale Claude.ai handoff -- under
+    LEDGER_DISTILL a pass with no accepted line writes no handoff, and nothing errors. The bots log
+    `[ledger] STALE_HANDOFF companion=<c> channel=<id> reason=<404|422:<rules>|no_lines|transport>`
+    for each such pass (console.warn -> the pm2 ERROR log), and `[<c>] ledger distiller: N accepted`
+    for every POST loop (console.log -> the OUT log), so both files are read. Per companion, never a
+    house total (one dead clerk must not hide behind two live ones).
+
+    Knob off: no distiller lines are ever written, so this would read as stale -- skipped when the
+    discord .env says LEDGER_DISTILL is off/0/false/no."""
+    from datetime import datetime, timedelta
+    now = now or datetime.now()
+    # pm2 stamps LOCAL time (CDT), not UTC -- compare local to local (the OPS-MANUAL trap).
+    horizon = now - timedelta(hours=24)
+    for cid, paths in sorted((logs or LEDGER_BOT_LOGS).items()):
+        lines, readable = [], False
+        for path in paths:
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - LEDGER_TAIL_BYTES))
+                    lines.extend(fh.read().decode("utf-8", "replace").splitlines())
+                readable = True
+            except OSError:
+                continue
+        if not readable:
+            rep.add("ledger:handoffs:%s" % cid, "notice", "bot logs unreadable -- ledger handoffs UNVERIFIED")
+            continue
+        activity, wins, reasons = _ledger_scan(lines, horizon)
+        why = (" (STALE_HANDOFF x%d: %s)" % (len(reasons), ", ".join(sorted(set(reasons))))) if reasons else ""
+        if activity and wins == 0:
+            rep.add("ledger:handoffs:%s" % cid, "warning",
+                    "%d Discord session(s) ended in 24h but ZERO distiller ledger lines accepted -- "
+                    "Claude.ai handoff is stale%s" % (activity, why))
+        else:
+            # Some stale passes among landed ones stay OK (detail only): `no_lines` is also what a quiet
+            # session with nothing worth recording produces, and a notice here would flip the throttle
+            # fingerprint -- and page Telegram -- on every such pass. The alarm is the ZERO case above.
+            rep.add("ledger:handoffs:%s" % cid, "ok",
+                    "%d session(s), %d accepted distiller line(s) in 24h%s" % (activity, wins, why))
+
+
+def ledger_distill_off(denv):
+    return (denv.get("LEDGER_DISTILL") or "").strip().lower() in ("off", "0", "false", "no")
+
+
 def main():
     args = set(sys.argv[1:])
     rep = Report()
@@ -1397,6 +1483,8 @@ def main():
         check_inference_balance(rep, denv)
         check_deepinfra_spend(rep)
         check_direct_inference(rep)
+        if not ledger_distill_off(denv):
+            check_ledger_handoffs(rep)
     except Exception as e:
         print("health-check itself failed: %s" % e, file=sys.stderr)
         return 3
