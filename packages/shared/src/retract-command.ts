@@ -87,6 +87,8 @@ type HalsethRetract = {
   already_archived?: { journal: string[]; notes: string[] };
   release_ids: string[];
   stm_deleted?: number;
+  /** Clerk ledger rows sourced to the retracted reply (message or window source), now dropped. */
+  ledger_dropped?: number;
 };
 
 /** Halseth's server-side floor for the STM hard-delete needle (handlers/retract.ts). */
@@ -126,6 +128,10 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
       headers: { "Authorization": `Bearer ${a.halseth.secret}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         agent: a.companionId,
+        // The reply's channel, ALWAYS sent (not only inside `stm`): Halseth drops clerk ledger lines
+        // whose window source covers the reply, and `stm` is absent for a short reply and dropped
+        // on the 409 retry -- exactly the cases where the window match would otherwise go dark.
+        channel_id: a.channelId,
         ...keys,
         reason: `Raziel retracted my reply ${a.botMessageId} on Discord (${when} UTC)`,
         ...(withStm && a.stm ? { stm: { channel_id: a.stm.channelId, content: a.stm.content } } : {}),
@@ -159,9 +165,11 @@ export async function retractFromStores(a: RetractArgs): Promise<StoresOutcome> 
       // The window count is a third number only when the caller asked for the window: without
       // `stm` the ack keeps its original shape.
       const window = stmNote || (a.stm ? `, dropped ${ns} window row${ns === 1 ? "" : "s"}` : "");
+      const nl = j.ledger_dropped ?? 0;
+      const ledger = nl > 0 ? `, dropped ${nl} ledger record${nl === 1 ? "" : "s"}` : "";
       parts.push(nj + nn === 0
-        ? `halseth: nothing to archive under that reply (no journal row or note carried its key)${window}`
-        : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}${window}`);
+        ? `halseth: nothing to archive under that reply (no journal row or note carried its key)${window}${ledger}`
+        : `halseth: archived ${nj} journal row${nj === 1 ? "" : "s"} and ${nn} note${nn === 1 ? "" : "s"}${window}${ledger}`);
       // Every reply is journaled as speech under `discord:<head>`, so zero journal rows means the
       // write had not landed (writeQueue retries) or this was already retracted. Either way the
       // headline must not say done. A repeat retract also cannot reach the vault mirrors: Halseth

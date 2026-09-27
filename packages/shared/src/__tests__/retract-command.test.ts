@@ -56,6 +56,17 @@ describe("retractKeys", () => {
 });
 
 describe("handleRetractCommand", () => {
+  it("always sends the reply's channel_id (the ledger window match) and names dropped ledger records", async () => {
+    const { fn, calls } = fakeFetch({
+      "/admin/retract": { status: 200, json: { archived: { journal: ["j1"], notes: [] }, release_ids: ["r1"], ledger_dropped: 2 } },
+      "/retract": { status: 200, json: { removed: 1, existed: true } },
+    });
+    // No `stm` here: the channel must still travel, or the window clause goes dark for short replies.
+    const ack = await handleRetractCommand({ ...base, fetchFn: fn });
+    expect(calls[0]!.body["channel_id"]).toBe("1497734427298762828");
+    expect(calls[0]!.body["stm"]).toBeUndefined();
+    expect(ack).toContain("dropped 2 ledger records");
+  });
   it("archives in Halseth with a reason, drops the vault doc AND the rag mirrors, and acks with the numbers", async () => {
     const { fn, calls } = fakeFetch({
       "/admin/retract": { status: 200, json: { archived: { journal: ["j1", "j2"], notes: ["n1"] }, release_ids: ["r1", "r2", "r3"] } },
