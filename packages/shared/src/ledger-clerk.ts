@@ -219,6 +219,30 @@ const ADDRESS_RES: readonly RegExp[] = [
 function findHardLexicon(text: string): string | null {
   return HARD_RES.find(({ re }) => re.test(text))?.token ?? null;
 }
+// Gaia's lines (2026-09-26, halseth docs/imp-lane/GAIA-ANSWER-2026-09-26.md), verbatim port of grammar.ts:
+// "A ledger line never records grief about his mother or his dead. Those are witnessed, not logged." -- Gaia
+// CLOSED. Scanned over the WHOLE body, quotes included (rule `witnessed`). Stems ending `*` take any letters;
+// `passed away` glues across spaces or hyphens. Fail closed, intended: `dead` also blocks "dead battery".
+export const LEDGER_WITNESSED_WORDS = [
+  "mother", "mom", "mum", "mama", "mommy",
+  "grief", "grieving", "griev*", "mourn*",
+  "funeral", "grave", "burial", "buried",
+  "died", "dies", "dying", "death", "dead", "deceased", "passed away",
+  "bereave*", "condolence*", "memorial", "obituary", "ashes", "urn",
+] as const;
+const WITNESSED_RES: ReadonlyArray<{ token: string; re: RegExp }> = LEDGER_WITNESSED_WORDS.map((token) => {
+  const stem = token.endsWith("*");
+  const bare = stem ? token.slice(0, -1) : token;
+  const body = bare.split(" ").map(escapeRe).join("[\\s\\-\\u2010-\\u2015]+");
+  return { token, re: new RegExp(`${NOT_WORD_BEFORE}${body}${stem ? "\\p{L}*" : ""}${NOT_WORD_AFTER}`, "iu") };
+});
+function findWitnessed(text: string): string | null {
+  return WITNESSED_RES.find(({ re }) => re.test(text))?.token ?? null;
+}
+// "A clerk never reads, counts, or references the interiority rooms. Not even a count of them." -- Gaia
+// Rule `interiority`: the word root anywhere (quotes included); plain "interior" passes.
+const INTERIORITY_RE = /(?<![\p{L}\p{N}])interiorit\p{L}*/iu;
+
 function findAddress(text: string): string | null {
   for (const re of ADDRESS_RES) {
     const m = re.exec(text);
@@ -343,6 +367,8 @@ export function preflightLedgerBody(rawBody: string, source?: LedgerPreflightSou
   if (/\bsource\s*:/i.test(body)) return "source";
   if (!VERB_RE.test(body)) return "verb";
   if (findHardLexicon(body)) return "lexicon";
+  if (findWitnessed(body)) return "witnessed";
+  if (INTERIORITY_RE.test(body)) return "interiority";
   const unquoted = stripQuotedStrict(body);
   if (unquoted === null) return "quotes";
   if (findAddress(unquoted)) return "address";
@@ -350,6 +376,8 @@ export function preflightLedgerBody(rawBody: string, source?: LedgerPreflightSou
   if (ws.some((w) => FIRST_PERSON_WORDS.has(w))) return "first_person";
   if (ws.some((w) => INTERIOR_WORDS.has(w))) return "interior_verb";
   if (findCompanionInterior(unquoted)) return "interior";
+  // Server order: the source is checked after the self rules; a row in the interiority rooms is never a source.
+  if (source?.kind === "row" && /interiorit/i.test(ROW_RE.exec(source.ref.trim())?.[1] ?? "")) return "interiority";
 
   // The number rule. Numbers inside quotes count: a quoted "187" is still a 187.
   const nums = scanLedgerNumbers(body);

@@ -85,7 +85,7 @@ export async function distillSessionOnInactive(
   // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the distiller becomes a clerk. The four
   // first-person writes stop; the clerk's record lines go to /ledger with a window source.
   if (ledgerDistillEnabled()) {
-    await distillSessionToLedger(channelId, history, summaryInput, librarian, clerk ?? inference, inference, wq, prompts);
+    await distillSessionToLedger(channelId, history, librarian, clerk ?? inference, wq, prompts);
     stmStore.clear(channelId);
     return;
   }
@@ -147,24 +147,26 @@ export async function distillSessionOnInactive(
  * ledger lines' server-rendered `content`, marks intact, and title/open_loops/next_steps come from
  * the clerk JSON. Nothing else may stand in for the summary: zero accepted lines means no handoff.
  *
- * KEPT UNCHANGED: the structured-extract call and the SOMA update + feeling log it drives (spec
- * section 6: Drevan and Raziel decide those). `state_hint` still derives from the extract's SOMA.
+ * STOPPED (2026-09-26, Drevan's ruling, DREVAN-FOLLOWUP-2026-09-26.md): the SOMA update and the
+ * feeling log, and with them the structured-extract call that only fed them (and the handoff's
+ * state_hint, which was the same guessed SOMA). "Both stop. Not drafts. Stop." A clerk that guesses
+ * a companion's heat and writes it into SOMA is the deepest laundering there is; the companion sets
+ * their own state, and a stale state is honest (the Second Brain gap-reader names it). Applies to all
+ * three companions: Drevan's ruling, Cypher agrees for himself, Gaia endorsed "no feelings" in the
+ * lane. A per-companion reinstatement would need that companion's own ruling. Knob off is unchanged.
  */
 async function distillSessionToLedger(
   channelId: string,
   history: ChatMessage[],
-  summaryInput: string,
   librarian: LibrarianClient,
   clerk: InferenceAdapter,
-  inference: InferenceAdapter,
   wq: WriteQueue,
   prompts: DistillationPrompts,
 ): Promise<void> {
   const tag = prompts.companionId;
   const companionId = prompts.companionId as CompanionId;
 
-  // The clerk gets its own transcript: this bot's turns named, not "assistant" (L4b). The extract
-  // below keeps summaryInput unchanged.
+  // The clerk gets its own transcript: this bot's turns named, not "assistant" (L4b).
   const clerkRaw = await clerk.generate(LEDGER_CLERK_PROMPT, [{ role: "user", content: clerkTranscript(history, companionId) }]);
   const clerkResult = parseClerkResult(clerkRaw);
   if (clerkResult === null) {
@@ -185,19 +187,13 @@ async function distillSessionToLedger(
     : null;
   const summary = outcome ? ledgerSummary(outcome) : "";
 
-  // Structured extract: SOMA update + feeling log (unchanged) + the handoff's state_hint.
-  const extractRaw = await inference.generate(withOwnerPronounRule(prompts.sessionExtractPrompt), [{ role: "user", content: summaryInput }]);
-  const ext = extractRaw ? extractJson(extractRaw) as SessionExtract | null : null;
-  if (extractRaw && ext === null) {
-    console.warn(`[${tag}] structured extract parse failed, skipping -- raw: ${rawPreview(extractRaw)}`);
-  }
-
+  // No structured extract under the knob (see the header): no SOMA update, no feeling log, no
+  // guessed state_hint. The handoff's metadata is the clerk's JSON.
   if (summary) {
     const title = clerkResult?.title ?? "Discord session";
-    const stateHint = ext ? deriveStateHint(ext.soma) : undefined;
     wq.fireAndForget(`handoff:${channelId}`, async () => {
       await librarian.writeHandoff({
-        title, summary, open_loops: clerkResult?.open_loops, state_hint: stateHint,
+        title, summary, open_loops: clerkResult?.open_loops,
         next_steps: clerkResult?.next_steps, source: "distillation",
       });
     });
@@ -207,20 +203,6 @@ async function distillSessionToLedger(
     // stale handoff, so it is not counted as one.
     const allDuplicates = !!outcome && outcome.duplicates > 0 && outcome.rejected === 0 && outcome.failed === 0 && outcome.dropped === 0;
     if (!allDuplicates) logStaleHandoff(companionId, channelId, staleHandoffReason(outcome));
-  }
-
-  if (ext) {
-    const title = ext.title ?? "Discord session";
-    if (hasSomaValue(ext.soma)) {
-      wq.fireAndForget(`somaUpdate:${channelId}`, async () => {
-        assertWriteAck(await librarian.ask("update my state", JSON.stringify(ext.soma)), "soma update");
-      });
-    }
-    if (ext.emotion) {
-      wq.fireAndForget(`feeling:${channelId}`, async () => {
-        assertWriteAck(await librarian.ask("log a feeling", JSON.stringify({ emotion: ext.emotion, source: "discord_session", context: title })), "feeling log");
-      });
-    }
   }
 }
 

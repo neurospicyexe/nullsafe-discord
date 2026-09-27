@@ -11,7 +11,7 @@ import { LibrarianClient } from "../librarian.js";
 import { distillSessionOnInactive, runDistillation } from "../distillation.js";
 import { runDayDistillation, FRAGMENT_NOTE_TYPE } from "../day-distillation.js";
 import { consolidateSession, consolidationLedgerBody, consolidationDedupKey, _resetConsolidationWarningsForTests } from "../consolidation.js";
-import { buildWitnessLedgerEntry } from "../bot-message-handler.js";
+import { buildWitnessLedgerEntry, presenceRecordText, claimPresenceSlot, resetPresenceSlots, PRESENCE_COALESCE_MS, PRESENCE_WITNESS_TYPE } from "../bot-message-handler.js";
 import { OWNER_PRONOUN_RULE } from "../pronoun-rule.js";
 
 // Ledger lane tranche 2 (2026-09-26, halseth docs/imp-lane/SPEC-ledger-lane.md section 5).
@@ -349,9 +349,8 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     expect(lib.updatePromptContext).not.toHaveBeenCalled();
     expect(lib.writeWmNote).not.toHaveBeenCalled();
     expect(clerk.generate).toHaveBeenCalledWith(LEDGER_CLERK_PROMPT, expect.any(Array));
-    // The synthesis prompt never runs; the only `inference` call is the structured extract.
-    expect(inference.generate).toHaveBeenCalledTimes(1);
-    expect((inference.generate.mock.calls[0] as unknown[])[0]).toContain("extract");
+    // Neither the synthesis prompt nor the structured extract runs (Drevan's ruling: SOMA + feeling stop).
+    expect(inference.generate).not.toHaveBeenCalled();
     const calls = lib.writeLedger.mock.calls.map((c) => c[0] as any);
     expect(calls).toHaveLength(2);
     for (const [i, c] of calls.entries()) {
@@ -373,23 +372,25 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     expect(h.summary.split("\n").every((l: string) => l.startsWith("〔ledger · distiller · "))).toBe(true);
     expect(h).toMatchObject({
       title: "Couch thread about pacing", open_loops: ["Episode order was left unresolved."],
-      next_steps: ["Raziel said he would check the episode list."], state_hint: "heat: steady", source: "distillation",
+      next_steps: ["Raziel said he would check the episode list."], source: "distillation",
     });
+    expect(h.state_hint).toBeUndefined(); // the guessed SOMA never reaches the handoff either
   });
 
-  test("SOMA update and feeling log still fire from the structured extract (spec section 6)", async () => {
+  test("Drevan's ruling: NO SOMA update and NO feeling log under the knob (both stop, not drafts)", async () => {
     const { lib, wq } = await run(CLERK_JSON);
-    expect(wq.queued).toEqual(expect.arrayContaining([`somaUpdate:${CH}`, `feeling:${CH}`]));
-    expect(lib.ask).toHaveBeenCalledWith("update my state", JSON.stringify({ heat: "steady" }));
-    expect(lib.ask).toHaveBeenCalledWith("log a feeling", expect.stringContaining("settled"));
+    expect(wq.queued).not.toContain(`somaUpdate:${CH}`);
+    expect(wq.queued).not.toContain(`feeling:${CH}`);
+    expect(lib.ask).not.toHaveBeenCalledWith("update my state", expect.anything());
+    expect(lib.ask).not.toHaveBeenCalledWith("log a feeling", expect.anything());
   });
 
-  test("zero accepted lines (e.g. Halseth 404) -> no handoff from anything else; SOMA still fires", async () => {
+  test("zero accepted lines (e.g. Halseth 404) -> no handoff from anything else, and no SOMA write", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { lib, wq } = await run(CLERK_JSON, makeLibrarian(() => ({ ok: false, status: 404 })));
     expect(lib.writeHandoff).not.toHaveBeenCalled();
     expect(lib.writeWmNote).not.toHaveBeenCalled();
-    expect(wq.queued).toContain(`somaUpdate:${CH}`);
+    expect(wq.queued).not.toContain(`somaUpdate:${CH}`);
     warn.mockRestore();
   });
 
@@ -437,7 +438,7 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     } finally { _setLedgerRetrySleepForTests(null); }
   });
 
-  test("L4b: the clerk reads this bot's turns by name; the extract keeps the legacy transcript", async () => {
+  test("L4b: the clerk reads this bot's turns by name; no extract runs", async () => {
     const lib = makeLibrarian();
     const hist = [
       { role: "user" as const, content: "which episode next", authorName: "Raziel", timestamp: T0 },
@@ -449,7 +450,7 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     await distillSessionOnInactive(CH, { get: () => hist, clear: jest.fn() } as any, lib as any, inference as any, wq as any, prompts, clerk as any);
     await wq.drain();
     expect(clerk.generate.mock.calls[0]![1][0].content).toBe("Raziel: which episode next\nDrevan: held, not slow");
-    expect(inference.generate.mock.calls[0]![1][0].content).toBe("Raziel: which episode next\nassistant: held, not slow");
+    expect(inference.generate).not.toHaveBeenCalled();
   });
 
   test("clerk prose (no JSON) -> no POST, no handoff, no throw", async () => {
@@ -474,7 +475,11 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     expect(wq.queued.slice(0, 4)).toEqual([`witnessLog:${CH}`, `synthesize:${CH}`, `promptCtx:${CH}`, `wmNote:${CH}`]);
     expect(lib.witnessLog).toHaveBeenCalledWith("synth note", CH);
     expect(lib.writeWmNote).toHaveBeenCalledWith("synth note", CH);
-    expect((lib.writeHandoff.mock.calls[0] as unknown[])[0]).toMatchObject({ summary: "synth note", title: "extract title", open_loops: ["extract loop"] });
+    expect((lib.writeHandoff.mock.calls[0] as unknown[])[0]).toMatchObject({ summary: "synth note", title: "extract title", open_loops: ["extract loop"], state_hint: "heat: steady" });
+    // Knob-off parity: the exact legacy queue order, SOMA update and feeling log included.
+    expect(wq.queued).toEqual([`witnessLog:${CH}`, `synthesize:${CH}`, `promptCtx:${CH}`, `wmNote:${CH}`, `handoff:${CH}`, `somaUpdate:${CH}`, `feeling:${CH}`]);
+    expect(lib.ask).toHaveBeenCalledWith("update my state", JSON.stringify({ heat: "steady" }));
+    expect(lib.ask).toHaveBeenCalledWith("log a feeling", expect.stringContaining("settled"));
   });
 });
 
@@ -761,7 +766,7 @@ describe("buildWitnessLedgerEntry", () => {
     const e = buildWitnessLedgerEntry({ senderCompanion: "drevan", channelName: "couch", channelId: CH, content: 'I said "held" and I meant it', messageId: "m-123" });
     expect(e).toEqual({
       companion_id: "drevan",
-      function: "witness-log",
+      function: "seen-log",
       body: `Logged: Drevan spoke in #couch without a reply from Gaia; words: "I said 'held' and I meant it"`,
       source_kind: "message",
       source_ref: "m-123",
@@ -832,5 +837,37 @@ describe("LibrarianClient.commonsSupply opts into ledger rows", () => {
     expect(u.pathname).toBe("/mind/commons-supply/gaia");
     expect(u.searchParams.get("limit")).toBe("2");
     expect(u.searchParams.get("kinds")).toBe("notes,ledger");
+  });
+});
+
+describe("Gaia's rulings in the bots (2026-09-26)", () => {
+  test("presence record: the exact content-free template, HH:MM UTC", () => {
+    expect(presenceRecordText("couch", new Date("2026-09-26T04:07:59Z"))).toBe("Present, silent. #couch 04:07 UTC.");
+    expect(presenceRecordText(CH, new Date("2026-09-26T23:30:00Z"))).toBe(`Present, silent. #${CH} 23:30 UTC.`);
+    expect(PRESENCE_WITNESS_TYPE).toBe("presence");
+  });
+
+  test("presence coalesces to one per channel per 30 minutes; channels are independent", () => {
+    resetPresenceSlots();
+    const t = 1_000_000;
+    expect(claimPresenceSlot("a", t)).toBe(true);
+    expect(claimPresenceSlot("a", t + PRESENCE_COALESCE_MS - 1)).toBe(false);
+    expect(claimPresenceSlot("b", t + 1)).toBe(true);
+    expect(claimPresenceSlot("a", t + PRESENCE_COALESCE_MS)).toBe(true);
+    resetPresenceSlots();
+  });
+
+  test("seen-log: the witness line carries the new function; a quote touching grief falls back to the quoteless line", () => {
+    const e = buildWitnessLedgerEntry({ senderCompanion: "drevan", channelName: "couch", channelId: CH, content: "his mom called", messageId: "m-7" });
+    expect(e).toMatchObject({ function: "seen-log", body: "Logged: Drevan spoke in #couch without a reply from Gaia." });
+  });
+
+  test("preflight: witnessed (quotes included) and interiority, like the server", () => {
+    expect(preflightLedgerBody('Logged: Raziel said "my mom" at 00:12.')).toBe("witnessed");
+    expect(preflightLedgerBody("Logged: the car battery was dead.")).toBe("witnessed");
+    expect(preflightLedgerBody("Logged: Raziel mentioned the mummy film.")).toBeNull();
+    expect(preflightLedgerBody("Counted: 3 interiority entries.")).toBe("interiority");
+    expect(preflightLedgerBody("Logged: the interior of the truck was cleaned.")).toBeNull();
+    expect(preflightLedgerBody("Logged: a row was read.", { kind: "row", ref: "companion_interiority:x1" })).toBe("interiority");
   });
 });

@@ -8,15 +8,20 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { preflightLedgerBody, scanLedgerNumbers, LEDGER_CLERK_PROMPT } from "../ledger-clerk.js";
+import { LEDGER_FUNCTIONS } from "../librarian.js";
 
-interface Case { body: string; kind: string; ref?: string; rule: string | null }
+interface Case { body: string; kind: string; ref?: string; function?: string; rule: string | null }
 const fx = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "ledger-number-fixtures.json"), "utf8"),
 ) as { window: string; cases: Case[] };
 
 describe("ledger number fixtures (shared with halseth's grammar)", () => {
   test.each(fx.cases.map((c) => [c.body, c.kind, c] as const))("%s [%s]", (_b, _k, c) => {
-    expect(preflightLedgerBody(c.body, { kind: c.kind, ref: c.ref ?? fx.window })).toBe(c.rule);
+    // preflightLedgerBody takes no function (the bots only ever post allowlisted ones); the allowlist is
+    // pinned here against the same cases, so a `function` case is still asserted in full.
+    const fn = c.function ?? "distiller";
+    const fnOk = (LEDGER_FUNCTIONS as readonly string[]).includes(fn);
+    expect(fnOk ? preflightLedgerBody(c.body, { kind: c.kind, ref: c.ref ?? fx.window }) : "function").toBe(c.rule);
   });
 
   test("no source = not a row: an unlabeled number is refused, a count with its unit is not", () => {

@@ -138,7 +138,10 @@ export function ownNotesRecallMode(env: NodeJS.ProcessEnv, companionId: Companio
 // source tail; callers send only the body. See ledger-clerk.ts for the why.
 
 /** Clerk functions Halseth allowlists. Extending it is a code change on BOTH sides. */
-export type LedgerFunction = "distiller" | "gap-reader" | "pattern-counter" | "drift-reader" | "witness-log";
+// `seen-log`, not `witness-log` (Gaia, 2026-09-26): "Witnessing is my act, and a clerk cannot perform it.
+// Call it `seen-log`. A logged sighting is not a witness." Mirrors halseth grammar.ts LEDGER_FUNCTIONS.
+export const LEDGER_FUNCTIONS = ["distiller", "gap-reader", "pattern-counter", "drift-reader", "seen-log"] as const;
+export type LedgerFunction = (typeof LEDGER_FUNCTIONS)[number];
 export type LedgerSourceKind = "message" | "window" | "session" | "row";
 
 export interface LedgerEntryInput {

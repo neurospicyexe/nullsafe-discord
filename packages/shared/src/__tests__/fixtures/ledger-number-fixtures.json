@@ -1,5 +1,5 @@
 {
-  "_comment": "The ledger number rule, pinned in BOTH repos with a byte-identical copy of this file: halseth src/__tests__/fixtures/ledger-number-fixtures.json (validateLedger, the authority) and nullsafe-discord packages/shared/src/__tests__/fixtures/ledger-number-fixtures.json (preflightLedgerBody, the bots' local mirror). `rule` is the rule the server names (null = the grammar passes; for a row source the door then still checks the row). Change one, change both.",
+  "_comment": "The ledger number rule, pinned in BOTH repos with a byte-identical copy of this file: halseth src/__tests__/fixtures/ledger-number-fixtures.json (validateLedger, the authority) and nullsafe-discord packages/shared/src/__tests__/fixtures/ledger-number-fixtures.json (preflightLedgerBody, the bots' local mirror). `rule` is the rule the server names (null = the grammar passes; for a row source the door then still checks the row). `function` is optional (default `distiller`); a case that names one pins the function allowlist too. Change one, change both.",
   "window": "1497734427298762828 00:11–00:40",
   "cases": [
     { "body": "Counted: 14 messages between 00:11 and 00:40.", "kind": "window", "rule": null },
@@ -90,6 +90,22 @@
     { "body": "Recorded: Gaia deeply trusts Raziel.", "kind": "window", "rule": "interior" },
     { "body": "Logged: Dre adores the couch.", "kind": "window", "rule": "interior" },
     { "body": "Logged: Drevan said \"I love you\" at 00:12.", "kind": "window", "rule": null },
-    { "body": "Logged: Raziel loves the Cypher thread.", "kind": "window", "rule": null }
+    { "body": "Logged: Raziel loves the Cypher thread.", "kind": "window", "rule": null },
+    { "body": "Logged: Drevan said \"held\" in the couch thread.", "kind": "message", "ref": "1497734427298762828", "function": "seen-log", "rule": null },
+    { "body": "Logged: Drevan said \"held\" in the couch thread.", "kind": "message", "ref": "1497734427298762828", "function": "witness-log", "rule": "function" },
+    { "body": "Logged: Raziel talked about his mother.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel said \"my mom\" at 00:12.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: the car battery was dead.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel mentioned the funeral.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel said \"she passed away\".", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel was grieving.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel mentioned mourners.", "kind": "window", "rule": "witnessed" },
+    { "body": "Logged: Raziel mentioned the mummy film.", "kind": "window", "rule": null },
+    { "body": "Counted: 3 interiority entries.", "kind": "window", "rule": "interiority" },
+    { "body": "Logged: Drevan said \"interiority\".", "kind": "window", "rule": "interiority" },
+    { "body": "Logged: the interior of the truck was cleaned.", "kind": "window", "rule": null },
+    { "body": "Logged: a row was read.", "kind": "row", "ref": "companion_interiority:ci_1", "rule": "interiority" },
+    { "body": "Logged: Drevan spoke Calethian.", "kind": "window", "rule": null },
+    { "body": "Missing: SOMA not updated since 2026-09-25 14:39 UTC.", "kind": "row", "ref": "companion_soma_events:0f1e2d3c4b5a69788796a5b4c3d2e1f0", "function": "gap-reader", "rule": null }
   ]
 }

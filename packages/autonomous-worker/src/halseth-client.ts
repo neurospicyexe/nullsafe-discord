@@ -959,12 +959,35 @@ export async function getCommonsPosts(context: string, limit = 30): Promise<Comm
   }
 }
 
+// ── Gaia's friction at the quote (2026-09-26, halseth GAIA-ANSWER point 1) ──────────────────────────
+// Halseth refuses a companion's commons / sibling write with 422 {error, rule} when it restates a
+// ledger line without carrying the line (mark + body + Source) verbatim (`ledger_restated`), or names
+// a health value about Raziel without a `Source: row <table>:<id>` pointer to a human record
+// (`health_pointer`). Both are final: the post is refused on its content, so a retry would only be
+// refused again. The caller logs ONE loud line naming the rule (never the content: a sibling note is
+// sealed), does not retry, and never throws out of the tick.
+export const LEDGER_FRICTION_RULES: ReadonlySet<string> = new Set(["ledger_restated", "health_pointer"]);
+
+/** The friction rule a failed hFetch names (from its "→ 422: <body>" message), or null. */
+export function ledgerFrictionRule(e: unknown): string | null {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (!/→ 422:/.test(msg)) return null;
+  const m = /"rule"\s*:\s*"([a-z_]+)"/.exec(msg);
+  return m && LEDGER_FRICTION_RULES.has(m[1]!) ? m[1]! : null;
+}
+
+function logLedgerFriction(route: string, author: string, rule: string): void {
+  console.error(`[ledger-friction] ${route} refused for ${author}: rule=${rule} (final, not retried; content withheld from this log)`);
+}
+
 /** Drop a post into the write layer (companion reply, club residue, etc.). Returns id or null. */
 export async function postCommonsPost(author: string, context: string, body: string, replyTo?: string | null): Promise<string | null> {
   try {
     const r = await hFetch("/mind/commons", "POST", { author, context, body, reply_to: replyTo ?? null }) as { id?: string };
     return r.id ?? null;
   } catch (e) {
+    const rule = ledgerFrictionRule(e);
+    if (rule) { logLedgerFriction("POST /mind/commons", `${author}/${context}`, rule); return null; }
     console.warn(`[commons] post failed (${author}/${context}):`, e);
     return null;
   }
@@ -1555,8 +1578,15 @@ export async function getSiblingUnread(companionId: string): Promise<SiblingNote
 }
 
 export async function sendSiblingNote(fromId: string, toId: string, body: string): Promise<boolean> {
-  const r = await hFetch(`/mind/siblings/send`, "POST", { from_id: fromId, to_id: toId, body }) as { ok?: boolean };
-  return r.ok === true;
+  try {
+    const r = await hFetch(`/mind/siblings/send`, "POST", { from_id: fromId, to_id: toId, body }) as { ok?: boolean };
+    return r.ok === true;
+  } catch (e) {
+    // Gaia's friction (see LEDGER_FRICTION_RULES): final, logged once by rule, never retried.
+    const rule = ledgerFrictionRule(e);
+    if (rule) { logLedgerFriction("POST /mind/siblings/send", `${fromId}->${toId}`, rule); return false; }
+    throw e;
+  }
 }
 
 export async function markSiblingRead(id: string, companionId: string): Promise<void> {

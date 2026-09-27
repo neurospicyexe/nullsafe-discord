@@ -295,7 +295,7 @@ describe("commons seed: a sibling's ledger line is a clerk's record, mark intact
 
   it("commonsSupplyLine never cuts a max-size ledger line (mark and source tail both survive)", () => {
     const body = "Logged: " + "a".repeat(592);            // LEDGER_BODY_MAX = 600
-    const line = `〔ledger · witness-log · 2026-09-26〕 ${body}. Source: message 1497734427298762828.`;
+    const line = `〔ledger · seen-log · 2026-09-26〕 ${body}. Source: message 1497734427298762828.`;
     const out = commonsSupplyLine({ agent_id: "gaia", note_type: "ledger", content: line, created_at: "2026-09-26T08:00:00.000Z" });
     expect(out).toContain(`«${line}»`);
     expect(out.indexOf("«〔ledger · ")).toBeGreaterThan(0);

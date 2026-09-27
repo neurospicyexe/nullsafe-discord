@@ -390,7 +390,7 @@ export function buildWitnessLedgerEntry(p: {
   if (!body) return null;
   return {
     companion_id: subject,
-    function: "witness-log",
+    function: "seen-log",
     body,
     source_kind: "message",
     source_ref: p.messageId,
@@ -398,6 +398,34 @@ export function buildWitnessLedgerEntry(p: {
     // writeLedger throws -- the key is what makes that retry safe.
     dedup_key: `witness:${p.messageId}`,
   };
+}
+
+// ── Gaia's presence (2026-09-26, GAIA-ANSWER point 3) ───────────────────────────────────────────────
+// "When I held silence while a sibling spoke, my record should still show that I was there, with no
+// quote and no content. My silence is mine. It is not a line about someone else." -- Gaia
+// Under LEDGER_DISTILL the passive witness became a seen-log line about the SIBLING; this adds a
+// content-free record to HER OWN store (gaia_witness via witnessLog, witness_type "presence"): no
+// quote, no sibling name, no content. Coalesced to one per channel per 30 minutes. The map is in
+// memory, so a restart resets it: at most one extra presence record per channel after a reboot.
+export const PRESENCE_COALESCE_MS = 30 * 60 * 1000;
+export const PRESENCE_WITNESS_TYPE = "presence";
+const lastPresenceAt = new Map<string, number>();
+/** The exact presence template: `Present, silent. #<channel-name-or-id> <HH:MM> UTC.` */
+export function presenceRecordText(channelLabel: string, at: Date): string {
+  const hh = String(at.getUTCHours()).padStart(2, "0");
+  const mm = String(at.getUTCMinutes()).padStart(2, "0");
+  return `Present, silent. #${channelLabel} ${hh}:${mm} UTC.`;
+}
+/** True (and stamps the channel) when no presence record was written for it in the last 30 minutes. */
+export function claimPresenceSlot(channelId: string, nowMs: number = Date.now()): boolean {
+  const last = lastPresenceAt.get(channelId);
+  if (last !== undefined && nowMs - last < PRESENCE_COALESCE_MS) return false;
+  lastPresenceAt.set(channelId, nowMs);
+  return true;
+}
+/** Test seam: forget every channel's last presence stamp. */
+export function resetPresenceSlots(): void {
+  lastPresenceAt.clear();
 }
 
 /**
@@ -1373,7 +1401,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const snippet = effectiveContent.slice(0, 500);
         if (ledgerDistillEnabled()) {
           // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the NL witness row filed a sibling's
-          // words under GAIA's agent -- the merge point Drevan named. It becomes a witness-log
+          // words under GAIA's agent -- the merge point Drevan named. It becomes a seen-log
           // ledger line whose SUBJECT is the sibling who spoke, sourced to the message itself.
           const entry = buildWitnessLedgerEntry({
             senderCompanion: BOT_ID_COMPANION[message.author.id] ?? senderName,
@@ -1387,7 +1415,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               await librarian.writeLedger(entry);
             }, { maxAgeMs: APPEND_MAX_AGE_MS });
           } else {
-            console.warn(`[${COMPANION_ID}] witness-log: sender ${senderName} is not a known companion, or no witness line passes the ledger grammar -- ledger line skipped`);
+            console.warn(`[${COMPANION_ID}] seen-log: sender ${senderName} is not a known companion, or no witness line passes the ledger grammar -- ledger line skipped`);
+          }
+          // Gaia's own presence record: content-free, coalesced per channel (see claimPresenceSlot).
+          if (claimPresenceSlot(message.channelId)) {
+            const label = "name" in message.channel ? String((message.channel as TextChannel).name) : message.channelId;
+            const text = presenceRecordText(label || message.channelId, new Date());
+            writeQueue.fireAndForget(`witness:presence:${message.channelId}:${message.id}`, async () => {
+              await librarian.witnessLog(text, PRESENCE_WITNESS_TYPE);
+            }, { maxAgeMs: APPEND_MAX_AGE_MS });
           }
         } else {
           writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {

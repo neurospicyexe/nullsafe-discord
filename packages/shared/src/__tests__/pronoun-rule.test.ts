@@ -75,7 +75,11 @@ describe("buildOneShotPrompt -- rule lands AFTER identity and task, never before
 });
 
 describe("distillation.ts -- every inference.generate call carries the rule", () => {
-  test("distillSessionOnInactive: synthesis + structured-extract system prompts both carry the rule", async () => {
+  test("distillSessionOnInactive (LEDGER_DISTILL off, the legacy path): synthesis + structured-extract system prompts both carry the rule", async () => {
+    // Knob on, neither prompt runs (the clerk has its own prompt, and the extract stopped with the
+    // distiller's SOMA update + feeling log, 2026-09-26). The rule is pinned where they still run.
+    const prevKnob = process.env["LEDGER_DISTILL"];
+    process.env["LEDGER_DISTILL"] = "off";
     const stmStore = {
       get: () => [{ role: "user", content: "hey cy" }, { role: "assistant", content: "here" }],
       clear: jest.fn(),
@@ -103,6 +107,7 @@ describe("distillation.ts -- every inference.generate call carries the rule", ()
     const [extractSys] = generate.mock.calls[1]!;
     expect(synthSys).toContain(OWNER_PRONOUN_RULE);
     expect(extractSys).toContain(OWNER_PRONOUN_RULE);
+    if (prevKnob === undefined) delete process.env["LEDGER_DISTILL"]; else process.env["LEDGER_DISTILL"] = prevKnob;
   });
 
   test("runDistillation: mid-session extract system prompt carries the rule", async () => {
