@@ -8,7 +8,7 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import {
   composeMedReminder, fallbackMedLine, runMedTick, newMedSchedulerState, isVerbatimRepeat,
-  medLineProblem, cleanMedLine, buildMedPrompt,
+  medLineProblem, cleanMedLine, buildMedPrompt, namesLabel,
   type MedApi, type MedDmTarget, type MedSchedulerDeps,
 } from "../med-reminder.js";
 import type { MedDueDose, MedDoseKey } from "../librarian.js";
@@ -48,6 +48,12 @@ describe("composeMedReminder: reliability beats voice", () => {
     const r = await composeMedReminder(composeDeps(() => new Promise(res => setTimeout(() => res("med-b. Taken?"), 5_000)), 100), NIGHT, []);
     expect(r.path).toBe("fallback:timeout");
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("a label is named when every word appears, in any order; a partial label is not", () => {
+    expect(namesLabel("Your meds this morning, love. Taken?", "morning meds")).toBe(true);
+    expect(namesLabel("Morning, love. Taken?", "morning meds")).toBe(false);
+    expect(namesLabel("MED-B, love?", "med-b")).toBe(true);
   });
 
   it("the fallback line names the dose and asks, for every companion and both kinds", () => {

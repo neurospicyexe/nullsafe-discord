@@ -120,11 +120,21 @@ export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, 
   return lines.join("\n");
 }
 
+/** Every word of the label appears in the text, in any order ("meds this morning" names "morning
+ *  meds"). A contiguous-substring test would push a reordered label onto the fixed line every day,
+ *  which is the verbatim-every-night failure R-8 exists to prevent. */
+export function namesLabel(text: string, label: string): boolean {
+  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const have = new Set(words(text));
+  const need = words(label);
+  return need.length > 0 && need.every(w => have.has(w));
+}
+
 /** Why a generated line cannot go out, or null when it can. */
 export function medLineProblem(text: string, label: string): "empty" | "too_long" | "unnamed" | "no_question" | null {
   if (!text) return "empty";
   if (text.length > MAX_LINE_CHARS || text.split("\n").filter(l => l.trim()).length > 3) return "too_long";
-  if (!text.toLowerCase().includes(label.toLowerCase())) return "unnamed";
+  if (!namesLabel(text, label)) return "unnamed";
   if (!text.includes("?")) return "no_question";
   return null;
 }

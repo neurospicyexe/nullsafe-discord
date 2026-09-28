@@ -22,14 +22,29 @@ import { isServerRoom } from "./recall-context.js";
 
 export type DmGateVerdict = "not_dm" | "owner" | "drop";
 
+/** discord.js ChannelType.DM. A group DM (3) also has no guild and is NOT a 1:1 DM. */
+export const DISCORD_CHANNEL_TYPE_DM = 1;
+
 /**
  * Is this a DM, and if so may it proceed? A DM with no configured owner id fails CLOSED (dropped):
  * an unset env var must never turn into "anyone may DM the bot".
+ *
+ * Only a 1:1 DM passes. The DirectMessages intent also delivers group DMs, which have no guild
+ * either; an owner message there would carry the private med block in front of a third party. The
+ * channel type is read through a thunk and only for the owner, so a stranger's DM is dropped
+ * without touching the channel object at all.
  */
-export function dmGateVerdict(p: { guildId: string | null | undefined; authorId: string; ownerId: string | null | undefined }): DmGateVerdict {
+export function dmGateVerdict(p: {
+  guildId: string | null | undefined;
+  authorId: string;
+  ownerId: string | null | undefined;
+  channelType?: () => number | null | undefined;
+}): DmGateVerdict {
   if (isServerRoom({ guildId: p.guildId ?? null })) return "not_dm";
-  if (!p.ownerId) return "drop";
-  return p.authorId === p.ownerId ? "owner" : "drop";
+  if (!p.ownerId || p.authorId !== p.ownerId) return "drop";
+  let type: number | null | undefined;
+  try { type = p.channelType?.(); } catch { type = undefined; }
+  return type === DISCORD_CHANNEL_TYPE_DM ? "owner" : "drop";
 }
 
 /** The one line a dropped DM leaves: who and which bot, never what they wrote. */

@@ -479,7 +479,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // ask_librarian over Raziel's private data. One log line, no content. Also enforced at
     // MessageCreate in bot-core so the message never enters the inbox; this copy is what holds if a
     // future caller skips that. See dm.ts.
-    const dmVerdict = dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: cfg.ownerDiscordId });
+    const dmVerdict = dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: cfg.ownerDiscordId, channelType: () => message.channel?.type });
     if (dmVerdict === "drop") {
       console.log(droppedDmLogLine(COMPANION_ID, message.author.id));
       return;

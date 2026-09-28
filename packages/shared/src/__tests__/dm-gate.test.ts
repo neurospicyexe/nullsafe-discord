@@ -18,14 +18,26 @@ describe("dmGateVerdict", () => {
   it("a server channel is not a DM, whoever wrote it", () => {
     expect(dmGateVerdict({ guildId: "g1", authorId: STRANGER, ownerId: OWNER })).toBe("not_dm");
   });
+  const DM = () => 1;
   it("the owner's DM passes; anyone else's is dropped", () => {
-    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER })).toBe("owner");
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER, channelType: DM })).toBe("owner");
     expect(dmGateVerdict({ guildId: null, authorId: STRANGER, ownerId: OWNER })).toBe("drop");
     expect(dmGateVerdict({ guildId: undefined, authorId: STRANGER, ownerId: OWNER })).toBe("drop");
   });
   it("fails closed with no configured owner (an unset env var never opens the DM to anyone)", () => {
     expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: "" })).toBe("drop");
-    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: undefined })).toBe("drop");
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: undefined, channelType: DM })).toBe("drop");
+  });
+  it("a group DM is not a 1:1 DM: dropped even from the owner, and an unknown type fails closed", () => {
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER, channelType: () => 3 })).toBe("drop");
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER, channelType: () => undefined })).toBe("drop");
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER })).toBe("drop");
+    expect(dmGateVerdict({ guildId: null, authorId: OWNER, ownerId: OWNER, channelType: () => { throw new Error("x"); } })).toBe("drop");
+  });
+  it("a stranger is dropped without the channel type ever being read", () => {
+    const read = jest.fn(() => 1);
+    expect(dmGateVerdict({ guildId: null, authorId: STRANGER, ownerId: OWNER, channelType: read })).toBe("drop");
+    expect(read).not.toHaveBeenCalled();
   });
   it("the log line carries no content", () => {
     expect(droppedDmLogLine("drevan", STRANGER)).toBe(`[drevan] dm dropped: author ${STRANGER} is not the owner (no content read or logged)`);

@@ -2,7 +2,7 @@
 // Fake labels and fake times only: real medication names and dose times never enter a tracked file.
 
 import { describe, it, expect } from "@jest/globals";
-import { renderMedStateBlock, MED_DOSING_RULE, type MedStateDose } from "../med-context.js";
+import { renderMedStateBlock, MED_DOSING_RULE, MED_NO_RAISE_RULE, type MedStateDose } from "../med-context.js";
 
 const dose = (over: Partial<MedStateDose>): MedStateDose => ({
   slot_key: "night", label: "med-b", local_time: "21:40", local_date: "2026-09-28", day: "today",
@@ -62,6 +62,13 @@ describe("renderMedStateBlock", () => {
     const b = renderMedStateBlock([], "drevan");
     expect(b).toContain("No doses have come due yet today.");
     expect(b).toContain(MED_DOSING_RULE);
+  });
+
+  it("tells the companion never to raise a dose he has not asked about (no third ask), in every shape", () => {
+    for (const b of [renderMedStateBlock([dose({})], "gaia"), renderMedStateBlock([], "drevan"), renderMedStateBlock(null, "cypher")]) {
+      expect(b).toContain(MED_NO_RAISE_RULE);
+    }
+    expect(MED_NO_RAISE_RULE).toContain("Do not bring up a dose he has not asked about");
   });
 
   it("marks itself private to the DM", () => {

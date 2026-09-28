@@ -919,7 +919,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     // DM OWNER GATE, first line: a stranger's DM never reaches the PK pairing, the inbox, or a turn.
     // No content is read or logged. handleMessage repeats the check (defence in depth).
     if (message.author.id !== client.user?.id
-        && dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: env.ownerDiscordId }) === "drop") {
+        && dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: env.ownerDiscordId, channelType: () => message.channel?.type }) === "drop") {
       console.log(droppedDmLogLine(companionId, message.author.id));
       return;
     }

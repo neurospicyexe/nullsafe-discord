@@ -27,6 +27,11 @@ export const MED_DOSING_RULE =
   "Dosing is not yours to advise, ever: never suggest a catch-up dose, a doubled dose, a skipped dose, or taking one at a different time. " +
   "If he asks whether he should take it now, or anything about amount or timing, say plainly that it is a question for his prescriber or pharmacist.";
 
+/** R-4/R-9: the reminder and its one follow-up are the only times a companion raises a dose. This
+ *  block is for answering him, so a model reading "no answer" must not turn it into a third ask. */
+export const MED_NO_RAISE_RULE =
+  "This is here so you can answer him if he asks. Do not bring up a dose he has not asked about: the reminder and its single follow-up are the only times anyone raises it.";
+
 export const MED_ABSENCE_RULE =
   "\"No answer\" means only that he did not tell you. It NEVER means he did not take it: never say or imply \"you didn't take it\", \"you missed it\" or \"you forgot\". " +
   "If he asks \"did I take them?\", say exactly what is above: when he told you, or that you have no answer from him for that one.";
@@ -51,10 +56,10 @@ function doseLine(d: MedStateDose, self: string): string {
 export function renderMedStateBlock(doses: MedStateDose[] | null, selfId: string): string {
   const head = "\n\n[Meds -- private to this DM, never to be mentioned in any server channel]";
   if (doses === null) {
-    return `${head}\n• You cannot see today's med state right now. If he asks whether he took something, say you can't see it at the moment; do not guess either way.\n${MED_DOSING_RULE}`;
+    return `${head}\n• You cannot see today's med state right now. If he asks whether he took something, say you can't see it at the moment; do not guess either way.\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
   }
   if (doses.length === 0) {
-    return `${head}\n• No doses have come due yet today.\n${MED_DOSING_RULE}`;
+    return `${head}\n• No doses have come due yet today.\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
   }
-  return `${head}\n${doses.map(d => doseLine(d, selfId)).join("\n")}\n${MED_ABSENCE_RULE}\n${MED_DOSING_RULE}`;
+  return `${head}\n${doses.map(d => doseLine(d, selfId)).join("\n")}\n${MED_ABSENCE_RULE}\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
 }
