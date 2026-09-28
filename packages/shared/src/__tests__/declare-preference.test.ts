@@ -7,12 +7,16 @@
 // (NONE writes nothing). Driven through the real runHeartbeat, because a direct executor call has no
 // companion origin and is refused by design (heartbeat-dm-route.test.ts).
 
-import { describe, it, expect, afterEach, jest } from "@jest/globals";
+import { describe, it, expect, afterEach, beforeEach, jest } from "@jest/globals";
 import { runHeartbeat } from "../autonomous-core.js";
 import { heartbeatCtx, inWindowOf, row } from "./fixtures/heartbeat-ctx.js";
 
 let restore: () => void = () => {};
 afterEach(() => restore());
+// These tests drive the DM lane as B7 2+2c built it, so they run with the REACH_DM switch ON
+// (reach-dm-switch.test.ts covers off, the default).
+beforeEach(() => { process.env["REACH_DM"] = "on"; });
+afterEach(() => { delete process.env["REACH_DM"]; });
 
 function run(lines: Array<string | null>, prefs = 0) {
   restore = inWindowOf("cypher");

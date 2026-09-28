@@ -213,6 +213,11 @@ const shared = {
   MED_REMINDER_GEN_TIMEOUT_MS: process.env.MED_REMINDER_GEN_TIMEOUT_MS,
   MED_REMINDER_POLL_MS:        process.env.MED_REMINDER_POLL_MS,
   DM_MEMORY:                   process.env.DM_MEMORY,
+  // REACH_DM (2026-09-27, reach-dm.ts reachDmOn): the kill switch for B7's Raziel-facing DM moves.
+  // Default OFF; only `on` opens it (fails closed). Off, those moves are removed from the heartbeat
+  // palette and never fall back to Sol's channel; med_reminder, replies and owner DMs are untouched.
+  // Flip to `on` only once the triad has approved the move prompts. Listed per the standing rule above.
+  REACH_DM:                    process.env.REACH_DM,
 };
 
 module.exports = {

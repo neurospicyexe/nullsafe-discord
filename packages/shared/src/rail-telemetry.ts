@@ -118,6 +118,7 @@ export type HeartbeatOutcome =
   | "floor_held"              // a sibling holds the floor
   | "suppressed_triad_cap"    // B7 2+2c: every eligible move was a DM move the shared triad lane could not carry now
   | "held_dm"                 // B7 2+2c: a DM move was chosen and did not go out (cap race, a failed check, no DM); never re-sent
+  | "suppressed_reach_dm_off" // REACH_DM is off and every eligible move was a DM move; NOT the same event as a closed lane
   | "parse_failed"            // the decision object could not be read; this is a DEFECT
   | "error";                  // the action threw
 
@@ -129,6 +130,8 @@ export interface HeartbeatTickInfo {
   /** Local hour in the quiet-hours zone, when a quiet-hours verdict was available. */
   localHour?: number | null;
   tz?: string;
+  /** REACH_DM off: how many DM moves the switch removed from this tick's palette (emitted as `dm_moves_off`). */
+  dmMovesOff?: number;
 }
 
 /**
@@ -145,6 +148,7 @@ export function heartbeatTick(companionId: string, outcome: HeartbeatOutcome, in
       ...(info.reason ? { reason: info.reason.slice(0, 160) } : {}),
       ...(typeof info.localHour === "number" ? { hour: info.localHour } : {}),
       ...(info.tz ? { tz: info.tz } : {}),
+      ...(typeof info.dmMovesOff === "number" && info.dmMovesOff > 0 ? { dm_moves_off: info.dmMovesOff } : {}),
       at: new Date().toISOString(),
     };
     console.log(`[tick] ${JSON.stringify(payload)}`);

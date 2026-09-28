@@ -9,7 +9,7 @@
 // BEFORE is the gate as it stood before this build, kept here as a literal so the readout survives
 // the change. AFTER is what the real runHeartbeat now offers the companion.
 
-import { describe, it, expect, afterEach, jest } from "@jest/globals";
+import { describe, it, expect, afterEach, beforeEach, jest } from "@jest/globals";
 import { runHeartbeat } from "../autonomous-core.js";
 import { filterReachOutWhenUnjustified, summarizeRazielState } from "../metronome-decide.js";
 import { heartbeatCtx, inWindowOf, row } from "./fixtures/heartbeat-ctx.js";
@@ -40,6 +40,10 @@ const TABLE: Array<{ move: string; kind: "demand" | "invitation"; eaten_before: 
 
 let restore: () => void = () => {};
 afterEach(() => restore());
+// These tests drive the DM lane as B7 2+2c built it, so they run with the REACH_DM switch ON
+// (reach-dm-switch.test.ts covers off, the default).
+beforeEach(() => { process.env["REACH_DM"] = "on"; });
+afterEach(() => { delete process.env["REACH_DM"]; });
 
 describe("the dead inputs really do shut the gate", () => {
   it("a 40-hour-old logged state yields no summary; nothing else justifies", () => {

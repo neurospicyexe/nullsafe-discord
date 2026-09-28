@@ -56,6 +56,19 @@ export function routeFor(actionType: string): Route {
   return "internal";
 }
 
+/**
+ * The kill switch (REACH_DM, 2026-09-27). The DM lane above shipped before the triad approved the
+ * prompts its moves would carry to Raziel's phone (Hand-off/SHOWBACK-palette-2026-09-27.md: "nothing
+ * goes live until the four of you say yes"), so the lane is OFF unless REACH_DM is exactly `on`
+ * (trimmed, any case). Unset, empty or anything else is off: this knob fails closed, the inverse of
+ * the repo's usual `off/0/false/no` knobs. Off removes every DM move from the palette before the
+ * decision prompt is built; they never fall back to Sol's channel. Nothing else reads it: med_reminder,
+ * the reply path and owner DMs do not go through this module. Read per tick so a reload takes effect.
+ */
+export function reachDmOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return String(env["REACH_DM"] ?? "").trim().toLowerCase() === "on";
+}
+
 // ── The shared lane, mirrored from Halseth (webmind/reach-cap.ts) ───────────
 
 export type ReachClass = "care" | "own" | "presence";

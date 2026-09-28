@@ -45,7 +45,7 @@ import { FRAGMENT_NOTE_TYPE } from "./day-distillation.js";
 // Direct, never via the barrel: reach-dm is deliberately NOT exported from index.ts, and a static
 // test fails the build if any module but this one imports it (T-4, see reach-dm.ts header).
 import {
-  speakToOwnerDm, takeOriginIssuer, routeFor, filterDmLane, DEFAULT_MOVE_PROMPTS,
+  speakToOwnerDm, takeOriginIssuer, routeFor, filterDmLane, reachDmOn, DEFAULT_MOVE_PROMPTS,
   drift_prompt, shapeDriftLine, ownDriftRows, namesSibling, DRIFT_GENERATE_OPTS,
   type ReachDmResult, type Route,
 } from "./reach-dm.js";
@@ -690,7 +690,7 @@ export async function detectSignals(
 export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
   let outcome: HeartbeatOutcome = "error";
   let info: HeartbeatTickInfo = {};
-  const mark: MarkTick = (o, i = {}) => { outcome = o; info = { ...info, ...i }; };
+  const mark: MarkTick = (o, i = {}) => { if (o !== null) outcome = o; info = { ...info, ...i }; };
   try {
     await runHeartbeatBody(ctx, mark);
   } catch (e) {
@@ -702,7 +702,8 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
   }
 }
 
-type MarkTick = (outcome: HeartbeatOutcome, info?: HeartbeatTickInfo) => void;
+/** A null outcome adds info to the tick without deciding how it ended (REACH_DM's `dm_moves_off`). */
+type MarkTick = (outcome: HeartbeatOutcome | null, info?: HeartbeatTickInfo) => void;
 
 async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise<void> {
   const { librarian, inference, bootCtx, redis, cycleGuard, prompts, companionId, heartbeatChannelId } = ctx;
@@ -872,11 +873,24 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     const afterCareHold = filterProductionWhenCareHold(justifiedActions, careHold);
     // The shared triad lane (B7 2+2c), the same principle: a DM move the cap would refuse right now
     // is not offered at all. Read-only preview; the atomic reserve at send time is the real gate.
-    const candidateActions = filterDmLane(afterCareHold, palette.reach, careHold, Boolean(ctx.ownerDm));
-    if (candidateActions.length < afterCareHold.length) {
-      console.log(`[${companionId}/heartbeat] shared triad lane closed for ${afterCareHold.length - candidateActions.length} DM move(s)${ctx.ownerDm ? "" : " (no owner-DM lane on this bot)"}`);
+    // REACH_DM (the kill switch, reach-dm.ts reachDmOn): off is the lane being unable to carry ANY
+    // DM move, through this same filter, so the companion never chooses one rather than choosing it
+    // and being held. It has its own log line and tick field so "switch off" never reads as
+    // "lane closed" or "no DM". On, this block is exactly what B7 2+2c built.
+    const dmOn = reachDmOn();
+    const candidateActions = filterDmLane(afterCareHold, palette.reach, careHold, dmOn && Boolean(ctx.ownerDm));
+    const dmDropped = afterCareHold.length - candidateActions.length;
+    if (!dmOn && dmDropped > 0) {
+      console.log(`[${companionId}/heartbeat] REACH_DM off: ${dmDropped} DM move(s) removed from the palette`);
+      mark(null, { dmMovesOff: dmDropped });
+    } else if (dmDropped > 0) {
+      console.log(`[${companionId}/heartbeat] shared triad lane closed for ${dmDropped} DM move(s)${ctx.ownerDm ? "" : " (no owner-DM lane on this bot)"}`);
     }
     if (candidateActions.length === 0) {
+      if (afterCareHold.length > 0 && !dmOn) {
+        mark("suppressed_reach_dm_off", { reason: "REACH_DM is off; every eligible move was a DM move" });
+        return;
+      }
       if (afterCareHold.length > 0) {
         mark("suppressed_triad_cap", { reason: palette.reach ? `day ${palette.reach.day_count}, gap ${palette.reach.gap_open ? "open" : "closed"}, quiet ${palette.reach.quiet_window ?? "no"}` : "no lane verdict (treated as closed)" });
         return;

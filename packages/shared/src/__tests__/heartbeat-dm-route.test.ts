@@ -14,6 +14,11 @@ import { heartbeatCtx, inWindowOf, row } from "./fixtures/heartbeat-ctx.js";
 let restore: () => void = () => {};
 afterEach(() => { restore(); for (const c of ["cypher", "drevan", "gaia"]) setCareState(c, null); });
 
+// These tests are the "REACH_DM=on is byte-for-byte B7 2+2c" proof: they are the 0df3ba0 suite,
+// unchanged, run with the switch on. reach-dm-switch.test.ts covers off, the default.
+beforeEach(() => { process.env["REACH_DM"] = "on"; });
+afterEach(() => { delete process.env["REACH_DM"]; });
+
 const logs: string[] = [];
 beforeEach(() => {
   logs.length = 0;
