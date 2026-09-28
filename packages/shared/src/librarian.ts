@@ -1839,6 +1839,10 @@ export class LibrarianClient {
    */
   async getDrives(): Promise<Array<{
     drive_key: string; level: number; threshold: number; fired: boolean; modality: "text" | "voice" | null;
+    /** Hours since the drive row's last event (B7 step 4). For relational_need that is the last
+     *  owner message this bot saw, since only an owner arrival writes it. Absent on an older worker,
+     *  which the justification gate reads as unknown (never "present"). */
+    hours_since_event?: number | null;
   }>> {
     try {
       const res = await this._fetch(`${this.url}/mind/drives/${encodeURIComponent(this.companionId)}`, {
@@ -1846,7 +1850,7 @@ export class LibrarianClient {
         signal: AbortSignal.timeout(8_000),
       });
       if (!res.ok) return [];
-      type D = { drive_key: string; level: number; threshold: number; fired: boolean; modality: "text" | "voice" | null };
+      type D = { drive_key: string; level: number; threshold: number; fired: boolean; modality: "text" | "voice" | null; hours_since_event?: number | null };
       const data = await res.json() as { drives?: D[] };
       return Array.isArray(data.drives) ? data.drives : [];
     } catch {

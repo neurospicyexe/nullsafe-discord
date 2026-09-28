@@ -2,8 +2,9 @@
 //
 // Every Halseth call is a fake with prod-like DEAD gate inputs by default, taken from the 09-27
 // audit: no palette row carries requires_signal (so detectSignals returns []), relational_need sits
-// at 0.0026 against a 0.60 threshold and has not fired, and Raziel's last logged state is 40 hours
-// old (the summary expires at 36h). The first inference call is the decision; the rest are lines.
+// at 0.0026 against a 0.60 threshold and has not fired, Raziel's last logged state is 40 hours
+// old (the summary expires at 36h), and his last message was 9.3h ago (B7 step 4's presence window
+// is 4h). The first inference call is the decision; the rest are lines.
 
 import { jest } from "@jest/globals";
 import type { AutonomousContext } from "../../autonomous-core.js";
@@ -44,6 +45,9 @@ export function heartbeatCtx(opts: {
   drifts?: Array<{ id: string; drift_text: string; opened_at?: string; companion_id?: string }>;
   prefs?: number;
   noLane?: boolean;
+  /** relational_need as GET /mind/drives returns it; default is the dead prod reading (not fired, last
+   *  owner message 9.3h ago, outside the 4h "he is here" window). */
+  drive?: { level?: number; threshold?: number; fired?: boolean; hours_since_event?: number | null };
 }) {
   const lines = [...(opts.lines ?? [])];
   const decide = opts.decide ? [...opts.decide] : null;
@@ -69,7 +73,10 @@ export function heartbeatCtx(opts: {
     })),
     getState: jest.fn(async () => ({})),
     getRecentNotes: jest.fn(async () => []),
-    getDrives: jest.fn(async () => [{ drive_key: "relational_need", level: 0.0026, threshold: 0.6, fired: false, modality: null }]),
+    getDrives: jest.fn(async () => [{
+      drive_key: "relational_need", level: 0.0026, threshold: 0.6, fired: false, modality: null, hours_since_event: 9.3,
+      ...(opts.drive ?? {}),
+    }]),
     getRazielState: jest.fn(async () => ({ recorded_at: new Date(Date.now() - 40 * 3_600_000).toISOString(), mood: "ok", energy: 5 })),
     writeAutonomyRun: jest.fn(async () => "run1"),
     patchAutonomyRun: jest.fn(async () => undefined),

@@ -53,6 +53,10 @@ export interface DecisionContext {
   /** Compact summary of Raziel's recent logged subjective state (migration 0081), or undefined
    *  when there is no fresh data. Real "recent data to justify a reach-out" -- shapes whether and how. */
   razielStateSummary?: string;
+  /** The justification gate's verdict for THIS tick (B7 step 4). The prompt's "these are held and
+   *  why" / "these are open and why" lines are written from it, never recomputed, so the text can
+   *  not disagree with what the filter actually did. Absent = the prompt says nothing about the gate. */
+  demand?: DemandTickVerdict;
 }
 
 /** Raw subjective-state snapshot from Halseth GET /biometrics/latest (migration 0081 fields). */
@@ -139,10 +143,8 @@ export const DEMAND_ACTIONS: ReadonlySet<string> = new Set([
 export const REACH_OUT_TO_RAZIEL_ACTIONS: ReadonlySet<string> = DEMAND_ACTIONS;
 
 /**
- * Gate: when nothing justifies asking something of Raziel, drop the DEMAND moves; invitations,
- * the commons, internal acts and "nothing" stay. Justification is any of:
- * a signal in recent conversation, a fresh logged ND-state, or a risen relational-need drive.
- * When justified, the full action list passes through unchanged.
+ * All-or-nothing form of the gate, kept for the measurement tests: `false` is "no reason at all",
+ * which drops every demand move. The heartbeat uses the per-move gate below (B7 step 4).
  */
 export function filterReachOutWhenUnjustified<T extends { action_type: string }>(
   actions: T[],
@@ -151,6 +153,158 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
   if (justified) return actions;
   return actions.filter(a => !DEMAND_ACTIONS.has(a.action_type));
 }
+
+// ---------------------------------------------------------------------------
+// The per-move justification gate (B7 step 4, 2026-09-28).
+//
+// Measured in prod 09-28 before this change, the gate's inputs were:
+//   - signal: requires_signal is null on all 30 rows, so detectSignals had no candidates and
+//     returned [] every tick. Never seeded since 0065b added the column. Also a coupling bug: ONE
+//     detected signal opened all four demand moves, so a "water" signal would have offered
+//     name_pattern.
+//   - need: relational_need at 0.0013 against 0.60. Not broken: 0.4/day to 0.6 is a 36h silence
+//     meter, shed by every owner message this bot sees. >=36h of silence at 1, 2 and 1 of 28
+//     ticks per companion over 14 days. Rare by design, and not retuned here.
+//   - fresh state: 2 biometrics rows in 7 days, newest 09-23, all manual (that is B8).
+// The care_actions rules add nothing an opener could use: low_spoons needs a fresh biometrics row
+// (already "fresh state"), owner_silence is the 36h silence "need" already reads, and meds_missed
+// fires on the ABSENCE of a log, so letting it open a demand move would read his not answering as
+// information (P-2, R-10); med_reminder owns that lane.
+//
+// What was missing is the reason the triad's own words give the reminder: Drevan's "tie it to the
+// moment, never to a schedule", "for when you surface". His being HERE is that moment. It is an
+// honest reason for a reminder and for nothing else: nothing in their words makes his being around
+// a reason for a question, a check-in or a pattern. So the gate is per move, not one boolean.
+// ---------------------------------------------------------------------------
+
+/** The reasons, from the moment, that can open a demand move. A row that names its own
+ *  `requires_signal` is opened by THAT signal alone (a per-row reason, see demandMoveOpen). */
+export type DemandReason = "fresh_state" | "need" | "present";
+
+/** Which reasons open which demand move. Overrulable at show-back; this is a design choice. */
+export const DEMAND_REASONS: Readonly<Record<string, readonly DemandReason[]>> = Object.freeze({
+  ask_question:       ["fresh_state", "need"],
+  check_in_on_raziel: ["fresh_state", "need"],
+  name_pattern:       ["fresh_state", "need"],
+  send_reminder:      ["fresh_state", "present"],
+});
+
+/** "He is here": an owner message THIS bot saw within this many hours. One heartbeat window (each
+ *  4h window belongs to one companion). The floor is the heartbeat's own 15-minute recent-activity
+ *  skip, so a reminder never lands mid-conversation. Measured over 14 days: true at 8, 7 and 4 of
+ *  28 ticks (Cypher, Drevan, Gaia), versus 24 to 26 of 28 for a 24h window. */
+export const PRESENT_WINDOW_HOURS = 4;
+
+export interface DemandInputs {
+  /** DISABLE_REACH_OUT_GATE=true: every demand move open (the old escape hatch, unchanged). */
+  override?: boolean;
+  /** summarizeRazielState output: non-null only for a fresh, usable logged state. */
+  razielStateSummary: string | null;
+  /** Age of the newest logged state, fresh or not, for the reason line. null = none at all. */
+  razielStateAgeHours: number | null;
+  /** This companion's relational_need drive; null = unreadable (never "fired"). */
+  relationalNeed: { level: number; threshold: number; fired: boolean } | null;
+  /** Hours since the last owner message THIS bot saw (relational_need's last_event_at, written only
+   *  on an owner arrival). null = unknown, which never reads as present. */
+  hoursSinceContact: number | null;
+}
+
+export interface DemandReasons {
+  override: boolean;
+  open: ReadonlySet<DemandReason>;
+  /** One short clause per reason that IS present ("present: last here 1.2h ago"). */
+  because: string[];
+  /** One short clause per reason that is NOT ("no fresh logged state (newest 118h old)"). */
+  missing: string[];
+}
+
+const fmtH = (h: number) => (h < 10 ? h.toFixed(1) : String(Math.round(h)));
+
+/** Read the moment. Pure; every input is a parameter. Unknown never opens anything. */
+export function readDemandReasons(i: DemandInputs): DemandReasons {
+  const open = new Set<DemandReason>();
+  const because: string[] = [];
+  const missing: string[] = [];
+
+  if (i.razielStateSummary) {
+    open.add("fresh_state");
+    // The age, never the values: this clause reaches the [tick] log line, and the state itself
+    // already rides the prompt on its own line.
+    because.push(i.razielStateAgeHours === null ? "fresh logged state" : `fresh logged state (${fmtH(i.razielStateAgeHours)}h old)`);
+  } else {
+    missing.push(i.razielStateAgeHours === null ? "no logged state" : `no fresh logged state (newest ${fmtH(i.razielStateAgeHours)}h old)`);
+  }
+
+  const n = i.relationalNeed;
+  if (n?.fired) {
+    open.add("need");
+    because.push(`relational need ${n.level.toFixed(2)}/${n.threshold.toFixed(2)}`);
+  } else {
+    missing.push(n ? `relational need ${n.level.toFixed(2)}/${n.threshold.toFixed(2)}` : "relational need unreadable");
+  }
+
+  const h = i.hoursSinceContact;
+  if (h !== null && Number.isFinite(h) && h >= 0 && h <= PRESENT_WINDOW_HOURS) {
+    open.add("present");
+    because.push(`he was here ${fmtH(h)}h ago`);
+  } else {
+    missing.push(h === null || !Number.isFinite(h) ? "last contact unknown" : `last here ${fmtH(h)}h ago`);
+  }
+
+  return { override: Boolean(i.override), open, because, missing };
+}
+
+/**
+ * Is this demand row open? A row that names its own requires_signal fires on that signal (the
+ * autonomous-core hard filter already dropped it when the signal was absent); a detected signal
+ * never opens a DIFFERENT row. Every other demand row needs one of the reasons its type accepts.
+ * Non-demand rows are not the gate's business and always pass.
+ */
+export function demandMoveOpen(
+  a: { action_type: string; requires_signal?: string | null },
+  r: DemandReasons,
+): boolean {
+  const accepts = DEMAND_REASONS[a.action_type];
+  if (!accepts) return true;
+  if (r.override) return true;
+  if (a.requires_signal && a.requires_signal.trim() !== "") return true;
+  return accepts.some(k => r.open.has(k));
+}
+
+/** What the gate did this tick, in the shape the prompt and the [tick] line both read. */
+export interface DemandTickVerdict {
+  /** Demand action types that stayed on the list. */
+  open: string[];
+  /** Demand action types the gate held. */
+  held: string[];
+  /** Why the open ones are open (present reasons), or why the held ones are held (missing ones). */
+  because: string[];
+  missing: string[];
+}
+
+export function filterDemandByReason<T extends { action_type: string; requires_signal?: string | null }>(
+  actions: T[],
+  r: DemandReasons,
+): { kept: T[]; verdict: DemandTickVerdict } {
+  const kept: T[] = [];
+  const open: string[] = [];
+  const held: string[] = [];
+  for (const a of actions) {
+    const isDemand = a.action_type in DEMAND_REASONS;
+    if (demandMoveOpen(a, r)) {
+      kept.push(a);
+      if (isDemand) open.push(a.action_type);
+    } else {
+      held.push(a.action_type);
+    }
+  }
+  return { kept, verdict: { open, held, because: r.because, missing: r.missing } };
+}
+
+/** Plain words for a demand move, for the prompt. */
+const DEMAND_WORDS: Record<string, string> = {
+  ask_question: "a question", check_in_on_raziel: "a check-in", send_reminder: "a reminder", name_pattern: "naming a pattern",
+};
 
 /**
  * Action types that care_hold softens (B7 step 1, 2026-09-27).
@@ -274,9 +428,14 @@ export function buildDecisionPrompt(
   if (ctx?.detectedSignals && ctx.detectedSignals.length > 0) {
     lines.push(`Signals present in recent conversation: ${ctx.detectedSignals.join(", ")}`);
   }
+  // B23 / B7 step 4: a move is only ever NAMED in the prompt if it is on the list. The nudges used
+  // to name check_in_on_raziel / offer_presence / ask_question even when the gate or the DM lane had
+  // removed them, and companions then picked a move that could not run (chose_unoffered).
+  const offered = new Set(actions.map(a => a.action_type));
   if (ctx?.razielStateSummary) {
+    const presence = offered.has("offer_presence") ? "quiet presence (offer_presence)" : "quiet";
     lines.push(
-      `\nRaziel's recent logged state: ${ctx.razielStateSummary}. This is real, fresh data -- let it shape whether and how you reach out. Low spoons or energy favors quiet presence (offer_presence) over a question; pain or poor sleep calls for gentleness or silence; a named low mood may be worth meeting directly. Match the modality to the state, do not override it.`,
+      `\nRaziel's recent logged state: ${ctx.razielStateSummary}. This is real, fresh data -- let it shape whether and how you reach out. Low spoons or energy favors ${presence} over a question; pain or poor sleep calls for gentleness or silence; a named low mood may be worth meeting directly. Match the modality to the state, do not override it.`,
     );
   }
 
@@ -284,8 +443,12 @@ export function buildDecisionPrompt(
 
   if (ctx?.relationalNeedFired) {
     const lvl = ctx.relationalNeedLevel != null ? ` (level ${ctx.relationalNeedLevel.toFixed(2)})` : "";
+    const reach = ["check_in_on_raziel", "offer_presence", "ask_question"].filter(t => offered.has(t));
+    const lean = reach.length > 0
+      ? `lean toward a reach-out (${reach.join(", ")}) unless your state truly says otherwise`
+      : `none of the reach-out moves is on the list right now, so let it shape what you do choose rather than reaching for one that is not there`;
     lines.push(
-      `\nYour relational need toward Raziel has crossed threshold${lvl} -- it has been a while since real contact and the pull to reach out is genuinely state-driven now, not just the cron firing. This is a real signal from your own state: lean toward a reach-out (check_in_on_raziel, offer_presence, ask_question) unless your state truly says otherwise. It is still YOUR choice; "nothing" remains valid if reaching would not be honest.`,
+      `\nYour relational need toward Raziel has crossed threshold${lvl} -- it has been a while since real contact and the pull to reach out is genuinely state-driven now, not just the cron firing. This is a real signal from your own state: ${lean}. It is still YOUR choice; "nothing" remains valid if reaching would not be honest.`,
     );
   }
   if (ctx?.otherCompanionsPostedRecently) {
@@ -295,17 +458,20 @@ export function buildDecisionPrompt(
     lines.push(`\nActions you fired in the last 24h: ${ctx.recentFiredActions.join(", ")}. Avoid repeating unless the context genuinely calls for it.`);
   }
 
-  // No recent data to justify a reach-out: no conversation signal, no fresh logged state,
-  // no risen relational need. Reaching out now would be unprompted noise -- name that plainly
-  // so "nothing" is the honest default rather than a reflexive cron-driven ping.
-  const noJustification =
-    process.env["DISABLE_REACH_OUT_GATE"] !== "true" &&
-    !(ctx?.detectedSignals && ctx.detectedSignals.length > 0) &&
-    !ctx?.razielStateSummary &&
-    !ctx?.relationalNeedFired;
-  if (noJustification) {
+  // The gate, in words, from the SAME verdict the filter used (B7 step 4). Before, this block
+  // recomputed "justified" from the ctx fields on its own, which is one new input away from the
+  // prompt saying the demand moves are off while they are on the list (B23 in reverse).
+  const d = ctx?.demand;
+  if (d && d.open.length > 0) {
+    const words = [...new Set(d.open)].map(t => DEMAND_WORDS[t] ?? t).join(", ");
     lines.push(
-      `\nThere is no fresh conversational signal, no recent logged state from Raziel, and no risen relational need, so the moves that ask something of him (a question, a check-in, a reminder, naming a pattern) are not on the list right now. What asks nothing still is, if it is real: something of yours to bring him, presence, a preference, play if play is yours. Tending, journaling and sibling notes stay open too. If none of it is true right now, "nothing" is the right choice, and a quiet day is not a failure.`,
+      `\nWhat asks something of him (${words}) is on the list because of something real from the moment: ${d.because.join("; ") || "its own signal"}. Only reach for it if that reason is still true for you, and ask once; if he does not answer, his silence tells you nothing.`,
+    );
+  }
+  if (d && d.held.length > 0) {
+    const words = [...new Set(d.held)].map(t => DEMAND_WORDS[t] ?? t).join(", ");
+    lines.push(
+      `\nNothing from the moment gives a reason for ${words} right now (${d.missing.join("; ")}), so those moves are not on the list right now. What asks nothing still is, if it is real: something of yours to bring him, presence, a preference, play if play is yours. Tending, journaling and sibling notes stay open too. If none of it is true right now, "nothing" is the right choice, and a quiet day is not a failure.`,
     );
   }
 

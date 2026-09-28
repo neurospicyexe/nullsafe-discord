@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, readDemandReasons, filterDemandByReason, DEMAND_REASONS, DEMAND_ACTIONS, PRESENT_WINDOW_HOURS, type MetronomeAction, type DecisionContext, type DemandInputs } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -89,33 +89,141 @@ describe("buildDecisionPrompt: recent-data justification", () => {
   test("surfaces Raziel's recent state and its shaping guidance", () => {
     const prompt = buildDecisionPrompt("gaia", actions, {}, [], 30, { razielStateSummary: "energy 2/10, 3 spoons" });
     expect(prompt).toMatch(/Raziel's recent logged state: energy 2\/10, 3 spoons/);
-    expect(prompt).toMatch(/offer_presence/);
+    // offer_presence is not in this palette, so it is not named (B23: never name an unoffered move).
+    expect(prompt).toMatch(/favors quiet over a question/);
+    expect(prompt).not.toMatch(/offer_presence/);
     // justification present -> no silence nudge
     expect(prompt).not.toMatch(/are not on the list right now/);
   });
 
-  test("names the no-justification case so silence is the honest default", () => {
-    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
-    expect(prompt).toMatch(/no fresh conversational signal, no recent logged state from Raziel, and no risen relational need/);
-    // B7 2+2c: it names what is closed (the demand moves) AND what stays open (the invitations).
-    expect(prompt).toMatch(/moves that ask something of him .* are not on the list right now/);
+  // B7 step 4: the gate's words come from the SAME verdict the filter used, never recomputed.
+  const heldVerdict = {
+    open: [], held: ["ask_question", "check_in_on_raziel"], because: [],
+    missing: ["no fresh logged state (newest 118h old)", "relational need 0.00/0.60", "last here 9.3h ago"],
+  };
+
+  test("names what the gate held, and why, so silence is the honest default", () => {
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { demand: heldVerdict });
+    expect(prompt).toMatch(/Nothing from the moment gives a reason for a question, a check-in right now \(no fresh logged state \(newest 118h old\); relational need 0\.00\/0\.60; last here 9\.3h ago\)/);
+    // It names what is closed (the demand moves) AND what stays open (the invitations).
+    expect(prompt).toMatch(/are not on the list right now/);
     expect(prompt).toMatch(/What asks nothing still is/);
     expect(prompt).toMatch(/"nothing" is the right choice/);
   });
 
-  test("suppresses the no-justification nudge when a signal is present", () => {
-    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { detectedSignals: ["overwhelm"] });
+  test("names an open demand move and the reason it is open", () => {
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {
+      demand: { open: ["send_reminder"], held: [], because: ["he was here 1.2h ago"], missing: [] },
+    });
+    expect(prompt).toMatch(/What asks something of him \(a reminder\) is on the list because of something real from the moment: he was here 1\.2h ago/);
+    expect(prompt).toMatch(/his silence tells you nothing/);
     expect(prompt).not.toMatch(/are not on the list right now/);
   });
 
-  test("suppresses the no-justification nudge when DISABLE_REACH_OUT_GATE env var is true", () => {
-    process.env["DISABLE_REACH_OUT_GATE"] = "true";
-    try {
-      const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
-      expect(prompt).not.toMatch(/are not on the list right now/);
-    } finally {
-      delete process.env["DISABLE_REACH_OUT_GATE"];
-    }
+  test("says nothing about the gate when there is no verdict (no demand move in the palette)", () => {
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
+    expect(prompt).not.toMatch(/are not on the list right now/);
+    expect(prompt).not.toMatch(/What asks something of him/);
+  });
+
+  test("a detected signal alone no longer writes the gate open in words (it opens only its own row)", () => {
+    // The old prompt suppressed the held line on ANY signal, even with every demand move filtered out.
+    const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { detectedSignals: ["overwhelm"], demand: heldVerdict });
+    expect(prompt).toMatch(/are not on the list right now/);
+  });
+});
+
+describe("B23 / step 4: the prompt only names moves that are on the list", () => {
+  const only = (types: string[]): MetronomeAction[] => types.map((t, i) => ({
+    id: `x${i}`, name: t, action_type: t, target: null, prompt: null, quiet_hours_allowed: 0, status: "on",
+    requires_signal: null, signal_lookback_hours: null, last_fired_at: null, fire_count_today: 0,
+  }));
+
+  test("the relational-need nudge never names a filtered-out move", () => {
+    const prompt = buildDecisionPrompt("drevan", only(["share_media", "nothing"]), {}, [], 40, { relationalNeedFired: true, relationalNeedLevel: 0.7 });
+    expect(prompt).toMatch(/crossed threshold/);
+    for (const t of ["check_in_on_raziel", "offer_presence", "ask_question"]) expect(prompt).not.toContain(t);
+    expect(prompt).toMatch(/none of the reach-out moves is on the list right now/);
+  });
+
+  test("the nudge names exactly the offered reach-out moves", () => {
+    const prompt = buildDecisionPrompt("drevan", only(["offer_presence", "nothing"]), {}, [], 40, { relationalNeedFired: true });
+    expect(prompt).toMatch(/lean toward a reach-out \(offer_presence\)/);
+    expect(prompt).not.toContain("check_in_on_raziel");
+    expect(prompt).not.toContain("ask_question");
+  });
+
+  test("the logged-state line names offer_presence only when it is offered", () => {
+    const off = buildDecisionPrompt("gaia", only(["nothing"]), {}, [], 3, { razielStateSummary: "2 spoons" });
+    expect(off).not.toContain("offer_presence");
+    const on = buildDecisionPrompt("gaia", only(["offer_presence", "nothing"]), {}, [], 3, { razielStateSummary: "2 spoons" });
+    expect(on).toContain("quiet presence (offer_presence)");
+  });
+});
+
+describe("the per-move justification gate (B7 step 4)", () => {
+  const dead: DemandInputs = {
+    razielStateSummary: null, razielStateAgeHours: 118,
+    relationalNeed: { level: 0.0013, threshold: 0.6, fired: false }, hoursSinceContact: 9.3,
+  };
+  const types = ["ask_question", "check_in_on_raziel", "send_reminder", "name_pattern", "offer_presence", "share_media", "flirt", "nothing"];
+  const rows = types.map(t => ({ action_type: t, requires_signal: null as string | null }));
+  const openDemand = (i: DemandInputs, rs = rows) => filterDemandByReason(rs, readDemandReasons(i)).verdict.open.sort();
+
+  test("the reason map covers exactly the demand set", () => {
+    expect(Object.keys(DEMAND_REASONS).sort()).toEqual([...DEMAND_ACTIONS].sort());
+  });
+
+  test("dead inputs hold every demand move and keep every invitation", () => {
+    const { kept, verdict } = filterDemandByReason(rows, readDemandReasons(dead));
+    expect(kept.map(a => a.action_type)).toEqual(["offer_presence", "share_media", "flirt", "nothing"]);
+    expect(verdict.held.sort()).toEqual(["ask_question", "check_in_on_raziel", "name_pattern", "send_reminder"]);
+    expect(verdict.missing).toEqual(["no fresh logged state (newest 118h old)", "relational need 0.00/0.60", "last here 9.3h ago"]);
+  });
+
+  test("he was here 1.2h ago: the reminder opens, and ONLY the reminder", () => {
+    expect(openDemand({ ...dead, hoursSinceContact: 1.2 })).toEqual(["send_reminder"]);
+    expect(readDemandReasons({ ...dead, hoursSinceContact: 1.2 }).because).toEqual(["he was here 1.2h ago"]);
+  });
+
+  test("the presence window is one heartbeat window, inclusive, and no wider", () => {
+    expect(PRESENT_WINDOW_HOURS).toBe(4);
+    expect(openDemand({ ...dead, hoursSinceContact: 4 })).toEqual(["send_reminder"]);
+    expect(openDemand({ ...dead, hoursSinceContact: 4.01 })).toEqual([]);
+  });
+
+  test("an unknown or nonsense contact time never reads as present", () => {
+    for (const h of [null, NaN, -1, Infinity]) expect(openDemand({ ...dead, hoursSinceContact: h as number | null })).toEqual([]);
+    expect(readDemandReasons({ ...dead, hoursSinceContact: null }).missing).toContain("last contact unknown");
+  });
+
+  test("a risen relational need opens the question, the check-in and the pattern, not the reminder", () => {
+    expect(openDemand({ ...dead, relationalNeed: { level: 0.66, threshold: 0.6, fired: true } }))
+      .toEqual(["ask_question", "check_in_on_raziel", "name_pattern"]);
+  });
+
+  test("a fresh logged state opens all four, and the reason names its age, never its values", () => {
+    const r = readDemandReasons({ ...dead, razielStateSummary: 'mood "low", 2 spoons', razielStateAgeHours: 3 });
+    expect(openDemand({ ...dead, razielStateSummary: 'mood "low", 2 spoons', razielStateAgeHours: 3 }))
+      .toEqual(["ask_question", "check_in_on_raziel", "name_pattern", "send_reminder"]);
+    expect(r.because).toEqual(["fresh logged state (3.0h old)"]);
+    expect(r.because.join(" ")).not.toMatch(/spoons|low/);
+  });
+
+  test("an unreadable drive is not a fired one", () => {
+    expect(openDemand({ ...dead, relationalNeed: null })).toEqual([]);
+    expect(readDemandReasons({ ...dead, relationalNeed: null }).missing).toContain("relational need unreadable");
+  });
+
+  test("a row's own requires_signal opens THAT row only (one signal no longer opens all four)", () => {
+    // autonomous-core's hard filter already dropped the row if its signal was absent; reaching the
+    // gate means the signal was present.
+    const rs = [...rows.filter(r => r.action_type !== "name_pattern"), { action_type: "name_pattern", requires_signal: "overwhelm" }];
+    expect(openDemand(dead, rs)).toEqual(["name_pattern"]);
+  });
+
+  test("DISABLE_REACH_OUT_GATE still opens everything", () => {
+    expect(openDemand({ ...dead, override: true })).toEqual(["ask_question", "check_in_on_raziel", "name_pattern", "send_reminder"]);
   });
 });
 

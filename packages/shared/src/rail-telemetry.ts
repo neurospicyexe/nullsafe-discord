@@ -138,6 +138,10 @@ export interface HeartbeatTickInfo {
   retry?: "recovered" | "unrecovered";
   /** B23: why the first reply was re-asked (emitted as `retry_cause`). */
   retryCause?: "unparsed" | "unoffered";
+  /** B7 step 4: what the justification gate did with the demand moves this tick, and why (emitted
+   *  as `demand`). Only present when the palette held a demand move. Recencies and the companion's
+   *  own drive only; never a count about him (R-12, R-5). */
+  demand?: { open: string[]; held: string[]; because: string[]; missing: string[] };
 }
 
 /**
@@ -157,6 +161,9 @@ export function heartbeatTick(companionId: string, outcome: HeartbeatOutcome, in
       ...(typeof info.dmMovesOff === "number" && info.dmMovesOff > 0 ? { dm_moves_off: info.dmMovesOff } : {}),
       ...(info.retry ? { retry: info.retry } : {}),
       ...(info.retryCause ? { retry_cause: info.retryCause } : {}),
+      ...(info.demand && (info.demand.open.length > 0 || info.demand.held.length > 0)
+        ? { demand: { open: info.demand.open, held: info.demand.held, because: info.demand.because, missing: info.demand.missing } }
+        : {}),
       at: new Date().toISOString(),
     };
     console.log(`[tick] ${JSON.stringify(payload)}`);

@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, DEMAND_ACTIONS, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
@@ -843,29 +843,38 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     // no justifying data, and buildDecisionPrompt leans the companion toward silence.
     const razielState = await librarian.getRazielState().catch(() => null);
 
+    const razielStateSummary = summarizeRazielState(razielState);
+    const stateAt = razielState?.recorded_at ? Date.parse(razielState.recorded_at) : NaN;
+
+    // The justification gate, per move (B7 step 4, metronome-decide.ts readDemandReasons). A move
+    // that asks something of him needs a reason from the moment that ITS type accepts: a fresh
+    // logged state, this companion's risen relational need, or (the reminder only) his having been
+    // here within the last heartbeat window. "Here" is relational_need's last_event_at, which only
+    // an owner arrival on THIS bot writes; not readOwnerLastSeen, whose sessions branch also counts
+    // companion agents opening claude-ai sessions at their own heartbeat ticks. Unknown never opens.
+    const demandReasons = readDemandReasons({
+      override: process.env["DISABLE_REACH_OUT_GATE"] === "true",
+      razielStateSummary,
+      razielStateAgeHours: Number.isFinite(stateAt) ? Math.max(0, (Date.now() - stateAt) / 3_600_000) : null,
+      relationalNeed: relationalNeed ? { level: relationalNeed.level, threshold: relationalNeed.threshold, fired: relationalNeed.fired } : null,
+      hoursSinceContact: typeof relationalNeed?.hours_since_event === "number" ? relationalNeed.hours_since_event : null,
+    });
+    const { kept: justifiedActions, verdict: demand } = filterDemandByReason(signalFiltered, demandReasons);
+    const hadDemand = signalFiltered.some(a => DEMAND_ACTIONS.has(a.action_type));
+    if (hadDemand) mark(null, { demand });
+    if (demand.held.length > 0) {
+      // Not silent: the gate names what it held and why, every tick (and the [tick] line carries it).
+      console.log(`[${companionId}/heartbeat] justification gate held ${demand.held.length} demand move(s): ${demand.held.join(", ")} (${demand.missing.join("; ")})`);
+    }
+
     const decisionCtx: DecisionContext = {
       detectedSignals: detectedSignals.length > 0 ? detectedSignals : undefined,
       timeOfDayLabel,
       recentFiredActions: recentFiredActions.length > 0 ? recentFiredActions : undefined,
       relationalNeedFired: relationalNeed?.fired || undefined,
       relationalNeedLevel: relationalNeed?.fired ? relationalNeed.level : undefined,
-      razielStateSummary: summarizeRazielState(razielState) ?? undefined,
+      razielStateSummary: razielStateSummary ?? undefined,
     };
-
-    // Reach-out justification gate: a direct interruption of Raziel needs recent data behind it --
-    // a conversation signal, a fresh logged ND-state, or a risen relational-need drive. With none,
-    // drop the direct reach-out actions so the only honest choices are commons / internal / nothing.
-    const reachOutJustified =
-      process.env["DISABLE_REACH_OUT_GATE"] === "true" ||
-      detectedSignals.length > 0 ||
-      decisionCtx.razielStateSummary != null ||
-      Boolean(decisionCtx.relationalNeedFired);
-    const justifiedActions = filterReachOutWhenUnjustified(signalFiltered, reachOutJustified);
-    if (justifiedActions.length < signalFiltered.length) {
-      // Not silent any more: the gate names what it held, every tick.
-      const held = signalFiltered.filter(a => !justifiedActions.includes(a)).map(a => a.action_type);
-      console.log(`[${companionId}/heartbeat] justification gate held ${held.length} demand move(s): ${held.join(", ")}`);
-    }
     // care_hold, applied to the PALETTE rather than to the send: the companion is never offered a
     // production move on a bad night, so what he picks from is presence, internal acts, or nothing.
     // That is the floor's own shape ("what softens is ambient self-selection"), and it keeps the
@@ -911,6 +920,12 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
       });
     }
 
+    // The prompt names a demand move as open only if it is still on the list AFTER care_hold and the
+    // DM lane; saying "a reminder is on the list" when care_hold took it is B23 in reverse.
+    if (hadDemand) {
+      const onList = new Set(candidateActions.map(a => a.action_type));
+      decisionCtx.demand = { ...demand, open: demand.open.filter(t => onList.has(t)) };
+    }
     const decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
     // Explicit high ceiling: the decision object is tiny, but in hermes mode the full agent
     // narrates before/around the JSON, and the default cap truncated the object mid-field
