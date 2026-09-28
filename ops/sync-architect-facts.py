@@ -39,15 +39,34 @@ DESIGN RULES, each earned the hard way:
   * Say what it did. Silence from a sync job is indistinguishable from success, which is the failure
     mode this whole day was about.
 
+RESTARTS WERE DROPPING REPLIES (B28, 2026-09-28)
+Measured: 48 `ECONNREFUSED 127.0.0.1:864x` hits in the bot logs since August, each 0-14s after that
+companion's gateway unit stopped. A restarted gateway takes 4-6s to listen, so every restart opened
+an ~8-10s hole in which a reply fell back to the canned line. Two things fed it from here:
+  * A number that ticks by itself. The open-facts footer renders `, oldest Nd` (halseth
+    open-facts-gate.ts heldOpenFactsLine), which changes once a day with no fact changed, so every
+    gateway bounced at 15:00 CDT daily. The fragment is stripped from what this script writes, and
+    the on-disk block is compared AFTER the same normalization, so a stale file still carrying the
+    old fragment is rewritten quietly ("normalized") instead of costing one more restart.
+  * Restarting mid-conversation. A needed restart now waits until that companion's gateway has
+    been quiet for IDLE_SECONDS (newest row in its Hermes state.db; see last_activity for why that
+    signal), deferring tick to tick with the pending restart persisted in PENDING_STATE_PATH, and
+    restarts anyway after DEFER_CAP_SECONDS so a busy evening cannot starve a real fact change.
+    The same gate covers the pm2 reloads a shared-context change triggers (each bot on its own
+    companion; autonomous-worker only when all three are quiet).
+
 USAGE
-    python3 ops/sync-architect-facts.py            # sync, restart only if changed
-    python3 ops/sync-architect-facts.py --dry-run  # report what would change, touch nothing
-    python3 ops/sync-architect-facts.py --force     # rewrite + restart even if unchanged
+    python3 ops/sync-architect-facts.py            # sync, restart only if changed AND idle
+    python3 ops/sync-architect-facts.py --dry-run  # report what would change / restart / defer, touch nothing
+    python3 ops/sync-architect-facts.py --force     # rewrite + restart even if unchanged, no idle wait
 """
 import json
 import os
+import re
+import sqlite3
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -85,6 +104,27 @@ GATEWAY_UNITS = {
 }
 SHARED_CONTEXT = "/app/identity/shared_system_context.md"
 PM2_PROCS = ["cypher-bot", "drevan-bot", "gaia-bot", "autonomous-worker"]
+
+# Which companions' activity gates each restart target. A bot process serves one companion; the
+# autonomous worker drives all three, so it waits until the whole triad is quiet.
+PM2_COMPANIONS = {
+    "cypher-bot": ["cypher"],
+    "drevan-bot": ["drevan"],
+    "gaia-bot": ["gaia"],
+    "autonomous-worker": ["cypher", "drevan", "gaia"],
+}
+
+# Idle deferral (B28). 15 minutes of silence is comfortably longer than the longest turn the bot
+# will wait for (HERMES_REQUEST_TIMEOUT_MS default 300s), so "quiet" cannot mean "mid-turn". The 6h
+# cap bounds how long a changed identity file can sit on disk unloaded.
+IDLE_SECONDS = 15 * 60
+DEFER_CAP_SECONDS = 6 * 60 * 60
+# Same convention as health-check.py's state files (/home/nullsafe/.nullsafe-*-state.json).
+PENDING_STATE_PATH = os.environ.get("FACTS_SYNC_PENDING_PATH",
+                                    "/home/nullsafe/.nullsafe-facts-sync-pending.json")
+# How far back from the newest row to look. Bounded by id on purpose: `messages` has no index on
+# timestamp alone, and an unbounded MAX(timestamp) is a full scan of a >1GB file every 20 minutes.
+ACTIVITY_WINDOW_ROWS = 200
 
 USER_SYSTEMCTL = "export XDG_RUNTIME_DIR=/run/user/$(id -u);"
 NVM = "export NVM_DIR=$HOME/.nvm && . $NVM_DIR/nvm.sh &&"
@@ -139,7 +179,20 @@ def fetch_render(env, companion=None):
         # version of the quiet data loss being fixed.
         return None, ("render (%s) is only %d chars (< %d), refusing to overwrite an identity file "
                       "with a likely-truncated block" % (companion or "shared", len(body), MIN_PLAUSIBLE_RENDER))
-    return normalize_dashes(body), None
+    return strip_ticking(normalize_dashes(body)), None
+
+
+# `, oldest 12d` in the held-open-questions footer (halseth open-facts-gate.ts heldOpenFactsLine).
+# It is the only part of the render that changes with the clock rather than with the facts, and a
+# byte change here restarts a gateway, so it cost every companion one dropped-reply window a day.
+# The count of held questions stays: that moves only when a fact does. Stripped here, not in
+# halseth, because the file-backed surfaces are the only consumers that pay for a changing byte.
+_TICKING = re.compile(r", oldest \d+d\b")
+
+
+def strip_ticking(text):
+    """Remove clock-driven fragments so the block's bytes change only when a fact changes."""
+    return _TICKING.sub("", text)
 
 
 # House style bans the em dash (shared_system_context.md:190, "Do not use em dash character").
@@ -159,6 +212,27 @@ def normalize_dashes(text):
     while "  -- " in out or " --  " in out:
         out = out.replace("  -- ", " -- ").replace(" --  ", " -- ")
     return out
+
+
+def existing_block(current):
+    """The text between the markers already on disk (current or legacy BEGIN), or None."""
+    for begin in [BEGIN] + LEGACY_BEGINS:
+        if begin in current:
+            rest = current.split(begin, 1)[1]
+            if END in rest:
+                return rest.split(END, 1)[0].strip("\n")
+    return None
+
+
+def is_material_change(current, block):
+    """True when writing `block` changes what the model would read, ignoring ticking fragments.
+
+    False covers the one case that used to cost a restart for nothing: a file written before the
+    fragment was stripped, whose block differs from the new render ONLY by `, oldest Nd`."""
+    old = existing_block(current)
+    if old is None:
+        return True
+    return strip_ticking(old).rstrip() != block.rstrip()
 
 
 def splice(current, block):
@@ -192,6 +266,8 @@ def sync_file(path, block, dry, force, cap=NO_CAP, margin=soul_cap.DEFAULT_MARGI
     new, changed = splice(current, block)
     if not changed and not force:
         return "unchanged", "%d chars" % len(current)
+    # Bytes differ but only by a ticking fragment: rewrite the file clean, never restart for it.
+    material = force or is_material_change(current, block)
     # PRE-WRITE GUARD (2026-09-25). Hermes cuts the middle out of SOUL.md the moment it crosses
     # context_file_max_chars, so a write that would land inside the margin is refused here, at the
     # only point that can still say no, rather than discovered by the health check fifteen minutes
@@ -205,7 +281,7 @@ def sync_file(path, block, dry, force, cap=NO_CAP, margin=soul_cap.DEFAULT_MARGI
                                "the middle out of it; file left at {:,} chars"
                                .format(len(new), cap, margin, len(current)))
     if dry:
-        return "would-change", "%d -> %d chars" % (len(current), len(new))
+        return ("would-change" if material else "would-normalize"), "%d -> %d chars" % (len(current), len(new))
     # Back up once per day, not per run: the point is a recoverable yesterday, not 96 copies of it.
     bak = path + ".bak-facts-sync"
     if not os.path.exists(bak):
@@ -216,7 +292,127 @@ def sync_file(path, block, dry, force, cap=NO_CAP, margin=soul_cap.DEFAULT_MARGI
             pass
     with open(path, "w", encoding="utf-8") as f:
         f.write(new)
+    if not material:
+        return "normalized", "%d -> %d chars (ticking fragment only, no restart)" % (len(current), len(new))
     return "updated", "%d -> %d chars" % (len(current), len(new))
+
+
+# ── Idle deferral (B28) ─────────────────────────────────────────────────────────────────────────
+# Pure decision logic (tested in ops/test_sync_architect_facts.py), then the thin I/O around it.
+
+def last_activity(db_path):
+    """(epoch seconds of the newest message row in this profile's Hermes state.db, error).
+
+    WHY THIS SIGNAL (verified read-only 2026-09-28): every call the bots make lands in `messages`
+    (sessions.source was `api_server` for every row of the last 24h in all three profiles), with
+    `timestamp` stamped per row as the turn happens: the user row at turn START, then tool and
+    assistant rows as they complete. Cross-checked against the bot logs the same day: gaia's
+    heartbeat at 16:00:02 CDT <-> a gaia user row at 16:00:03; gaia's director pass at 15:33:37 <->
+    15:33:36; drevan's 15:35 notes poll <-> 15:35:09. So an in-flight turn shows as activity from
+    its first second, and ANY role counts (a long tool-calling turn keeps writing tool rows).
+
+    Read-only URI open; the DB is WAL and the cron runs as the owning user. Any failure returns
+    (None, why) and the caller treats unknown as BUSY: a deferred restart is bounded by the cap, a
+    mid-turn restart is the harm this exists to remove."""
+    if not os.path.isfile(db_path):
+        return None, "no state.db at %s" % db_path
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=5)
+        try:
+            row = con.execute(
+                "SELECT MAX(timestamp) FROM messages WHERE id > "
+                "(SELECT COALESCE(MAX(id), 0) FROM messages) - ?", (ACTIVITY_WINDOW_ROWS,)
+            ).fetchone()
+        finally:
+            con.close()
+    except Exception as e:
+        return None, "state.db unreadable: %s" % str(e)[:120]
+    if not row or row[0] is None:
+        return 0.0, None  # a profile that has never been spoken to is idle
+    return float(row[0]), None
+
+
+def combined_activity(cids, activity):
+    """Newest activity across companions; None if ANY of them is unknown (unknown = busy)."""
+    ts = []
+    for c in cids:
+        v = activity.get(c)
+        if v is None:
+            return None
+        ts.append(v)
+    return max(ts) if ts else None
+
+
+def decide_restart(now, last_ts, pending_since, idle_s=IDLE_SECONDS, cap_s=DEFER_CAP_SECONDS):
+    """-> (action, reason). action is 'restart', 'restart-cap' or 'defer'.
+
+    The cap counts from the FIRST deferral (pending_since), not the latest change, so a render that
+    keeps moving while the room is busy still restarts within cap_s."""
+    waited = max(0.0, now - pending_since) if pending_since is not None else 0.0
+    if pending_since is not None and waited >= cap_s:
+        return "restart-cap", "deferred %s, at the %s cap; restarting anyway" % (_dur(waited), _dur(cap_s))
+    if last_ts is None:
+        return "defer", "activity unknown, treated as busy (pending %s)" % _dur(waited)
+    quiet = now - last_ts
+    if quiet >= idle_s:
+        return "restart", "idle %s" % _dur(quiet)
+    return "defer", "last message %s ago (< %s idle), pending %s" % (
+        _dur(max(0.0, quiet)), _dur(idle_s), _dur(waited))
+
+
+def merge_pending(pending, new_keys, now, reason="render changed"):
+    """Add newly needed restarts to the pending map WITHOUT resetting an existing `since`."""
+    out = {k: dict(v) for k, v in pending.items()}
+    for k in new_keys:
+        if k not in out:
+            out[k] = {"since": now, "reason": reason}
+    return out
+
+
+def target_companions(key):
+    """Which companions gate a restart target key; None for a key this version doesn't know."""
+    kind, _, name = key.partition(":")
+    if kind == "gateway" and name in GATEWAY_UNITS:
+        return [name]
+    if kind == "pm2" and name in PM2_COMPANIONS:
+        return PM2_COMPANIONS[name]
+    return None
+
+
+def target_command(key):
+    kind, _, name = key.partition(":")
+    if kind == "gateway":
+        return "%s systemctl --user restart %s" % (USER_SYSTEMCTL, GATEWAY_UNITS[name])
+    return "%s pm2 reload %s" % (NVM, name)
+
+
+def _dur(seconds):
+    s = int(seconds)
+    if s < 3600:
+        return "%dm%02ds" % (s // 60, s % 60)
+    return "%dh%02dm" % (s // 3600, (s % 3600) // 60)
+
+
+def load_pending(path=None):
+    path = path or PENDING_STATE_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return {k: v for k, v in data.items()
+                if isinstance(v, dict) and isinstance(v.get("since"), (int, float))}
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print("pending state unreadable (%s), starting empty" % str(e)[:120], file=sys.stderr)
+        return {}
+
+
+def save_pending(pending, path=None):
+    path = path or PENDING_STATE_PATH
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(pending, fh, indent=2, sort_keys=True)
+    os.replace(tmp, path)
 
 
 def main():
@@ -277,34 +473,88 @@ def main():
         results["shared-context"] = state
         print("  %-18s %-13s %s" % ("shared context", state, detail))
 
-    changed_souls = [c for c in HERMES_HOMES if results.get("soul:" + c) == "updated"]
-    shared_changed = results.get("shared-context") == "updated"
+    # "normalized" is deliberately absent: a ticking-fragment-only rewrite never restarts anything.
+    material = ("updated", "would-change")
+    changed_souls = [c for c in HERMES_HOMES if results.get("soul:" + c) in material]
+    shared_changed = results.get("shared-context") in material
 
-    if dry:
-        print("dry run: nothing written, nothing restarted")
-        return 1 if fetch_errors else 0
-    if not changed_souls and not shared_changed:
+    # Hermes reads SOUL.md at startup, so only the profiles whose file actually moved need a bounce;
+    # loadSharedContext caches for the process lifetime, so a shared change needs the pm2 reloads.
+    new_keys = ["gateway:" + c for c in changed_souls]
+    if shared_changed:
+        new_keys += ["pm2:" + p for p in PM2_PROCS]
+
+    now = time.time()
+    pending = merge_pending(load_pending(), new_keys, now)
+
+    if not pending:
         print("no changes, so nothing restarted (a restart on every tick would bounce the triad "
               "for nothing)")
+        if dry:
+            print("dry run: nothing written, nothing restarted")
         return 1 if fetch_errors else 0
 
-    # Hermes reads SOUL.md at startup; only bounce the profiles whose file actually moved.
-    for cid in changed_souls:
-        ok, out = run("%s systemctl --user restart %s" % (USER_SYSTEMCTL, GATEWAY_UNITS[cid]))
-        print("  restart %-8s %s" % (cid, "ok" if ok else "FAILED: " + out.strip()[:120]))
+    activity = {}
+    for cid, home in HERMES_HOMES.items():
+        ts, err = last_activity(os.path.join(home, "state.db"))
+        activity[cid] = ts
+        if err:
+            print("  activity %-7s unknown: %s" % (cid, err), file=sys.stderr)
 
-    # loadSharedContext caches for the process lifetime, so the bots need a reload to see it.
-    if shared_changed:
-        for proc in PM2_PROCS:
-            ok, out = run("%s pm2 reload %s" % (NVM, proc))
-            print("  reload  %-18s %s" % (proc, "ok" if ok else "FAILED: " + out.strip()[:120]))
+    pending, restarted = run_restarts(pending, activity, now, dry, force, run)
 
-    print("synced: %d SOUL file(s), shared context %s" %
-          (len(changed_souls), "updated" if shared_changed else "unchanged"))
+    if dry:
+        print("dry run: nothing written, nothing restarted, pending state untouched")
+        return 1 if fetch_errors else 0
+
+    try:
+        save_pending(pending)
+    except Exception as e:
+        print("FAILED to save pending state %s: %s" % (PENDING_STATE_PATH, e), file=sys.stderr)
+        fetch_errors["pending-state"] = str(e)
+
+    print("synced: %d SOUL file(s), shared context %s; restarted %d, still pending %d%s" % (
+        len(changed_souls), "updated" if shared_changed else "unchanged", len(restarted), len(pending),
+        (" (" + ", ".join(sorted(pending)) + ")") if pending else ""))
     # Partial failure: some renders fetched fine and were written, but at least one companion's
     # (or the shared) render failed and that file was left untouched. Non-zero so a cron/alerting
-    # wrapper notices, without discarding the writes that DID succeed.
+    # wrapper notices, without discarding the writes that DID succeed. A deferral is NOT a failure.
     return 1 if fetch_errors else 0
+
+
+def run_restarts(pending, activity, now, dry, force, runner):
+    """Decide and act on every pending restart target. -> (pending_after, restarted_keys).
+
+    A deferred target keeps its original `since`; a failed restart stays pending so the next tick
+    retries it; unknown keys (a target renamed between versions) are dropped with a log line.
+    `runner(cmd) -> (ok, output)` is injected so the tick-to-tick behaviour is testable."""
+    pending = {k: dict(v) for k, v in pending.items()}
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(now))
+    restarted = []
+    for key in sorted(pending):  # "gateway:*" sorts before "pm2:*", so gateways come back first
+        cids = target_companions(key)
+        if cids is None:
+            print("  %s dropping unknown pending target %s" % (stamp, key))
+            del pending[key]
+            continue
+        if force:
+            action, reason = "restart", "--force"
+        else:
+            action, reason = decide_restart(now, combined_activity(cids, activity), pending[key]["since"])
+        if dry:
+            print("  %s would %s %-24s %s" % (stamp, "DEFER  " if action == "defer" else "RESTART", key, reason))
+            continue
+        if action == "defer":
+            print("  %s DEFER   %-24s %s" % (stamp, key, reason))
+            continue
+        ok, out = runner(target_command(key))
+        label = "RESTART-CAP" if action == "restart-cap" else "RESTART"
+        print("  %s %-7s %-24s %s -> %s" % (stamp, label, key, reason,
+                                            "ok" if ok else "FAILED: " + out.strip()[:120]))
+        if ok:
+            restarted.append(key)
+            del pending[key]
+    return pending, restarted
 
 
 if __name__ == "__main__":

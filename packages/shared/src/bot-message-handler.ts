@@ -2212,7 +2212,8 @@ ${widened}`;
     //
     // The id also carries the per-channel retract bump (2026-09-26, rotate-on-retract): a
     // `<prefix>: retract` increments it, so the retracted reply's transcript is abandoned on the
-    // very next turn instead of at 19:00 CDT. The rotation edge below does the rest.
+    // very next turn instead of at the next scheduled rotation (Monday 04:00 America/Chicago since
+    // B28). The rotation edge below does the rest.
     const turnBumps = await ensureRetractBumps(librarian);
     const { sessionId: inferenceSessionId, sessionKey: inferenceSessionKey } =
       hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), turnBumps.get(message.channelId));

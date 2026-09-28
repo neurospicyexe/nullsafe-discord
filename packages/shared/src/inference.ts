@@ -476,6 +476,56 @@ export function hermesRequestTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
   return ms;
 }
 
+// Refused-connection retry (B28, 2026-09-28). A Hermes gateway restart leaves its port closed for
+// the 4-6s the new process takes to listen, and every call in that hole used to come straight back
+// as the in-character fallback: 48 `ECONNREFUSED 127.0.0.1:864x` hits since August, each 0-14s
+// after that companion's gateway unit stopped. ECONNREFUSED is the ONE failure that is safe to
+// retry: the TCP connect was rejected, so no byte of the request reached the gateway and a retry
+// cannot start a duplicate turn. Timeouts, aborts, resets and HTTP errors all may have reached a
+// running agent, so they are never retried here. ~15s total covers the measured 8-10s gap.
+export const HERMES_REFUSED_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 4_000, 4_000];
+
+/** True only for a refused TCP connect (undici puts the code on `cause`; some paths on the error). */
+export function isConnectionRefused(e: unknown): boolean {
+  const err = e as { code?: unknown; cause?: { code?: unknown } } | null | undefined;
+  return err?.cause?.code === "ECONNREFUSED" || err?.code === "ECONNREFUSED";
+}
+
+/** Resolves after `ms`, or rejects the moment `signal` aborts (so a backoff never outlives it). */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason ?? new Error("aborted")); return; }
+    const onAbort = () => { clearTimeout(t); reject(signal.reason ?? new Error("aborted")); };
+    const t = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * `fetchFn(url, init)` with a bounded retry on ECONNREFUSED only. `init.signal` must already carry
+ * the caller's signal AND the overall ceiling, built ONCE by the caller: the ceiling therefore
+ * spans every attempt and every backoff instead of resetting per retry, and an abort during a
+ * backoff ends the loop at once (the sleep rejects with the abort, which the caller's catch sees
+ * as the abort it is). Every other error is rethrown untouched on the first occurrence.
+ */
+export async function fetchRetryingRefused(
+  fetchFn: typeof fetch,
+  url: string,
+  init: RequestInit & { signal: AbortSignal },
+  backoffMs: readonly number[] = HERMES_REFUSED_BACKOFF_MS,
+  sleep: (ms: number, signal: AbortSignal) => Promise<void> = abortableSleep,
+): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchFn(url, init);
+    } catch (e) {
+      if (!isConnectionRefused(e) || attempt >= backoffMs.length || init.signal.aborted) throw e;
+      console.warn(`[hermes] refused, retry ${attempt + 1}`);
+      await sleep(backoffMs[attempt]!, init.signal);
+    }
+  }
+}
+
 // Hermes agent API server (OpenAI-compatible /v1/chat/completions, bearer-gated).
 // Unlike LMStudioAdapter, this sends Authorization and allows a long timeout: each call
 // runs the FULL Hermes agent (orient, SOUL.md, Halseth MCP, tools), which can take tens of
@@ -505,7 +555,11 @@ class HermesAdapter implements InferenceAdapter {
       // `sessionKey` stays the stable `companionId:channelId` -- it is the long-term-memory scope
       // (e.g. Honcho), which must survive any number of transcript rotations. Callers that don't
       // pass a separate key (pre-rotation call sites) fall back to `sessionId` for both headers.
-      const res = await this.fetchFn(`${this.baseUrl}/chat/completions`, {
+      // Built ONCE: the ceiling covers every refused-connection retry and backoff, not each attempt.
+      const deadline = signal
+        ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal])
+        : AbortSignal.timeout(this.timeoutMs);
+      const res = await fetchRetryingRefused(this.fetchFn, `${this.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -524,7 +578,7 @@ class HermesAdapter implements InferenceAdapter {
           stream: false,
         }),
         // The caller's signal (when given) aborts alongside the adapter's own ceiling.
-        signal: signal ? AbortSignal.any([AbortSignal.timeout(this.timeoutMs), signal]) : AbortSignal.timeout(this.timeoutMs),
+        signal: deadline,
       });
       if (!res.ok) {
         console.warn(`[inference:hermes] non-2xx response: ${res.status}`);

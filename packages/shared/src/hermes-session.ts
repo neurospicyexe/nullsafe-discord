@@ -31,8 +31,44 @@ function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
 
+// Rotation boundary (B28, 2026-09-28). The epoch used to roll at 00:00 UTC, which is 19:00 CDT /
+// 18:00 CST: the middle of Raziel's evening, so every weekly rotation dropped the live transcript
+// of whatever conversation was happening. It now rolls at 04:00 America/Chicago, his
+// lowest-traffic hour (a 30-day audit found ZERO inbound messages between 03:00 and 05:00).
+//
+// DST-aware by construction: the Chicago wall clock comes from Intl (never a fixed offset), and the
+// "rotation day" is that wall-clock date, minus one day before 04:00. Both DST switches happen at
+// 02:00 on a Sunday, two hours before the boundary and on a day that is never a Monday, so the
+// repeated hour in November and the skipped hour in March both fall inside one rotation day: the
+// epoch is stable and never goes backwards across either change.
+const ROTATION_TZ = "America/Chicago";
+const ROTATION_HOUR = 4;
+const chicagoParts = new Intl.DateTimeFormat("en-US", {
+  timeZone: ROTATION_TZ,
+  hourCycle: "h23",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+});
+
 /**
- * ISO-8601 week string (`YYYY-Www`), UTC, Monday-start, ISO year rules -- the ISO week and its
+ * The calendar day a rotation period belongs to, as a UTC-midnight Date carrying that Chicago
+ * date's y/m/d: the Chicago date of `now`, or the previous date when it is before 04:00 there.
+ */
+function rotationDay(now: Date): Date {
+  const p: Record<string, number> = {};
+  for (const part of chicagoParts.formatToParts(now)) {
+    if (part.type !== "literal") p[part.type] = Number(part.value);
+  }
+  // Day arithmetic in UTC fields sidesteps DST entirely; this Date is a calendar label, not an instant.
+  const day = new Date(Date.UTC(p.year!, p.month! - 1, p.day!));
+  if (p.hour! < ROTATION_HOUR) day.setUTCDate(day.getUTCDate() - 1);
+  return day;
+}
+
+/**
+ * ISO-8601 week string (`YYYY-Www`) of a calendar day, Monday-start, ISO year rules -- the ISO week and its
  * "week year" can differ from the calendar year at both ends of December/January (e.g.
  * 2027-01-01 falls in ISO week 2026-W53; 2024-12-30 falls in ISO week 2025-W01). Standard
  * algorithm: shift to the Thursday of the same ISO week, then the week number is that Thursday's
@@ -49,15 +85,17 @@ function isoWeekString(date: Date): string {
 
 /**
  * The rotation epoch for `now` under `mode` -- `null` for "off" (no rotation, caller keeps the
- * stable key as the session id), a UTC calendar date (`YYYY-MM-DD`) for "daily", or a
- * Monday-start ISO week (`YYYY-Www`) for "weekly".
+ * stable key as the session id), the rotation day (`YYYY-MM-DD`) for "daily", or the Monday-start
+ * ISO week (`YYYY-Www`) of the rotation day for "weekly". Both roll at 04:00 America/Chicago, so
+ * weekly rolls Monday 04:00 Chicago (daily moved with it: same evening-rollover problem).
  */
 export function hermesSessionEpoch(now: Date, mode: HermesRotation): string | null {
   if (mode === "off") return null;
+  const day = rotationDay(now);
   if (mode === "daily") {
-    return `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
+    return `${day.getUTCFullYear()}-${pad2(day.getUTCMonth() + 1)}-${pad2(day.getUTCDate())}`;
   }
-  return isoWeekString(now);
+  return isoWeekString(day);
 }
 
 /**
@@ -66,7 +104,8 @@ export function hermesSessionEpoch(now: Date, mode: HermesRotation): string | nu
  * `bump` (2026-09-26, rotate-on-retract): a per-channel counter that forces a fresh transcript
  * NOW instead of at the next scheduled epoch. `<prefix>: retract` pulled a mistaken reply out of
  * every memory store, and the gateway transcript still carried it -- so the model kept seeing (and
- * re-answering from) a reply Raziel had already retracted, until the 19:00 CDT rotation. A bump
+ * re-answering from) a reply Raziel had already retracted, until the next scheduled rotation (then
+ * Sunday 19:00 CDT; since B28, 2026-09-28, Monday 04:00 America/Chicago). A bump
  * > 0 suffixes the id with `:r<n>`; the key (LTM scope) never moves, and the next scheduled
  * epoch still changes the id further, so bumps and the schedule compose rather than collide.
  */
