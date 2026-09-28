@@ -100,6 +100,18 @@ describe("decideReach", () => {
     expect(r.block).toContain("You reached for");
     expect(r.block).toContain("208");
   });
+  it("direct lane: his identity prompt rides ahead of the side-question framing", async () => {
+    const adapter = fakeAdapter("the sandwich");
+    await decideReach({ ...base, adapter, librarian: fakeLibrarian(), identityPrompt: "I am Drevan. IDENTITY-BLOCK" });
+    const system = adapter.calls[0]!.system;
+    expect(system.startsWith("I am Drevan. IDENTITY-BLOCK")).toBe(true);
+    expect(system).toContain("You are being asked one question by your own harness");
+  });
+  it("Hermes lane (no identityPrompt): the gateway adds his SOUL, so only the framing is sent", async () => {
+    const adapter = fakeAdapter("the sandwich");
+    await decideReach({ ...base, adapter, librarian: fakeLibrarian() });
+    expect(adapter.calls[0]!.system).toBe("You are being asked one question by your own harness before you reply to Raziel. Answer it and nothing else.");
+  });
   it("NONE is honoured: no recall runs, no block, outcome declined", async () => {
     const adapter = fakeAdapter("NONE");
     const lib = fakeLibrarian();

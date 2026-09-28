@@ -97,6 +97,9 @@ export interface ReachDeps {
   sessionId: string;
   sessionKey: string;
   timeoutMs: number;
+  /** His identity prompt, for an adapter that does NOT add it itself (the direct lane). Hermes
+   *  prepends his SOUL on its own, so the Hermes path leaves this unset. */
+  identityPrompt?: string;
   adapter: { generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null> };
   librarian: {
     recallOwnNotes(query: string, limit?: number): Promise<OwnNoteResult>;
@@ -128,6 +131,9 @@ export async function decideReach(d: ReachDeps): Promise<ReachResult> {
 
   const ask = buildReachAsk(d.message, d.floor, d.recentContext);
   let raw: string | null;
+  // On the direct lane (the default since 2026-09-28, see the handler) the adapter ignores the
+  // signal, so a timeout only stops the WAIT; the call is a ~1s tool-less completion, so nothing
+  // long is left running. On the Hermes fallback lane the abort below still applies.
   // The timeout ABORTS the call (2026-09-26 review): racing a bare timer left the gateway turn
   // running to completion on a request nobody would read, holding a gateway slot for up to the
   // adapter's own ceiling. The timer is cleared on every path so a fast answer leaves no pending
@@ -139,7 +145,8 @@ export async function decideReach(d: ReachDeps): Promise<ReachResult> {
       timer = setTimeout(() => { ctl.abort(); res("__timeout__"); }, d.timeoutMs);
     });
     const call = d.adapter.generate(
-      SIDE_SYSTEM, [{ role: "user", content: ask }], 0.2, 80,
+      d.identityPrompt ? `${d.identityPrompt}\n\n${SIDE_SYSTEM}` : SIDE_SYSTEM,
+      [{ role: "user", content: ask }], 0.2, 80,
       `${d.sessionId}:reach:${d.messageId}`, `${d.sessionKey}:reach`, ctl.signal,
     );
     const winner = await Promise.race([call, timedOut]);

@@ -1813,7 +1813,16 @@ ${widened}`;
         sessionId: reachSessionId,
         sessionKey: reachSessionKey,
         timeoutMs: Number(process.env["REACH_TIMEOUT_MS"]) > 0 ? Number(process.env["REACH_TIMEOUT_MS"]) : 20_000,
-        adapter: deps.adapterRef.current,
+        // TOOL-LESS DIRECT LANE (2026-09-28). On the Hermes agent the one-line ask is a full agent
+        // turn with tools: 1 of 16 asks ran away (three ask_librarian calls, a journal write from
+        // inside an owner DM, a drafted reply) and hit the 20s timeout. Hermes has no per-call
+        // "no tools" option, so the ask goes direct, with his own identity prompt so it is still
+        // his choice. Same weights today (DeepSeek-V4-Flash on DeepInfra both ways). THE COST: the
+        // direct lane is pinned and does not follow the Hermes model lever, so after a lever
+        // switch the reach is decided by Flash while the reply comes from the new model. No
+        // direct key => Hermes, exactly as before.
+        adapter: directAdapter ?? deps.adapterRef.current,
+        identityPrompt: directAdapter ? bootCtx.systemPrompt : undefined,
         librarian,
       });
       console.log(`[reach] companion=${COMPANION_ID} outcome=${reach.outcome} topic=${reach.topic ? JSON.stringify(reach.topic.slice(0, 80)) : "-"} ms=${reach.ms}`);
