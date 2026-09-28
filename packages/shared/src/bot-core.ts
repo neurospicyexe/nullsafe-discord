@@ -54,6 +54,7 @@ import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
 import { sealDmChannel } from "./recall-context.js";
 import { isAffirmativeMedAnswer } from "./med-answer.js";
 import { startMedReminderScheduler, medReminderEnabled, medGenTimeoutMs, type MedDmTarget } from "./med-reminder.js";
+import type { OwnerDmLane } from "./owner-dm.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
 
@@ -316,7 +317,7 @@ export interface RunBotConfig {
   mistralTtsModel: string | undefined;
   mistralSttModel: string | undefined;
   autonomous: {
-    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null, halsethSecret: string, registerSentId?: (id: string) => void) => void;
+    start: (librarian: LibrarianClient, adapter: InferenceAdapter, client: Client, configCache: ChannelConfigCache, bootCtx: BootContext, sessionWindows: SessionWindowManager, redis: Redis | null, halsethSecret: string, registerSentId?: (id: string) => void, ownerDm?: OwnerDmLane) => void;
     stop: () => void;
     resetCycleGuard: () => void;
     pushRazielMessage: (content: string) => void;
@@ -658,7 +659,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         if (oldest === undefined) break;
         sentIds.delete(oldest);
       }
-    });
+    }, env.ownerDiscordId ? ownerDmLane : undefined);
     // med_reminder (2026-09-27): its own scheduler, outside the metronome and every other rail
     // (spec R-9). Halseth decides what is due and who sends it; a companion on no schedule row
     // (Gaia today) polls and never gets anything. MED_REMINDER=off stops it.
@@ -666,17 +667,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       stopMedReminder = startMedReminderScheduler({
         companionId,
         api: librarian,
-        resolveDm: resolveOwnerDm,
+        resolveDm: ownerDmLane.resolve,
         // Tool-less direct adapter first: a one-line DM must not ride the Hermes agent (tool
         // runaways, and an aborted call orphans its answer). Same identity prompt either way.
         generate: (system, prompt) => (directAdapter ?? adapterRef.current).generate(system, [{ role: "user", content: prompt }], 0.8),
         systemPrompt: () => bootCtx.systemPrompt,
         genTimeoutMs: medGenTimeoutMs(),
-        onSent: async (channelId, text, messageId) => {
-          sentIds.add(messageId);
-          await stmStore.ensureLoaded(channelId).catch(() => {});
-          stmStore.append(channelId, { role: "assistant", content: text, timestamp: Date.now() });
-        },
+        onSent: ownerDmLane.onSent,
       });
       console.log(`[${companionId}] med_reminder scheduler started`);
     } else {
@@ -691,6 +688,17 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // Registered as a sealed recall source the moment it exists (recall-context.ts sealDmChannel).
   let stopMedReminder: (() => void) | null = null;
   let ownerDm: { id: string; send(c: string): Promise<{ id: string }>; messages: { fetch(o: { limit: number }): Promise<Map<string, { author: { id: string }; content: string; createdTimestamp: number }>> } } | null = null;
+  // ONE owner-DM lane (owner-dm.ts), shared by med_reminder and every Raziel-facing metronome move
+  // (B7 steps 2 + 2c). The same resolver, the same seal, the same after-send bookkeeping; nothing
+  // here writes the text anywhere but the DM and this bot's own STM for the reply turn.
+  const ownerDmLane: OwnerDmLane = {
+    resolve: () => resolveOwnerDm(),
+    onSent: async (channelId, text, messageId) => {
+      sentIds.add(messageId);
+      await stmStore.ensureLoaded(channelId).catch(() => {});
+      stmStore.append(channelId, { role: "assistant", content: text, timestamp: Date.now() });
+    },
+  };
   async function resolveOwnerDm(): Promise<MedDmTarget | null> {
     if (!env.ownerDiscordId) return null;
     if (!ownerDm) {

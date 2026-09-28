@@ -14,9 +14,13 @@ import type { RazielState } from "../librarian.js";
 
 const a = (action_type: string) => ({ action_type, name: action_type });
 
-const PRODUCTION = ["post_heartbeat", "share_observation", "name_pattern", "share_media", "ask_question", "send_reminder", "tend_creature"];
+const PRODUCTION = [
+  "post_heartbeat", "share_observation", "name_pattern", "share_media", "ask_question", "send_reminder", "tend_creature",
+  // B7 2c: play goes quiet (T-6), and the moves that now reach his phone are production too.
+  "flirt", "dare", "show_made", "drift_outward", "declare_preference",
+];
 const PRESENCE = ["offer_presence", "check_in_on_raziel"];
-const INTERNAL = ["write_journal", "write_feeling", "write_inter_companion", "write_note_to_raziel", "drift_open", "declare_preference", "nothing"];
+const INTERNAL = ["write_journal", "write_feeling", "write_inter_companion", "write_note_to_raziel", "drift_open", "nothing"];
 
 describe("filterProductionWhenCareHold", () => {
   it("suppresses every production action while the hold is on", () => {

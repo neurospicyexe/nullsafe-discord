@@ -116,6 +116,8 @@ export type HeartbeatOutcome =
   | "recent_activity"         // activity within the last 15 minutes
   | "not_my_window"           // another companion owns this heartbeat window
   | "floor_held"              // a sibling holds the floor
+  | "suppressed_triad_cap"    // B7 2+2c: every eligible move was a DM move the shared triad lane could not carry now
+  | "held_dm"                 // B7 2+2c: a DM move was chosen and did not go out (cap race, a failed check, no DM); never re-sent
   | "parse_failed"            // the decision object could not be read; this is a DEFECT
   | "error";                  // the action threw
 

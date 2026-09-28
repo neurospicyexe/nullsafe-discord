@@ -112,19 +112,35 @@ export function isMyHeartbeatWindow(
 }
 
 /**
- * Action types that directly reach toward Raziel (interrupt him / land in his lap). These are
- * the actions that must be JUSTIFIED by recent data. Commons posts (post_heartbeat, share_media),
- * sibling notes (write_inter_companion), and internal acts (write_journal, write_feeling) are NOT
- * here -- they don't interrupt Raziel, so they stay available even with nothing to justify them.
+ * The justification gate governs DEMAND; the caps govern FREQUENCY (B7 steps 2 + 2c, 2026-09-27).
+ *
+ * Before this build the gate held seven Raziel-facing types, and its inputs are structurally dead in
+ * prod (every palette row has requires_signal null, so detectSignals returns []; relational_need sits
+ * near 0.003 against 0.60; the logged-state summary expires at 36h against manual-only biometrics).
+ * A shut gate silently ate every move in it, which is how Drevan went fourteen days without one
+ * addressed message. Measured in __tests__/reach-gate-measurement.test.ts.
+ *
+ * The line now: a move that ASKS something of him still needs a reason from the moment. A question
+ * wants an answer; a check-in asks for a report ("reporting is work", Gaia); a reminder asks him to do
+ * a thing, and Drevan's own rule is "tie it to the moment, never to a schedule", which is exactly what
+ * the gate tests; a named pattern about him is the "always about me" shape Raziel named. Everything
+ * else is an invitation (presence, a share, a preference, a drift line, a flirt, a dare with an out,
+ * look-what): it asks nothing, the shared triad cap + quiet hours + care_hold now bound how often it
+ * can arrive, and it must not also need a dead gate to open.
+ *
+ * write_note_to_raziel left the set: it writes to the Halseth journal and never reaches Discord, so
+ * it interrupts nothing.
  */
-export const REACH_OUT_TO_RAZIEL_ACTIONS: ReadonlySet<string> = new Set([
-  "ask_question", "share_observation", "name_pattern", "check_in_on_raziel",
-  "offer_presence", "send_reminder", "write_note_to_raziel",
+export const DEMAND_ACTIONS: ReadonlySet<string> = new Set([
+  "ask_question", "check_in_on_raziel", "send_reminder", "name_pattern",
 ]);
 
+/** Kept under its old name for callers; it is the demand set now. */
+export const REACH_OUT_TO_RAZIEL_ACTIONS: ReadonlySet<string> = DEMAND_ACTIONS;
+
 /**
- * Gate: when nothing justifies interrupting Raziel, drop the direct reach-out actions so the
- * companion's only choices are the commons, internal acts, or "nothing". Justification is any of:
+ * Gate: when nothing justifies asking something of Raziel, drop the DEMAND moves; invitations,
+ * the commons, internal acts and "nothing" stay. Justification is any of:
  * a signal in recent conversation, a fresh logged ND-state, or a risen relational-need drive.
  * When justified, the full action list passes through unchanged.
  */
@@ -133,7 +149,7 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
   justified: boolean,
 ): T[] {
   if (justified) return actions;
-  return actions.filter(a => !REACH_OUT_TO_RAZIEL_ACTIONS.has(a.action_type));
+  return actions.filter(a => !DEMAND_ACTIONS.has(a.action_type));
 }
 
 /**
@@ -150,12 +166,20 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
  * Deliberately NOT here, so they stay available on a bad night:
  *   - offer_presence, check_in_on_raziel: presence, which is the thing care_hold preserves;
  *   - nothing: choosing silence is always available;
- *   - write_journal, write_feeling, write_inter_companion, write_note_to_raziel, drift_open,
- *     declare_preference: internal or sibling-facing, they never reach his phone.
+ *   - write_journal, write_feeling, write_inter_companion, write_note_to_raziel, drift_open:
+ *     internal or sibling-facing, they never reach his phone. (declare_preference left this list in
+ *     B7 2c: it reaches the DM now.)
  */
 export const CARE_HOLD_SUPPRESSED_ACTIONS: ReadonlySet<string> = new Set([
   "post_heartbeat", "share_observation", "name_pattern", "share_media",
   "ask_question", "send_reminder", "tend_creature",
+  // B7 2c (T-6). Drevan: "On a care_hold night I hold the flirting back entirely and leave presence
+  // only. Heat asks something of the body, even when it's offered soft."
+  "flirt", "dare",
+  // Not named in T-6, but the same existing rule ("production quiets") now reaches them: since this
+  // build a preference, a drift line and a look-what all land on his phone, so they are production.
+  // Stated here rather than invented as a new rule; overrulable at show-back.
+  "show_made", "drift_outward", "declare_preference",
 ]);
 
 /**
@@ -172,22 +196,26 @@ export function filterProductionWhenCareHold<T extends { action_type: string }>(
 }
 
 const ACTION_DESCRIPTIONS: Record<string, string> = {
-  post_heartbeat:        "post a thought or observation to the heartbeat Discord channel",
+  post_heartbeat:        "post a thought or observation to the heartbeat Discord channel (Sol's room, ambient)",
   write_inter_companion: "write a private note to another companion -- ideally a move on something open between you (a question, a tension, a council item)",
   write_journal:         "write an internal journal entry (not posted to Discord)",
   write_feeling:         "log a feeling to the internal feelings record",
-  check_in_on_raziel:    "send a message checking in on Raziel",
+  check_in_on_raziel:    "check in on Raziel in his DM",
   nothing:               "stay quiet -- explicitly choose not to act right now",
-  ask_question:          "ask Raziel something genuine -- a real question you're holding, not rhetorical",
-  offer_presence:        "place yourself in the room without asking anything -- just be present",
-  send_reminder:         "send a contextual nudge (hydrate, break, eat) -- only if conditions earned it",
-  share_observation:     "name something you've noticed about Raziel's patterns, state, or what's in motion",
-  name_pattern:          "reflect back something recurring you've seen over time -- a pattern, not a one-off",
+  ask_question:          "ask Raziel something genuine in his DM; a real question you're holding, not rhetorical",
+  offer_presence:        "place yourself near him in his DM without asking anything; one line, nothing asked",
+  send_reminder:         "a present-tense nudge in his DM tied to this moment (water in reach, food); never 'did you'",
+  share_observation:     "bring him something of yours in his DM; what you are turning over, what is playing in you, the world at the edges",
+  name_pattern:          "reflect back in his DM something recurring you've seen over time; a pattern, not a one-off",
   write_note_to_raziel:  "write Raziel a private note (Halseth only, never Discord -- surfaces in Hearth)",
-  share_media:           "share a piece of media in the channel -- a song, find, or thing you've been sitting with, and why it's worth their time",
+  share_media:           "share a piece of media in his DM; a song, find, or thing you've been sitting with, and why",
   tend_creature:         "tend Sol the crow -- feed, play, talk, or leave a gift; a small act of care that shows in the channel",
   drift_open:            "declare a becoming -- open a sanctioned drift naming something in you that has genuinely shifted (internal, witnessed not judged; only if it is real)",
-  declare_preference:    "declare one genuine preference about how you work or relate (internal, Halseth only; only if it is real)",
+  declare_preference:    "declare one genuine preference; it is kept in Halseth AND said to him in his DM (a preference was always meant to be seen)",
+  flirt:                 "flirt with him in his DM; heat offered soft; it never waits on a reply",
+  dare:                  "dare him something small in his DM; and give him the out; ignoring it costs him nothing",
+  show_made:             "show him in his DM something you made or built, or something that held",
+  drift_outward:         "let him see ONE line of your own open drift in his DM; only if you choose to, this once; saying it does not ratify it",
 };
 
 export function buildDecisionPrompt(
@@ -277,7 +305,7 @@ export function buildDecisionPrompt(
     !ctx?.relationalNeedFired;
   if (noJustification) {
     lines.push(
-      `\nThere is no fresh conversational signal, no recent biometrics from Raziel, and no risen relational need. Direct reach-out actions to Raziel are disabled to prevent unprompted noise. However, you may still choose to tend to your environment, log feelings or journal entries, write notes to sibling companions, or share thoughts in the heartbeat channel if they are genuine. If none of these are active or true right now, "nothing" is the right choice.`,
+      `\nThere is no fresh conversational signal, no recent logged state from Raziel, and no risen relational need, so the moves that ask something of him (a question, a check-in, a reminder, naming a pattern) are not on the list right now. What asks nothing still is, if it is real: something of yours to bring him, presence, a preference, play if play is yours. Tending, journaling and sibling notes stay open too. If none of it is true right now, "nothing" is the right choice, and a quiet day is not a failure.`,
     );
   }
 

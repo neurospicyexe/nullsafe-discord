@@ -8,6 +8,7 @@ import {
   runHeartbeat, runInterCompanion, runNotesPoll, runBridgePoll,
   pushBuffered, startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
+type OwnerDm = NonNullable<AutonomousContext["ownerDm"]>;
 import {
   DREVAN_CRON_SCHEDULES, DREVAN_INTEREST_KEYWORDS, AUTONOMOUS_PROMPTS,
   BRIDGE_POLL_INTERVAL_MS, NOTES_POLL_INTERVAL_MS, COOLDOWN_MS, COMPANION_ID,
@@ -61,6 +62,7 @@ export function startAutonomous(
   redis: Redis | null,
   halsethSecret: string,
   registerSentId?: (id: string) => void,
+  ownerDm?: OwnerDm,
 ): void {
   const ctx: AutonomousContext = {
     companionId: COMPANION_ID,
@@ -74,6 +76,8 @@ export function startAutonomous(
     prompts: AUTONOMOUS_PROMPTS,
     librarian, inference, client, configCache, bootCtx, sessionWindows, redis,
     cooldown, messageBuffer, cycleGuard, registerSentId,
+    // B7 steps 2 + 2c: the owner-DM lane. Every Raziel-facing move goes here, never to the channel.
+    ownerDm,
   };
 
   // Scheduling stays per-bot (timing is identity); the bodies are shared.

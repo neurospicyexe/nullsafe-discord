@@ -10,6 +10,20 @@ import { sealedRecallSources } from "./recall-context.js";
  * generation prompt's menu to identify the object without spending its whole context budget.
  */
 /** A dose due for this companion (Halseth /mind/med/due). `label` is private: DM text only. */
+/** Halseth's read-only preview of the shared triad DM lane (mig 0137, webmind/reach-cap.ts). */
+export interface ReachLaneVerdict {
+  local_date: string;
+  /** Local date the current quiet window started, or null outside the window. */
+  quiet_window: string | null;
+  quiet_presence_taken: boolean;
+  gap_open: boolean;
+  day_count: number;
+  daily_cap: number;
+  daily_cap_care_hold: number;
+  care_count: number;
+  care_ceiling: number;
+}
+
 export interface MedDueDose { slot_key: string; local_date: string; kind: "first" | "followup"; label: string; local_time: string }
 export interface MedDoseKey { slot_key: string; local_date: string; kind: "first" | "followup" }
 /** One dose's state (Halseth /mind/med/today). answered_local null = NO ANSWER, never "not taken". */
@@ -619,7 +633,7 @@ export class LibrarianClient {
   }
 
   /** This companion's OPEN drifts (raw REST; admin/owner auth). [] on any error. */
-  async driftsOpen(): Promise<Array<{ id: string; drift_text: string; opened_at: string }>> {
+  async driftsOpen(): Promise<Array<{ id: string; drift_text: string; opened_at: string; companion_id?: string }>> {
     try {
       const res = await this._fetch(`${this.url}/drifts/${encodeURIComponent(this.companionId)}?status=open`, {
         headers: { "Authorization": `Bearer ${this.secret}` },
@@ -627,7 +641,7 @@ export class LibrarianClient {
       });
       if (!res.ok) return [];
       const data = await res.json() as unknown;
-      return Array.isArray(data) ? data as Array<{ id: string; drift_text: string; opened_at: string }> : [];
+      return Array.isArray(data) ? data as Array<{ id: string; drift_text: string; opened_at: string; companion_id?: string }> : [];
     } catch {
       return [];
     }
@@ -1758,6 +1772,9 @@ export class LibrarianClient {
       last_fired_at: string | null; fire_count_today: number;
     }>;
     quietHours: { active: boolean; in_force: boolean; local_hour: number | null; tz: string } | null;
+    /** The shared triad DM lane (Halseth mig 0137), read-only. null = unknown, which the heartbeat
+     *  reads as CLOSED for DM moves (the atomic reserve would refuse them anyway). */
+    reach: ReachLaneVerdict | null;
   }> {
     try {
       const url = new URL(`${this.url}/mind/metronome/actions/${encodeURIComponent(this.companionId)}/eligible`);
@@ -1766,17 +1783,53 @@ export class LibrarianClient {
         headers: { "Authorization": `Bearer ${this.secret}` },
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) return { actions: [], quietHours: null };
+      if (!res.ok) return { actions: [], quietHours: null, reach: null };
       type MA = { id: string; name: string; action_type: string; target: string | null; prompt: string | null; quiet_hours_allowed: number; status: "on" | "off"; requires_signal: string | null; signal_lookback_hours: number | null; last_fired_at: string | null; fire_count_today: number };
       type QH = { active: boolean; in_force: boolean; local_hour: number | null; tz: string };
-      const data = await res.json() as { actions?: MA[]; quiet_hours?: QH };
+      const data = await res.json() as { actions?: MA[]; quiet_hours?: QH; reach?: ReachLaneVerdict | null };
       const qh = data.quiet_hours;
+      const rv = data.reach;
       return {
         actions: Array.isArray(data.actions) ? data.actions : [],
         quietHours: qh && typeof qh.in_force === "boolean" ? qh : null,
+        reach: rv && typeof rv.gap_open === "boolean" && typeof rv.day_count === "number" ? rv : null,
       };
     } catch {
-      return { actions: [], quietHours: null };
+      return { actions: [], quietHours: null, reach: null };
+    }
+  }
+
+  // ── Shared triad reach cap (Halseth mig 0137, /mind/reach/*) ─────────────────
+  // Direct calls, never ask_librarian. Every proactive DM reserves a slot BEFORE it generates and
+  // hands it back if nothing goes out. All non-throwing: an error reads as "not reserved", so a
+  // Halseth outage produces silence, never an unbounded DM.
+
+  async reachReserve(actionType: string, careHold: boolean): Promise<{ reserved: true; id: number } | { reserved: false; reason: string }> {
+    const r = await this.reachPost<{ reserved?: boolean; id?: number; reason?: string }>("reserve", { action_type: actionType, care_hold: careHold });
+    if (r?.reserved === true && typeof r.id === "number") return { reserved: true, id: r.id };
+    return { reserved: false, reason: r?.reason ?? "unreachable" };
+  }
+
+  async reachDelivered(id: number, path: string): Promise<boolean> {
+    return (await this.reachPost<{ updated?: boolean }>("delivered", { id, path }))?.updated === true;
+  }
+
+  async reachRelease(id: number): Promise<boolean> {
+    return (await this.reachPost<{ released?: boolean }>("release", { id }))?.released === true;
+  }
+
+  private async reachPost<T>(route: "reserve" | "delivered" | "release", body: Record<string, unknown>): Promise<T | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/reach/${route}`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...body, companion_id: this.companionId }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      return await res.json() as T;
+    } catch {
+      return null;
     }
   }
 

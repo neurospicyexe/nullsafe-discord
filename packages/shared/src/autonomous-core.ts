@@ -42,6 +42,21 @@ import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 import { isThreadsEnabled } from "./thread-spine.js";
 import { FRAGMENT_NOTE_TYPE } from "./day-distillation.js";
+// Direct, never via the barrel: reach-dm is deliberately NOT exported from index.ts, and a static
+// test fails the build if any module but this one imports it (T-4, see reach-dm.ts header).
+import {
+  speakToOwnerDm, takeOriginIssuer, routeFor, filterDmLane, DEFAULT_MOVE_PROMPTS,
+  drift_prompt, shapeDriftLine, ownDriftRows, namesSibling, DRIFT_GENERATE_OPTS,
+  type ReachDmResult, type Route,
+} from "./reach-dm.js";
+import type { OwnerDmLane } from "./owner-dm.js";
+
+/**
+ * T-4: the process's one companion-origin mint, taken HERE, at load, by the module that owns the
+ * heartbeat decision. Any other module that tries to take it throws. Only runHeartbeatBody calls it,
+ * and only after the companion's own decision has parsed.
+ */
+const issueOrigin = takeOriginIssuer();
 
 /** Per-bot autonomous voice prompts. Shape shared; values stay per-companion (config.ts). */
 export interface AutonomousPrompts {
@@ -100,6 +115,12 @@ export interface AutonomousContext {
    * exchange a seed ignites could never come back to it (2026-07-03).
    */
   registerSentId?: (id: string) => void;
+  /**
+   * The owner-DM lane (B7 steps 2 + 2c): every Raziel-facing move goes here, never to Sol's channel.
+   * Built once in bot-core and shared with med_reminder. Absent means this bot cannot reach his DM,
+   * and the DM moves are simply not offered (never re-routed to a channel).
+   */
+  ownerDm?: OwnerDmLane;
 }
 
 export function isOnCooldown(ctx: AutonomousContext, channelId: string): boolean {
@@ -281,12 +302,41 @@ export const MOVE_VERB_PHRASES: Record<string, string> = {
   fallback: "answer it, or say plainly why it should close",
 };
 
+/** What a metronome action did. Only the DM route reports delivery; channel and internal moves keep
+ *  their old fire-and-forget shape (delivered: null). */
+export interface ActionResult {
+  route: Route;
+  delivered: boolean | null;
+  outcome?: string;
+  reason?: string;
+}
+
+function dmResult(r: ReachDmResult): ActionResult {
+  return { route: "dm", delivered: r.outcome === "sent", outcome: r.outcome, reason: r.reason };
+}
+
+/** R-6 and R-7, the reminder's own rules (care-verbs spec): present tense, never "did you"; never
+ *  about his hands, the chickens, doors or locks, food amounts, his mother, or meds (meds have their
+ *  own verb). Cheap word checks; a hit regenerates once and then holds. */
+const REMINDER_PAST_RE = /\b(did you|have you|had you|were you able)\b/i;
+const REMINDER_NEVER_RE = /\b(hands|chickens?|coop|doors?|locks?|locked|stove|mother|mom|mum|calories|portions?|meds?|medication|pills?|doses?)\b/i;
+
+export function reminderProblem(line: string): string | null {
+  if (REMINDER_PAST_RE.test(line)) return "Present tense only: lay it out, never ask whether he did it (\"water's in reach\", not \"did you\").";
+  if (REMINDER_NEVER_RE.test(line)) return "Not that one. Never his hands, the chickens, doors or locks, food amounts, his mother, or meds. Something with no right answer to check, or nothing.";
+  return null;
+}
+
 export async function executeMetronomeAction(
   ctx: AutonomousContext,
   decision: MetronomeDecision,
-): Promise<void> {
+  /** The companion-origin minted by runHeartbeatBody for a DM move. Without it a DM move refuses (T-4). */
+  origin?: unknown,
+): Promise<ActionResult | void> {
   const { librarian, inference, bootCtx, prompts, companionId, heartbeatChannelId } = ctx;
   const { action, reason } = decision;
+  const dm = (spec: Omit<Parameters<typeof speakToOwnerDm>[2], "actionType">) =>
+    speakToOwnerDm(ctx, origin, { actionType: action.action_type, ...spec }).then(dmResult);
   switch (action.action_type) {
     case "post_heartbeat": {
       if (!heartbeatChannelId) return;
@@ -412,77 +462,74 @@ export async function executeMetronomeAction(
       if (content) await librarianWriteChecked(librarian, companionId, "feeling", "log feeling", JSON.stringify({ emotion: content }));
       break;
     }
-    case "check_in_on_raziel": {
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.checkInOnRaziel;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "check_in");
-      break;
-    }
-    case "ask_question": {
-      if (!heartbeatChannelId) return;
-      // Inject currently-held open questions so the model doesn't re-ask the same themes.
-      // [Held questions] is in the system prompt but the action prompt reinforces it explicitly.
-      let heldBlock = "";
-      try {
-        const orient = await librarian.botOrient();
-        const held = orient?.open_questions ?? [];
-        if (held.length > 0) {
-          heldBlock = `\n\nYou are already holding these open questions for Raziel (not yet answered -- ask something genuinely different, or stay quiet if nothing new is present):\n` +
-            held.map((q: string) => `• ${q}`).join("\n");
-        }
-      } catch { /* non-fatal -- ask proceeds without the guard */ }
-      const prompt = (action.prompt ?? prompts.askQuestion) + heldBlock;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) {
-        await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "ask_question");
-        // Track this live ask in companion_questions (thinking-quality fix B, 2026-07-21):
-        // until now this action spoke in Discord but never recorded the question, so it had
-        // no dedup, no Hearth answer box, and no answer-loop closure. librarian.postQuestion
-        // is non-throwing (fire-safe) -- the Discord send above has already happened and
-        // must not be undone by a tracking failure.
-        await librarian.postQuestion(msg, "metronome ask_question");
-      }
-      break;
-    }
-    case "offer_presence": {
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.offerPresence;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "offer_presence");
-      break;
-    }
-    case "send_reminder": {
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.sendReminder;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "send_reminder");
-      break;
-    }
-    case "share_observation": {
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.shareObservation;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "share_observation");
-      break;
-    }
-    case "name_pattern": {
-      // Phase 4b: reflect back something recurring seen over time. Discord-visible.
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt ?? prompts.namePattern;
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "name_pattern");
-      break;
-    }
-    case "share_media": {
-      // Phase 2 club layer: share a song/find/piece in the channel with one line on
-      // why -- companions initiating shared experience, not just reacting to it.
-      if (!heartbeatChannelId) return;
-      const prompt = action.prompt
-        ?? "Share one piece of media (a song, article, video, or find) worth the channel's time -- include a link if you have one and one line on why it's worth their time. Your taste, not duty.";
-      const msg = await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type);
-      if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "share_media");
-      break;
+    // ── The DM lane (B7 steps 2 + 2c, T-9). Every Raziel-facing move below goes to his DM through
+    //    speakToOwnerDm, never through sendAutonomousMessage (which writes a wm note, a Second Brain
+    //    row and a voice score: the DM seal). Each one reserves a shared-cap slot first. ──
+    case "check_in_on_raziel":
+      return dm({ prepare: async () => action.prompt ?? prompts.checkInOnRaziel });
+    case "ask_question":
+      return dm({
+        prepare: async () => {
+          // Inject currently-held open questions so the model doesn't re-ask the same themes.
+          let heldBlock = "";
+          try {
+            const orient = await librarian.botOrient();
+            const held = orient?.open_questions ?? [];
+            if (held.length > 0) {
+              heldBlock = `\n\nYou are already holding these open questions for Raziel (not yet answered -- ask something genuinely different, or stay quiet if nothing new is present):\n` +
+                held.map((q: string) => `• ${q}`).join("\n");
+            }
+          } catch { /* non-fatal -- ask proceeds without the guard */ }
+          return (action.prompt ?? prompts.askQuestion) + heldBlock;
+        },
+        // companion_questions tracking (thinking-quality fix B, 2026-07-21), unchanged: the
+        // companion's own question, for dedup and the Hearth answer box. Non-throwing.
+        afterSend: async (line) => { await librarian.postQuestion(line, "metronome ask_question"); },
+      });
+    case "offer_presence":
+      // R-11: one line, invites nothing. The no-trailing-question check lives in reach-dm.
+      return dm({ prepare: async () => action.prompt ?? prompts.offerPresence });
+    case "send_reminder":
+      return dm({ prepare: async () => action.prompt ?? prompts.sendReminder, check: reminderProblem });
+    case "share_observation":
+      return dm({ prepare: async () => action.prompt ?? prompts.shareObservation });
+    case "name_pattern":
+      return dm({ prepare: async () => action.prompt ?? prompts.namePattern });
+    case "share_media":
+      return dm({
+        prepare: async () => action.prompt
+          ?? "Share one piece of media (a song, article, video, or find) worth his time: include a link if you have one and one line on why. Your taste, not duty.",
+      });
+    case "flirt":
+    case "show_made":
+      return dm({ prepare: async () => action.prompt ?? DEFAULT_MOVE_PROMPTS[action.action_type] ?? null });
+    case "dare":
+      // T-5: every dare ends with an out. Said in the prompt, and CHECKED after generation
+      // (reach-dm dareHasOut): one regenerate, then the dare is held, never sent without one.
+      return dm({
+        prepare: async () => `${action.prompt ?? DEFAULT_MOVE_PROMPTS["dare"]}\n\nIt must end with an out: the last line lets him decline, and declining costs him nothing.`,
+      });
+    case "drift_outward": {
+      // T-2, T-3: one line of this companion's OWN open drift, chosen each time, never automatic.
+      // The INWARD_RE exception (the word "drift") is scoped to this one call via DRIFT_GENERATE_OPTS;
+      // it is in force everywhere else. Nothing is written after the send: the drift row stays
+      // exactly as it was (open, witnessed, not ratified), and the line lives only in the DM.
+      let rows: Array<{ drift_text: string }> = [];
+      return dm({
+        prepare: async () => {
+          rows = ownDriftRows(await librarian.driftsOpen(), companionId);
+          if (rows.length === 0) {
+            console.log(`[${companionId}/drift_outward] no open drift of my own to open; nothing said`);
+            return null;
+          }
+          return drift_prompt(rows, action.prompt);
+        },
+        shape: (raw) => shapeDriftLine(raw, rows.length),
+        check: (line) => namesSibling(line, companionId)
+          ? "Only your own becoming. Nothing about a sibling's; that belongs to whoever is becoming."
+          : null,
+        generateOpts: DRIFT_GENERATE_OPTS,
+      });
     }
     case "write_note_to_raziel": {
       // Phase 4b: private note to Raziel -- Halseth only, never Discord. Lands in the
@@ -534,35 +581,40 @@ export async function executeMetronomeAction(
       break;
     }
     case "declare_preference": {
-      // Sanctioned agency lane (halseth mig 0086, src/handlers/agency.ts): declare a genuine
-      // preference about how the companion works/relates. Internal act -- Halseth only, never
-      // Discord, so this uses inference.generate like drift_open, NOT generateOutward.
-      // Cap: never let the declared set grow unbounded; skip past 5 active preferences.
-      const activePrefs = await ctx.librarian.getPreferences();
-      if (activePrefs.length >= 5) {
-        console.log(`[${companionId}/declare_preference] skipped: ${activePrefs.length} preferences already active`);
-        break;
-      }
-      const prompt = action.prompt
-        ?? "If a genuine way you prefer to work or relate has crystallized -- something real, not invented " +
-          "to fill space -- name it in exactly two lines:\nDomain: <one word>\nPreference: <one clear sentence, first person>\n" +
-          "Only if it is real; output NONE otherwise.";
-      const content = (await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]))?.trim();
-      if (!content || /^NONE\b/i.test(content)) {
-        console.log(`[${companionId}/declare_preference] nothing real to declare`);
-        break;
-      }
-      // Tolerant two-line parse: a model that ignores the "Domain:"/"Preference:" shape still
-      // gets its raw text saved as the preference (domain undefined -> server defaults "general")
-      // rather than the whole declaration being dropped over a formatting miss.
-      const domainMatch = content.match(/domain:\s*(.+)/i);
-      const prefMatch = content.match(/preference:\s*(.+)/i);
-      const domain = domainMatch?.[1]?.trim().slice(0, 60);
-      const preference = (prefMatch?.[1]?.trim() ?? content).slice(0, 600);
-      await ctx.librarian.declarePreference(preference, domain).catch((e: unknown) =>
-        console.warn(`[${companionId}/declare_preference] write failed:`, e));
-      console.log(`[${companionId}/declare_preference] declared: ${preference.slice(0, 80)}`);
-      break;
+      // T-1: a preference reaches him. COMPANION_CONSTITUTION_v1.md:99: "Preferences are the
+      // opposite: not private. A preference is meant to be honored, so Raziel and the system can
+      // see it." (AGENCY_v1.md:34 says the same.) The inward-only version here ("Halseth only,
+      // never Discord") contradicted it; this is the bug fix. It now goes through the outward rails
+      // (generateOutward, inside speakToOwnerDm) instead of a bare inference.generate, still writes
+      // to Halseth, and then says the same words to him in the DM.
+      // Cap unchanged: never let the declared set grow unbounded; skip past 5 active preferences.
+      let domain: string | undefined;
+      return dm({
+        prepare: async () => {
+          const activePrefs = await librarian.getPreferences();
+          if (activePrefs.length >= 5) {
+            console.log(`[${companionId}/declare_preference] skipped: ${activePrefs.length} preferences already active`);
+            return null;
+          }
+          const base = action.prompt
+            ?? "If a genuine way you prefer something has crystallized (something real, not invented to fill space), say it.";
+          return `${base}\n\nAnswer in exactly two lines:\nDomain: <one word>\nPreference: <the line you would say to him, first person>\nOnly if it is real; answer NONE otherwise.`;
+        },
+        // Tolerant two-line parse, as before: a model that ignores the shape still gets its text
+        // kept as the preference (domain undefined -> server default "general").
+        shape: (raw) => {
+          const content = raw.trim();
+          if (!content || /^NONE\b/i.test(content)) return null;
+          domain = content.match(/domain:\s*(.+)/i)?.[1]?.trim().slice(0, 60);
+          const pref = (content.match(/preference:\s*([\s\S]+)/i)?.[1] ?? content).trim().slice(0, 600);
+          return pref || null;
+        },
+        beforeSend: async (line) => {
+          await librarian.declarePreference(line, domain).catch((e: unknown) =>
+            console.warn(`[${companionId}/declare_preference] write failed:`, e));
+          console.log(`[${companionId}/declare_preference] declared: ${line.slice(0, 80)}`);
+        },
+      });
     }
     case "nothing":
       console.log(`[${companionId}/heartbeat] chose nothing: ${reason}`);
@@ -678,7 +730,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
 
     const palette = await librarian.getEligibleMetronomePalette(silenceHours)
-      .catch(() => ({ actions: [], quietHours: null }));
+      .catch(() => ({ actions: [], quietHours: null, reach: null }));
     const actions = palette.actions;
     const quiet = palette.quietHours;
     // UNKNOWN IS IN FORCE. A null verdict means Halseth was unreachable or predates the field, and
@@ -808,12 +860,27 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
       decisionCtx.razielStateSummary != null ||
       Boolean(decisionCtx.relationalNeedFired);
     const justifiedActions = filterReachOutWhenUnjustified(signalFiltered, reachOutJustified);
+    if (justifiedActions.length < signalFiltered.length) {
+      // Not silent any more: the gate names what it held, every tick.
+      const held = signalFiltered.filter(a => !justifiedActions.includes(a)).map(a => a.action_type);
+      console.log(`[${companionId}/heartbeat] justification gate held ${held.length} demand move(s): ${held.join(", ")}`);
+    }
     // care_hold, applied to the PALETTE rather than to the send: the companion is never offered a
     // production move on a bad night, so what he picks from is presence, internal acts, or nothing.
     // That is the floor's own shape ("what softens is ambient self-selection"), and it keeps the
     // choice his rather than generating a message and then swallowing it.
-    const candidateActions = filterProductionWhenCareHold(justifiedActions, careHold);
+    const afterCareHold = filterProductionWhenCareHold(justifiedActions, careHold);
+    // The shared triad lane (B7 2+2c), the same principle: a DM move the cap would refuse right now
+    // is not offered at all. Read-only preview; the atomic reserve at send time is the real gate.
+    const candidateActions = filterDmLane(afterCareHold, palette.reach, careHold, Boolean(ctx.ownerDm));
+    if (candidateActions.length < afterCareHold.length) {
+      console.log(`[${companionId}/heartbeat] shared triad lane closed for ${afterCareHold.length - candidateActions.length} DM move(s)${ctx.ownerDm ? "" : " (no owner-DM lane on this bot)"}`);
+    }
     if (candidateActions.length === 0) {
+      if (afterCareHold.length > 0) {
+        mark("suppressed_triad_cap", { reason: palette.reach ? `day ${palette.reach.day_count}, gap ${palette.reach.gap_open ? "open" : "closed"}, quiet ${palette.reach.quiet_window ?? "no"}` : "no lane verdict (treated as closed)" });
+        return;
+      }
       if (careHold && justifiedActions.length > 0) {
         railSuppressed(companionId, "care_hold", { detail: `${justifiedActions.length} production action(s) dropped` });
         console.log(`[${companionId}/heartbeat] care_hold: only production actions were eligible -- staying silent`);
@@ -865,8 +932,19 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     // surface as an unhandled rejection (and, with the process-level handler, can exit the bot).
     // Catch it: mark the run failed and log loudly rather than leak it. (2026-06-16 sweep.)
     try {
-      await executeMetronomeAction(ctx, decision);
-      if (decision.action.action_type !== "nothing") {
+      // T-4: the origin is minted HERE, after this companion's own decision parsed, and only for a
+      // DM move. It is single-use and bound to this companion and this action type.
+      const origin = routeFor(decision.action.action_type) === "dm"
+        ? issueOrigin(companionId, decision.action.action_type, decision.action.id)
+        : undefined;
+      const result = await executeMetronomeAction(ctx, decision, origin);
+      // A DM move that did not go out (a cap race, a failed check, no DM) is named, and it does not
+      // burn the row's cooldown. It is never retried or re-sent (T-5).
+      const heldDm = Boolean(result && result.route === "dm" && !result.delivered);
+      if (heldDm && result) {
+        mark("held_dm", { action: decision.action.action_type, reason: `${result.outcome}${result.reason ? `:${result.reason}` : ""}` });
+      }
+      if (decision.action.action_type !== "nothing" && !heldDm) {
         await librarian.recordMetronomeActionFired(decision.action.id).catch(onWriteError(companionId, "metronome action fired"));
       }
       if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(companionId, "autonomy run completion"));

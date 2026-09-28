@@ -19,7 +19,7 @@
 
 import type { CompanionId } from "./types.js";
 import type { MedDueDose, MedDoseKey } from "./librarian.js";
-import { verbatimCopyOf } from "./echo-guard.js";
+import { isVerbatimRepeat as sharedVerbatimRepeat, cleanOneLiner, isDmBlocked, withTimeout, type OwnerDmTarget } from "./owner-dm.js";
 
 export interface MedApi {
   medDue(): Promise<MedDueDose[] | null>;
@@ -28,14 +28,9 @@ export interface MedApi {
   medRelease(d: MedDoseKey): Promise<boolean>;
 }
 
-/** The owner's DM with this bot, reduced to what the scheduler needs (keeps discord.js out of tests). */
-export interface MedDmTarget {
-  channelId: string;
-  /** Send; resolves to the message id. Throws on failure (the error's `code` is read). */
-  send(content: string): Promise<string>;
-  /** This bot's own recent messages in the DM, newest last. The R-8 pool. */
-  recentOwnTexts(): Promise<string[]>;
-}
+/** The owner's DM with this bot. Since B7 steps 2 + 2c this is the shared owner-DM lane's target
+ *  (owner-dm.ts); the name stays for the 2b call sites and tests. */
+export type MedDmTarget = OwnerDmTarget;
 
 export interface MedSchedulerDeps {
   companionId: CompanionId;
@@ -139,27 +134,11 @@ export function medLineProblem(text: string, label: string): "empty" | "too_long
   return null;
 }
 
-/** Strip the wrappers a model adds around a one-liner (quotes, a "Message:" lead). */
-export function cleanMedLine(raw: string | null | undefined): string {
-  let t = (raw ?? "").trim();
-  t = t.replace(/^(message|dm|reply)\s*:\s*/i, "").trim();
-  if (/^["“].*["”]$/s.test(t)) t = t.slice(1, -1).trim();
-  return t;
-}
+/** Strip the wrappers a model adds around a one-liner (shared with every proactive DM: owner-dm.ts). */
+export const cleanMedLine = cleanOneLiner;
 
-/** R-8 on the autonomous send: exact-after-normalisation against this companion's recent DMs. A
- *  reminder is ~30 chars, far under the reply rail's 120-char floor, so the floor is lifted here;
- *  under 8 words the shingler compares whole normalised strings, which is exactly "verbatim". */
-export function isVerbatimRepeat(text: string, recent: readonly string[]): boolean {
-  return verbatimCopyOf(text, recent.map(t => ({ text: t, label: "self" })), { minChars: 1 }).copied;
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("timeout")), ms);
-    p.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
-  });
-}
+/** R-8 on the autonomous send (shared with every proactive DM: owner-dm.ts). */
+export const isVerbatimRepeat = sharedVerbatimRepeat;
 
 /**
  * Produce the DM text. At most two generations: the second only when the first repeated a recent
@@ -188,11 +167,6 @@ export async function composeMedReminder(
     avoid = [...recent];
   }
   return { text: fallbackMedLine(deps.companionId, dose), path: "fallback:verbatim" };
-}
-
-/** Discord error 50007: "Cannot send messages to this user" (his privacy settings block the DM). */
-function isDmBlocked(e: unknown): boolean {
-  return (e as { code?: number })?.code === 50007;
 }
 
 export interface MedSchedulerState {

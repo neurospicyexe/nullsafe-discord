@@ -91,25 +91,28 @@ describe("buildDecisionPrompt: recent-data justification", () => {
     expect(prompt).toMatch(/Raziel's recent logged state: energy 2\/10, 3 spoons/);
     expect(prompt).toMatch(/offer_presence/);
     // justification present -> no silence nudge
-    expect(prompt).not.toMatch(/Direct reach-out actions to Raziel are disabled/);
+    expect(prompt).not.toMatch(/are not on the list right now/);
   });
 
   test("names the no-justification case so silence is the honest default", () => {
     const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
-    expect(prompt).toMatch(/no fresh conversational signal, no recent biometrics from Raziel, and no risen relational need/);
+    expect(prompt).toMatch(/no fresh conversational signal, no recent logged state from Raziel, and no risen relational need/);
+    // B7 2+2c: it names what is closed (the demand moves) AND what stays open (the invitations).
+    expect(prompt).toMatch(/moves that ask something of him .* are not on the list right now/);
+    expect(prompt).toMatch(/What asks nothing still is/);
     expect(prompt).toMatch(/"nothing" is the right choice/);
   });
 
   test("suppresses the no-justification nudge when a signal is present", () => {
     const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, { detectedSignals: ["overwhelm"] });
-    expect(prompt).not.toMatch(/Direct reach-out actions to Raziel are disabled/);
+    expect(prompt).not.toMatch(/are not on the list right now/);
   });
 
   test("suppresses the no-justification nudge when DISABLE_REACH_OUT_GATE env var is true", () => {
     process.env["DISABLE_REACH_OUT_GATE"] = "true";
     try {
       const prompt = buildDecisionPrompt("cypher", actions, {}, [], 30, {});
-      expect(prompt).not.toMatch(/Direct reach-out actions to Raziel are disabled/);
+      expect(prompt).not.toMatch(/are not on the list right now/);
     } finally {
       delete process.env["DISABLE_REACH_OUT_GATE"];
     }
@@ -132,18 +135,20 @@ describe("filterReachOutWhenUnjustified", () => {
     expect(filterReachOutWhenUnjustified(mixed, true)).toHaveLength(mixed.length);
   });
 
-  test("drops direct reach-out actions when nothing justifies them, keeps commons/internal/nothing", () => {
+  test("drops the DEMAND moves when nothing justifies them; invitations, commons, internal and nothing stay", () => {
     const kept = filterReachOutWhenUnjustified(mixed, false).map(a => a.action_type);
-    expect(kept).toEqual(["post_heartbeat", "write_inter_companion", "write_journal", "nothing"]);
+    // B7 2+2c: share_observation is an invitation now (it asks nothing), and write_note_to_raziel
+    // never reaches Discord, so neither needs the gate. ask_question and name_pattern still do.
+    expect(kept).toEqual(["share_observation", "write_note_to_raziel", "post_heartbeat", "write_inter_companion", "write_journal", "nothing"]);
     // none of the gated reach-out types survive
     for (const t of kept) expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(false);
   });
 
-  test("the gated set covers the seeded direct-to-Raziel actions", () => {
-    for (const t of ["ask_question", "name_pattern", "share_observation", "write_note_to_raziel"]) {
-      expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(true);
+  test("the gated set is exactly the moves that ask something of him", () => {
+    expect([...REACH_OUT_TO_RAZIEL_ACTIONS].sort()).toEqual(["ask_question", "check_in_on_raziel", "name_pattern", "send_reminder"]);
+    for (const t of ["post_heartbeat", "share_observation", "offer_presence", "write_note_to_raziel", "flirt", "dare"]) {
+      expect(REACH_OUT_TO_RAZIEL_ACTIONS.has(t)).toBe(false);
     }
-    expect(REACH_OUT_TO_RAZIEL_ACTIONS.has("post_heartbeat")).toBe(false);
   });
 });
 
