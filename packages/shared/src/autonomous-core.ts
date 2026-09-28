@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, isDemandMove, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, isDemandMove, filterProductionWhenCareHold, isMyHeartbeatWindow, HEARTBEAT_ORDER, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
@@ -719,7 +719,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
   }
   // Stateless clock rotation instead of the frozen house_state.autonomous_turn pointer (which only
   // advanced via the Claude.ai ritual, so it stranded the heartbeat on one companion for days).
-  if (!isMyHeartbeatWindow(companionId, ALL_COMPANIONS)) {
+  if (!isMyHeartbeatWindow(companionId, HEARTBEAT_ORDER)) {
     console.log(`[${companionId}/autonomous] not my heartbeat window, skipping`);
     mark("not_my_window");
     return;

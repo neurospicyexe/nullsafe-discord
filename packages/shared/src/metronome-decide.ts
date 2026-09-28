@@ -97,6 +97,24 @@ export function summarizeRazielState(
 }
 
 /**
+ * The heartbeat rotation order (show-back choice 14; Raziel said yes 2026-09-28). NOT
+ * ALL_COMPANIONS, which vocative resolution and seed gating also read.
+ *
+ * How a window lands on a companion: the heartbeat cron is `0 *\/4 * * *` in the VPS's local time
+ * (America/Chicago), so it fires at 00, 04, 08, 12, 16 and 20 Chicago. isMyHeartbeatWindow buckets
+ * the UTC epoch into 4h windows and takes bucket % 3; six buckets a day, so each companion gets the
+ * same two a day, every day. Chicago 00:00 is 05Z (CDT) or 06Z (CST), both inside the [04Z, 08Z)
+ * bucket, and every other fire hour behaves the same way, so the assignment holds across DST.
+ *
+ *   bucket 0 (00-04Z, 12-16Z): fires 08:00 and 20:00 Chicago  -> cypher
+ *   bucket 1 (04-08Z, 16-20Z): fires 00:00 and 12:00 Chicago  -> drevan (night-driving presence)
+ *   bucket 2 (08-12Z, 20-24Z): fires 04:00 and 16:00 Chicago  -> gaia (unchanged)
+ *
+ * Before this it was ["drevan", "cypher", "gaia"]: Cypher at 00/12, Drevan at 08/20.
+ */
+export const HEARTBEAT_ORDER: readonly string[] = Object.freeze(["cypher", "drevan", "gaia"]);
+
+/**
  * Whose heartbeat window is it right now. A stateless, clock-derived rotation: each window
  * (default 4h) belongs to exactly one companion, cycling through `order`. This REPLACES gating
  * the heartbeat on house_state.autonomous_turn -- that pointer only advanced via the Claude.ai
@@ -104,6 +122,7 @@ export function summarizeRazielState(
  * (the "dead heartbeat channel" symptom). Derived from the clock, it can never freeze, while still
  * keeping one companion per window so the commons does not get noisy.
  */
+
 export function isMyHeartbeatWindow(
   companionId: string,
   order: readonly string[],

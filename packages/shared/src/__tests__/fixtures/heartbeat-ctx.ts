@@ -9,7 +9,7 @@
 import { jest } from "@jest/globals";
 import type { AutonomousContext } from "../../autonomous-core.js";
 import type { ReachLaneVerdict } from "../../librarian.js";
-import { ALL_COMPANIONS } from "../../channel-config.js";
+import { HEARTBEAT_ORDER } from "../../metronome-decide.js";
 
 export const OPEN_LANE: ReachLaneVerdict = {
   local_date: "2026-09-28", quiet_window: null, quiet_presence_taken: false, gap_open: true,
@@ -25,7 +25,7 @@ export function row(action_type: string, name = action_type, prompt: string | nu
 /** Pin Date.now inside `companionId`'s 4-hour heartbeat window (the clock-derived rotation). */
 export function inWindowOf(companionId: string): () => void {
   const W = 4 * 3_600_000;
-  const idx = ALL_COMPANIONS.indexOf(companionId as never);
+  const idx = HEARTBEAT_ORDER.indexOf(companionId);
   const base = Math.floor(Date.now() / (3 * W)) * 3 * W;
   const t = base + idx * W + 60_000;
   const spy = jest.spyOn(Date, "now").mockReturnValue(t);

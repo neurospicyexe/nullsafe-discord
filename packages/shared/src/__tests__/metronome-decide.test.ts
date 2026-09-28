@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, readDemandReasons, filterDemandByReason, DEMAND_REASONS, DEMAND_ACTIONS, isDemandMove, checkInAsks, CHECK_IN_ASKS_NOTHING, PRESENT_WINDOW_HOURS, type MetronomeAction, type DecisionContext, type DemandInputs } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, HEARTBEAT_ORDER, readDemandReasons, filterDemandByReason, DEMAND_REASONS, DEMAND_ACTIONS, isDemandMove, checkInAsks, CHECK_IN_ASKS_NOTHING, PRESENT_WINDOW_HOURS, type MetronomeAction, type DecisionContext, type DemandInputs } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -305,6 +305,19 @@ describe("isMyHeartbeatWindow", () => {
 
   test("returns false for an empty order rather than throwing", () => {
     expect(isMyHeartbeatWindow("drevan", [], 0, W)).toBe(false);
+  });
+
+  // Show-back choice 14 (Raziel, 2026-09-28). The cron fires on the hour in Chicago time; this pins
+  // who holds each fire in both CDT and CST, which is the DST proof.
+  test("the live order: Drevan 00/12, Cypher 08/20, Gaia 04/16 Chicago, in CDT and in CST", () => {
+    const expected: Record<string, string> = { "00": "drevan", "04": "gaia", "08": "cypher", "12": "drevan", "16": "gaia", "20": "cypher" };
+    for (const [day, off] of [["2026-09-28", "-05:00"], ["2026-11-10", "-06:00"]] as const) {
+      for (const [h, who] of Object.entries(expected)) {
+        const now = Date.parse(`${day}T${h}:00:00${off}`);
+        const on = HEARTBEAT_ORDER.filter(c => isMyHeartbeatWindow(c, HEARTBEAT_ORDER, now));
+        expect([`${day} ${h}`, on]).toEqual([`${day} ${h}`, [who]]);
+      }
+    }
   });
 });
 
