@@ -94,7 +94,7 @@ export function railMargin(score: number | undefined, threshold: number | undefi
 // crashed turn are currently the same observable, which is nothing. The justification gate
 // logged nothing per tick, and the readout caught two heartbeats dying on
 // "decision parse failed, skipping" (a shrug, at warn level, indistinguishable from a chosen
-// hold). Until those are separable we cannot say whether the system is exercising judgement or
+// hold; B23 later found most of those WERE chosen holds, lost to a missing `nothing` row). Until those are separable we cannot say whether the system is exercising judgement or
 // quietly broken, and the readout proves both happen.
 //
 // So: exactly ONE line per proactive tick, per companion, naming the outcome and its reason.
@@ -119,7 +119,9 @@ export type HeartbeatOutcome =
   | "suppressed_triad_cap"    // B7 2+2c: every eligible move was a DM move the shared triad lane could not carry now
   | "held_dm"                 // B7 2+2c: a DM move was chosen and did not go out (cap race, a failed check, no DM); never re-sent
   | "suppressed_reach_dm_off" // REACH_DM is off and every eligible move was a DM move; NOT the same event as a closed lane
-  | "parse_failed"            // the decision object could not be read; this is a DEFECT
+  | "decision_unparsed"       // B23: no decision could be read, even after the one re-ask; a DEFECT (was `parse_failed`)
+  | "chose_unoffered"         // B23: a well-formed pick of a move not offered right now, after the re-ask; never run
+  | "no_reply"                // B23: the decision call got no text at all (every provider failed); not re-asked
   | "error";                  // the action threw
 
 export interface HeartbeatTickInfo {
@@ -132,6 +134,10 @@ export interface HeartbeatTickInfo {
   tz?: string;
   /** REACH_DM off: how many DM moves the switch removed from this tick's palette (emitted as `dm_moves_off`). */
   dmMovesOff?: number;
+  /** B23: the decision needed its one re-ask, and whether that re-ask produced a readable choice. */
+  retry?: "recovered" | "unrecovered";
+  /** B23: why the first reply was re-asked (emitted as `retry_cause`). */
+  retryCause?: "unparsed" | "unoffered";
 }
 
 /**
@@ -149,6 +155,8 @@ export function heartbeatTick(companionId: string, outcome: HeartbeatOutcome, in
       ...(typeof info.localHour === "number" ? { hour: info.localHour } : {}),
       ...(info.tz ? { tz: info.tz } : {}),
       ...(typeof info.dmMovesOff === "number" && info.dmMovesOff > 0 ? { dm_moves_off: info.dmMovesOff } : {}),
+      ...(info.retry ? { retry: info.retry } : {}),
+      ...(info.retryCause ? { retry_cause: info.retryCause } : {}),
       at: new Date().toISOString(),
     };
     console.log(`[tick] ${JSON.stringify(payload)}`);

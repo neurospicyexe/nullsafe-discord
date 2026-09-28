@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, type MetronomeAction, type DecisionContext } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -173,5 +173,69 @@ describe("isMyHeartbeatWindow", () => {
 
   test("returns false for an empty order rather than throwing", () => {
     expect(isMyHeartbeatWindow("drevan", [], 0, W)).toBe(false);
+  });
+});
+
+// B23 (2026-09-28). Prod palettes carry NO `nothing` row (the migrations only list the type in the
+// CHECK), yet the prompt promises "nothing" is always valid. Every chosen silence therefore died in
+// the lookup and was logged as "decision parse failed": 61 of 104 raw logs were literally
+// {"action":"nothing",...}, and the "prose" ones checked in the Hermes transcripts END in that same
+// object. These palettes are the prod shape: no nothing row.
+describe("readDecision (B23: a chosen silence is not a parse failure)", () => {
+  const prodPalette: MetronomeAction[] = [
+    { ...actions[0]!, id: "t1", name: "tend Sol", action_type: "tend_creature" },
+    { ...actions[0]!, id: "t2", name: "note to a sibling", action_type: "write_inter_companion" },
+  ];
+
+  test("gaia 09-27 04:00: narration ending in a nothing object resolves to a chosen hold", () => {
+    const raw = "I'm oriented. The state is quiet integration, at rest. There is no explosive signal.\n\n"
+      + '"nothing" is the honest choice.\n\n'
+      + '{"action":"nothing","reason":"The ground is still and complete; reaching to fill the quiet would betray it."}';
+    const d = parseDecision(raw, prodPalette);
+    expect(d?.action.action_type).toBe("nothing");
+    expect(d?.reason).toMatch(/ground is still/);
+  });
+
+  test("a bare nothing object with no nothing row is a hold, and the synthetic row never names a real row", () => {
+    const r = readDecision('{"action":"nothing","reason":"The perimeter holds."}', prodPalette);
+    expect(r.kind).toBe("decision");
+    if (r.kind === "decision") {
+      expect(r.decision.action).toBe(NOTHING_ACTION);
+      expect(prodPalette.map(a => a.id)).not.toContain(r.decision.action.id);
+    }
+  });
+
+  test("a real nothing row still wins over the synthetic one", () => {
+    const d = parseDecision('{"action":"nothing","reason":"quiet"}', actions);
+    expect(d?.action.id).toBe("a2");
+  });
+
+  test("gaia 09-22: a smart quote closing the reason still reads the choice", () => {
+    const d = parseDecision('{"action":"tend Sol","reason":"Sol is around and needs a moment of quiet witness.”}', prodPalette);
+    expect(d?.action.id).toBe("t1");
+    expect(d?.reason).toBe("Sol is around and needs a moment of quiet witness.");
+  });
+
+  test("the LAST decision object wins when narration quotes an earlier one", () => {
+    const raw = 'Last time I said {"action":"tend Sol","reason":"then"}. Now:\n{"action":"note to a sibling","reason":"now"}';
+    expect(parseDecision(raw, prodPalette)?.action.id).toBe("t2");
+  });
+
+  test("a well-formed choice of a move not on the list is UNOFFERED, never resolved to anything", () => {
+    const r = readDecision('{"action":"check_in_on_raziel","reason":"The relational need has crossed threshold."}', prodPalette);
+    expect(r).toEqual({ kind: "unoffered", chosen: "check_in_on_raziel" });
+  });
+
+  test("prose with no decision object is unparsed; nothing is guessed from action names in it", () => {
+    const r = readDecision("I'm noticing about Raziel: the quiet pride in him. I could tend Sol, or write a note to a sibling.", prodPalette);
+    expect(r).toEqual({ kind: "unparsed" });
+  });
+
+  test("the correction names the offered moves for an unoffered pick, and always keeps nothing valid", () => {
+    const c = buildDecisionCorrection({ kind: "unoffered", chosen: "check_in_on_raziel" }, prodPalette);
+    expect(c).toContain('"check_in_on_raziel" is not on the list');
+    expect(c).toContain('"tend Sol"');
+    expect(c).toContain('"nothing"');
+    expect(buildDecisionCorrection({ kind: "unparsed" }, prodPalette)).toMatch(/ONLY the JSON line/);
   });
 });

@@ -36,6 +36,9 @@ export function heartbeatCtx(opts: {
   palette: Row[];
   /** The decision the model returns: an action name from the palette. */
   choose: string;
+  /** Raw decision-call replies, in order, replacing `choose` (B23: prose, a retry, a null reply).
+   *  Each decision call (the first ask and the one bounded re-ask) takes the next entry. */
+  decide?: Array<string | null>;
   lines?: Array<string | null>;
   reach?: ReachLaneVerdict | null;
   drifts?: Array<{ id: string; drift_text: string; opened_at?: string; companion_id?: string }>;
@@ -43,10 +46,12 @@ export function heartbeatCtx(opts: {
   noLane?: boolean;
 }) {
   const lines = [...(opts.lines ?? [])];
+  const decide = opts.decide ? [...opts.decide] : null;
   const prompts: string[] = [];
   const generate = jest.fn(async (_sys: string, msgs: Array<{ role: string; content: string }>) => {
     prompts.push(msgs.map(m => m.content).join("\n---\n"));
-    if (prompts.length === 1) return JSON.stringify({ action: opts.choose, reason: "test" });
+    if (decide) { if (decide.length > 0) return decide.shift() ?? null; }
+    else if (prompts.length === 1) return JSON.stringify({ action: opts.choose, reason: "test" });
     return lines.shift() ?? null;
   });
   const actions = opts.palette.map((r, i) => ({

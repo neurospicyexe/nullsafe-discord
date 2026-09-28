@@ -323,27 +323,97 @@ export function buildDecisionPrompt(
   return lines.join("\n");
 }
 
+/**
+ * The built-in hold (B23, 2026-09-28). The prompt says "nothing" is ALWAYS a valid choice, but no
+ * migration seeds a `nothing` row (0064 onward list the type in the CHECK only), so no prod palette
+ * has one. Every chosen silence then died in the row lookup and was logged as "decision parse
+ * failed": 61 of 104 logged failures were literally {"action":"nothing",...}, and the "prose" ones
+ * pulled from the Hermes transcripts end in that same object. The parser now keeps the prompt's
+ * promise. The id is not a Halseth row and never reaches one: runHeartbeat skips
+ * recordMetronomeActionFired for `nothing`, and routeFor("nothing") is internal.
+ */
+export const NOTHING_ACTION: MetronomeAction = Object.freeze({
+  id: "builtin:nothing", name: "nothing", action_type: "nothing", target: null, prompt: null,
+  quiet_hours_allowed: 1, status: "on", requires_signal: null, signal_lookback_hours: null,
+  last_fired_at: null, fire_count_today: 0,
+});
+
+/**
+ * What a decision reply says, read without guessing (B23).
+ *   decision  -- a choice of an offered row (or the built-in hold);
+ *   unoffered -- a well-formed choice of a move NOT on the list right now (the gate or the DM lane
+ *                removed it; the relational-need nudge names check_in_on_raziel / offer_presence even
+ *                when they are filtered out). It is never run and never mapped to something else;
+ *   unparsed  -- no decision object could be read.
+ * Only `nothing` is ever resolved without a row. Nothing is inferred from action names in prose.
+ */
+export type DecisionRead =
+  | { kind: "decision"; decision: MetronomeDecision }
+  | { kind: "unoffered"; chosen: string }
+  | { kind: "unparsed" };
+
+/** The decision fields, from the LAST decision object in the reply (the agent narrates first). */
+function extractDecisionFields(raw: string): { action: string; reason: string } | null {
+  const fields = (o: Record<string, unknown> | null) =>
+    o && typeof o.action === "string" && typeof o.reason === "string" ? { action: o.action, reason: o.reason } : null;
+  // Flat objects that carry "action", newest last; a narration can quote an earlier one.
+  const flat = raw.match(/\{[^{}]*"action"[^{}]*\}/g) ?? [];
+  for (let i = flat.length - 1; i >= 0; i--) {
+    const f = fields(extractJson(flat[i]!));
+    if (f) return f;
+  }
+  // Greedy first-{...}-block extraction handles nested braces inside the reason text that the flat
+  // regex can't. Truncated JSON still yields null.
+  const greedy = fields(extractJson(raw));
+  if (greedy) return greedy;
+  // Last resort: a typographic quote closing a field (gaia 09-22: `...witness.”}`) is invalid JSON.
+  // Read the two fields directly, and only when BOTH close, so a max_tokens cut still yields null.
+  // Curly quotes are not blanket-replaced: reason text legitimately contains them.
+  const actions = [...raw.matchAll(/"action"\s*:\s*["“]([^"”\n]{1,80})["”]/g)];
+  const reasons = [...raw.matchAll(/"reason"\s*:\s*["“]([^\n]*?)["”]\s*\}/g)];
+  const a = actions.at(-1)?.[1], r = reasons.at(-1)?.[1];
+  return a && r !== undefined ? { action: a, reason: r } : null;
+}
+
+export function readDecision(raw: string, actions: MetronomeAction[]): DecisionRead {
+  try {
+    const f = extractDecisionFields(raw);
+    if (!f) return { kind: "unparsed" };
+    const said = f.action.trim();
+    const norm = said.toLowerCase();
+    const action = actions.find(a => a.name === said)
+                ?? actions.find(a => a.action_type === said)
+                ?? actions.find(a => a.name.trim().toLowerCase() === norm || a.action_type.toLowerCase() === norm)
+                ?? (norm === "nothing" ? NOTHING_ACTION : undefined);
+    if (!action) return { kind: "unoffered", chosen: said.slice(0, 40) };
+    return { kind: "decision", decision: { action, reason: f.reason } };
+  } catch {
+    return { kind: "unparsed" };
+  }
+}
+
 export function parseDecision(
   raw: string,
   actions: MetronomeAction[],
 ): MetronomeDecision | null {
-  try {
-    const match = raw.match(/\{[^{}]*"action"[^{}]*"reason"[^{}]*\}/s)
-               ?? raw.match(/\{[^{}]+\}/);
-    // Fallback: greedy first-{...}-block extraction handles nested braces inside the
-    // reason text that the flat regexes above can't. Truncated JSON still yields null.
-    const parsed = (match ? extractJson(match[0]) : null) ?? extractJson(raw);
-    if (parsed === null) return null;
-    if (typeof parsed.action !== "string" || typeof parsed.reason !== "string") return null;
+  const r = readDecision(raw, actions);
+  return r.kind === "decision" ? r.decision : null;
+}
 
-    const action = actions.find(a => a.name === parsed.action)
-                ?? actions.find(a => a.action_type === parsed.action);
-    if (!action) return null;
-
-    return { action, reason: parsed.reason };
-  } catch {
-    return null;
+/**
+ * The ONE re-ask's correction (B23). Short, names what went wrong, restates the shape, keeps
+ * "nothing" valid so the retry never pressures a move. An unoffered pick hears that it cannot run
+ * and which moves can; nothing is chosen for the companion.
+ */
+export function buildDecisionCorrection(read: Exclude<DecisionRead, { kind: "decision" }>, actions: MetronomeAction[]): string {
+  const shape = `{"action":"<exact action name from the list>","reason":"<one sentence why>"}`;
+  if (read.kind === "unoffered") {
+    const names = actions.map(a => `"${a.name}"`).join(", ");
+    return `"${read.chosen}" is not on the list of actions available right now, so it cannot run. `
+      + `Choose again from the list (${names}) or "nothing", and answer with ONLY the JSON line:\n${shape}`;
   }
+  return `I could not find a decision in that reply. Answer again with ONLY the JSON line, nothing before or after it:\n`
+    + `${shape}\n"nothing" is always a valid choice.`;
 }
 
 /** Extract signal keywords present in a block of text.

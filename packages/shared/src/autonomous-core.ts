@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  parseDecision, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, filterReachOutWhenUnjustified, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
@@ -28,7 +28,7 @@ import {
   INTER_SEED_HISTORY_N, stripSiblingVocative, seedThreadTtlMs,
   seedVocativeAllowed, countBotMsgsSinceHuman, assertWriteAck,
   extractJson, rawPreview,
-  type HeartbeatTemperature, type MetronomeDecision, type DecisionContext,
+  type HeartbeatTemperature, type MetronomeDecision, type DecisionContext, type ChatMessage,
   type LibrarianClient, type InferenceAdapter, type ChannelConfigCache,
   type BootContext, type ChannelEntry, type Redis, type CompanionId,
 } from "./index.js";
@@ -916,21 +916,51 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     // narrates before/around the JSON, and the default cap truncated the object mid-field
     // ("decision parse failed" with valid-looking-but-cut JSON in the raw log, gaia 06-30/07-01).
     // A ceiling never forces length -- the model stops when the thought is done.
+    const decisionMessages: ChatMessage[] = [{ role: "user", content: decisionPrompt }];
     const rawDecision = await inference.generate(
       bootCtx.systemPrompt,
-      [{ role: "user", content: decisionPrompt }],
+      decisionMessages,
       undefined,
       HEARTBEAT_DECISION_MAX_TOKENS,
     );
-    const decision = rawDecision ? parseDecision(rawDecision, candidateActions) : null;
-
-    if (!decision) {
-      // console.error, not warn (B7 step 1): this is a DEFECT, not a shrug. The 09-27 readout
-      // found two heartbeats dying here and it read as ordinary quiet. Control flow unchanged.
-      console.error(`[${companionId}/heartbeat] decision parse failed, skipping -- raw: ${String(rawDecision).slice(0, 120)}`);
-      mark("parse_failed", { reason: String(rawDecision).slice(0, 120) });
+    if (!rawDecision) {
+      // Every provider failed (27 of the 104 pre-B23 "parse failures" were this, raw: null). An
+      // outage, not a format problem, so a correction would not help and the resilience chain has
+      // already been walked: no re-ask.
+      console.error(`[${companionId}/heartbeat] decision call got no reply, skipping`);
+      mark("no_reply");
       return;
     }
+    let read = readDecision(rawDecision, candidateActions);
+    if (read.kind !== "decision") {
+      // B23: ONE bounded re-ask with a short correction, through the same adapter, prompt and
+      // ceiling. Still unreadable, the tick is a no-op with a countable outcome; never a guessed move.
+      const cause = read.kind;
+      console.warn(`[${companionId}/heartbeat] decision ${cause}${read.kind === "unoffered" ? ` ("${read.chosen}")` : ""}, re-asking once -- raw: ${rawPreview(rawDecision)}`);
+      const retryRaw = await inference.generate(
+        bootCtx.systemPrompt,
+        [...decisionMessages, { role: "assistant", content: rawDecision.slice(0, 4000) }, { role: "user", content: buildDecisionCorrection(read, candidateActions) }],
+        undefined,
+        HEARTBEAT_DECISION_MAX_TOKENS,
+      ).catch(() => null);
+      const reread = retryRaw ? readDecision(retryRaw, candidateActions) : read;
+      if (reread.kind !== "decision") {
+        const last = retryRaw ?? rawDecision;
+        if (reread.kind === "unoffered") {
+          // The gate or the DM lane removed this move; it is not run and not swapped for another.
+          console.warn(`[${companionId}/heartbeat] chose "${reread.chosen}", which is not offered right now (retry unrecovered), skipping`);
+          mark("chose_unoffered", { action: reread.chosen, reason: rawPreview(last), retry: "unrecovered", retryCause: cause });
+        } else {
+          // console.error, not warn (B7 step 1): this is a DEFECT, not a shrug.
+          console.error(`[${companionId}/heartbeat] decision parse failed (retry unrecovered), skipping -- raw: ${rawPreview(last)}`);
+          mark("decision_unparsed", { reason: rawPreview(last), retry: "unrecovered", retryCause: cause });
+        }
+        return;
+      }
+      mark(null, { retry: "recovered", retryCause: cause });
+      read = reread;
+    }
+    const decision = read.decision;
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
     // A chosen silence is a SUCCESS and is recorded as one; it is the outcome Cadence's design
     // calls first-class and ours could not previously distinguish from a crash.
