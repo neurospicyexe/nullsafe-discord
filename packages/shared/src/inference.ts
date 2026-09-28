@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChatMessage } from "./types.js";
 import type { InferenceProvider } from "./models.js";
 
@@ -182,6 +183,71 @@ function toApiMessage(m: ChatMessage): { role: string; content: string } {
  * `null`, so an empty-but-non-null string would be delivered to Discord as silence.
  */
 const DEEPSEEK_REASONING_HEADROOM = 3000;
+// ── Token accounting for the DIRECT lanes (B22, 2026-09-28) ──────────────────────────────────
+//
+// The Hermes gateway writes its own token counts to state.db. The bot-side DIRECT calls (judges,
+// consolidation narrator, day-distill clerk, med reminder, reach ask) went straight to DeepInfra /
+// DeepSeek and logged nothing but "[inference] deepinfra responded": 83 calls a day whose spend
+// was invisible (readout 2026-09-27). Every 2xx body from those two adapters now prints ONE line:
+//
+//   [inference:usage] provider=deepinfra model=<id> caller=<label|-> in=N out=N cached=N reasoning=N cost=<usd|->
+//
+// in = prompt_tokens (INCLUDES cached), out = completion_tokens (INCLUDES reasoning), cached =
+// the cached subset of `in` (OpenAI `prompt_tokens_details.cached_tokens`, or DeepSeek's
+// `prompt_cache_hit_tokens`), cost = the provider's own `usage.estimated_cost` when it sends one.
+// A 2xx with no `usage` object prints `usage=absent`, so the line count still equals the call
+// count. NEVER any prompt or completion text: counts and ids only.
+//
+// caller: set by wrapping an adapter with `withCaller(adapter, "judge")`. It rides
+// AsyncLocalStorage, so the InferenceAdapter interface is unchanged and an unwrapped caller just
+// logs `caller=-`.
+
+export const USAGE_TAG = "[inference:usage]";
+
+const inferenceCaller = new AsyncLocalStorage<string>();
+
+/** Wrap an adapter so every call made through it is attributed to `caller` in the usage line.
+ * Null/undefined pass through untouched, so `withCaller(directAdapter, "x") ?? fallback` works. */
+export function withCaller<T extends InferenceAdapter | null | undefined>(adapter: T, caller: string): T {
+  if (!adapter) return adapter;
+  const inner: InferenceAdapter = adapter;
+  const label = caller.replace(/[^A-Za-z0-9_.:-]/g, "_").slice(0, 40) || "-";
+  const wrapped: InferenceAdapter = {
+    generate: (...args: Parameters<InferenceAdapter["generate"]>) => inferenceCaller.run(label, () => inner.generate(...args)),
+  };
+  return wrapped as T;
+}
+
+/** The caller label in effect for the current async context, or undefined. Exported for tests. */
+export function currentInferenceCaller(): string | undefined {
+  return inferenceCaller.getStore();
+}
+
+export interface ApiUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number } | null;
+  prompt_cache_hit_tokens?: number;
+  completion_tokens_details?: { reasoning_tokens?: number } | null;
+  estimated_cost?: number;
+}
+
+const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? Math.round(v) : 0);
+
+/** Pure formatter for the usage line (tested directly). */
+export function formatUsageLine(provider: string, model: string, usage: ApiUsage | null | undefined, caller?: string): string {
+  const head = `${USAGE_TAG} provider=${provider} model=${model} caller=${caller ?? "-"}`;
+  if (!usage || typeof usage !== "object") return `${head} usage=absent`;
+  const cached = count(usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens);
+  const reasoning = count(usage.completion_tokens_details?.reasoning_tokens);
+  const cost = typeof usage.estimated_cost === "number" && Number.isFinite(usage.estimated_cost) ? String(usage.estimated_cost) : "-";
+  return `${head} in=${count(usage.prompt_tokens)} out=${count(usage.completion_tokens)} cached=${cached} reasoning=${reasoning} cost=${cost}`;
+}
+
+function logUsage(provider: string, model: string, usage: ApiUsage | null | undefined): void {
+  console.log(formatUsageLine(provider, model, usage, inferenceCaller.getStore()));
+}
+
 const isDeepSeekReasoningModel = (m: string): boolean => /^deepseek-(v[4-9]|r)/i.test(m.trim());
 
 // Exported for the consolidation narrator, which must NOT go through buildAdapter: the bots run
@@ -227,8 +293,9 @@ export class DeepSeekAdapter implements InferenceAdapter {
         }
         const data = await res.json() as {
           choices: Array<{ message: { content?: string }; finish_reason?: string }>;
-          usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+          usage?: ApiUsage;
         };
+        logUsage("deepseek", this.model, data.usage);
         const content = data.choices[0]?.message?.content ?? null;
         // Return null, not "", when the reasoning pass consumed the whole budget: null is what
         // makes buildAdapter's resilience tail fall through to the next provider instead of
@@ -700,8 +767,9 @@ export class DeepInfraAdapter implements InferenceAdapter {
       }
       const data = await res.json() as {
         choices: Array<{ message: { content?: string }; finish_reason?: string }>;
-        usage?: { completion_tokens_details?: { reasoning_tokens?: number } };
+        usage?: ApiUsage;
       };
+      logUsage("deepinfra", this.model, data.usage);
       const content = data.choices[0]?.message?.content ?? null;
       // Same rule as DeepSeekAdapter: null (never "") so the resilience tail falls through
       // instead of handing Discord an empty message.

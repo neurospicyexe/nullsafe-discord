@@ -39,7 +39,7 @@ import {
   NEW_THREAD_GAP_MS, COMPANION_CHAIN_LIMIT, MAX_BOT_RESPONSES_PER_HUMAN,
   BOT_PINGPONG_MAX, BOT_LOOP_COOLDOWN_MS,
   countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
-  inferTemperature, createAdapter, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
+  inferTemperature, createAdapter, withCaller, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK, closeBidLine,
@@ -1409,7 +1409,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const relevant = await judgeAmbientRelevance(
         effectiveContent,
         COMPANION_ID,
-        (sys, msgs) => (directAdapter ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
+        (sys, msgs) => (withCaller(directAdapter, "ambient-judge") ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
     } else if (!isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
@@ -1821,7 +1821,7 @@ ${widened}`;
         // direct lane is pinned and does not follow the Hermes model lever, so after a lever
         // switch the reach is decided by Flash while the reply comes from the new model. No
         // direct key => Hermes, exactly as before.
-        adapter: directAdapter ?? deps.adapterRef.current,
+        adapter: withCaller(directAdapter, "reach-ask") ?? deps.adapterRef.current,
         identityPrompt: directAdapter ? bootCtx.systemPrompt : undefined,
         librarian,
       });
@@ -2620,7 +2620,7 @@ ${widened}`;
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL && !dmSealed) {
       distillationCounter.set(message.channelId, 0);
-      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName, COMPANION_ID, directAdapter).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
+      runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName, COMPANION_ID, withCaller(directAdapter, "distill")).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
 
     // Conversation pulse: every 4 turns, write the raw exchange to wm_note so Claude.ai
@@ -2660,7 +2660,7 @@ ${widened}`;
       assistantResponse: response,
       channelId: message.channelId,
       messageId: message.id,
-      inference: directAdapter ?? adapterRef.current,
+      inference: withCaller(directAdapter, "writeback") ?? adapterRef.current,
       librarian,
       enqueue: (label, fn) => writeQueue.fireAndForget(label, fn, { maxAgeMs: APPEND_MAX_AGE_MS }),
     }).catch((e) => console.error(`[${COMPANION_ID}] judgeWriteback failed:`, e));

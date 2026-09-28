@@ -18,7 +18,7 @@ import {
   CONSOLIDATION_IDLE_MINUTES,
 } from "./config.js";
 import {
-  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession, createDirectAdapter,
+  getLastActivityMs, isIdle, isConsolidated, markConsolidated, consolidateSession, createDirectAdapter, withCaller,
 } from "@nullsafe/shared";
 
 // Built once, not per tick: the adapter is stateless and rebuilding it every 5 minutes would only
@@ -30,7 +30,7 @@ import {
 let narratorBuilt = false;
 let narratorRef: InferenceAdapter | null = null;
 function getNarrator(): InferenceAdapter | null {
-  if (!narratorBuilt) { narratorRef = createDirectAdapter(); narratorBuilt = true; }
+  if (!narratorBuilt) { narratorRef = withCaller(createDirectAdapter(), "narrator"); narratorBuilt = true; }
   return narratorRef;
 }
 

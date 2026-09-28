@@ -20,7 +20,7 @@ import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
 import { ledgerClerkAdapterWarning } from "./ledger-clerk.js";
-import { createAdapter, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
+import { createAdapter, withCaller, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { createDirectAdapter, directChainNames } from "./direct-inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
 import { readHermesModelKeys, selectableModels, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
@@ -573,7 +573,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       } catch (e) {
         console.warn(`[${companionId}] watch-party freshness check failed (non-fatal):`, e instanceof Error ? e.message : String(e));
       }
-      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }, directAdapter).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
+      const p = distillSessionOnInactive(channelId, stmStore, librarian, adapterRef.current, writeQueue, { companionId, synthesisPrompt, sessionExtractPrompt }, withCaller(directAdapter, "session-distill")).catch((e) => console.error(`[${companionId}] distillSessionOnInactive failed:`, e));
       pendingClosures.add(p);
       p.finally(() => pendingClosures.delete(p));
     },
@@ -623,7 +623,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // CDT: after evening closures flush, before Layer B autonomous time at 01:30).
   const dayDistillHour = parseInt(process.env["DAY_DISTILL_UTC_HOUR"] ?? "6", 10);
   const dayDistillInterval = scheduleDayDistillation(
-    { companionId, librarian, adapter: () => adapterRef.current, clerk: () => directAdapter },
+    { companionId, librarian, adapter: () => adapterRef.current, clerk: () => withCaller(directAdapter, "day-distill") },
     Number.isFinite(dayDistillHour) ? dayDistillHour : 6,
   );
 
@@ -670,7 +670,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         resolveDm: ownerDmLane.resolve,
         // Tool-less direct adapter first: a one-line DM must not ride the Hermes agent (tool
         // runaways, and an aborted call orphans its answer). Same identity prompt either way.
-        generate: (system, prompt) => (directAdapter ?? adapterRef.current).generate(system, [{ role: "user", content: prompt }], 0.8),
+        generate: (system, prompt) => (withCaller(directAdapter, "med-reminder") ?? adapterRef.current).generate(system, [{ role: "user", content: prompt }], 0.8),
         systemPrompt: () => bootCtx.systemPrompt,
         genTimeoutMs: medGenTimeoutMs(),
         onSent: ownerDmLane.onSent,

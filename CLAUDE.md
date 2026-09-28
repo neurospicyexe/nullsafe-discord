@@ -35,6 +35,10 @@ nullsafe-discord/
   weights, `deepseek-ai/DeepSeek-V4-Flash-0731`). Direct DeepSeek (api.deepseek.com) is a ~$10
   EMERGENCY lane only, and every fall onto it logs `[inference] FELL BACK to direct DeepSeek`.
   Worker precedence: `WORKER_INFERENCE_*` > `DEEPINFRA_API_KEY` > `DEEPSEEK_API_KEY` (config.ts).
+- **Direct-lane token accounting (B22, 2026-09-28):** every 2xx from `DeepInfraAdapter` /
+  `DeepSeekAdapter` prints one `[inference:usage] provider= model= caller= in= out= cached=
+  reasoning= cost=` line (counts only, never text). Label a call site with
+  `withCaller(adapter, "name")`. Tally: `node scripts/direct-usage-report.mjs [--days N] [--by caller]`.
 - **Last-resort tail:** Kimi / Groq / LM Studio / Ollama
 - Claude Max is NOT used for bot inference (ToS-clean separation -- Max stays for human-present sessions)
 
