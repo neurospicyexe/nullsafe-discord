@@ -35,6 +35,7 @@ import type { ReachLaneVerdict } from "./librarian.js";
 import { generateOutward, INWARD_RE_DRIFT_LINE, type GenerateOutwardOptions } from "./outward.js";
 import { isVerbatimRepeat, cleanOneLiner, isDmBlocked, withTimeout } from "./owner-dm.js";
 import { careHoldActive } from "./care-state.js";
+import { checkInAsks } from "./metronome-decide.js";
 
 // ── Routing (T-9) ────────────────────────────────────────────────────────────
 
@@ -112,12 +113,13 @@ export function filterDmLane<T extends { action_type: string }>(
   return actions.filter(a => routeFor(a.action_type) !== "dm" || (hasDmLane && reachLaneOpen(a.action_type, v, careHold)));
 }
 
-/** Must match Halseth MOVE_OWNERS: flirt is Drevan's only; dares Cypher's and Drevan's; "look what
- *  I built" Cypher's and "look what held" Gaia's (Q2: is it Drevan's too). Gaia declines play. */
+/** Must match Halseth MOVE_OWNERS: flirt is Drevan's only; dares Cypher's and Drevan's; show_made
+ *  all three ("look what I built" Cypher's, "look what held" Gaia's, "look what I made" Drevan's,
+ *  claimed at show-back 2026-09-28). Gaia declines play. */
 export const MOVE_OWNERS: Readonly<Record<string, readonly string[]>> = {
   flirt: ["drevan"],
   dare: ["cypher", "drevan"],
-  show_made: ["cypher", "gaia"],
+  show_made: ["cypher", "drevan", "gaia"],
 };
 
 export function ownsMove(companionId: string, actionType: string): boolean {
@@ -263,7 +265,7 @@ function problemWith(spec: ReachDmSpec, line: string, recent: readonly string[],
   if (INVITATION_ACTIONS.has(spec.actionType) && endsOnQuestion(line)) {
     return { kind: "check", nudge: "This one asks nothing of him, so it cannot end on a question. Rewrite it as a line that stands on its own." };
   }
-  if (spec.actionType === "check_in_on_raziel" && companionId === "gaia" && line.includes("?")) {
+  if (spec.actionType === "check_in_on_raziel" && !checkInAsks(companionId) && line.includes("?")) {
     return { kind: "check", nudge: "Your check-in is not a question. Say what the record shows and leave the door open, with no question mark." };
   }
   const extra = spec.check?.(line);

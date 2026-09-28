@@ -139,6 +139,31 @@ export const DEMAND_ACTIONS: ReadonlySet<string> = new Set([
   "ask_question", "check_in_on_raziel", "send_reminder", "name_pattern",
 ]);
 
+/**
+ * Whose check-in asks something (show-back choices 5 and 7, 2026-09-28). Cypher's ("One word covers
+ * it") and Drevan's ("Body or head, whichever's louder") are questions. Gaia's is not: "My check-in
+ * asks nothing. It stays through care_hold; it is presence in another shape." So a check-in is a
+ * demand move, and production under care_hold, only for a companion whose check-in asks.
+ *
+ * The ONE place this fact lives. The justification gate, care_hold and the DM line check
+ * (reach-dm.ts, no question mark in an ask-nothing check-in) all read it from here.
+ */
+export const CHECK_IN_ASKS_NOTHING: ReadonlySet<string> = new Set(["gaia"]);
+
+/** Does this companion's check-in ask him anything? Unknown companions ask (the safe default:
+ *  a check-in nobody vouched for stays behind the gate and quiets under care_hold). */
+export function checkInAsks(companionId: string): boolean {
+  return !CHECK_IN_ASKS_NOTHING.has(companionId);
+}
+
+/** Is this move a demand move FOR THIS COMPANION (it asks something of him)? DEMAND_ACTIONS is
+ *  the set by type; Gaia's check-in is the one per-companion exception. */
+export function isDemandMove(companionId: string, actionType: string): boolean {
+  if (!DEMAND_ACTIONS.has(actionType)) return false;
+  if (actionType === "check_in_on_raziel") return checkInAsks(companionId);
+  return true;
+}
+
 /** Kept under its old name for callers; it is the demand set now. */
 export const REACH_OUT_TO_RAZIEL_ACTIONS: ReadonlySet<string> = DEMAND_ACTIONS;
 
@@ -181,7 +206,8 @@ export function filterReachOutWhenUnjustified<T extends { action_type: string }>
  *  `requires_signal` is opened by THAT signal alone (a per-row reason, see demandMoveOpen). */
 export type DemandReason = "fresh_state" | "need" | "present";
 
-/** Which reasons open which demand move. Overrulable at show-back; this is a design choice. */
+/** Which reasons open which demand move. Overrulable at show-back; this is a design choice.
+ *  Keyed by type; a check-in that asks nothing (Gaia) never reaches this table (isDemandMove). */
 export const DEMAND_REASONS: Readonly<Record<string, readonly DemandReason[]>> = Object.freeze({
   ask_question:       ["fresh_state", "need"],
   check_in_on_raziel: ["fresh_state", "need"],
@@ -263,7 +289,9 @@ export function readDemandReasons(i: DemandInputs): DemandReasons {
 export function demandMoveOpen(
   a: { action_type: string; requires_signal?: string | null },
   r: DemandReasons,
+  companionId: string,
 ): boolean {
+  if (!isDemandMove(companionId, a.action_type)) return true;
   const accepts = DEMAND_REASONS[a.action_type];
   if (!accepts) return true;
   if (r.override) return true;
@@ -285,13 +313,14 @@ export interface DemandTickVerdict {
 export function filterDemandByReason<T extends { action_type: string; requires_signal?: string | null }>(
   actions: T[],
   r: DemandReasons,
+  companionId: string,
 ): { kept: T[]; verdict: DemandTickVerdict } {
   const kept: T[] = [];
   const open: string[] = [];
   const held: string[] = [];
   for (const a of actions) {
-    const isDemand = a.action_type in DEMAND_REASONS;
-    if (demandMoveOpen(a, r)) {
+    const isDemand = isDemandMove(companionId, a.action_type);
+    if (demandMoveOpen(a, r, companionId)) {
       kept.push(a);
       if (isDemand) open.push(a.action_type);
     } else {
@@ -318,7 +347,10 @@ const DEMAND_WORDS: Record<string, string> = {
  * to Discord and are not presence.
  *
  * Deliberately NOT here, so they stay available on a bad night:
- *   - offer_presence, check_in_on_raziel: presence, which is the thing care_hold preserves;
+ *   - offer_presence: presence, which is the thing care_hold preserves;
+ *   - check_in_on_raziel, for a companion whose check-in asks nothing (Gaia, "presence in another
+ *     shape"). Cypher's and Drevan's check-ins are questions, so care_hold holds them
+ *     (careHoldHolds below; show-back choice 5, 2026-09-28);
  *   - nothing: choosing silence is always available;
  *   - write_journal, write_feeling, write_inter_companion, write_note_to_raziel, drift_open:
  *     internal or sibling-facing, they never reach his phone. (declare_preference left this list in
@@ -336,6 +368,12 @@ export const CARE_HOLD_SUPPRESSED_ACTIONS: ReadonlySet<string> = new Set([
   "show_made", "drift_outward", "declare_preference",
 ]);
 
+/** Does care_hold hold this move for this companion? The by-type set, plus a check-in that asks. */
+export function careHoldHolds(companionId: string, actionType: string): boolean {
+  if (CARE_HOLD_SUPPRESSED_ACTIONS.has(actionType)) return true;
+  return actionType === "check_in_on_raziel" && checkInAsks(companionId);
+}
+
 /**
  * Gate: while care_hold is active, drop the production actions so the companion's remaining
  * choices are presence, internal acts, or nothing. Never touches the reply path (a direct
@@ -344,9 +382,10 @@ export const CARE_HOLD_SUPPRESSED_ACTIONS: ReadonlySet<string> = new Set([
 export function filterProductionWhenCareHold<T extends { action_type: string }>(
   actions: T[],
   careHold: boolean,
+  companionId: string,
 ): T[] {
   if (!careHold) return actions;
-  return actions.filter(a => !CARE_HOLD_SUPPRESSED_ACTIONS.has(a.action_type));
+  return actions.filter(a => !careHoldHolds(companionId, a.action_type));
 }
 
 const ACTION_DESCRIPTIONS: Record<string, string> = {

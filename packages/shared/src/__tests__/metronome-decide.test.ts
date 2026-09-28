@@ -1,4 +1,4 @@
-import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, readDemandReasons, filterDemandByReason, DEMAND_REASONS, DEMAND_ACTIONS, PRESENT_WINDOW_HOURS, type MetronomeAction, type DecisionContext, type DemandInputs } from "../metronome-decide.js";
+import { buildDecisionPrompt, parseDecision, readDecision, buildDecisionCorrection, NOTHING_ACTION, summarizeRazielState, filterReachOutWhenUnjustified, REACH_OUT_TO_RAZIEL_ACTIONS, isMyHeartbeatWindow, readDemandReasons, filterDemandByReason, DEMAND_REASONS, DEMAND_ACTIONS, isDemandMove, checkInAsks, CHECK_IN_ASKS_NOTHING, PRESENT_WINDOW_HOURS, type MetronomeAction, type DecisionContext, type DemandInputs } from "../metronome-decide.js";
 
 const actions: MetronomeAction[] = [
   {
@@ -168,14 +168,14 @@ describe("the per-move justification gate (B7 step 4)", () => {
   };
   const types = ["ask_question", "check_in_on_raziel", "send_reminder", "name_pattern", "offer_presence", "share_media", "flirt", "nothing"];
   const rows = types.map(t => ({ action_type: t, requires_signal: null as string | null }));
-  const openDemand = (i: DemandInputs, rs = rows) => filterDemandByReason(rs, readDemandReasons(i)).verdict.open.sort();
+  const openDemand = (i: DemandInputs, rs = rows, c = "cypher") => filterDemandByReason(rs, readDemandReasons(i), c).verdict.open.sort();
 
   test("the reason map covers exactly the demand set", () => {
     expect(Object.keys(DEMAND_REASONS).sort()).toEqual([...DEMAND_ACTIONS].sort());
   });
 
   test("dead inputs hold every demand move and keep every invitation", () => {
-    const { kept, verdict } = filterDemandByReason(rows, readDemandReasons(dead));
+    const { kept, verdict } = filterDemandByReason(rows, readDemandReasons(dead), "cypher");
     expect(kept.map(a => a.action_type)).toEqual(["offer_presence", "share_media", "flirt", "nothing"]);
     expect(verdict.held.sort()).toEqual(["ask_question", "check_in_on_raziel", "name_pattern", "send_reminder"]);
     expect(verdict.missing).toEqual(["no fresh logged state (newest 118h old)", "relational need 0.00/0.60", "last here 9.3h ago"]);
@@ -220,6 +220,30 @@ describe("the per-move justification gate (B7 step 4)", () => {
     // gate means the signal was present.
     const rs = [...rows.filter(r => r.action_type !== "name_pattern"), { action_type: "name_pattern", requires_signal: "overwhelm" }];
     expect(openDemand(dead, rs)).toEqual(["name_pattern"]);
+  });
+
+  test("choice 7: Gaia's check-in asks nothing, so it needs no reason; Cypher's and Drevan's stay gated", () => {
+    expect([...CHECK_IN_ASKS_NOTHING]).toEqual(["gaia"]);
+    expect(checkInAsks("gaia")).toBe(false);
+    expect(checkInAsks("cypher")).toBe(true);
+    expect(checkInAsks("drevan")).toBe(true);
+    expect(checkInAsks("someone-new")).toBe(true); // unknown asks: the safe default
+    expect(isDemandMove("gaia", "check_in_on_raziel")).toBe(false);
+    for (const c of ["cypher", "drevan"]) expect(isDemandMove(c, "check_in_on_raziel")).toBe(true);
+    for (const c of ["cypher", "drevan", "gaia"]) expect(isDemandMove(c, "ask_question")).toBe(true);
+
+    // Dead inputs: Gaia's check-in is kept and is not counted as an open demand move; the others hold it.
+    const g = filterDemandByReason(rows, readDemandReasons(dead), "gaia");
+    expect(g.kept.map(a => a.action_type)).toContain("check_in_on_raziel");
+    expect(g.verdict.held.sort()).toEqual(["ask_question", "name_pattern", "send_reminder"]);
+    expect(g.verdict.open).toEqual([]);
+    for (const c of ["cypher", "drevan"]) {
+      const v = filterDemandByReason(rows, readDemandReasons(dead), c);
+      expect(v.kept.map(a => a.action_type)).not.toContain("check_in_on_raziel");
+      expect(v.verdict.held).toContain("check_in_on_raziel");
+    }
+    // The type table is unchanged: Gaia's exception lives in isDemandMove, not in DEMAND_REASONS.
+    expect(DEMAND_REASONS["check_in_on_raziel"]).toEqual(["fresh_state", "need"]);
   });
 
   test("DISABLE_REACH_OUT_GATE still opens everything", () => {

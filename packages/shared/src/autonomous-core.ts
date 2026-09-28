@@ -20,7 +20,7 @@ import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
   SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
-  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, DEMAND_ACTIONS, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
+  readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, isDemandMove, filterProductionWhenCareHold, isMyHeartbeatWindow, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
   liveIngest, reportVoiceScore, type VoiceCompanionId,
@@ -859,8 +859,8 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
       relationalNeed: relationalNeed ? { level: relationalNeed.level, threshold: relationalNeed.threshold, fired: relationalNeed.fired } : null,
       hoursSinceContact: typeof relationalNeed?.hours_since_event === "number" ? relationalNeed.hours_since_event : null,
     });
-    const { kept: justifiedActions, verdict: demand } = filterDemandByReason(signalFiltered, demandReasons);
-    const hadDemand = signalFiltered.some(a => DEMAND_ACTIONS.has(a.action_type));
+    const { kept: justifiedActions, verdict: demand } = filterDemandByReason(signalFiltered, demandReasons, companionId);
+    const hadDemand = signalFiltered.some(a => isDemandMove(companionId, a.action_type));
     if (hadDemand) mark(null, { demand });
     if (demand.held.length > 0) {
       // Not silent: the gate names what it held and why, every tick (and the [tick] line carries it).
@@ -879,7 +879,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     // production move on a bad night, so what he picks from is presence, internal acts, or nothing.
     // That is the floor's own shape ("what softens is ambient self-selection"), and it keeps the
     // choice his rather than generating a message and then swallowing it.
-    const afterCareHold = filterProductionWhenCareHold(justifiedActions, careHold);
+    const afterCareHold = filterProductionWhenCareHold(justifiedActions, careHold, companionId);
     // The shared triad lane (B7 2+2c), the same principle: a DM move the cap would refuse right now
     // is not offered at all. Read-only preview; the atomic reserve at send time is the real gate.
     // REACH_DM (the kill switch, reach-dm.ts reachDmOn): off is the lane being unable to carry ANY

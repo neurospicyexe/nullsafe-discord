@@ -147,6 +147,8 @@ describe("the companion-origin brand (T-4)", () => {
     expect(ownsMove("cypher", "flirt")).toBe(false);
     expect(ownsMove("gaia", "dare")).toBe(false);
     expect(ownsMove("gaia", "show_made")).toBe(true);
+    expect(ownsMove("drevan", "show_made")).toBe(true); // Q2, claimed at show-back 2026-09-28
+    expect(ownsMove("cypher", "show_made")).toBe(true);
   });
 });
 
