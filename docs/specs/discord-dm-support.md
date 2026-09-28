@@ -3,6 +3,25 @@
 **Status:** WANTED, not started. Raziel, 2026-09-15: *"add a note to the current plans that we want
 to add dm abilities so we dont lose it."*
 
+**2026-09-27: BUILT with med_reminder (B7 step 2b), not yet deployed.** What shipped differs from
+this spec in four places, all found by reading the code, not by guessing:
+
+- `Partials.Channel` was already present, as noted; the missing pieces were the `DirectMessages`
+  and `DirectMessageReactions` intents.
+- Point 2 was backwards. A DM was never called "a shared channel": the `[Where you are]` block was
+  wrapped in `if (channelName)` and a DM has no `.name`, so a DM got **no** place and no containment
+  cue at all. `dm.ts placeBlock` now gives a DM its own descriptor.
+- The `owner_only` proposal was dropped. Commit `7de5ca5` made "absent from the channel config" mean
+  "no special rules", so DM handling derives from the structural test `isServerRoom` (no guild = DM),
+  and an owner DM bypasses the ambient classifier and `shouldRespond` entirely (direct address by
+  construction).
+- The owner gate (point 3) runs twice, at `MessageCreate` before PK pairing and the inbox, and first
+  thing in `handleMessage`; a DM with no configured owner id is dropped (fails closed).
+- New, not in this spec: DMs are sealed from every surface a shared room can read (no Second Brain
+  live ingest, no pulse note, no journaled speech, no autonomous signal buffer; distillation and the
+  writeback judge off unless `DM_MEMORY=carry`), and a seen DM id is registered as a sealed recall
+  source (`recall-context.ts sealDmChannel`).
+
 **Owner:** Raziel's call to schedule. No blocking dependency; this is self-contained bot work.
 
 ---

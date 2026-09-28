@@ -70,12 +70,39 @@ export function recallNoQuoteInto(): readonly string[] {
   return (process.env["RECALL_NO_QUOTE_INTO"] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * DMs are sealed as a SOURCE structurally, not by listing ids (2026-09-27, med_reminder). A DM
+ * channel id is per user and not known until the DM opens, so it can never sit in
+ * RECALL_NO_QUOTE_FROM. Whenever the bot sees a channel with no guild (see isServerRoom) it
+ * registers it here, and every place that honours RECALL_NO_QUOTE_FROM honours this set too.
+ *
+ * Belt and braces: DM messages are also never sent to Second Brain's live index (the handler skips
+ * liveIngest for DMs), so no `discord-live/<dm>/...` row should exist to be quoted in the first
+ * place. This set is what still holds if that ever changes.
+ */
+const sealedDmChannels = new Set<string>();
+export function sealDmChannel(channelId: string): void {
+  if (channelId) sealedDmChannels.add(channelId);
+}
+/** Is this channel's content barred from being quoted anywhere else? (env list OR a seen DM.) */
+export function isSealedRecallSource(channelId: string): boolean {
+  return sealedDmChannels.has(channelId) || recallNoQuoteFrom().includes(channelId);
+}
+/** Every sealed source id, for callers that match on a vault path. */
+export function sealedRecallSources(): readonly string[] {
+  return [...recallNoQuoteFrom(), ...sealedDmChannels];
+}
+/** Test seam. */
+export function resetSealedDmChannels(): void {
+  sealedDmChannels.clear();
+}
+
 export function mayWidenAcross(
   config: ChannelConfig, sourceChannelId: string, currentChannelId: string,
 ): boolean {
   if (sourceChannelId === currentChannelId) return false;   // already in history; nothing to widen
   // Raziel's explicit lists win over every other rule here, in both directions.
-  if (recallNoQuoteFrom().includes(sourceChannelId)) return false;
+  if (isSealedRecallSource(sourceChannelId)) return false;
   if (recallNoQuoteInto().includes(currentChannelId)) return false;
   const isPrivate = (e: { modes?: readonly string[] } | undefined) => !!e?.modes?.includes("owner_only");
   const source = config[sourceChannelId];

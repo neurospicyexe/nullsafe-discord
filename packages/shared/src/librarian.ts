@@ -1,7 +1,7 @@
 import type { CompanionId } from "./types.js";
 import type { TaskCheckRow } from "./task-check.js";
 import { relativeTime } from "./relative-time.js";
-import { recallNoQuoteFrom } from "./recall-context.js";
+import { sealedRecallSources } from "./recall-context.js";
 
 /**
  * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
@@ -9,6 +9,15 @@ import { recallNoQuoteFrom } from "./recall-context.js";
  * `label` is the truncated (<=160 char) question/tension/council text -- enough for the
  * generation prompt's menu to identify the object without spending its whole context budget.
  */
+/** A dose due for this companion (Halseth /mind/med/due). `label` is private: DM text only. */
+export interface MedDueDose { slot_key: string; local_date: string; kind: "first" | "followup"; label: string; local_time: string }
+export interface MedDoseKey { slot_key: string; local_date: string; kind: "first" | "followup" }
+/** One dose's state (Halseth /mind/med/today). answered_local null = NO ANSWER, never "not taken". */
+export interface MedStateDoseWire {
+  slot_key: string; label: string; local_time: string; local_date: string;
+  day: "today" | "yesterday"; answered_local: string | null; answered_to: string | null;
+}
+
 export interface SharedObject {
   ref_type: "question" | "tension" | "council";
   ref_id: string;
@@ -852,7 +861,7 @@ export class LibrarianClient {
       const text = (c.text ?? "").trim();
       if (!text) continue;
       if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
-      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
+      if (c.vault_path && sealedRecallSources().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
       seen.add(text.slice(0, 80));
     }
     return seen.size;
@@ -871,7 +880,7 @@ export class LibrarianClient {
       const text = (c.text ?? "").trim();
       if (!text) continue;
       if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
-      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
+      if (c.vault_path && sealedRecallSources().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
       const key = text.slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -908,7 +917,7 @@ export class LibrarianClient {
       // you in the watch party channel" carries. Gating only the widening would have made the
       // control a half-measure, which is worse than none: Raziel would name a room, believe it
       // sealed, and its lines would keep appearing one at a time.
-      if (c.vault_path && recallNoQuoteFrom().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
+      if (c.vault_path && sealedRecallSources().some((id) => c.vault_path!.includes(`discord-live/${id}/`))) continue;
       const key = text.slice(0, 80);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1844,6 +1853,86 @@ export class LibrarianClient {
       });
     } catch {
       // non-fatal -- contact shedding is best-effort
+    }
+  }
+
+  // ── med_reminder (Halseth mig 0136, 2026-09-27) ───────────────────────────────────────────────
+  // Direct /mind/med/* calls, never ask_librarian: this path must not depend on a classifier. All
+  // non-throwing; a failure returns the "nothing happened" value and the caller logs the outcome.
+  // `label` in the payloads is the medication name: it goes into a DM and nowhere else.
+
+  /** Doses THIS companion should send now. null = Halseth unreachable (distinct from "nothing due"). */
+  async medDue(): Promise<MedDueDose[] | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/med/due/${encodeURIComponent(this.companionId)}`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { due?: MedDueDose[] };
+      return Array.isArray(data.due) ? data.due : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Atomic claim; true only for the one caller that won. Any error reads as "not claimed". */
+  async medClaim(d: MedDoseKey): Promise<boolean> {
+    return (await this.medPost<{ claimed?: boolean }>("claim", d))?.claimed === true;
+  }
+
+  async medDelivered(d: MedDoseKey & { path: string }): Promise<boolean> {
+    return (await this.medPost<{ updated?: boolean }>("delivered", d))?.updated === true;
+  }
+
+  async medRelease(d: MedDoseKey): Promise<boolean> {
+    return (await this.medPost<{ released?: boolean }>("release", d))?.released === true;
+  }
+
+  /** Record his affirmative answer. Returns the dose it answered, or null (none open, or error). */
+  async medAnswer(answeredAtIso: string): Promise<{ slot_key: string; local_date: string; answered_local: string | null } | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/med/answer`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ companion_id: this.companionId, answered_at: answeredAtIso }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { recorded?: { slot_key: string; local_date: string; answered_local: string | null } | null };
+      return data.recorded ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Today's med state (and last night's before noon). null = could not be read. */
+  async medToday(): Promise<MedStateDoseWire[] | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/med/today`, {
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(4_000),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { doses?: MedStateDoseWire[] };
+      return Array.isArray(data.doses) ? data.doses : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async medPost<T>(route: "claim" | "delivered" | "release", d: MedDoseKey & { path?: string }): Promise<T | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/med/${route}`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...d, companion_id: this.companionId }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return null;
+      return await res.json() as T;
+    } catch {
+      return null;
     }
   }
 

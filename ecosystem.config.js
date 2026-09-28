@@ -204,6 +204,15 @@ const shared = {
   // writers byte for byte. Halseth's /ledger must be deployed first: until it is, every line 404s,
   // no line is accepted, and no handoff is written. Listed per the standing rule above.
   LEDGER_DISTILL:            process.env.LEDGER_DISTILL,
+  // med_reminder (2026-09-27, med-reminder.ts): companion-voiced medication reminders by DM. Default
+  // on; `off` stops the scheduler. GEN_TIMEOUT_MS bounds the one-line generation before the fixed
+  // fallback line goes out (default 25000); POLL_MS is the due-check interval (default 30000).
+  // DM_MEMORY=carry lets DM conversations feed the paraphrasing memory paths (distillation, the
+  // writeback judge); default sealed (dm.ts). Listed per the standing rule above.
+  MED_REMINDER:                process.env.MED_REMINDER,
+  MED_REMINDER_GEN_TIMEOUT_MS: process.env.MED_REMINDER_GEN_TIMEOUT_MS,
+  MED_REMINDER_POLL_MS:        process.env.MED_REMINDER_POLL_MS,
+  DM_MEMORY:                   process.env.DM_MEMORY,
 };
 
 module.exports = {

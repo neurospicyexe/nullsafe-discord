@@ -50,6 +50,10 @@ import type { FollowUpEntitlement } from "./sequential-floor.js";
 import { followUpPassEnabled } from "./pass-turn.js";
 import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
+import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
+import { sealDmChannel } from "./recall-context.js";
+import { isAffirmativeMedAnswer } from "./med-answer.js";
+import { startMedReminderScheduler, medReminderEnabled, medGenTimeoutMs, type MedDmTarget } from "./med-reminder.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
 
@@ -631,6 +635,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       // Reaction READING (2026-08-16): the floor rework's reaction tier gave companions an emoji
       // OUTPUT; without this intent they could never see one -- their own or anyone else's.
       GatewayIntentBits.GuildMessageReactions,
+      // DMs (2026-09-27, med_reminder): lets Raziel answer "taken" in the DM a reminder arrives in.
+      // Partials.Channel below (already present for reactions) is what discord.js needs to emit a
+      // DM's MessageCreate at all, since DM channels are never cached at login. Every inbound DM
+      // passes the owner gate before anything else happens (dm.ts dmGateVerdict).
+      GatewayIntentBits.DirectMessages,
+      GatewayIntentBits.DirectMessageReactions,
     ],
     // Reactions on messages older than the process (or simply uncached) arrive as partials;
     // without these the MessageReactionAdd event for them is silently never emitted.
@@ -649,10 +659,58 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         sentIds.delete(oldest);
       }
     });
+    // med_reminder (2026-09-27): its own scheduler, outside the metronome and every other rail
+    // (spec R-9). Halseth decides what is due and who sends it; a companion on no schedule row
+    // (Gaia today) polls and never gets anything. MED_REMINDER=off stops it.
+    if (medReminderEnabled() && env.ownerDiscordId) {
+      stopMedReminder = startMedReminderScheduler({
+        companionId,
+        api: librarian,
+        resolveDm: resolveOwnerDm,
+        // Tool-less direct adapter first: a one-line DM must not ride the Hermes agent (tool
+        // runaways, and an aborted call orphans its answer). Same identity prompt either way.
+        generate: (system, prompt) => (directAdapter ?? adapterRef.current).generate(system, [{ role: "user", content: prompt }], 0.8),
+        systemPrompt: () => bootCtx.systemPrompt,
+        genTimeoutMs: medGenTimeoutMs(),
+        onSent: async (channelId, text, messageId) => {
+          sentIds.add(messageId);
+          await stmStore.ensureLoaded(channelId).catch(() => {});
+          stmStore.append(channelId, { role: "assistant", content: text, timestamp: Date.now() });
+        },
+      });
+      console.log(`[${companionId}] med_reminder scheduler started`);
+    } else {
+      console.log(`[${companionId}] med_reminder scheduler NOT started (${env.ownerDiscordId ? "MED_REMINDER=off" : "no owner id"})`);
+    }
     registerGuildCommands(client, buildCompanionCommands(companionLabel))
       .then((n) => console.log(`[${companionId}] slash commands registered on ${n} guild(s)`))
       .catch((e) => console.warn(`[${companionId}] slash registration failed:`, e));
   });
+
+  // The owner's DM with this bot, opened once and cached (REST only: sending needs no intent).
+  // Registered as a sealed recall source the moment it exists (recall-context.ts sealDmChannel).
+  let stopMedReminder: (() => void) | null = null;
+  let ownerDm: { id: string; send(c: string): Promise<{ id: string }>; messages: { fetch(o: { limit: number }): Promise<Map<string, { author: { id: string }; content: string; createdTimestamp: number }>> } } | null = null;
+  async function resolveOwnerDm(): Promise<MedDmTarget | null> {
+    if (!env.ownerDiscordId) return null;
+    if (!ownerDm) {
+      const user = await client.users.fetch(env.ownerDiscordId);
+      ownerDm = (await user.createDM()) as unknown as typeof ownerDm;
+    }
+    const dm = ownerDm!;
+    sealDmChannel(dm.id);
+    return {
+      channelId: dm.id,
+      send: async (content) => (await dm.send(content)).id,
+      recentOwnTexts: async () => {
+        const got = await dm.messages.fetch({ limit: 50 });
+        return [...got.values()]
+          .filter(m => m.author.id === client.user?.id)
+          .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+          .map(m => m.content);
+      },
+    };
+  }
 
   const connectVoice = (vc: VoiceBasedChannel): string => {
     const connection = joinVoiceChannel({
@@ -812,6 +870,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
     try {
       if (user.id === client.user?.id) return; // own glyphs are not news
+      // Owner gate for DM reactions, before any fetch (a partial carries guildId from the event).
+      if (!reaction.message.guildId && user.id !== env.ownerDiscordId) return;
       const r = reaction.partial ? await reaction.fetch() : reaction;
       const msg = r.message.partial ? await r.message.fetch() : r.message;
       if (msg.author?.id !== client.user?.id) return; // only reactions to MY messages
@@ -831,6 +891,17 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         env.ownerDisplayName,
       );
       if (!who) return;
+      // A reaction in a DM: owner only, and never into STM (the DM is sealed from recall anyway).
+      // A check mark or thumbs-up from him on one of my messages is the iPad-shaped "taken" (R-10);
+      // Halseth records it only if I reminded him about a dose that is still open.
+      if (!msg.guildId) {
+        if (user.id !== env.ownerDiscordId) return;
+        if (isAffirmativeMedAnswer(emoji)) {
+          const rec = await librarian.medAnswer(new Date().toISOString());
+          console.log(`[${companionId}] [med] affirmative reaction in DM -> ${rec ? `recorded slot=${rec.slot_key} date=${rec.local_date}` : "no open dose (nothing recorded)"}`);
+        }
+        return;
+      }
       const snippet = (msg.content ?? "").replace(/\s+/g, " ").slice(0, 80);
       stmStore.append(msg.channelId, {
         role: "user",
@@ -845,6 +916,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   });
 
   client.on(Events.MessageCreate, (message: Message) => {
+    // DM OWNER GATE, first line: a stranger's DM never reaches the PK pairing, the inbox, or a turn.
+    // No content is read or logged. handleMessage repeats the check (defence in depth).
+    if (message.author.id !== client.user?.id
+        && dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: env.ownerDiscordId }) === "drop") {
+      console.log(droppedDmLogLine(companionId, message.author.id));
+      return;
+    }
     // PluralKit pairing happens HERE, at event time, before the inbox -- never inside a turn.
     // The inbox serializes per channel, so a hold taken inside the original's turn blocks the
     // very webhook turn whose claim it waits for: the claim never lands, the already-deleted
@@ -952,6 +1030,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   async function shutdown() {
     console.log(`[${companionId}] shutting down...`);
     autonomous.stop();
+    if (stopMedReminder) stopMedReminder();
     sessionWindows.closeAll();
     if (pendingClosures.size > 0) {
       console.log(`[${companionId}] flushing ${pendingClosures.size} active channel(s)...`);

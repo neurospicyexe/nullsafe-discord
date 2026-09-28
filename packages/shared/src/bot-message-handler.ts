@@ -1,5 +1,9 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
+import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
+import { isAffirmativeMedAnswer } from "./med-answer.js";
+import { renderMedStateBlock } from "./med-context.js";
+import { sealDmChannel } from "./recall-context.js";
 import {
   parseDiscordLivePath, mayWidenAcross, isServerRoom, buildRecallContext,
   WIDEN_BEFORE, WIDEN_AFTER, type RecalledMessage,
@@ -469,12 +473,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
   } = deps;
 
+    if (message.author.id === client.user?.id) return;
+    // DM OWNER GATE (2026-09-27), before ANY network call, inference, tool, STT or vision. Anyone who
+    // shares a server with the bot can DM it; without this a stranger gets full inference plus
+    // ask_librarian over Raziel's private data. One log line, no content. Also enforced at
+    // MessageCreate in bot-core so the message never enters the inbox; this copy is what holds if a
+    // future caller skips that. See dm.ts.
+    const dmVerdict = dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: cfg.ownerDiscordId });
+    if (dmVerdict === "drop") {
+      console.log(droppedDmLogLine(COMPANION_ID, message.author.id));
+      return;
+    }
+    /** A 1:1 DM from the owner. He wrote to THIS companion: every addressing rail treats it as direct address. */
+    const isOwnerDm = dmVerdict === "owner";
+    if (isOwnerDm) sealDmChannel(message.channelId);
+
     // INFERENCE_MODE=hermes forces every adapter build to the local Hermes agent (see
     // createAdapter forceHermes). Surfaced here for the reply-token ceiling (full agent runs
     // long) and the model-switch branches (routing is owned by Hermes, not Discord).
     const inferenceMode = apiUrls.forceHermes ? "hermes" : undefined;
-
-    if (message.author.id === client.user?.id) return;
 
     const BOT_ID_COMPANION: Record<string, string> = {};
     if (process.env["CYPHER_BOT_ID"]) BOT_ID_COMPANION[process.env["CYPHER_BOT_ID"]] = "cypher";
@@ -495,7 +512,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // time it arrived, and running it twice double-counts or double-pays (pass-turn.ts).
     const isArrival = !followUpPass;
     // The origin survived this check when it arrived (it started the chain), so a pass skips it.
-    if (isArrival && !message.webhookId && !message.author.bot) {
+    // PluralKit never proxies in a DM, so an owner DM skips the 3s hold and the deleted-check fetch.
+    if (isArrival && !isOwnerDm && !message.webhookId && !message.author.bot) {
       const { skip } = await pkDedup.waitForClaim(message.channelId, message.id, PK_HOLD_MS);
       if (skip) return; // PluralKit deleted this and reposted it; the proxy turn owns the reply
       // Content pairing can miss legitimately: an image-only proxy has no text to match, a
@@ -1338,7 +1356,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // a conversation was already underway. Only computed for unaddressed owner messages, so
     // named/group traffic pays no fetch and can always hand the thread over.
     // An entitled follow-up (a pass turn runs on the owner's origin) answers regardless: no fetch.
-    if (attribution.isOwner && !senderCtx.isCompanionBot && !entitledFollowUp && extractAddress(effectiveContent).type === "ambient") {
+    if (!isOwnerDm && attribution.isOwner && !senderCtx.isCompanionBot && !entitledFollowUp && extractAddress(effectiveContent).type === "ambient") {
       try {
         const hist = await message.channel.messages.fetch({ limit: 8 });
         senderCtx.activeExchangeWith = activeExchangeHolder(
@@ -1370,7 +1388,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // down and offers the reaction tier instead.
     // An entitled follow-up never goes through the classifier (2026-09-26 review): a pass turn runs
     // on the human origin, and a "not relevant" here would drop an entitlement already consumed.
-    const isAmbientOwnerOnly = runsAmbientClassifier({
+    // An owner DM is direct address by construction (nobody else is in the room), so neither the
+    // ambient classifier nor shouldRespond runs: "Cy, ..." typed into Drevan's DM must not silence
+    // Drevan the way a sibling's name does in a shared room.
+    const isAmbientOwnerOnly = !isOwnerDm && runsAmbientClassifier({
       ownerOnlyChannel: channelEntry?.modes?.includes("owner_only") === true,
       isCompanionBot: senderCtx.isCompanionBot,
       isMentioned: senderCtx.isMentioned,
@@ -1391,7 +1412,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         (sys, msgs) => (directAdapter ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -1527,7 +1548,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // rather than deleted so the command branches (search, listen) that reach this point by their own
     // route still record, and so a future refactor that moves the early call cannot silently drop it.
     stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: stmContent, authorName: memberLabel, timestamp: message.createdTimestamp });
-    if (attribution.isOwner && isArrival) pushRazielMessage(stmContent);
+    // The autonomous signal buffer feeds generations that post into server channels: a DM never enters it.
+    if (attribution.isOwner && isArrival && !isOwnerDm) pushRazielMessage(stmContent);
 
     // Streaming indexer: index the inbound message into Second Brain's vector store
     // right now (gated by SB_LIVE_INGEST). SB dedups by message_id, so all three bots
@@ -1536,7 +1558,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // stmContent (2026-08-29) for the same reason as the STM writes above -- a vault
     // recall surfacing the full [HEARD] block later would re-inject the same standing
     // imperative into a future prompt's [Memory] section.
-    if (!senderCtx.isCompanionBot && isArrival) {
+    // A DM is never indexed: with no discord-live/<dm> row, nothing from it can be recalled into any
+    // room (the structural half of the DM seal; see recall-context.ts sealDmChannel).
+    if (!senderCtx.isCompanionBot && isArrival && !isOwnerDm) {
       liveIngest({
         companion: null,
         author: memberLabel,
@@ -1553,7 +1577,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     );
     if (appliesBotRails(railTurn) && chainDepth >= COMPANION_CHAIN_LIMIT) return;
 
-    if (resetsBotRails(railTurn)) sessionWindows.touch(message.channelId);
+    if (resetsBotRails(railTurn) && !(isOwnerDm && dmParaphraseMemorySealed())) sessionWindows.touch(message.channelId);
+
+    // med_reminder answer (spec R-10). In an owner DM, an affirmative ("yes", "took them", a check
+    // mark) is sent to Halseth, which records it ONLY if this companion reminded him about a dose that
+    // is still open; which dose it answers is decided there (most recently reminded). The recording is
+    // a side effect: the message still goes through the normal reply path below. Nothing else about
+    // him is ever recorded: no answer, a "no" or anything ambiguous leaves no trace. Before the
+    // supersede check, so a "yes" that a newer message supersedes is still heard.
+    let medAnswerRecorded = false;
+    if (isOwnerDm && isArrival && isAffirmativeMedAnswer(effectiveContent)) {
+      const rec = await librarian.medAnswer(new Date(message.createdTimestamp || Date.now()).toISOString());
+      medAnswerRecorded = rec !== null;
+      console.log(`[${COMPANION_ID}] [med] affirmative in DM -> ${rec ? `recorded slot=${rec.slot_key} date=${rec.local_date}` : "no open dose (nothing recorded)"}`);
+    }
 
     // Supersede check A (channel inbox, 2026-07-06): a newer human conversational message
     // is already waiting behind this turn. Everything this message needed for continuity
@@ -1887,23 +1924,23 @@ ${widened}`;
     // parent, and whether the room is private/triad/shared -- plus a containment cue so private or
     // DM detail doesn't bleed into a shared channel. Rides into both Brain packet and direct path
     // via contextPrompt. Guarded for DMs (no .name) and threads (parent is the host channel).
+    // A DM has no `.name`, and this block used to be wrapped in `if (channelName)`, so a DM got no
+    // place and no containment cue at all (09-27 audit). placeBlock (dm.ts) gives it one; the server
+    // channel text is unchanged.
     const liveChannel = message.channel;
     const channelName = "name" in liveChannel ? (liveChannel as TextChannel).name : null;
-    if (channelName) {
-      let channelCtx = `\n\n[Where you are]\n• Channel: #${channelName}`;
-      if (liveChannel.isThread()) {
-        const parentName = liveChannel.parent?.name;
-        if (parentName) channelCtx += ` (a thread under #${parentName})`;
-      } else if ("parent" in liveChannel && liveChannel.parent?.name) {
-        channelCtx += ` (in ${liveChannel.parent.name})`;
-      }
-      const modes = channelEntry?.modes ?? [];
-      const place = modes.includes("owner_only") ? "a private space with Raziel"
-        : modes.includes("inter_companion") ? "triad space -- you and your siblings"
-        : "a shared channel";
-      channelCtx += `\n• This is ${place}.`;
-      channelCtx += `\n• Keep it contained to here: don't carry private or DM detail into a shared channel unless Raziel opens it in this room.`;
-      contextPrompt += channelCtx;
+    const isThreadCh = typeof liveChannel.isThread === "function" && liveChannel.isThread();
+    const parentOf = (c: unknown) => (c as { parent?: { name?: string } | null }).parent?.name ?? null;
+    contextPrompt += placeBlock({
+      isDm: isOwnerDm,
+      channelName: channelName ?? null,
+      threadParentName: isThreadCh ? parentOf(liveChannel) : null,
+      categoryName: !isThreadCh && "parent" in liveChannel ? parentOf(liveChannel) : null,
+      modes: channelEntry?.modes ?? [],
+    });
+    // Today's med state + the dosing rule (spec P-2, P-1), DM only: the block names medications.
+    if (isOwnerDm) {
+      contextPrompt += renderMedStateBlock(await librarian.medToday(), COMPANION_ID);
     }
 
     // Floor handback (2026-07-01): in the last allowed turns before the human-anchored
@@ -2496,7 +2533,9 @@ ${widened}`;
     }
 
     // Streaming indexer: index this companion's own reply for instant recall.
-    if (sent.length > 0) {
+    // DM seal: none of the raw-text paths below (live index, voice telemetry, journaled speech) run
+    // for a DM, since each carries the words to a surface a shared room can read.
+    if (sent.length > 0 && !isOwnerDm) {
       liveIngest({
         companion: COMPANION_ID,
         author: COMPANION_ID,
@@ -2565,9 +2604,12 @@ ${widened}`;
     }
 
     // Rolling distillation: fire every DISTILLATION_INTERVAL messages (user + assistant = 2 per turn).
+    // DM seal: the paraphrasing memory paths (this distillation and the writeback judge below) stay
+    // off for a DM unless DM_MEMORY=carry; the raw pulse never runs for a DM at all. See dm.ts.
+    const dmSealed = isOwnerDm && dmParaphraseMemorySealed();
     const distCount = (distillationCounter.get(message.channelId) ?? 0) + 2;
     distillationCounter.set(message.channelId, distCount);
-    if (distCount >= DISTILLATION_INTERVAL) {
+    if (distCount >= DISTILLATION_INTERVAL && !dmSealed) {
       distillationCounter.set(message.channelId, 0);
       runDistillation(message.channelId, stmStore, librarian, adapterRef.current, writeQueue, DISTILLATION_PROMPT, DISTILLATION_INTERVAL, cfg.ownerDisplayName, COMPANION_ID, directAdapter).catch((e) => console.error(`[${COMPANION_ID}] runDistillation failed:`, e));
     }
@@ -2576,7 +2618,7 @@ ${widened}`;
     // and Hearth have actual conversation content mid-session without waiting for inactivity.
     const pulseCount = (pulseCounter.get(message.channelId) ?? 0) + 2;
     pulseCounter.set(message.channelId, pulseCount);
-    if (pulseCount >= PULSE_INTERVAL) {
+    if (pulseCount >= PULSE_INTERVAL && !isOwnerDm) {
       pulseCounter.set(message.channelId, 0);
       const recentTurns = stmStore.get(message.channelId).slice(-PULSE_INTERVAL)
         .map(m => `${m.authorName ?? m.role}: ${m.content.slice(0, 200)}`)
@@ -2599,7 +2641,9 @@ ${widened}`;
     // session and ran to Hermes's 150-turn cap, burning >100M of a companion's weekly input
     // tokens. The direct adapter has no tools to reach for; fall back to the live agent adapter
     // only when no direct key is configured.
-    runWritebackGate({
+    // Skipped on a recorded med answer even when DM memory carries: a judged note "he told me he took
+    // them" would be a second record of compliance, which R-10 forbids.
+    if (!dmSealed && !medAnswerRecorded) runWritebackGate({
       mode: WRITEBACK_GATE_MODE,
       companionId: COMPANION_ID,
       speaker: writebackSpeaker,
