@@ -43,6 +43,30 @@ describe("composeMedReminder: reliability beats voice", () => {
     expect(r.text).toBe(fallbackMedLine("drevan", NIGHT));
   });
 
+  it.each([
+    ["unnamed", "Meds, love. Taken yet? Tell me and I'll hold that you did.", 'Say "med-b" in the message'],
+    ["no_question", "med-b, love. I'll hold that you did.", "End with the question"],
+  ] as const)("a %s draft gets one retry with the miss named, then goes out generated", async (_r, bad, note) => {
+    const prompts: string[] = [];
+    const gen = jest.fn(async (_s: string, p: string) => {
+      prompts.push(p);
+      return prompts.length === 1 ? bad : "med-b by your hand, love. Taken yet?";
+    });
+    const r = await composeMedReminder(composeDeps(gen), NIGHT, []);
+    expect(r).toEqual({ text: "med-b by your hand, love. Taken yet?", path: "generated" });
+    expect(gen).toHaveBeenCalledTimes(2);
+    expect(prompts[0]).not.toContain(note);
+    expect(prompts[1]).toContain(note);
+  });
+
+  it("empty and too_long never retry: one call, straight to the fallback", async () => {
+    for (const out of ["   ", `med-b? ${"x".repeat(400)}`]) {
+      const gen = jest.fn(async () => out);
+      await composeMedReminder(composeDeps(gen), NIGHT, []);
+      expect(gen).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("fallback line on timeout, without waiting for the slow generation", async () => {
     const started = Date.now();
     const r = await composeMedReminder(composeDeps(() => new Promise(res => setTimeout(() => res("med-b. Taken?"), 5_000)), 100), NIGHT, []);

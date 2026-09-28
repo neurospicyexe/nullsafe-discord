@@ -152,18 +152,32 @@ export async function composeMedReminder(
 ): Promise<{ text: string; path: string }> {
   const timeoutMs = deps.genTimeoutMs ?? MED_GEN_TIMEOUT_DEFAULT_MS;
   let avoid: string[] = [];
+  let correction = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
     let raw: string | null | undefined;
     try {
-      raw = await withTimeout(Promise.resolve(deps.generate(deps.systemPrompt(), buildMedPrompt(deps.companionId, dose, avoid))), timeoutMs);
+      raw = await withTimeout(Promise.resolve(deps.generate(deps.systemPrompt(), buildMedPrompt(deps.companionId, dose, avoid) + correction)), timeoutMs);
     } catch (e) {
       const reason = e instanceof Error && e.message === "timeout" ? "timeout" : "error";
       return { text: fallbackMedLine(deps.companionId, dose), path: `fallback:${reason}` };
     }
     const text = cleanMedLine(raw);
     const problem = medLineProblem(text, dose.label);
+    // A wording miss gets the one retry: a generation costs ~1s against a 25s budget, and the
+    // miss seen live (2026-09-28, 1 in 6 when sampled) was the register example copied whole,
+    // which never names the dose. Empty / too_long go straight to the fallback as before.
+    if (problem === "unnamed" || problem === "no_question") {
+      if (attempt === 1) {
+        correction = problem === "unnamed"
+          ? `\nYour last draft did not name the dose. Say "${dose.label}" in the message, word for word.`
+          : "\nYour last draft did not ask. End with the question of whether he has taken it.";
+        continue;
+      }
+      return { text: fallbackMedLine(deps.companionId, dose), path: `fallback:${problem}` };
+    }
     if (problem) return { text: fallbackMedLine(deps.companionId, dose), path: `fallback:${problem}` };
     if (!isVerbatimRepeat(text, recent)) return { text, path: "generated" };
+    correction = "";
     avoid = [...recent];
   }
   return { text: fallbackMedLine(deps.companionId, dose), path: "fallback:verbatim" };
