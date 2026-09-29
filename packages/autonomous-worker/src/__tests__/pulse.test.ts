@@ -178,6 +178,18 @@ describe("decidePulse", () => {
     expect(d.reason).toBe("self-programmed rest");
   });
 
+  it("uses the companion's own row threshold when given, so gate and shed agree", () => {
+    const base = { pace: "normal" as const, lastRunAtMs: null, runsToday: 0, primaryFloat: 0.99, nowMs: NOW };
+    // Gaia's row threshold is 0.85: 0.8 is not resting for her, though it is over the 0.75 default.
+    expect(decidePulse({ ...base, restNeed: 0.8, restThreshold: 0.85 }).reason).not.toContain("rest_need");
+    // Drevan's is 0.7: 0.72 is resting for him, though it is under the default.
+    const d = decidePulse({ ...base, restNeed: 0.72, restThreshold: 0.7 });
+    expect(d.fire).toBe(false);
+    expect(d.reason).toContain("rest_need 0.72 >= 0.7");
+    // A non-finite threshold falls back to the default.
+    expect(decidePulse({ ...base, restNeed: 0.8, restThreshold: Number.NaN }).fire).toBe(false);
+  });
+
   it("rest_need gate precedes the daily cap in the reason ordering", () => {
     const d = decidePulse({
       pace: "normal",

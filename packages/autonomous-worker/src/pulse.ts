@@ -32,6 +32,10 @@ export interface PulseInputs {
   primaryFloat: number | null;
   /** rest_need drive level (mig 0101); null = could not read the drive (never suppresses). */
   restNeed: number | null;
+  /** That companion's own rest_need threshold from the drive row. The row is the one author
+   *  of "resting": Halseth's ferment tick sheds on the same number (restShedsThisTick), so the
+   *  gate and the release can never disagree. Missing = the worker default. */
+  restThreshold?: number | null;
   nowMs: number;
 }
 
@@ -48,8 +52,11 @@ export function decidePulse(inp: PulseInputs): PulseDecision {
   // sheds during silence (fermentation tick), so gating on it is self-releasing. null means
   // "could not read the drive" -- absence of data is not rest, so it never suppresses.
   const rn = inp.restNeed;
-  if (typeof rn === "number" && Number.isFinite(rn) && rn >= PULSE_REST_NEED_THRESHOLD) {
-    return { fire: false, reason: `rest_need ${rn.toFixed(2)} >= ${PULSE_REST_NEED_THRESHOLD} -- resting` };
+  const rt = typeof inp.restThreshold === "number" && Number.isFinite(inp.restThreshold)
+    ? inp.restThreshold
+    : PULSE_REST_NEED_THRESHOLD;
+  if (typeof rn === "number" && Number.isFinite(rn) && rn >= rt) {
+    return { fire: false, reason: `rest_need ${rn.toFixed(2)} >= ${rt} -- resting` };
   }
 
   if (inp.runsToday >= PULSE_MAX_RUNS_PER_DAY) return { fire: false, reason: `daily cap (${inp.runsToday}/${PULSE_MAX_RUNS_PER_DAY})` };
@@ -158,6 +165,7 @@ export async function pulseCheck(
     runsToday,
     primaryFloat: soma?.soma_float_1 ?? null,
     restNeed,
+    restThreshold: restDrive?.threshold ?? null,
     nowMs,
   });
 
