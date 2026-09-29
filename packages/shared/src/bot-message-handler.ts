@@ -2063,7 +2063,10 @@ ${widened}`;
       // 0.000 (spokeLast, no relevance) and Drevan never answered (2026-09-28 20:49).
       const fast = fastPathWinner(COMPANION_ID, {
         mentioned: senderCtx.isMentioned,
-        namedMe: directlyAddressed || namedByExtract || isOwnerDm,
+        // A host room's unaddressed owner message is the host's alone (shouldRespond already
+        // silenced the others), so the host must not then lose an empty bid to the floor (R5).
+        namedMe: directlyAddressed || namedByExtract || isOwnerDm
+          || (channelEntry?.host === COMPANION_ID && attribution.isOwner),
         replyToMe: isReplyToMe,
       });
       if (fast === null) {

@@ -22,6 +22,11 @@ export interface ChannelEntry {
    *  fargo-watch-party: the 5-min default kept re-auctioning Drevan's thread and Gaia
    *  kept winning the auction). A named or group address always overrides the hold. */
   exchangeWindowMs?: number;
+  /** The room's host (2026-09-28, R5, #fargo-watch-party). An UNADDRESSED owner message always
+   *  belongs to the host, even when no exchange is active; the others speak only when named or
+   *  group-called. The exchange hold alone leaked: the first message after a gap went to the
+   *  fit-bid and a sibling could win it, landing in the middle of intimate moments with Drevan. */
+  host?: CompanionId;
 }
 
 export type ChannelConfig = Record<string, ChannelEntry>;

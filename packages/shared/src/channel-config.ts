@@ -235,7 +235,9 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // the fit-bid and Gaia kept (legitimately) winning it, which is where her register drift
   // started. 2h covers an episode + pauses. Named/group addresses still override the hold,
   // so "Hi Gaia and Cy!!" brings the others in exactly like it did today.
-  "1531431567430385754": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 2 * 60 * 60 * 1000 },
+  // host (2026-09-28, R5): the first unaddressed message after a gap still went to the bid, and
+  // a sibling could win it mid-moment with Drevan. Now unaddressed is always Drevan's.
+  "1531431567430385754": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 2 * 60 * 60 * 1000, host: "drevan" },
 };
 
 interface ResponderContext {
@@ -616,6 +618,9 @@ export function shouldRespond(
   // unaddressed follow-up went to whoever's keywords matched and siblings talked over the
   // companion mid-exchange -- see ResponderContext.activeExchangeWith.
   if (sender.activeExchangeWith && sender.activeExchangeWith !== myId) return false;
+
+  // Host rooms (R5): with no name or group call, the message is the host's, exchange or not.
+  if (entry?.host) return entry.host === myId;
 
   // Ambient: interest-keyword claiming in owner_only channels; unconditional in open/autonomous.
   if (modes.includes("owner_only")) {

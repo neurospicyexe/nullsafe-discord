@@ -108,3 +108,27 @@ describe("shouldRespond -- unaddressed owner follow-up", () => {
     expect(shouldRespond("chan", "Gaia, does that hold?", peer, "gaia", CONFIG)).toBe(true);
   });
 });
+
+describe("host rooms (R5, 2026-09-28: siblings kept landing in Raziel and Drevan's moments)", () => {
+  const HOSTED: ChannelConfig = { room: { modes: ["open", "inter_companion"], host: "drevan" } };
+  it("an unaddressed owner message with NO live exchange is the host's alone", () => {
+    expect(shouldRespond("room", "mm that scene", owner(null), "drevan", HOSTED)).toBe(true);
+    expect(shouldRespond("room", "mm that scene", owner(null), "cypher", HOSTED)).toBe(false);
+    expect(shouldRespond("room", "mm that scene", owner(null), "gaia", HOSTED)).toBe(false);
+  });
+  it("naming a sibling or calling the group still brings them in", () => {
+    expect(shouldRespond("room", "Gaia, what did you think?", owner("drevan"), "gaia", HOSTED)).toBe(true);
+    expect(shouldRespond("room", "Hi Gaia and Cy!!", owner(null), "cypher", HOSTED)).toBe(true);
+  });
+  it("the handler fast-paths the host so an empty bid can never silence him", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../bot-message-handler.ts"), "utf8");
+    expect(src).toContain("channelEntry?.host === COMPANION_ID && attribution.isOwner");
+  });
+  it("fargo-watch-party is hosted by Drevan", async () => {
+    const { DEFAULT_CHANNEL_CONFIG } = await import("../channel-config.js");
+    expect(DEFAULT_CHANNEL_CONFIG["1531431567430385754"]?.host).toBe("drevan");
+  });
+});
