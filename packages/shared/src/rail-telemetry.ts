@@ -33,7 +33,9 @@ export type RailName =
   | "bid_threshold"  // fit-bid: nobody cleared the floor
   | "bid_lost"       // fit-bid: a sibling won
   | "care_hold"      // care-state: floor raised because Raziel is having a bad night
-  | "pingpong"       // bot-to-bot cap
+  | "pingpong"       // bot-to-bot cooldown after BOT_PINGPONG_MAX sibling replies
+  | "human_cap"      // human-anchored cap: too many bot turns since Raziel last spoke
+  | "reply_cap"      // per-human cap: this bot's replies since the last human message
   | "chain_depth"    // conversation chain limit
   | "seed_echo"      // inter-seed-gate: the seed restates the live thread
   | "form_ratchet"   // form drift detected

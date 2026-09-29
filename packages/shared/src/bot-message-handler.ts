@@ -1525,7 +1525,16 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       } else if (silence && !isArrival) {
         console.log(`[${COMPANION_ID}] pass turn on ${message.id} railed (${silence}) -- staying silent`);
       }
-      if (silence) return;
+      if (silence) {
+        // 2026-09-28: these three rails ended turns with no [rail] line, so the logs could not
+        // say which one stops a chain. Record every one, arrival or pass.
+        const rail = silence === "human-anchored-cap" ? "human_cap" : silence === "pingpong-cooldown" ? "pingpong" : "reply_cap";
+        const [score, threshold] = rail === "human_cap" ? [botTurnsSinceHuman, capMax]
+          : rail === "reply_cap" ? [botResponsesSinceHuman.get(message.channelId) ?? 0, MAX_BOT_RESPONSES_PER_HUMAN]
+          : [undefined, undefined];
+        railSuppressed(COMPANION_ID, rail, { score, threshold, channelId: message.channelId, detail: isArrival ? undefined : "pass turn" });
+        return;
+      }
     } else if (resetsBotRails(railTurn)) {
       // Human message: reset bot-to-bot counters and cycle guard for this channel.
       botResponsesSinceHuman.delete(message.channelId);
@@ -1575,7 +1584,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
       new Set(),
     );
-    if (appliesBotRails(railTurn) && chainDepth >= COMPANION_CHAIN_LIMIT) return;
+    if (appliesBotRails(railTurn) && chainDepth >= COMPANION_CHAIN_LIMIT) {
+      railSuppressed(COMPANION_ID, "chain_depth", { score: chainDepth, threshold: COMPANION_CHAIN_LIMIT, channelId: message.channelId });
+      return;
+    }
 
     if (resetsBotRails(railTurn) && !(isOwnerDm && dmParaphraseMemorySealed())) sessionWindows.touch(message.channelId);
 
