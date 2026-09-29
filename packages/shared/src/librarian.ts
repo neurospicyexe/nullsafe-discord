@@ -2334,8 +2334,10 @@ export async function isMyAutonomousTurn(
  * the budget is sized so the measured worst real payload (~12.5k rest + ~2.1k pinned forage post-
  * cap) fits whole. ~14k chars is ~3.5k tokens of DeepSeek input per build; the blind cut cost more
  * in coherence than this costs in tokens.
+ * 15000 (2026-09-28, R15): the rest overflowed by ~600 chars on ~290 builds/day/bot (tail ephemera cut,
+ * forage pinned and intact). Raziel ruled the raise over trimming the tail blocks; ~150 tokens/build.
  */
-export const RECENT_CONTEXT_BUDGET = 14000;
+export const RECENT_CONTEXT_BUDGET = 15000;
 
 /**
  * The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
