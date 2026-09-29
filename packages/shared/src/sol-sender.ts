@@ -83,21 +83,30 @@ export function muzzleVerdict(p: {
  * more companions goes to them, and a host room's unnamed moment goes to its host, exactly as for
  * Raziel's own messages. Everything else is open to all three, and the fit bid picks ONE.
  */
-export function solMayAnswer(p: {
+export interface SolAnswerInput {
   modes: readonly string[];
   companions: readonly string[];
   me: string;
   address: AddressType;
   host?: string;
-}): boolean {
-  if (p.modes.includes("broadcast")) return false;
-  if (!p.companions.includes(p.me)) return false;
+}
+
+export type SolDeclineReason = "broadcast" | "not_in_companions" | "named_other" | "host_other";
+
+/** Why THIS companion stands down on a Sol post, or null when it may answer. The handler logs the reason. */
+export function solDeclineReason(p: SolAnswerInput): SolDeclineReason | null {
+  if (p.modes.includes("broadcast")) return "broadcast";
+  if (!p.companions.includes(p.me)) return "not_in_companions";
   const a = p.address;
-  if (a.type === "named") return a.id === p.me;
-  if (a.type === "named_multi") return (a.ids as readonly string[]).includes(p.me);
-  if (a.type === "group") return true;
-  if (p.host) return p.host === p.me;
-  return true;
+  if (a.type === "named") return a.id === p.me ? null : "named_other";
+  if (a.type === "named_multi") return (a.ids as readonly string[]).includes(p.me) ? null : "named_other";
+  if (a.type === "group") return null;
+  if (p.host && p.host !== p.me) return "host_other";
+  return null;
+}
+
+export function solMayAnswer(p: SolAnswerInput): boolean {
+  return solDeclineReason(p) === null;
 }
 
 /** One context line for a turn triggered by a Sol post. Positive framing; one line on purpose. */

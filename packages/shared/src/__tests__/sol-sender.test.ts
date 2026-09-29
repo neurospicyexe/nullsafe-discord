@@ -5,7 +5,7 @@
 // post must never act as the human anchor that re-opens a floor.
 import { describe, it, expect } from "@jest/globals";
 import {
-  solWebhookId, isSolPost, withoutSol, muzzleVerdict, solMayAnswer, solMomentFraming,
+  solWebhookId, isSolPost, withoutSol, muzzleVerdict, solMayAnswer, solDeclineReason, solMomentFraming,
   solRecognizedLogLine, solUnsetBootLine, SOL_AUTHOR_LABEL,
 } from "../sol-sender.js";
 import {
@@ -197,6 +197,16 @@ describe("who answers a Sol post", () => {
     const address = extractAddress("*Sol lands on the sill.*");
     expect(solMayAnswer({ ...ownerOnly, host: "drevan", me: "drevan", address })).toBe(true);
     expect(solMayAnswer({ ...ownerOnly, host: "drevan", me: "cypher", address })).toBe(false);
+  });
+
+  it("every stand-down carries a loggable reason; an open moment carries none", () => {
+    const ambient = extractAddress("*Sol dozes on the rail.*");
+    const all = ["cypher", "drevan", "gaia"];
+    expect(solDeclineReason({ modes: ["broadcast"], companions: all, me: "gaia", address: ambient })).toBe("broadcast");
+    expect(solDeclineReason({ modes: ["owner_only"], companions: ["drevan"], me: "gaia", address: ambient })).toBe("not_in_companions");
+    expect(solDeclineReason({ modes: ["owner_only"], companions: all, me: "gaia", address: { type: "named", id: "drevan" } })).toBe("named_other");
+    expect(solDeclineReason({ modes: ["owner_only"], companions: all, me: "gaia", address: ambient, host: "drevan" })).toBe("host_other");
+    expect(solDeclineReason({ modes: ["owner_only"], companions: all, me: "gaia", address: ambient })).toBeNull();
   });
 
   it("a reply to Sol is never voiced", () => {

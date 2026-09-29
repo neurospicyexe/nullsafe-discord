@@ -28,7 +28,7 @@ import {
 // Identity stays per-bot: prompt prefix lives in bootCtx, framings/keywords/audit in config.
 
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
-import { isSolPost, withoutSol, muzzleVerdict, solMayAnswer, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
+import { isSolPost, withoutSol, muzzleVerdict, solDeclineReason, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
 import { VoiceConnectionStatus, createAudioResource, type VoiceConnection, type AudioPlayer } from "@discordjs/voice";
 import { Readable } from "stream";
@@ -693,8 +693,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // (it indexes display_name), while the /v2/messages fallback returns the member's raw `name`,
     // which can differ from the display name and would have the companion address a front by a
     // name not in use this moment. API/roster values remain the fallback chain.
-    const pkMemberName = (isPKProxy ? (message.author?.username ?? null) : null)
-      ?? attribution.frontMember ?? pkCtx.memberName;
+    // Never a front for Sol: a non-null name here injects a "[Current front: ...] Guest register." line.
+    const pkMemberName = isSol ? null : ((isPKProxy ? (message.author?.username ?? null) : null)
+      ?? attribution.frontMember ?? pkCtx.memberName);
     const author = isSol ? SOL_AUTHOR_LABEL
       : isPKProxy
       ? (pkMemberName ?? cfg.ownerDisplayName)
@@ -1426,6 +1427,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       isSol,
     });
 
+    // Sol's gate (sol-sender.ts). Sol is household, not a guest: shouldRespond would read the webhook
+    // as a guest (named-only, shut out of owner_only). solDeclineReason decides; the fit bid below
+    // picks the one speaker. A decline is LOGGED with its reason, so "recognized, then nothing" is
+    // never silent (a broadcast heartbeat channel would otherwise look like the old muzzle drop).
+    const solDecline = isSol && !isReplyToMe && !entitledFollowUp
+      ? solDeclineReason({
+        modes: channelEntry?.modes ?? ["open", "inter_companion"],
+        companions: channelEntry?.companions ?? ["cypher", "drevan", "gaia"],
+        me: COMPANION_ID,
+        address: extractAddress(effectiveContent),
+        host: channelEntry?.host,
+      })
+      : null;
+
     if (isAmbientOwnerOnly) {
       // A yes/no relevance filter needs zero tools; riding the Hermes agent adapter here
       // over-costs a one-word answer the same way the memory judge over-cost a one-sentence
@@ -1437,15 +1452,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         (sys, msgs) => (withCaller(directAdapter, "ambient-judge") ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (isSol && !isReplyToMe && !entitledFollowUp && !solMayAnswer({
-      modes: channelEntry?.modes ?? ["open", "inter_companion"],
-      companions: channelEntry?.companions ?? ["cypher", "drevan", "gaia"],
-      me: COMPANION_ID,
-      address: extractAddress(effectiveContent),
-      host: channelEntry?.host,
-    })) {
-      // Sol is household, not a guest: shouldRespond would read the webhook as a guest (named-only,
-      // shut out of owner_only). solMayAnswer is its gate; the fit bid below picks the one speaker.
+    } else if (solDecline) {
+      console.log(`[${COMPANION_ID}] Sol post ${message.id} not mine to answer (${solDecline}) -- standing down`);
       return;
     } else if (!isSol && !isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
