@@ -1444,7 +1444,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
               : BOT_ID_COMPANION[m.author.id] && !m.webhookId
                 ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
-                : m.webhookId ? m.author.username : cfg.ownerDisplayName,
+                : m.webhookId ? m.author.username
+                  : m.author.id === cfg.ownerDiscordId ? cfg.ownerDisplayName : m.author.username,
             text: m.content ?? "",
           }));
           const holder = activeExchangeHolder(
