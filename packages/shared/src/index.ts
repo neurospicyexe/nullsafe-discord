@@ -84,3 +84,6 @@ export * from "./med-context.js";
 export * from "./med-reminder.js";
 // The owner-DM lane types (B7 2+2c). reach-dm.ts is deliberately NOT exported here (T-4).
 export type { OwnerDmTarget, OwnerDmLane } from "./owner-dm.js";
+// B37 step 1: the address classifier (pure) and its shadow run (2026-09-29).
+export * from "./address-model.js";
+export * from "./address-shadow.js";

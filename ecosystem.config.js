@@ -224,6 +224,14 @@ const shared = {
   // (env-file.ts already loads the whole .env into every bot, so this listing is the standing rule, not
   // a new grant.) Listed per the standing rule above.
   SOL_WEBHOOK_URL:             process.env.SOL_WEBHOOK_URL,
+  // ADDRESS_MODEL (2026-09-29, B37 step 1, address-shadow.ts): the "who is this spoken to" classifier.
+  // Code default is OFF; this file defaults the bots to `shadow` (the worker ignores it). Shadow runs
+  // the classifier once per qualifying human message (Redis claim), detached from the reply path, and
+  // only logs `[address]` lines plus ADDRESS_SHADOW_LOG rows; it never changes who speaks. Any value
+  // other than `shadow` turns it off. A .env line wins over this default (env-file.ts, file wins).
+  // Listed per the standing rule above.
+  ADDRESS_MODEL:               process.env.ADDRESS_MODEL ?? "shadow",
+  ADDRESS_SHADOW_LOG:          process.env.ADDRESS_SHADOW_LOG,
 };
 
 module.exports = {

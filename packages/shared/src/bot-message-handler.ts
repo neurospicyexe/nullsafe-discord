@@ -28,6 +28,8 @@ import {
 // Identity stays per-bot: prompt prefix lives in bootCtx, framings/keywords/audit in config.
 
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
+import { fireAddressShadow, recordAddressSpoke } from "./address-shadow.js";
+import { addressModelMode, type AddressTurn } from "./address-model.js";
 import { isSolPost, withoutSol, muzzleVerdict, solDeclineReason, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
 import { VoiceConnectionStatus, createAudioResource, type VoiceConnection, type AudioPlayer } from "@discordjs/voice";
@@ -1401,6 +1403,63 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         }
       } catch { /* history unavailable -- leave null, ambient stays open to everyone */ }
     }
+
+    // B37 step 1, address model SHADOW (address-shadow.ts, 2026-09-29). Fired HERE -- after the regex
+    // verdict and the exchange holder are settled, before this bot's own gates return -- because it
+    // has to see the messages this bot will NOT answer ("Cy said..." silences Drevan and Gaia at
+    // shouldRespond just below). NEVER awaited: it returns void, runs detached, claims the message
+    // in Redis so only one bot calls the model, and changes nothing about who speaks.
+    // Human owner messages only (Raziel or his PK front); never a sibling, never Sol, never a DM,
+    // never a replayed pass turn.
+    if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+      && attribution.isOwner && addressModelMode() === "shadow") {
+      const shadowRefId = message.reference?.messageId ?? null;
+      fireAddressShadow({
+        isDm: isOwnerDm,
+        companionId: COMPANION_ID,
+        messageId: message.id,
+        channelId: message.channelId,
+        createdTimestamp: message.createdTimestamp,
+        content: effectiveContent,
+        speaker: author,
+        mentionedCompanion: senderCtx.isMentioned
+          || [...BOT_IDS].some(id => id !== client.user?.id && message.mentions.users?.has?.(id)),
+        replyToMe: isReplyToMe,
+        replyToCompanion: shadowRefId
+          ? async () => {
+            const ref = await message.channel.messages.fetch(shadowRefId).catch(() => null);
+            return !!ref && BOT_IDS.has(ref.author.id) && !ref.webhookId;
+          }
+          : undefined,
+        regex: extractAddress(effectiveContent),
+        holder: senderCtx.activeExchangeWith,
+        redis,
+        adapter: withCaller(directAdapter, "address_model") ?? null,
+        fetchRecent: async () => {
+          const hist = await message.channel.messages.fetch({ limit: 8 });
+          const older = [...hist.values()]
+            .filter(m => m.id !== message.id && m.createdTimestamp <= message.createdTimestamp)
+            .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+          const turns: AddressTurn[] = older.map(m => ({
+            speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
+              : BOT_ID_COMPANION[m.author.id] && !m.webhookId
+                ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
+                : m.webhookId ? m.author.username : cfg.ownerDisplayName,
+            text: m.content ?? "",
+          }));
+          const holder = activeExchangeHolder(
+            withoutSol(older, solId).reverse().map(m => ({
+              companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
+              authorIsBot: botTurn(m),
+              createdTimestamp: m.createdTimestamp,
+            })),
+            message.createdTimestamp,
+            channelEntry?.exchangeWindowMs,
+          );
+          return { turns, holder };
+        },
+      });
+    }
     // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
     // (2026-07-29): brainClient was always null, so the gate always applied. Same for the
     // `brainHandlesInterCompanion` escape below it, which deferred inter-companion routing to
@@ -2600,6 +2659,16 @@ ${widened}`;
     }
 
     for (const m of sent) sentIds.add(m.id);
+    // B37 shadow: the OBSERVED speaker, joined to the address shadow row by origin id in the report.
+    // Fire-and-forget file append, no-op unless ADDRESS_MODEL=shadow; never for a DM or Sol.
+    if (sent.length > 0 && !isOwnerDm && !isSol && (entitledFollowUp || (!senderCtx.isCompanionBot && attribution.isOwner))) {
+      recordAddressSpoke({
+        isDm: isOwnerDm,
+        msgId: entitledFollowUp?.originMessageId ?? message.id,
+        channelId: message.channelId,
+        companionId: COMPANION_ID,
+      });
+    }
     // Retract bookkeeping (2026-09-26 review): which chunks are this reply, which is its head
     // (what journalSpeech + liveIngest key on below), and which message triggered the turn (what
     // the memory judge keys `judge:<id>` on). See reply-index.ts.

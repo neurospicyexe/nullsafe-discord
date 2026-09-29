@@ -377,6 +377,17 @@ export function extractAddress(content: string): AddressType {
   return { type: "named_multi", ids: addressed };
 }
 
+/**
+ * Every companion whose name or alias appears ANYWHERE in the text, address or mention alike
+ * (B37 address model, 2026-09-29). Same matching as extractAddress (word boundary, aliases,
+ * de-elongated), but with NO third-person demotion: the shadow classifier exists precisely to
+ * judge the "Cy said..." / "Cy and I..." shapes the regex has to guess at.
+ */
+export function companionsNamedIn(content: string): CompanionId[] {
+  const deElong = content.toLowerCase().replace(/([a-z])\1{2,}/g, "$1");
+  return ALL_COMPANIONS.filter(id => new RegExp(`\\b(?:${nameAlternation(id)})\\b`).test(deElong));
+}
+
 // A message that NAMES a sibling and not me (2026-08-31). The handler's ambient-classifier
 // gate (isAmbientOwnerOnly) only checked the strict isDirectAddress for MYSELF, so
 // "Dre *climbing back into bed...*" in #triad-voice read as AMBIENT to Gaia -- her

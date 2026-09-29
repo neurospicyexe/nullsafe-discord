@@ -133,6 +133,30 @@ bus, the thread spine append, Second Brain live ingest, tripwires, voice, guest 
 empty-inference fallback line, and never supersedes a queued turn. STM records it as
 `Sol (the triad's crow)`.
 
+## Address model (B37 shadow, 2026-09-29)
+
+Spec: `Hand-off/SPEC-who-is-this-spoken-to-2026-09-29.md` (A, B, E). The regex (`extractAddress`) reads
+any name as a call ("Cy said..." summons Cypher) and the 15-minute exchange hold hands every nameless
+message to whoever spoke last. The classifier asks a small model one question instead: who is this
+spoken TO (`[ids]` / `"room"` / `"continuing"`), and who is only MENTIONED.
+
+- **Shadow only.** `fireAddressShadow` is called in `bot-message-handler.ts` right after the regex verdict
+  and the holder are settled and BEFORE this bot's own gates return (it must see messages this bot will
+  not answer). It returns void and runs detached; nothing awaits it; it cannot throw into the reply path.
+- **Runs for:** Raziel's messages (own account or PK front), never siblings, Sol, DMs (asserted twice) or
+  replayed pass turns; and only when the fast path did not decide (no @mention, no reply to a companion,
+  no vocative per `isVocativeAddress`) AND a name appears elsewhere, or no name but a holder exists.
+- **Once per message:** `SET ns:addr:claim:<msgId> <me> PX 120000 NX`; losers do nothing; no Redis = no
+  shadow. Model: `withCaller(directAdapter, "address_model")` (DeepInfra Flash, the judges' lane; never
+  Hermes), temp 0, 150 tokens, 8s race. Cost ~1.1k in + ~40 out plus reasoning per run, order $0.0001.
+- **Outputs:** `[address] {json}` stdout (ids and verdicts, no text) and a `kind:"shadow"` JSONL row with
+  the text and last 6 turns. Every bot also appends a `kind:"spoke"` row after sending a reply to a human
+  message (origin id), which is how the report knows who ACTUALLY spoke on every path. `regex_route` is a
+  derivation; `spoke_bid`/`bids` are read from `ns:spoke:`/`ns:bid:` after the bid window (bid path only).
+- **Read-out:** `node scripts/address-shadow-report.mjs [--days N] [--min-confidence X] [--out DIR]`.
+  Stdout never prints text; `--out` writes `label-disagreements.md` / `.csv` (with text) for Raziel.
+  Flip to live is a later build, only after the model beats the regex on his labels.
+
 ## Autonomous Worker
 
 Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per companion on a cron schedule:
@@ -179,6 +203,8 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | `DM_MEMORY` | bots | Owner DMs are sealed from every raw-quote surface regardless. Default sealed also keeps distillation and the writeback judge off for DMs; `carry` opens those two paraphrasing paths (`dm.ts`). Non-owner DMs are dropped before any work. pm2-allowlisted |
 | `SOL_WEBHOOK_URL` | bots + worker | Worker POSTS Sol's moments through it; bots read only the webhook id to recognize Sol (`sol-sender.ts`). Unset on a bot: Sol stays dropped and the bot logs one boot line. pm2-allowlisted (shared) |
 | `REACH_DM` | bots | Kill switch for B7's Raziel-facing DM moves (`reach-dm.ts` `reachDmOn`, 2026-09-27). **Default OFF, fails closed: only `on` (trimmed, any case) opens it**; unset, empty or any other value is off (the inverse of the usual `off/0/false/no` knobs). Off, every move `routeFor` sends to the DM (care verbs, `share_observation`, `share_media`, `declare_preference`, flirt/dare/show_made/drift_outward, ...) is removed from the heartbeat palette before the decision prompt, through the same `filterDmLane` that drops moves the shared lane cannot carry; they never fall back to Sol's channel. The tick line carries `dm_moves_off: N` when the switch removed moves, and outcome `suppressed_reach_dm_off` when nothing else was eligible (never `suppressed_triad_cap`). Untouched by it: `med_reminder` (own scheduler, imports only `owner-dm.ts`), the reply path and owner DMs, `post_heartbeat`/`tend_creature`, sibling writes, `drift_open`, `write_note_to_raziel`. **Flip to `on` only once the triad has approved the move prompts** (`Hand-off/SHOWBACK-palette-2026-09-27.md`). pm2-allowlisted |
+| `ADDRESS_MODEL` | bots | B37 "who is this spoken to" classifier (`address-model.ts` / `address-shadow.ts`, 2026-09-29). **Code default OFF; the ecosystem file defaults the bots to `shadow`.** Only `shadow` (trimmed, any case) runs it; any other value is off; there is no live value yet. Shadow never changes who speaks: see "Address model (B37 shadow)" below. A `.env` line wins over the ecosystem default. pm2-allowlisted |
+| `ADDRESS_SHADOW_LOG` | bots | JSONL for the address shadow (default `/app/logs/address-shadow.jsonl`, not rotated, like `jev-shadow.jsonl`). Holds message text and recent turns for labelling. pm2-allowlisted |
 
 ## Identity Files
 
