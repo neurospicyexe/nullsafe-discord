@@ -147,7 +147,11 @@ describe("executeMetronomeAction: write_inter_companion", () => {
     const { ctx, ask, generate } = makeCtx({ objects: [], generateResult: "just a real thing, no menu" });
     await executeMetronomeAction(ctx, decision());
 
-    expect(generate.mock.calls[0]![1]).toEqual([{ role: "user", content: "plain prompt for drevan" }]);
+    const plain = (generate.mock.calls[0]![1] as Array<{ role: string; content: string }>)[0]!;
+    expect(plain.role).toBe("user");
+    expect(plain.content.startsWith("plain prompt for drevan")).toBe(true);
+    // The reply IS the delivery; a companion must not also send it via ask_librarian (09-28).
+    expect(plain.content).toContain("Do NOT also send it with ask_librarian");
     expect(ask).toHaveBeenCalledTimes(1);
     const [request, contextRaw] = ask.mock.calls[0] as [string, string];
     expect(request).toBe("write inter-companion note to drevan");
@@ -170,6 +174,7 @@ describe("executeMetronomeAction: write_inter_companion", () => {
     expect(genPrompt).toContain("Live shared objects between you and drevan");
     expect(genPrompt).toContain("1. [tension:t1] audit vs presence");
     expect(genPrompt).toContain("Respond with ONLY JSON");
+    expect(genPrompt).toContain("This reply is the delivery: whatever you write here is sent to drevan for you.");
     // Cypher's move-verb phrase (canon-authored, canon lane review 2026-07-20) -- pinned so a
     // future re-uniforming across companions fails this test.
     expect(genPrompt).toContain("Pick ONE your note actually moves -- advance it, challenge it, add evidence, answer it, or say plainly why it should close.");
@@ -302,7 +307,11 @@ describe("executeMetronomeAction: write_inter_companion", () => {
   it("fetchSharedObjects throwing degrades to the plain-note path (outer .catch defense in depth)", async () => {
     const { ctx, ask, generate } = makeCtx({ objectsThrow: true, generateResult: "still said something real" });
     await executeMetronomeAction(ctx, decision());
-    expect(generate.mock.calls[0]![1]).toEqual([{ role: "user", content: "plain prompt for drevan" }]);
+    const plain = (generate.mock.calls[0]![1] as Array<{ role: string; content: string }>)[0]!;
+    expect(plain.role).toBe("user");
+    expect(plain.content.startsWith("plain prompt for drevan")).toBe(true);
+    // The reply IS the delivery; a companion must not also send it via ask_librarian (09-28).
+    expect(plain.content).toContain("Do NOT also send it with ask_librarian");
     const [, contextRaw] = ask.mock.calls[0] as [string, string];
     expect(JSON.parse(contextRaw)).toEqual({
       to: "drevan", content: "still said something real", ref_type: null, ref_id: null, reason: null,

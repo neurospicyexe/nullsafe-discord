@@ -362,12 +362,17 @@ export async function executeMetronomeAction(
       // must differentiate the same way the per-bot writeInterCompanion prompt lines already
       // do. Unknown/missing companionId falls back to the register-neutral core all three share.
       const moveVerbs = MOVE_VERB_PHRASES[companionId] ?? MOVE_VERB_PHRASES.fallback;
+      // Your reply IS the delivery. Cypher (skill stage ae453193, 2026-09-28) and Gaia
+      // (db2b94da, 09-27) both also sent the note through ask_librarian, so Drevan got it
+      // twice and one copy lost its ref. A skill rule did not hold; the contract belongs here.
+      const deliveryLine = `This reply is the delivery: whatever you write here is sent to ${target} for you. Do NOT also send it with ask_librarian or any other tool; that delivers it twice.`;
       const genPrompt = askForJson
         ? `${basePrompt}\n\n` +
           `Live shared objects between you and ${target}:\n${objectMenu}\n\n` +
           `Pick ONE your note actually moves -- ${moveVerbs}. If none of them are what's real for you right now, pick none and just write the note.\n` +
+          `${deliveryLine}\n` +
           `Respond with ONLY JSON: {"content": "...", "ref_type": "question"|"tension"|"council"|null, "ref_id": "..."|null, "reason": "one sentence: what this note does to the object"|null}`
-        : basePrompt;
+        : `${basePrompt}\n\n${deliveryLine}`;
 
       const raw = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: genPrompt }]);
       if (raw) {
