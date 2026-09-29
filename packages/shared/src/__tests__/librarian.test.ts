@@ -127,6 +127,24 @@ describe("LibrarianClient.botOrient()", () => {
     expect(block).toContain("audit is a gear");
   });
 
+  it("renders the R9 resurfaced conclusion as its own labelled block, never inside [Worldview]", () => {
+    const block = formatRecentContext({
+      synthesis_summary: null,
+      ground_threads: [],
+      ground_handoff: null,
+      rag_excerpts: [],
+      active_conclusions: [{ text: "audit is a gear", belief_type: "self", confidence: 0.82, subject: null }],
+      flagged_beliefs: [],
+      resurfaced_conclusion: { conclusion_text: "the doing comes back before the wanting does", belief_type: "about_raziel", concluded_at: "2026-08-04T12:00:00Z", pool_size: 50 },
+    });
+    expect(block).toContain("[An older conclusion, resurfacing -- 1 of 50 cold conclusions in rotation.");
+    expect(block).toContain("[concluded @ 2026-08-04] «the doing comes back before the wanting does»");
+    const worldview = block.split("[Worldview]")[1]!.split("[An older conclusion")[0]!;
+    expect(worldview).not.toContain("the doing comes back");
+    const none = formatRecentContext({ synthesis_summary: null, ground_threads: [], ground_handoff: null, rag_excerpts: [], resurfaced_conclusion: null });
+    expect(none).not.toContain("resurfacing");
+  });
+
   it("keeps the forage block even when the interior cluster overflows the budget", () => {
     // Pre-fix this was `parts.join().slice(0, 4800)` -- a blind tail cut that dropped forage,
     // the only block carrying material from outside the companion's own corpus.

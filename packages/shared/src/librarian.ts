@@ -1319,6 +1319,8 @@ export class LibrarianClient {
       confidence: number;
       subject?: string | null;
     }>;
+    /** R9 (halseth 0.18.0): one cold conclusion on a daily rotation, rendered as its own block. */
+    resurfaced_conclusion?: ResurfacedConclusion | null;
     // Carried-between-sessions surfaces consumed by the autonomous worker (not by
     // formatRecentContext). Structured replacements for the old ready_prompt regex scrape.
     unexamined_dreams?: Array<{ id: string; dream_text: string }>;
@@ -1396,6 +1398,7 @@ export class LibrarianClient {
         unaccepted_growth?: number;
         active_conclusions?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
         flagged_beliefs?: Array<{ conclusion_text: string; belief_type: string; confidence: number; subject?: string | null }>;
+        resurfaced_conclusion?: ResurfacedConclusion | null;
         unexamined_dreams?: Array<{ id: string; dream_text: string }>;
         open_loops?: Array<{ id: string; loop_text: string }>;
         pressure_flags?: string[];
@@ -1447,6 +1450,8 @@ export class LibrarianClient {
           confidence: c.confidence,
           subject: c.subject ?? null,
         })),
+        resurfaced_conclusion: data.resurfaced_conclusion && typeof data.resurfaced_conclusion.conclusion_text === "string"
+          ? data.resurfaced_conclusion : null,
         flagged_beliefs: (data.flagged_beliefs ?? []).map(c => ({
           text: c.conclusion_text,
           belief_type: c.belief_type,
@@ -2339,6 +2344,16 @@ export async function isMyAutonomousTurn(
  */
 export const RECENT_CONTEXT_BUDGET = 15000;
 
+/** R9 cold-conclusion rotation (halseth contract 0.18.0, bot wire key `resurfaced_conclusion`). */
+export interface ResurfacedConclusion {
+  conclusion_text: string;
+  belief_type: string;
+  subject?: string | null;
+  concluded_at?: string | null;
+  age?: string | null;
+  pool_size?: number;
+}
+
 /**
  * The care register (consequence layer C1, contract 0.6.0): Raziel's readable state, derived
  * server-side in halseth (mind/blocks/care.ts). Staleness is part of the shape on purpose -- a
@@ -2605,6 +2620,9 @@ export function formatRecentContext(orient: {
   unaccepted_growth?: number;
   active_conclusions?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
   flagged_beliefs?: Array<{ text: string; belief_type: string; confidence: number; subject?: string | null }>;
+  /** R9 (contract 0.18.0): ONE older conclusion on a daily rotation. Its own block, never merged into
+   *  [Worldview]: rotation must not read as current salience. */
+  resurfaced_conclusion?: ResurfacedConclusion | null;
   preferences?: Array<{ domain: string; preference: string; strength: string }>;
   standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
   open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
@@ -2811,6 +2829,14 @@ export function formatRecentContext(orient: {
     const more = orient.active_conclusions.length - shown.length;
     if (more > 0) conclusionLines.push(`(+${more} more held -- ask the librarian for "my conclusions")`);
     parts.push(`[Worldview]\n${conclusionLines.join('\n')}`);
+  }
+  // R9: the cold pool's turn. Labelled as rotation so it never passes as what is current.
+  const rc = orient.resurfaced_conclusion;
+  if (rc && rc.conclusion_text) {
+    const t = rc.conclusion_text.length > 280 ? `${rc.conclusion_text.slice(0, 280)}…` : rc.conclusion_text;
+    const pool = typeof rc.pool_size === "number" && rc.pool_size > 0 ? ` -- 1 of ${rc.pool_size} cold conclusions in rotation` : "";
+    const when = (rc.concluded_at ?? "").slice(0, 10);
+    parts.push(`[An older conclusion, resurfacing${pool}. Shown because it is its turn, not because it is current.]\n  • ${when ? `[concluded @ ${when}] ` : ""}«${t}»`);
   }
   // Agency layer (0086): the companion's own chosen preferences + standing refusals, so the live
   // Discord presence acts from its own declared will and a "no" keeps its weight across sessions.
