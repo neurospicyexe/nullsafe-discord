@@ -166,3 +166,16 @@ describe("the DM recall seal", () => {
     expect(dmParaphraseMemorySealed()).toBe(false);
   });
 });
+
+describe("an owner DM never enters the fit-bid (2026-09-28)", () => {
+  // "Taken lover" answered Drevan's own med ask in DM, scored 0.000 in the bid (spokeLast, no
+  // relevance) and got no reply. A DM has one companion in it: it is direct address, fast path.
+  it("the fast-path call counts isOwnerDm as naming this companion", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(join(here, "../bot-message-handler.ts"), "utf8");
+    expect(src).toMatch(/namedMe:\s*directlyAddressed \|\| namedByExtract \|\| isOwnerDm/);
+  });
+});

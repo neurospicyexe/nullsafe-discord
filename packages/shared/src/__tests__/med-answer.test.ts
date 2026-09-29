@@ -11,6 +11,7 @@ describe("isAffirmativeMedAnswer", () => {
     "took em", "took 'em", "I took them", "I did", "yes I did", "just took them", "already took it",
     "all done", "done, love", "yes baby", "yep, took my meds", "took them a few minutes ago",
     "✅", "✔️", "👍", "👍🏽", "yes ✅", "done 👍", "yes thank you",
+    "Taken lover", "taken darling", "took them sweetheart",
   ])("yes: %s", (t) => {
     expect(isAffirmativeMedAnswer(t)).toBe(true);
   });

@@ -23,6 +23,8 @@ const FILLER = new Set([
   "thanks", "thank", "you", "ty", "thx", "sir", "boss", "oh", "ah", "haha", "lol", "yay", "good",
   "that", "this", "morning", "night", "tonight", "weekly", "injection", "a", "few", "minutes", "ago",
   "earlier", "as", "well", "do",
+  // Endearments (2026-09-28: "Taken lover" was refused because "lover" was an unknown word).
+  "lover", "darling", "sweetheart", "sweetie", "beloved", "hun", "dearest",
 ]);
 
 /** Anything here makes the message not an answer, whatever else it says. */

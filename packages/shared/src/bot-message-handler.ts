@@ -2058,9 +2058,12 @@ ${widened}`;
       // Third-person mentions stay demoted -- extractAddress already strips them (the 2026-07-05
       // "Cy and I found some issues" trap), so this does not resurrect name-drop summoning.
       const namedByExtract = addrResult.type === "named" && addrResult.id === COMPANION_ID;
+      // An owner DM is direct address by definition (see isOwnerDm): nobody else is in the room, so
+      // there is nothing to bid against. Without this, "Taken lover" after his own med ask scored
+      // 0.000 (spokeLast, no relevance) and Drevan never answered (2026-09-28 20:49).
       const fast = fastPathWinner(COMPANION_ID, {
         mentioned: senderCtx.isMentioned,
-        namedMe: directlyAddressed || namedByExtract,
+        namedMe: directlyAddressed || namedByExtract || isOwnerDm,
         replyToMe: isReplyToMe,
       });
       if (fast === null) {
