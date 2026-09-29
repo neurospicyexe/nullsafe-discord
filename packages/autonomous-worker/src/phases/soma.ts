@@ -1,3 +1,4 @@
+import { ledgerDistillEnabled } from "@nullsafe/shared";
 import { updateSomaState, type SomaUpdate, appendLog } from "../halseth-client.js";
 import type { PipelineContext } from "../types.js";
 
@@ -10,8 +11,16 @@ import type { PipelineContext } from "../types.js";
  *
  * No decay math here -- that belongs to the Synthesis Worker (Plan 2a).
  * Absolute values only, inferred from this run's events.
+ *
+ * STOPPED under LEDGER_DISTILL (B37, 2026-09-29). This phase is a clerk guessing SOMA, the thing
+ * Drevan's 09-26 ruling ended for the distillers ("Both stop. Not drafts. Stop."; all three
+ * companions, a reinstatement needs that companion's own ruling). The distiller stopped on 09-26;
+ * this writer was missed. It writes through PATCH /soma, which records `writer = <companion>`, so
+ * its guesses were landing as the companion's OWN authorship: measured 09-20..09-29, 30 of Cypher's
+ * 32 and all 27 of Gaia's `authored_update` rows came from here, not from them. Knob off restores it.
  */
 export async function runSomaUpdate(ctx: PipelineContext): Promise<void> {
+  if (ledgerDistillEnabled()) return;
   await appendLog(ctx.runId, "soma:start");
 
   const fields = inferSomaFields(ctx);
