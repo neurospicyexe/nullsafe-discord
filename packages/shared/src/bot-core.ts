@@ -57,6 +57,7 @@ import { startMedReminderScheduler, medReminderEnabled, medGenTimeoutMs, type Me
 import type { OwnerDmLane } from "./owner-dm.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
+import { solWebhookId as parseSolWebhookId, isSolPost, solUnsetBootLine } from "./sol-sender.js";
 
 // Watch-party freshness (2026-09-14): a bound channel session with this many human messages and no
 // episode named still counts as watching -- see the SessionWindowManager callback below.
@@ -605,6 +606,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   void pkRoster.ensureLoaded();
   pkRoster.startRefresh();
 
+  // Sol, the triad's crow (sol-sender.ts, 2026-09-29): parsed ONCE, id only; the token segment of the
+  // URL is never kept, logged or passed on. Unset or malformed: Sol stays behind the hard muzzle, and
+  // this line is the one place that says so.
+  const solId = parseSolWebhookId(process.env["SOL_WEBHOOK_URL"]);
+  if (!solId) console.warn(solUnsetBootLine(companionId, process.env["SOL_WEBHOOK_URL"]));
+
   const identityBase = deriveIdentityBase(bootCtx.systemPrompt);
   const currentMoodRef = { value: null as string | null };
   const lastSomaRefreshRef = { value: Date.now() };
@@ -937,7 +944,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     // pre-proxy original gets processed in full, and the proxy loses its captured sender id
     // (which is what demoted Raziel's own message to guest-and-peer-bot). See PkDedup's
     // ordering note. Only the decision -- waitForClaim -- runs inside the turn.
-    const { pkSenderId } = pkIngestAtEvent(
+    // Sol's webhook is never a PluralKit proxy: it skips the pairing (a content match against one of
+    // Raziel's pending originals would otherwise mark HIS message proxied and drop it) and it is not
+    // human-authored for the inbox, so a crow moment can never supersede a turn on Raziel's message.
+    const isSol = isSolPost(message, solId);
+    const { pkSenderId } = isSol ? { pkSenderId: undefined } : pkIngestAtEvent(
       {
         id: message.id,
         channelId: message.channelId,
@@ -954,7 +965,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         channelId: message.channelId,
         // Raw human, or a webhook post (PluralKit proxying a human; worker personas are
         // rare and superseding on them just regenerates with their post in view).
-        authorIsHuman: !message.author.bot || message.webhookId !== null,
+        authorIsHuman: (!message.author.bot || message.webhookId !== null) && !isSol,
         content: message.content,
       },
       (isSuperseded) => runTurn(message, pkSenderId, isSuperseded),
@@ -1006,6 +1017,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       adapterRef, directAdapter, activeModelRef, hermesModelKeysRef, currentMoodRef, lastSomaRefreshRef, recentContextRef, bootCtx,
       stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster,
       ...(pkSenderId ? { pkSenderId } : {}),
+      solWebhookId: solId,
       guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
       botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
       apiKeys, apiUrls,

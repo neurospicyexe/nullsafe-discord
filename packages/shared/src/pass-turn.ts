@@ -30,6 +30,12 @@ export interface TurnKind {
   isCompanionBot: boolean;
   /** False for a follow-up pass turn: the message already arrived once. */
   isArrival: boolean;
+  /**
+   * A post from Sol's webhook (sol-sender.ts). Sol is household, not a human: a Sol-triggered turn
+   * is governed by the bot rails and never resets them, so a crow moment cannot re-open a floor
+   * that Raziel's absence closed. Optional so every existing caller keeps its meaning.
+   */
+  isSol?: boolean;
 }
 
 /**
@@ -38,12 +44,12 @@ export interface TurnKind {
  * yes: it is a follow-up in a companion chain on a message Raziel sent once, not a new message.
  */
 export function appliesBotRails(t: TurnKind): boolean {
-  return t.isCompanionBot || !t.isArrival;
+  return t.isCompanionBot || !t.isArrival || !!t.isSol;
 }
 
-/** Only a human message ARRIVING re-opens the floor: counters, cooldown and cycle guard reset. */
+/** Only a human message ARRIVING re-opens the floor: counters, cooldown and cycle guard reset. Sol is not human. */
 export function resetsBotRails(t: TurnKind): boolean {
-  return !t.isCompanionBot && t.isArrival;
+  return !t.isCompanionBot && t.isArrival && !t.isSol;
 }
 
 /**
@@ -86,14 +92,20 @@ export function runsAmbientClassifier(p: {
   directlyAddressed: boolean;
   namesSiblingOnly: boolean;
   entitled: boolean;
+  /**
+   * Never for a Sol post (2026-09-29). The judge asks "is Raziel talking to ME" and would answer
+   * "no" about a crow moment in all three processes, silently dropping it before the fit bid could
+   * pick one speaker. solMayAnswer + the fit bid are the arbiters for Sol instead.
+   */
+  isSol?: boolean;
 }): boolean {
   return p.ownerOnlyChannel && !p.isCompanionBot && !p.isMentioned && !p.isReplyToMe
-    && !p.directlyAddressed && !p.namesSiblingOnly && !p.entitled;
+    && !p.directlyAddressed && !p.namesSiblingOnly && !p.entitled && !p.isSol;
 }
 
-/** Voice is for a human-facing turn that is not a follow-up. Follow-ups (pass or not) never voice. */
-export function mayVoice(p: { isCompanionBot: boolean; entitled: boolean }): boolean {
-  return !p.isCompanionBot && !p.entitled;
+/** Voice is for a human-facing turn that is not a follow-up. Follow-ups (pass or not) never voice; nor does a reply to Sol. */
+export function mayVoice(p: { isCompanionBot: boolean; entitled: boolean; isSol?: boolean }): boolean {
+  return !p.isCompanionBot && !p.entitled && !p.isSol;
 }
 
 const label = (id: string): string => id.charAt(0).toUpperCase() + id.slice(1);

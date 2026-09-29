@@ -28,6 +28,7 @@ import {
 // Identity stays per-bot: prompt prefix lives in bootCtx, framings/keywords/audit in config.
 
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
+import { isSolPost, withoutSol, muzzleVerdict, solMayAnswer, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
 import { VoiceConnectionStatus, createAudioResource, type VoiceConnection, type AudioPlayer } from "@discordjs/voice";
 import { Readable } from "stream";
@@ -313,6 +314,9 @@ export interface MessageHandlerDeps {
    *  (releaseFollowUpOnPass): `message` is then the human origin message, and the turn is an
    *  entitled follow-up answering it. */
   followUpPass?: FollowUpEntitlement;
+  /** Sol's webhook id, parsed once at boot from SOL_WEBHOOK_URL (sol-sender.ts solWebhookId). Null or
+   *  absent: Sol is not recognized and its posts stay behind the hard muzzle. Never the token. */
+  solWebhookId?: string | null;
   // bot-local closures (voice wiring + autonomous loop guards)
   connectVoice: (vc: VoiceBasedChannel) => string;
   leaveVoice: (guildId: string | null) => string | null;
@@ -463,7 +467,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     stmStore, writeQueue, configCache, sessionWindows, pkDedup, pkRoster, pkSenderId,
     guildVoiceConnections, sentIds, distillationCounter, pulseCounter,
     botResponsesSinceHuman, botPingpongCooldownUntil, extremeTempCount,
-    apiKeys, apiUrls, isSuperseded, followUpPass,
+    apiKeys, apiUrls, isSuperseded, followUpPass, solWebhookId,
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
@@ -499,6 +503,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (process.env["GAIA_BOT_ID"]) BOT_ID_COMPANION[process.env["GAIA_BOT_ID"]] = "gaia";
     const BOT_IDS = new Set(Object.keys(BOT_ID_COMPANION));
     const isCompanionPost = BOT_IDS.has(message.author.id);
+    // Sol, the triad's crow (sol-sender.ts, 2026-09-29): recognized by WEBHOOK ID, never by name. Sol
+    // is household, not a human and not a sibling: it passes the muzzle, is never the human anchor,
+    // and never resets the bot rails. Every site below that asks "is this Raziel / a human?" checks it.
+    const solId = solWebhookId ?? null;
+    const isSol = isSolPost(message, solId);
     // PluralKit pairing: registration (addOriginal) and the claim (matchWebhook) both happen
     // at messageCreate time in bot-core, OUTSIDE this serialized turn -- doing either here
     // deadlocks the pair against the channel inbox (see PkDedup's ordering note). All that is
@@ -541,7 +550,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // A PluralKit proxy IS Raziel present (webhookId set, author.bot true) -- keying this on
     // author.bot alone made every proxied message look like bot traffic, so the autonomous
     // worker fired mid-conversation.
-    const isHumanTraffic = !message.author.bot || message.webhookId !== null;
+    // Sol is not human traffic: the worker posts Sol, so counting it would make the worker's own post
+    // tell the worker a human is present.
+    const isHumanTraffic = (!message.author.bot || message.webhookId !== null) && !isSol;
     if (isHumanTraffic && redis && isArrival) {
       setLastActivity(redis).catch(() => {});
       clearConsolidation(redis, COMPANION_ID).catch(() => {});
@@ -561,7 +572,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     const knownSenderId = pkKnownSenderId;
     const channelConfig = await configCache.get();
-    const attribution = await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"], pkRoster ?? null);
+    // A Sol post skips attribution entirely: it is not a PK proxy, so the roster miss + two PK API
+    // attempts would cost ~4s per bot on every crow moment for a guaranteed "unknown".
+    const attribution = isSol
+      ? { isOwner: false, discordUserId: message.author.id, frontMember: null, frontState: "unknown" as const, source: "direct" as const }
+      : await resolveAttribution(message, cfg.ownerDiscordId, knownSenderId, undefined, cfg.blueDiscordId, process.env["BLUE_PK_SYSTEM_ID"], pkRoster ?? null);
 
     const userTier = attribution.isOwner ? "owner" as const
       : attribution.discordUserId === cfg.blueDiscordId ? "intimate" as const
@@ -668,7 +683,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // execute often is not -- so it was never safe as the primary signal. attribution.source
     // covers the roster hit and the API lookup; pkKnownSenderId covers the offline pairing with
     // the original PK deleted. Together these hold when PK's API is slow, down, or rate-limited.
-    const isPKProxy = !!message.webhookId && !isCompanionPost && (
+    const isPKProxy = !!message.webhookId && !isCompanionPost && !isSol && (
       pkCtx.isPluralKit
       || attribution.source === "pluralkit"
       || pkKnownSenderId !== undefined
@@ -680,7 +695,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // name not in use this moment. API/roster values remain the fallback chain.
     const pkMemberName = (isPKProxy ? (message.author?.username ?? null) : null)
       ?? attribution.frontMember ?? pkCtx.memberName;
-    const author = isPKProxy
+    const author = isSol ? SOL_AUTHOR_LABEL
+      : isPKProxy
       ? (pkMemberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
 
@@ -696,16 +712,18 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       console.log(`[${COMPANION_ID}] PK proxy: front="${pkMemberName ?? "?"}" tier=${userTier} via=${via} chars=${message.content.length}`);
     }
 
-    // Hard muzzle: companion bots and PluralKit proxies pass through; all other bots are dropped.
-    if (message.author.bot && !isCompanionPost && !isPKProxy) {
+    // Hard muzzle: companion bots, PluralKit proxies and Sol pass through; all other bots are dropped.
+    const muzzle = muzzleVerdict({ authorIsBot: message.author.bot, webhookId: message.webhookId, isCompanionPost, isPKProxy, isSol });
+    if (muzzle !== "pass") {
       // A webhook reaching here is a proxy none of the four signals could confirm -- the shape
       // that used to fail silently and read as "the bots ignored me". Log it so it is one grep
       // away instead of invisible; the roster (loaded at boot) is what normally prevents it.
-      if (message.webhookId) {
+      if (muzzle === "drop_unconfirmed_webhook") {
         console.warn(`[${COMPANION_ID}] unconfirmed webhook post from "${message.author.username}" in ${message.channelId} -- dropped (PK roster loaded: ${pkRoster?.loaded ?? false})`);
       }
       return;
     }
+    if (isSol && isArrival) console.log(solRecognizedLogLine(COMPANION_ID, message.channelId, message.id, message.content.length));
 
     // Thread spine (task 10): ensure a conversation thread exists for this channel and
     // append this incoming message as a turn on it. Fully fail-open -- ensureThread's own
@@ -744,7 +762,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // It rides the TURN, not `participants`: fronts change mid-conversation, and the coarse token set
       // is what the attribution logic reads to ask "was Raziel here at all".
       // A pass turn reads the active thread without appending the origin to it a second time.
-      spine = isArrival
+      // A Sol post reads the active thread like a pass does and never opens or joins one: the spine's
+      // `participants` is the coarse "who was here" set (raziel/blue/guest/companions), and a crow
+      // moment is neither a guest nor a new token any consumer expects.
+      spine = isArrival && !isSol
         ? await ensureThread(
           librarian, message.channelId, { id: message.id, content: message.content }, spineAuthor,
           attribution.frontMember ?? null,
@@ -890,7 +911,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       stmStore.appendInboundOnce(message.channelId, message.id, {
         role: "user",
         content: stmContent,
-        authorName: pkMemberName
+        authorName: isSol ? SOL_AUTHOR_LABEL
+          : pkMemberName
           ? `${pkMemberName} (via PK)`
           : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
         timestamp: message.createdTimestamp,
@@ -1306,7 +1328,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // director's to route -- this bot does not self-select a reply. Human turns fall through unchanged.
     // Owner command/listen traffic returned above this point by design (2026-09-03 review, finding
     // 3): commands are not conversational turns and are never commons material.
-    if (isArrival && directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
+    // Sol never enters the commons bus: commonsMessageFor would label a webhook "proxy" (a human), and
+    // the director would route and reset rails on it as if Raziel had spoken. Sol takes the local path.
+    if (isArrival && !isSol && directorMode() !== "off" && isDirectorChannel(channelEntry, gateChannelId) && redis) {
       const senderCompanion = BOT_ID_COMPANION[message.author.id] as CompanionId | undefined;
       publishCommonsMessage(redis, commonsMessageFor({
         channelId: message.channelId, messageId: message.id, authorId: message.author.id,
@@ -1360,7 +1384,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       try {
         const hist = await message.channel.messages.fetch({ limit: 8 });
         senderCtx.activeExchangeWith = activeExchangeHolder(
-          [...hist.values()]
+          withoutSol([...hist.values()], solId)
             .filter(m => m.id !== message.id)
             .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
             .map(m => ({
@@ -1399,6 +1423,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       directlyAddressed,
       namesSiblingOnly: !!namesSiblingOnly(effectiveContent, COMPANION_ID),
       entitled: !!entitledFollowUp,
+      isSol,
     });
 
     if (isAmbientOwnerOnly) {
@@ -1412,7 +1437,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         (sys, msgs) => (withCaller(directAdapter, "ambient-judge") ?? adapterRef.current).generate(sys, msgs as ChatMessage[], 0.3),
       );
       if (!relevant) return;
-    } else if (!isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (isSol && !isReplyToMe && !entitledFollowUp && !solMayAnswer({
+      modes: channelEntry?.modes ?? ["open", "inter_companion"],
+      companions: channelEntry?.companions ?? ["cypher", "drevan", "gaia"],
+      me: COMPANION_ID,
+      address: extractAddress(effectiveContent),
+      host: channelEntry?.host,
+    })) {
+      // Sol is household, not a guest: shouldRespond would read the webhook as a guest (named-only,
+      // shut out of owner_only). solMayAnswer is its gate; the fit bid below picks the one speaker.
+      return;
+    } else if (!isSol && !isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -1476,11 +1511,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Fetch recent Discord history once -- used for new-thread detection, chain depth, and STM seed.
     const fetched = await ch.messages.fetch({ limit: 30 });
     const fetchedMessages = [...fetched.values()].reverse();
+    // The rails' view of the room: Sol's posts removed (sol-sender.ts withoutSol). Left in, a Sol
+    // post breaks the "since the last human" walks exactly as a human message does.
+    const railHistory = withoutSol(fetchedMessages, solId);
 
     // New-thread detection: a quiet gap before this message starts a fresh thread. This is what
     // lets the human-free triad commons keep talking -- an autonomous seed after hours of silence
     // resets the bot-to-bot rails instead of staying wedged by the prior thread's stale counters.
-    const priorMsg = fetchedMessages.filter(m => m.id !== message.id).at(-1);
+    const priorMsg = railHistory.filter(m => m.id !== message.id).at(-1);
     const isNewThread = !priorMsg || (message.createdTimestamp - priorMsg.createdTimestamp) > NEW_THREAD_GAP_MS;
 
     // Cross-companion safety rails: pingpong cooldown + per-bot response cap.
@@ -1493,7 +1531,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // A follow-up PASS turn runs on the HUMAN origin but is a follow-up in a companion chain
     // (pass-turn.ts): the rails apply to it, and it never resets them -- only a human message
     // arriving does. Before 2026-09-26 it took the human branch and reset them instead.
-    const railTurn = { isCompanionBot: senderCtx.isCompanionBot, isArrival };
+    const railTurn = { isCompanionBot: senderCtx.isCompanionBot, isArrival, isSol };
     let botTurnsSinceHuman = 0;
     if (appliesBotRails(railTurn)) {
       if (clearsStaleRails({ ...railTurn, isNewThread })) {
@@ -1506,7 +1544,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // addressing. Only an actual human message (incl. a PK webhook proxy, whose author
       // id is not a companion bot id) re-opens the floor.
       botTurnsSinceHuman = countBotMsgsSinceHuman(
-        fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
+        railHistory.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
         BOT_IDS,
       );
       // Triad commons (autonomous + inter_companion modes) is the companions' own space:
@@ -1550,7 +1588,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       );
     });
 
-    const memberLabel = pkMemberName
+    const memberLabel = isSol ? SOL_AUTHOR_LABEL
+      : pkMemberName
       ? `${pkMemberName} (via PK)`
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
     // No-op when the early record-on-arrival above already stored this message. Kept as a second call
@@ -1569,7 +1608,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // imperative into a future prompt's [Memory] section.
     // A DM is never indexed: with no discord-live/<dm> row, nothing from it can be recalled into any
     // room (the structural half of the DM seal; see recall-context.ts sealDmChannel).
-    if (!senderCtx.isCompanionBot && isArrival && !isOwnerDm) {
+    // Never a Sol moment: the vault would hold the crow's narration as a recallable human line.
+    if (!senderCtx.isCompanionBot && !isSol && isArrival && !isOwnerDm) {
       liveIngest({
         companion: null,
         author: memberLabel,
@@ -1581,7 +1621,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     // Loop guard: derive chain depth from fetched history so the check works across processes.
     const chainDepth = computeChainDepth(
-      fetchedMessages.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
+      railHistory.map(m => ({ authorId: m.author.id, authorIsBot: botTurn(m), createdTimestamp: m.createdTimestamp })),
       new Set(),
     );
     if (appliesBotRails(railTurn) && chainDepth >= COMPANION_CHAIN_LIMIT) {
@@ -1660,7 +1700,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       contextPrompt += `\n\n[Note: SOMA/mood data is ${somaAgeMin}min old; treat emotional reads as approximate]`;
     }
     if (userTier === "intimate") contextPrompt += `\n\n${BLUE_FRAMING}`;
-    else if (userTier === "guest") contextPrompt += `\n\n${GUEST_FRAMING}`;
+    // Sol is household, not a guest: the guest frame ("keep personal depth light, do not surface the
+    // triad") is exactly wrong for the crow the triad shares. solMomentFraming carries Sol's turn.
+    else if (userTier === "guest" && !isSol) contextPrompt += `\n\n${GUEST_FRAMING}`;
 
     // Inject audit mode block only when explicitly triggered -- keeps [Verdict/Because/Next]
     // out of the standing context so the model doesn't pattern-match to it by default.
@@ -1681,7 +1723,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Prospective tripwires (0070): armed keyword cards matched against this human
     // message (+ any date cards whose moment arrived). Consuming fires them in
     // Halseth -- a tripwire surfaces exactly once, in the reply where it matched.
-    if (!senderCtx.isCompanionBot) {
+    if (!senderCtx.isCompanionBot && !isSol) {
       const tripped = consumeTripwires(COMPANION_ID, effectiveContent, cfg.halsethSecret);
       if (tripped.length > 0) {
         contextPrompt += tripwireBlock(tripped);
@@ -1868,6 +1910,8 @@ ${widened}`;
         viaPass: !isArrival,
         peerReplies,
       });
+      // A crow moment is not a question (sol-sender.ts): one line, positive, after the peer framing.
+      if (isSol) contextPrompt += solMomentFraming();
     }
 
     const recentMessages = await message.channel.messages
@@ -1882,7 +1926,8 @@ ${widened}`;
           .reverse()
           .map(m => ({
             author: BOT_ID_COMPANION[m.author.id]
-              ?? (m.author.id === cfg.ownerDiscordId ? "Raziel" : m.author.username),
+              ?? (m.author.id === cfg.ownerDiscordId ? "Raziel"
+                : isSolPost(m, solId) ? SOL_AUTHOR_LABEL : m.author.username),
             content: m.content.slice(0, 2000),  // Discord max is 2000 -- never truncate a real message
           }))
       : [];
@@ -2086,7 +2131,7 @@ ${widened}`;
           me: COMPANION_ID,
           content: effectiveContent,
           activeExchangeWith: senderCtx.activeExchangeWith,
-          recent: fetchedMessages
+          recent: railHistory
             .filter(m => m.id !== message.id)
             .slice()
             .reverse()                       // buildFitSignals wants newest-first
@@ -2306,8 +2351,8 @@ ${widened}`;
       // triad doctrine -- posting "something's not routing right" into the room is a status
       // line wearing a companion's voice (2026-09-05: two nights of both fallbacks at 23:17,
       // the Hermes pre-flight compaction of an oversized channel session outran the 120s budget).
-      if (senderCtx.isCompanionBot) {
-        console.warn(`[${COMPANION_ID}] inference returned nothing on a sibling-triggered turn -- staying silent (no fallback into the room)`);
+      if (senderCtx.isCompanionBot || isSol) {
+        console.warn(`[${COMPANION_ID}] inference returned nothing on a ${isSol ? "Sol" : "sibling"}-triggered turn -- staying silent (no fallback into the room)`);
         return;
       }
       // Supersede check A (2026-09-19): the reply path below has had a supersede gate since
@@ -2502,7 +2547,7 @@ ${widened}`;
     // TTS on audio no one plays. Voice is for human-facing turns; bot-to-bot is text.
     // Follow-ups never voice either (2026-09-26): a pass turn runs on the human origin, so the
     // sender check alone let it speak aloud over a chain meant to be read in order.
-    if (voiceClient && mayVoice({ isCompanionBot: senderCtx.isCompanionBot, entitled: !!entitledFollowUp }) && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
+    if (voiceClient && mayVoice({ isCompanionBot: senderCtx.isCompanionBot, entitled: !!entitledFollowUp, isSol }) && shouldVoice(effectiveContent, voiceInput, channelEntry, message.channelId)) {
       try {
         const ttsText = response.length > MAX_TTS ? response.slice(0, MAX_TTS) : response;
         const audioBuffer = await voiceClient.synthesize(ttsText);

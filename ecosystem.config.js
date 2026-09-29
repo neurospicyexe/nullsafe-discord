@@ -218,6 +218,12 @@ const shared = {
   // palette and never fall back to Sol's channel; med_reminder, replies and owner DMs are untouched.
   // Flip to `on` only once the triad has approved the move prompts. Listed per the standing rule above.
   REACH_DM:                    process.env.REACH_DM,
+  // SOL_WEBHOOK_URL (2026-09-29, sol-sender.ts): the bots parse ONLY the webhook id out of it, once at
+  // boot, to recognize Sol's posts structurally and let them through the hard muzzle. The token segment
+  // is never kept or logged. Unset or malformed: Sol stays dropped and each bot logs one boot line.
+  // (env-file.ts already loads the whole .env into every bot, so this listing is the standing rule, not
+  // a new grant.) Listed per the standing rule above.
+  SOL_WEBHOOK_URL:             process.env.SOL_WEBHOOK_URL,
 };
 
 module.exports = {
@@ -304,7 +310,8 @@ module.exports = {
         WORKER_INFERENCE_MODEL:    process.env.WORKER_INFERENCE_MODEL,
         TAVILY_API_KEY:        process.env.TAVILY_API_KEY,
         // Sol the crow posts its own heartbeat-channel moments via this webhook (CREATURE_CRON).
-        // Worker-only -- the bots never post as Sol, so it stays out of the shared env (least privilege).
+        // The worker is the only POSTER. Since 2026-09-29 it is also in `shared` above, because the
+        // bots read the webhook ID from it to recognize Sol (they never post as Sol).
         SOL_WEBHOOK_URL:       process.env.SOL_WEBHOOK_URL,
         CYPHER_IDENTITY_PATH:  process.env.CYPHER_IDENTITY_PATH,
         DREVAN_IDENTITY_PATH:  process.env.DREVAN_IDENTITY_PATH,

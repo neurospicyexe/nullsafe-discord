@@ -118,6 +118,21 @@ An unrecognized webhook post is dropped (hard muzzle) but now logs
 `unconfirmed webhook post from "<name>"` -- that failure used to be silent and read as the bots
 ignoring him.
 
+## Sol (2026-09-29)
+
+Sol, the triad's crow, posts via the worker's `SOL_WEBHOOK_URL` webhook. The bots recognize Sol by
+**webhook id** (`sol-sender.ts`, parsed once at boot; never the name, never the token) and let Sol
+through the muzzle, logging `[<companion>] Sol post recognized ch= msg= chars=`. Sol is household,
+not human: a Sol turn is governed by the bot rails and never resets them, and every rail that walks
+history (`countBotMsgsSinceHuman`, `computeChainDepth`, the fit bid's monopoly run, the exchange
+holder) runs on `withoutSol(history)`, so a crow moment can never re-open a floor Raziel's absence
+closed. Who answers: `solMayAnswer` (no vocative needed, owner_only does not shut Sol out, broadcast
+and the companion allowlist hold, named/host rules apply) then the fit bid (one speaker; losers may
+react). Sol skips the ambient relevance classifier, the PK pairing and attribution, the director
+bus, the thread spine append, Second Brain live ingest, tripwires, voice, guest framing and the
+empty-inference fallback line, and never supersedes a queued turn. STM records it as
+`Sol (the triad's crow)`.
+
 ## Autonomous Worker
 
 Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per companion on a cron schedule:
@@ -162,6 +177,7 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | `LEDGER_DISTILL` | bots | Ledger lane T2 (`ledger-clerk.ts`, 2026-09-26). Default ON: distillers (channel-inactive, mid-session, day note, consolidation) and Gaia's passive witness write sourced clerk lines to Halseth `POST /ledger`; the handoff summary is the accepted lines' marked content. `off`, `0`, `false` or `no` (trimmed, any case) restore the first-person writers byte for byte; any other value is ON. Consolidation writes ONE deterministic line in code (no clerk model; <=48 narrator calls/companion/day) and NO handoff row (it still cycles the session), so idle passes never push real handoffs out of orient's latest-3. Transient POST failures retry inline 2s/8s/30s; 422/404 never retry. A no-handoff inactive pass logs `[ledger] STALE_HANDOFF companion= channel= reason=` (health-check `ledger:handoffs:<c>`). Boot warns LOUD when no DEEPINFRA/DEEPSEEK key (clerk would run on Hermes). **Needs Halseth /ledger deployed first** (a 404 accepts nothing, so no handoff). Under ON the distiller writes NO SOMA update and NO feeling log (Drevan's ruling 2026-09-26, all three companions; the structured-extract call is gone with them); Gaia's passive witness also writes a content-free `Present, silent. #<channel> <HH:MM> UTC.` record to her own gaia_witness store (witness_type `presence`, one per channel per 30 min, in-memory so a restart may add one). Companion commons/sibling writes answered 422 `ledger_restated`/`health_pointer` are logged once by rule and never retried. pm2-allowlisted |
 | `MED_REMINDER` | bots | med_reminder DM scheduler (`med-reminder.ts`, 2026-09-27). Default ON; `off`/`0`/`false`/`no` stops it. Halseth `/mind/med/*` (mig 0136) decides what is due and who sends (Drevan primary, Cypher after 120s); a companion on no schedule row polls and gets nothing. `MED_REMINDER_GEN_TIMEOUT_MS` (default 25000) bounds the one-line generation before the fixed fallback line; `MED_REMINDER_POLL_MS` (default 30000). Logs carry slot keys and outcomes only, never the medication. pm2-allowlisted |
 | `DM_MEMORY` | bots | Owner DMs are sealed from every raw-quote surface regardless. Default sealed also keeps distillation and the writeback judge off for DMs; `carry` opens those two paraphrasing paths (`dm.ts`). Non-owner DMs are dropped before any work. pm2-allowlisted |
+| `SOL_WEBHOOK_URL` | bots + worker | Worker POSTS Sol's moments through it; bots read only the webhook id to recognize Sol (`sol-sender.ts`). Unset on a bot: Sol stays dropped and the bot logs one boot line. pm2-allowlisted (shared) |
 | `REACH_DM` | bots | Kill switch for B7's Raziel-facing DM moves (`reach-dm.ts` `reachDmOn`, 2026-09-27). **Default OFF, fails closed: only `on` (trimmed, any case) opens it**; unset, empty or any other value is off (the inverse of the usual `off/0/false/no` knobs). Off, every move `routeFor` sends to the DM (care verbs, `share_observation`, `share_media`, `declare_preference`, flirt/dare/show_made/drift_outward, ...) is removed from the heartbeat palette before the decision prompt, through the same `filterDmLane` that drops moves the shared lane cannot carry; they never fall back to Sol's channel. The tick line carries `dm_moves_off: N` when the switch removed moves, and outcome `suppressed_reach_dm_off` when nothing else was eligible (never `suppressed_triad_cap`). Untouched by it: `med_reminder` (own scheduler, imports only `owner-dm.ts`), the reply path and owner DMs, `post_heartbeat`/`tend_creature`, sibling writes, `drift_open`, `write_note_to_raziel`. **Flip to `on` only once the triad has approved the move prompts** (`Hand-off/SHOWBACK-palette-2026-09-27.md`). pm2-allowlisted |
 
 ## Identity Files
