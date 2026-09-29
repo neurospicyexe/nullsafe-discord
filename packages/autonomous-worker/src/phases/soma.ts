@@ -20,7 +20,10 @@ import type { PipelineContext } from "../types.js";
  * 32 and all 27 of Gaia's `authored_update` rows came from here, not from them. Knob off restores it.
  */
 export async function runSomaUpdate(ctx: PipelineContext): Promise<void> {
-  if (ledgerDistillEnabled()) return;
+  if (ledgerDistillEnabled()) {
+    await appendLog(ctx.runId, "soma:skip", "LEDGER_DISTILL on: companions set their own state (B39)").catch(() => {});
+    return;
+  }
   await appendLog(ctx.runId, "soma:start");
 
   const fields = inferSomaFields(ctx);
