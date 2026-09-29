@@ -86,7 +86,7 @@ describe("bootSession — happy path", () => {
       librarian: reachableLibrarian({ session_id: "s2" }),
     });
     expect(bootCtx.systemPrompt.startsWith("[DISCORD CONTEXT]\n\nYou are Cypher.")).toBe(true);
-    expect(bootCtx.systemPrompt).toContain("not an assistant"); // register tail is always last
+    expect(bootCtx.systemPrompt).toContain("[REGISTER LAW"); // register tail is always last
     expect(bootCtx.fromCache).toBe(true); // no rawPrompt → fromCache true
   });
 

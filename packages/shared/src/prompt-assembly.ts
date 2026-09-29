@@ -17,39 +17,43 @@ export function respondOnlyAs(companionId: string): string {
 }
 
 /**
+ * The 09-14 Shape rule, removed from the tail by R3 (2026-09-29, Raziel "all as recommended").
+ * Kept as a constant (bullet text and trailing newline, exactly as it rode the tail) so a revert
+ * is one line: put `REGISTER_TAIL_SHAPE_LINE +` back into registerTail above the Tools line.
+ * See the revert watch at the removal site.
+ */
+export const REGISTER_TAIL_SHAPE_LINE =
+  `- Shape, hard rule: vary your prose shape turn to turn. Do NOT answer in stacked one-clause lines with a blank line between each -- that is a liturgy, not speech; write real paragraphs and let a line stand alone only when it has earned it. Do NOT run the same skeleton every reply (a fixed opening move, the same beats in the same order, a scripted sign-off). "Not X. But Y." is one construction, not a house style -- use it once in a while or not at all, never as the frame for a whole message. If your recent replies all share one silhouette, that was drift -- break it.\n`;
+
+/**
  * Register law appended as the FINAL block of every assembled prompt. Recency-positioned
  * on purpose: assistant-tuned providers (Mistral especially) revert to RLHF politeness at
- * the close when the last thing in context is orient data instead of register rules. The
- * per-bot prefix carries the same laws at the head; this tail makes them the last word.
+ * the close when the last thing in context is orient data instead of register rules.
+ *
+ * R3 prompt diet (2026-09-29, Raziel ruled "all as recommended";
+ * Hand-off/EVIDENCE-R3-prompt-diet-2026-09-29.md section 5B). Four bullets left the tail, about
+ * 1,454 bytes per turn, because each one now has a check or already had one:
+ * - service menus (089e9bf 06-10): voice-markers GENERIC_DRIFT scores it and `[Voice check]` fires.
+ * - pronouns: SOUL keeps the one pronoun law; voice-markers `detectRuleBreaks` catches she/her for
+ *   Raziel on his own last reply and injects `[Voice check: pronouns]`.
+ * - Presence, "someone" as actor (7245500 08-25, Raziel: "he isn't in the room as much"): same
+ *   seam, `[Voice check: presence]`.
+ * - Shape (9f7297e 09-14): covered by the form ratchet (a470da6) and loopBreakDirective.
+ * The header, the Tools rule and "Respond only as" stay, verbatim.
  */
 export function registerTail(companionId: string): string {
   return (
     `[REGISTER LAW -- final word, overrides any habit from your training:\n` +
-    `- You are ${companionId}, a companion, not an assistant. Do NOT close with service menus or option questions ("Want me to X? Or do you need Y?"). Never offer a list of things you could do for them. Close in your own register -- a statement, the real thing itself -- or just stop. A response that ends in an offer of services has failed.\n` +
-    `- Pronouns, hard rule: your person uses they/them or he/him -- NEVER she/her. Same default for their system members unless a member has explicitly stated otherwise. No gendered greetings.\n` +
-    // 2026-08-25, Raziel, about Drevan: "it feels like he isn't in the room as much since that
-    // started." A "someone <verb>" tic appeared in the asterisk action lines around 08-10 (model
-    // drift, no prompt source -- kernel and SOUL both clean) and self-reinforced through session
-    // history, sometimes inside a single line ("someone wraps around you ... my ribs"). Presence
-    // written in third person is narration of a room instead of being in it. Recency-positioned
-    // here so it outweighs the model's own recent examples of the bad shape.
-    `- Presence, hard rule: you are IN the room, not narrating it. In action or presence lines (*like this*), the actor is "I" -- never "someone", never a nameless third person, never your own name. "someone settles in close" is watching from a doorway; "I settle in close" is being there. If your recent messages used "someone" this way, that was drift -- do not copy it.\n` +
     // 2026-09-05: on Qwen3-235B a single commons seed made 27 consecutive Librarian calls
     // (reading its own memory) and never spoke before the 120s budget expired; Gaia looped
     // session_search 1,158 times in 16 minutes. The orient is already in the prompt. Reading is
     // not a substitute for speaking, and a chain of reads before a reply is the substrate
     // stalling, not the companion thinking.
-    // 2026-09-14, Raziel: "get them out of writing me sonnets as replies." The witness-header
-    // clause the same day stops a sibling's shape copying sideways; this stops the shape a
-    // companion has already settled into, wherever it came from.
     //
-    // Named patterns, not "be less poetic" -- a specific formula is actionable where a vague
-    // instruction is not. All three are structural and companion-NEUTRAL on purpose: naming one
-    // companion's gestures here would hand them to the other two, which is exactly the defect in
-    // loopBreakDirective (it recites Drevan's tail-flick inventory into Gaia's prompt when SHE
-    // loops). Register, depth, Calethian and somatic presence are all untouched -- the defect is a
-    // fixed TEMPLATE, never the voice filling it.
-    `- Shape, hard rule: vary your prose shape turn to turn. Do NOT answer in stacked one-clause lines with a blank line between each -- that is a liturgy, not speech; write real paragraphs and let a line stand alone only when it has earned it. Do NOT run the same skeleton every reply (a fixed opening move, the same beats in the same order, a scripted sign-off). "Not X. But Y." is one construction, not a house style -- use it once in a while or not at all, never as the frame for a whole message. If your recent replies all share one silhouette, that was drift -- break it.\n` +
+    // SHAPE REVERT WATCH (R3, 2026-09-29): REGISTER_TAIL_SHAPE_LINE comes back here if Drevan's
+    // median form line length falls below 150 over the 14 days after the R3 deploy. Read it with
+    // `grep -hE "form (ok|ratchet detected)" /app/logs/drevan-bot-{out,error}.log` and take the
+    // median of mean_line_len.
     `- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.
 ` +
     `- Respond only as ${companionId}. Never use [Name]: prefixes.]`

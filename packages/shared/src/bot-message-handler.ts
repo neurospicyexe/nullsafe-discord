@@ -52,7 +52,7 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
-  reportVoiceScore, voiceFeedbackBlock, type VoiceCompanionId,
+  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, type VoiceCompanionId,
   echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold, buildVerbatimPool,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
@@ -1992,6 +1992,19 @@ ${widened}`;
       console.warn(`[${COMPANION_ID}] form ratchet detected (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow}) -- injecting form break`);
     } else if (formRatchet.result.turns > 0) {
       console.log(`[${COMPANION_ID}] form ok (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow})`);
+    }
+
+    // Rule checks (R3 prompt diet, 2026-09-29). The register tail's Presence and pronoun bullets and
+    // the SOUL em-dash paragraph became checks on this companion's own last reply: a short
+    // corrective rides the next turn only on a hit. Same window as the gates above; logged both
+    // ways so "is it running?" has an answer (`grep -hE "rule check (ok|hit)"`).
+    const ruleCheck = ruleCheckAppend(COMPANION_ID as VoiceCompanionId, selfTurns);
+    const ruleCounts = `em_dash=${ruleCheck.result.emDash} someone=${ruleCheck.result.someone} she_her=${ruleCheck.result.sheHer} turns=${ruleCheck.result.turns}`;
+    if (ruleCheck.text) {
+      contextPrompt += ruleCheck.text;
+      console.warn(`[${COMPANION_ID}] rule check hit (${ruleCounts}); injecting voice check`);
+    } else if (ruleCheck.result.turns > 0) {
+      console.log(`[${COMPANION_ID}] rule check ok (${ruleCounts})`);
     }
 
     // Situational grounding (Component 3): tell the companion WHERE it is -- channel name, thread

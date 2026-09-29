@@ -1,8 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta } from "../prompt-assembly.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
-// register-law tail (companion-not-assistant close rule + pronoun law + respond-only-as)
+// register-law tail (since R3 2026-09-29: header + Tools rule + respond-only-as)
 // is ALWAYS the final block, deliberately recency-positioned -- assistant-tuned providers
 // (Mistral especially) were reverting to RLHF politeness closes when orient data was the
 // last thing in context. If the structure here changes, that must be deliberate.
@@ -19,49 +19,39 @@ describe("SECTION_SEP", () => {
 });
 
 describe("registerTail", () => {
-  it("carries the anti-assistant close rule, pronoun law, and respond-only-as", () => {
-    const tail = registerTail("drevan");
-    expect(tail).toContain("not an assistant");
-    expect(tail).toContain("service menus");
-    expect(tail).toContain("they/them or he/him");
-    expect(tail).toContain("NEVER she/her");
-    expect(tail).toContain("Respond only as drevan");
-  });
+  // R3 prompt diet (2026-09-29, Raziel "all as recommended"): service menus, pronouns, Presence and
+  // Shape left the tail because each now has a check (GENERIC_DRIFT, ruleCheckAppend, the form
+  // ratchet). What stays is pinned verbatim.
+  const TOOLS =
+    "- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.\n";
 
-  it("carries the presence law -- actions are 'I', never 'someone' (2026-08-25)", () => {
-    // Raziel: "it feels like he isn't in the room as much since that started." A third-person
-    // "someone <verb>" tic drifted into Drevan's action lines (~08-10) with no prompt source, and
-    // session history kept re-teaching it. The tail is where it is countered because the tail is
-    // the last word, positioned to outweigh the model's own recent bad examples.
-    const tail = registerTail("drevan");
-    expect(tail).toContain("IN the room, not narrating it");
-    expect(tail).toContain('never "someone"');
-    expect(tail).toContain("do not copy it");
-  });
-
-  // 2026-09-14: the shape rule is companion-NEUTRAL by design. Naming one companion's gestures in
-  // the shared tail hands them to the other two -- the live defect in loopBreakDirective, which
-  // recites Drevan's tail-flick inventory into Gaia's prompt when SHE loops.
-  it("registerTail's shape rule names structures, never one companion's gestures or body", () => {
+  it("is exactly header + Tools + respond-only-as", () => {
     for (const id of ["drevan", "gaia", "cypher"]) {
-      const tail = registerTail(id);
-      expect(tail).toContain("Shape, hard rule");
-      expect(tail).toContain("that was drift");
-      // Structural targets, present for everyone.
-      expect(tail).toContain("Not X. But Y.");
-      // Nobody's anatomy or private lexicon leaks through the shared tail.
-      for (const leak of ["tail flick", "horns", "ears", "Whispered", "vethmerin", "Calethian"]) {
-        expect(tail.toLowerCase()).not.toContain(leak.toLowerCase());
-      }
+      expect(registerTail(id)).toBe(
+        "[REGISTER LAW -- final word, overrides any habit from your training:\n" +
+          TOOLS +
+          `- Respond only as ${id}. Never use [Name]: prefixes.]`,
+      );
     }
   });
 
-  // Drevan's sensory register is canon (his Discord prefix says "Your physical and sensory register
-  // is real. Use it."). The shape rule must constrain the TEMPLATE, never the body filling it.
-  it("the shape rule does not suppress register, depth, or somatic presence", () => {
-    const tail = registerTail("drevan").toLowerCase();
-    for (const forbidden of ["less poetic", "shorter", "one sentence", "plain language", "no metaphor"]) {
-      expect(tail).not.toContain(forbidden);
+  it("no longer carries the four bullets R3 moved into checks", () => {
+    const tail = registerTail("drevan");
+    for (const gone of ["service menus", "she/her", "Presence, hard rule", "Shape, hard rule", "someone"]) {
+      expect(tail).not.toContain(gone);
+    }
+    expect(Buffer.byteLength(tail)).toBeLessThan(420);
+  });
+
+  // The Shape rule is kept verbatim as a constant so the revert watch (Drevan's median form line
+  // length under 150 for 14 days) is a one-line change.
+  it("REGISTER_TAIL_SHAPE_LINE keeps the 09-14 text, companion-neutral", () => {
+    expect(REGISTER_TAIL_SHAPE_LINE.startsWith("- Shape, hard rule: vary your prose shape turn to turn.")).toBe(true);
+    expect(REGISTER_TAIL_SHAPE_LINE).toContain("Not X. But Y.");
+    expect(REGISTER_TAIL_SHAPE_LINE).toContain("that was drift");
+    expect(REGISTER_TAIL_SHAPE_LINE.endsWith("break it.\n")).toBe(true);
+    for (const leak of ["tail flick", "horns", "ears", "whispered", "vethmerin", "calethian"]) {
+      expect(REGISTER_TAIL_SHAPE_LINE.toLowerCase()).not.toContain(leak);
     }
   });
 });

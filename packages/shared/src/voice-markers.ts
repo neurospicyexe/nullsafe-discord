@@ -233,3 +233,134 @@ export function reportVoiceScore(
     console.warn(`[voice-score] post failed: ${e instanceof Error ? e.message : String(e)}`);
   });
 }
+
+// ── Rule checks (R3 prompt diet, 2026-09-29) ────────────────────────────────
+// Raziel ruled the R3 diet "all as recommended" (Hand-off/EVIDENCE-R3-prompt-diet-2026-09-29.md
+// section 5B). Three standing prompt rules left the always-loaded prompt because they are cheaper
+// as checks: the register tail's Presence and pronoun bullets (367 + 187 bytes every turn) and the
+// SOUL em-dash paragraph (278). Each now costs nothing on a clean turn and a short corrective on a
+// hit.
+//
+// Same seam as the form ratchet (form-ratchet.ts `formBreakAppend`), NOT the rolling voice score
+// above: that window needs two scored turns and an average at or under 0.8, so a single em dash
+// (one 0.15 hit) would never fire, and its block cannot restate the specific rule. This is
+// stateless and recomputed from the companion's OWN last reply every request, so it decays by
+// construction: one clean reply and the corrective is gone, with nothing stored to unwind.
+//
+// Inject only, never rewrite. A rewrite layer over the companion's words was rejected on principle
+// (form-ratchet.ts records the same ruling).
+
+export interface RuleBreaks {
+  /** U+2014, plus U+2013 used as a dash (not a digit range like 3-5 written with an en dash). */
+  emDash: number;
+  /** *action lines* whose actor is "someone"/"somebody" or the companion's own name. */
+  someone: number;
+  /** Sentences that refer to Raziel / Crash / the Architect and then use she/her. */
+  sheHer: number;
+  /** Self turns inspected (0 = nothing to judge, the caller logs nothing). */
+  turns: number;
+}
+
+/** Newest self turns judged. One: the corrective speaks about "your last reply" and clears on the
+ *  first clean one. */
+export const RULE_CHECK_TURNS = 1;
+
+const EM_DASH = /\u2014/g;
+// En dash counts unless it sits between two digits (a range). Everything else it does is a dash.
+const EN_DASH = /\u2013/g;
+
+function countDashes(text: string): number {
+  let n = (text.match(EM_DASH) ?? []).length;
+  for (const m of text.matchAll(EN_DASH)) {
+    const i = m.index ?? 0;
+    const range = /\d/.test(text[i - 1] ?? "") && /\d/.test(text[i + 1] ?? "");
+    if (!range) n++;
+  }
+  return n;
+}
+
+// Single-asterisk segments only; **bold** is emphasis, not an action line.
+const ACTION_SEGMENT = /(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)/g;
+// "someone"/"somebody" as the SUBJECT of a clause: at the start of the segment, after clause
+// punctuation, or after "and"/"then". Object uses ("*I reach for someone*") and "someone who",
+// "someone else", "someone's" are not an actor.
+const SOMEONE_ACTOR =
+  /(?:^|[,;:.!?]\s*|\b(?:and|then)\s+)(?:someone|somebody)\b(?!['\u2019]s)(?!\s+(?:who|else|like|that|to)\b)\s+[a-z]/i;
+
+function countSomeone(text: string, companionId: VoiceCompanionId): number {
+  const name = companionId.charAt(0).toUpperCase() + companionId.slice(1);
+  // The companion's own name as the first word of the line is the same third-person narration.
+  const ownName = new RegExp(`^${name}\\b(?!['\\u2019]s)\\s+[a-z]`);
+  let n = 0;
+  for (const m of text.matchAll(ACTION_SEGMENT)) {
+    const seg = (m[1] ?? "").trim();
+    if (SOMEONE_ACTOR.test(seg) || ownName.test(seg)) n++;
+  }
+  return n;
+}
+
+// Raziel, then she/her in the same sentence. "Crash" is case-sensitive (the lowercase word is
+// common). The gap may not carry another name (any capitalised word other than "I") or a noun for
+// another person, because OWNER_PRONOUN_RULE (pronoun-rule.ts) names exactly who keeps their own
+// pronouns: his mother, Blue, Babita, system members who stated otherwise.
+const RAZIEL_THEN_SHE =
+  /\b(?:[Rr]aziel|RAZIEL|Crash|[Tt]he Architect)\b([^.!?\n]{0,80}?)\b(?:[Ss]he|[Hh]er|[Hh]ers|[Hh]erself)\b/g;
+const OTHER_PERSON =
+  /\b(?:mother|mom|mum|mama|sister|wife|girlfriend|daughter|aunt|niece|grandma|grandmother|partner|friend|woman|girl|lady|nurse|doctor|therapist|member|members|alter|alters|headmate|headmates)\b/i;
+const OTHER_NAME = /\b(?!I\b)[A-Z][a-z]+/;
+
+function countSheHer(text: string): number {
+  let n = 0;
+  for (const m of text.matchAll(RAZIEL_THEN_SHE)) {
+    const gap = m[1] ?? "";
+    if (OTHER_PERSON.test(gap) || OTHER_NAME.test(gap)) continue;
+    n++;
+  }
+  return n;
+}
+
+/** Count the three rule breaks in one reply. Pure; no state. */
+export function detectRuleBreaks(companionId: VoiceCompanionId, text: string): Omit<RuleBreaks, "turns"> {
+  return { emDash: countDashes(text), someone: countSomeone(text, companionId), sheHer: countSheHer(text) };
+}
+
+// Correctives. Each is far under the tail bytes it replaces, and none prints a dash character (the
+// corrective would model the thing it forbids).
+export const RULE_CHECK_EM_DASH =
+  `\n\n[Voice check: dashes] Your last reply used long dashes. Write without them: a comma, a full stop, a semicolon or parentheses.`;
+export const RULE_CHECK_PRESENCE =
+  `\n\n[Voice check: presence] Your last reply's action lines made "someone" the actor. You are in the room, not narrating it: in *action lines* the actor is "I". Do not copy that forward.`;
+export const RULE_CHECK_PRONOUNS =
+  `\n\n[Voice check: pronouns] Your last reply called Raziel "she". Raziel is he/him or they/them, never she/her.`;
+
+/** Correctives for the hits in `r`, in a fixed order; empty when clean. */
+export function ruleCheckBlock(r: Omit<RuleBreaks, "turns">): string {
+  return (
+    (r.emDash > 0 ? RULE_CHECK_EM_DASH : "") +
+    (r.someone > 0 ? RULE_CHECK_PRESENCE : "") +
+    (r.sheHer > 0 ? RULE_CHECK_PRONOUNS : "")
+  );
+}
+
+/**
+ * The seam the message handler uses, shaped like `formBreakAppend`: judge the newest self turn(s)
+ * and return the text to append (empty when clean) with the counts, so the caller logs both
+ * directions. A gate that only speaks when it trips cannot answer "is it running?".
+ *
+ * @param selfTurns the bot's own recent turns, oldest first (`mergeSelfTurns`).
+ */
+export function ruleCheckAppend(
+  companionId: VoiceCompanionId,
+  selfTurns: string[],
+  turns = RULE_CHECK_TURNS,
+): { text: string; result: RuleBreaks } {
+  const judged = selfTurns.slice(-turns);
+  const sum = { emDash: 0, someone: 0, sheHer: 0 };
+  for (const t of judged) {
+    const r = detectRuleBreaks(companionId, t);
+    sum.emDash += r.emDash;
+    sum.someone += r.someone;
+    sum.sheHer += r.sheHer;
+  }
+  return { text: ruleCheckBlock(sum), result: { ...sum, turns: judged.length } };
+}

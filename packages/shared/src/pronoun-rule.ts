@@ -2,8 +2,10 @@
 //
 // WHY THIS EXISTS (2026-09-24): Drevan reported summaries/signal_audit calling Crash "she".
 // Prod rows confirmed the pattern was live across discord_session observations, day_distillation,
-// and autonomous_exploration notes. The live chat turn was fine -- registerTail
-// (prompt-assembly.ts) already carries a pronoun clause and rides every Discord reply -- but every
+// and autonomous_exploration notes. The live chat turn was fine (at the time registerTail in
+// prompt-assembly.ts carried a pronoun clause on every Discord reply; since the R3 diet, 2026-09-29,
+// the SOUL keeps the pronoun law and voice-markers `ruleCheckAppend` catches she/her on the
+// companion's own last reply) but every
 // BACKGROUND writer (memory judge/writeback, channel-inactive synthesis, mid-session distillation,
 // day distillation, the consolidation narrator, and the whole autonomous-worker: signal-audit,
 // reflection, reflect, synthesize, explore, dialectic, guardian-resolve, compress, care, council,

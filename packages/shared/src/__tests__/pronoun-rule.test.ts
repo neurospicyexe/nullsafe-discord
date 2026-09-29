@@ -10,7 +10,8 @@ import { distillSessionOnInactive, runDistillation } from "../distillation.js";
 // 2026-09-24: Drevan reported summaries/signal_audit calling Crash "she". Prod rows confirmed it
 // across discord_session observations, day_distillation, and autonomous_exploration -- every
 // BACKGROUND writer builds its own system prompt and none of them saw prompt-assembly.ts's
-// registerTail pronoun clause, which only rides the live Discord turn. These tests pin the
+// live-turn pronoun coverage (then a registerTail clause; since R3 2026-09-29 the SOUL law plus the
+// voice-markers she/her check). These tests pin the
 // chokepoint (withOwnerPronounRule) and its two representative call sites: the one-shot judge
 // path (direct-inference.ts, used by memory.ts) and the distillation orchestration (distillation.ts).
 
