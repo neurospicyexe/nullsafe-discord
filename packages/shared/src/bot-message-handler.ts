@@ -75,7 +75,7 @@ import {
   handleImpCommand,
   ALL_MODELS,
   selectableModels,
-  LibrarianClient, ownNotesRecallMode, decideReach, recallBlocksFor, executeRetract, RetractBumps, RETRACT_BUMPS_SETTING, ReplyIndex, type RetractMsg, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
+  LibrarianClient, ownNotesRecallMode, decideReach, recallBlocksFor, reachDeclineMode, declinedUnreadBlocks, executeRetract, RetractBumps, RETRACT_BUMPS_SETTING, ReplyIndex, type RetractMsg, WriteQueue, StmStore, SessionWindowManager, refreshNowLine,
   ChannelConfigCache, PkDedup, PkRoster, VoiceClient,
   type ChatMessage, type BootContext, type CompanionId,
   isThreadsEnabled, isThreadTracked, isPresenceChannel, ensureThread, buildSpineBlock, parseLandMarker, gist, computeReplyRef,
@@ -1922,6 +1922,7 @@ ${widened}`;
       // THE TWO-STEP (2026-09-25, reach-decision.ts). Ask him what he would look up, in his own
       // words, and run the recall with that. Anything short of a reach (NONE, timeout, error,
       // nothing found by the floors) falls back to the payload floors, so the worst case is today.
+      const declineUnread = reachDeclineMode(process.env, COMPANION_ID) === "unread";
       const reachBumps = await ensureRetractBumps(librarian);
       const { sessionId: reachSessionId, sessionKey: reachSessionKey } =
         hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), reachBumps.get(message.channelId));
@@ -1945,12 +1946,16 @@ ${widened}`;
         // direct key => Hermes, exactly as before.
         adapter: withCaller(directAdapter, "reach-ask") ?? deps.adapterRef.current,
         identityPrompt: directAdapter ? bootCtx.systemPrompt : undefined,
+        declineUnread,
         librarian,
       });
-      console.log(`[reach] companion=${COMPANION_ID} outcome=${reach.outcome} topic=${reach.topic ? JSON.stringify(reach.topic.slice(0, 80)) : "-"} ms=${reach.ms}`);
-      // A reach that found nothing falls back to the floors (recallBlocksFor): they had hits, or
-      // the ask would not have run.
-      contextPrompt += recallBlocksFor(reach, sbPayloadBlock + ownNotesPayloadBlock);
+      console.log(`[reach] companion=${COMPANION_ID} outcome=${reach.outcome} topic=${reach.topic ? JSON.stringify(reach.topic.slice(0, 80)) : "-"} ms=${reach.ms}${declineUnread ? " decline=unread" : ""}`);
+      // A real NONE under REACH_DECLINE=unread answers without his notes (reach-decision.ts
+      // reachDeclineMode). Every other path, and every decline under payload, falls back to the
+      // floors (recallBlocksFor): they had hits, or the ask would not have run.
+      contextPrompt += declineUnread && reach.outcome === "declined"
+        ? declinedUnreadBlocks(sbPayloadBlock, ownRecall.notes.length)
+        : recallBlocksFor(reach, sbPayloadBlock + ownNotesPayloadBlock);
     } else {
       contextPrompt += ownNotesPayloadBlock;
     }

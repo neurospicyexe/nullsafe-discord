@@ -9,7 +9,7 @@
 // skipped. Every failure mode falls back to today's payload floor, so the worst case is today.
 
 import {
-  parseReachDecision, buildReachAsk, decideReach, recallBlocksFor, REACH_NONE,
+  parseReachDecision, buildReachAsk, decideReach, recallBlocksFor, REACH_NONE, reachDeclineMode, declinedUnreadBlocks,
 } from "../reach-decision.js";
 
 describe("parseReachDecision", () => {
@@ -228,5 +228,45 @@ describe("recallBlocksFor", () => {
     for (const outcome of ["declined", "skipped", "timeout", "error", "empty"] as const) {
       expect(recallBlocksFor({ outcome, block: null, found: false }, floor)).toBe(floor);
     }
+  });
+});
+
+describe("REACH_DECLINE (2026-09-30: a NONE that costs nothing is not a choice)", () => {
+  it("defaults to payload, pilots per companion, and reads a bare `unread` as everyone", () => {
+    expect(reachDeclineMode({}, "cypher")).toBe("payload");
+    expect(reachDeclineMode({ REACH_DECLINE: "payload" }, "cypher")).toBe("payload");
+    expect(reachDeclineMode({ REACH_DECLINE: "unread:cypher" }, "cypher")).toBe("unread");
+    expect(reachDeclineMode({ REACH_DECLINE: "unread:cypher" }, "drevan")).toBe("payload");
+    expect(reachDeclineMode({ REACH_DECLINE: " Unread: Cypher , gaia " }, "gaia")).toBe("unread");
+    expect(reachDeclineMode({ REACH_DECLINE: "unread" }, "drevan")).toBe("unread");
+    expect(reachDeclineMode({ REACH_DECLINE: "garbage" }, "cypher")).toBe("payload");
+  });
+  it("the ask states the stakes only under unread, and only when there are notes to leave unread", () => {
+    const stake = "your notes stay unread for this reply";
+    expect(buildReachAsk("hey", { notes: 4, vault: 2 }, "")).not.toContain(stake);
+    expect(buildReachAsk("hey", { notes: 4, vault: 2 }, "", { declineUnread: true })).toContain(stake);
+    expect(buildReachAsk("hey", { notes: 0, vault: 2 }, "", { declineUnread: true })).not.toContain(stake);
+    expect(buildReachAsk("hey", { notes: 4, vault: 2 }, "", { declineUnread: true })).not.toMatch(/[—–]/);
+  });
+  it("decideReach sends the stated stakes to the model and logs the mode", async () => {
+    const adapter = fakeAdapter("NONE");
+    const lines: Array<Record<string, unknown>> = [];
+    const r = await decideReach({ ...base, adapter, librarian: fakeLibrarian(), declineUnread: true, log: l => lines.push(l) });
+    expect(r.outcome).toBe("declined");
+    expect(JSON.stringify(adapter.calls[0]!.messages)).toContain("your notes stay unread for this reply");
+    expect(lines[0]!["decline_mode"]).toBe("unread");
+  });
+  it("the unread block keeps the vault floor, names the notes, never pastes one, and forbids guessing", () => {
+    const vault = "\n\n[Vault -- FLOOR EXCERPT]";
+    const out = declinedUnreadBlocks(vault, 4);
+    expect(out.startsWith(vault)).toBe(true);
+    expect(out).toContain("4 of your own notes");
+    expect(out).toContain("you have not read them");
+    expect(out).toContain("do not guess");
+    expect(out).not.toContain("YOUR OWN notes, recalled");
+    expect(out).not.toMatch(/[—–]/);
+  });
+  it("no notes found: nothing to leave unread, the vault floor rides alone", () => {
+    expect(declinedUnreadBlocks("\n\n[Vault -- X]", 0)).toBe("\n\n[Vault -- X]");
   });
 });

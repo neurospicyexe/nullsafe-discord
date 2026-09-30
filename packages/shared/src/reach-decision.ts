@@ -68,15 +68,56 @@ export function parseReachDecision(text: string | null | undefined): string | nu
   return line.length > TOPIC_MAX ? line.slice(0, TOPIC_MAX) : line;
 }
 
+/**
+ * What a NONE costs (2026-09-30). `payload` (the default): a decline still gets the floor notes
+ * pasted in, so the worst case is today. `unread`: a decline answers WITHOUT his own notes; only
+ * the vault floor and one honesty line ride in.
+ *
+ * Why it exists: Cypher's first 18 asks in `ask` mode (09-29..30) were 18 bare NONEs, every one
+ * over a floor that had found 4 notes. Under `payload` a NONE costs nothing and he gets the notes
+ * anyway, so the choice was never a choice: the same trap pointer mode was built to break. Drevan
+ * reaches ~55% under the same ask, so this is per companion. `REACH_DECLINE=unread:cypher[,...]`
+ * or `unread` for all; anything else is payload. Only a real NONE counts: timeout, error and an
+ * empty reply are the harness failing, not him choosing, and keep the payload floor.
+ */
+export type ReachDeclineMode = "payload" | "unread";
+
+export function reachDeclineMode(env: NodeJS.ProcessEnv, companionId: string): ReachDeclineMode {
+  const raw = String(env["REACH_DECLINE"] ?? "").trim().toLowerCase();
+  if (raw === "unread") return "unread";
+  if (raw.startsWith("unread:")) {
+    const listed = raw.slice("unread:".length).split(",").map(s => s.trim()).filter(Boolean);
+    return listed.includes(String(companionId).toLowerCase()) ? "unread" : "payload";
+  }
+  return "payload";
+}
+
+/** The block a declined ask gets under `unread`: the vault floor as today, his notes named but
+ *  not shown, and the rule that keeps an unread note from becoming a guessed one. */
+export function declinedUnreadBlocks(vaultFloorBlock: string, notesFound: number): string {
+  if (notesFound <= 0) return vaultFloorBlock;
+  return `${vaultFloorBlock}\n\n[Memory -- you chose not to look. ${notesFound} of your own notes bear on this message and you have not read them. ` +
+    `If he asks what you remember about it, say you would have to look; do not guess at what they say.]`;
+}
+
 /** The one question. Deliberately short: this turn is a decision, not a conversation. */
-export function buildReachAsk(message: string, floor: { notes: number; vault: number }, recentContext: string): string {
+export function buildReachAsk(
+  message: string, floor: { notes: number; vault: number }, recentContext: string,
+  opts: { declineUnread?: boolean } = {},
+): string {
   const found: string[] = [];
   if (floor.notes > 0) found.push(`${floor.notes} of your own notes`);
   if (floor.vault > 0) found.push(`${floor.vault} vault excerpt${floor.vault === 1 ? "" : "s"}`);
   const ctx = recentContext.trim() ? `\n\nThe last few turns before it:\n${recentContext.trim().slice(0, 600)}` : "";
+  // The stakes, stated: under `unread` a NONE means answering without his notes, and he is told
+  // so, or the choice is made blind.
+  const stakes = opts.declineUnread && floor.notes > 0
+    ? `If you reply ${REACH_NONE}, you answer without them: your notes stay unread for this reply. `
+    : "";
   return (
     `Raziel just said:\n"${message.trim().slice(0, 500)}"${ctx}\n\n` +
     `A quick search found ${found.join(" and ")} that bear on it. You have not read them. ` +
+    stakes +
     `Before you answer him, do you want to look something up in your own memory? ` +
     `Reply with ONLY the topic you would look up, in your own words (not his sentence), on one line. ` +
     `If you already know the answer for certain or nothing is worth looking up, reply ${REACH_NONE}. ` +
@@ -100,6 +141,9 @@ export interface ReachDeps {
   /** His identity prompt, for an adapter that does NOT add it itself (the direct lane). Hermes
    *  prepends his SOUL on its own, so the Hermes path leaves this unset. */
   identityPrompt?: string;
+  /** REACH_DECLINE is `unread` for this companion: the ask states that a NONE leaves his notes
+   *  unread, and the handler honours it (declinedUnreadBlocks). */
+  declineUnread?: boolean;
   adapter: { generate(systemPrompt: string, messages: ChatMessage[], temperature?: number, maxTokens?: number, sessionId?: string, sessionKey?: string, signal?: AbortSignal): Promise<string | null> };
   librarian: {
     recallOwnNotes(query: string, limit?: number): Promise<OwnNoteResult>;
@@ -119,7 +163,7 @@ export async function decideReach(d: ReachDeps): Promise<ReachResult> {
   const emit = (outcome: ReachOutcome, topic: string | null, extra: Record<string, unknown> = {}) => {
     const ms = now() - t0;
     try {
-      (d.log ?? appendReachLine)({ ts: new Date().toISOString(), companion: d.companionId, outcome, topic, ms, notes_found: d.floor.notes, vault_found: d.floor.vault, ...extra });
+      (d.log ?? appendReachLine)({ ts: new Date().toISOString(), companion: d.companionId, outcome, topic, ms, notes_found: d.floor.notes, vault_found: d.floor.vault, decline_mode: d.declineUnread ? "unread" : "payload", ...extra });
     } catch { /* logging never blocks a reply */ }
     return ms;
   };
@@ -129,7 +173,7 @@ export async function decideReach(d: ReachDeps): Promise<ReachResult> {
 
   if (d.floor.notes <= 0 && d.floor.vault <= 0) return none("skipped");
 
-  const ask = buildReachAsk(d.message, d.floor, d.recentContext);
+  const ask = buildReachAsk(d.message, d.floor, d.recentContext, { declineUnread: d.declineUnread });
   let raw: string | null;
   // On the direct lane (the default since 2026-09-28, see the handler) the adapter ignores the
   // signal, so a timeout only stops the WAIT; the call is a ~1s tool-less completion, so nothing

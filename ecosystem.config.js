@@ -189,6 +189,8 @@ const shared = {
   // payload floor is used instead (default 20000), and where the decision log goes.
   REACH_TIMEOUT_MS:          process.env.REACH_TIMEOUT_MS,
   REACH_LOG:                 process.env.REACH_LOG,
+  // 2026-09-30: what a NONE costs. unread:cypher = a declined ask answers without his own notes.
+  REACH_DECLINE:             process.env.REACH_DECLINE,
   // Multi-address follow-up PASS (2026-09-26, pass-turn.ts): when a rail silences a companion
   // holding a position in a multi-address order, the companion behind it answers the origin
   // instead of waiting out FOLLOW_UP_TTL_MS in silence. Default on; `off` stops both the publish
