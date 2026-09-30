@@ -8,8 +8,7 @@ export type InferenceProvider =
   | "openai"
   | "anthropic"
   | "mistral"
-  | "deepinfra"
-  | "ollama";
+  | "deepinfra";
 
 export interface ModelEntry {
   provider: InferenceProvider;
@@ -71,8 +70,6 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   "claude-opus":       { provider: "anthropic", model: "claude-opus-4-8",           label: "Claude Opus 4.8" },
   "claude-sonnet":     { provider: "anthropic", model: "claude-sonnet-4-6",         label: "Claude Sonnet 4.6" },
   "claude-haiku":      { provider: "anthropic", model: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-  // Ollama
-  "ollama-local":      { provider: "ollama",    model: "llama3.2",                  label: "Ollama (local)" },
 };
 
 export function getAvailableModels(opts: {

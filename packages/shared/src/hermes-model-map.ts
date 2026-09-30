@@ -11,7 +11,8 @@
 //     pinged "unknown model key". Two contradictory acks for one action, which is the same
 //     ack-success-change-nothing shape as the 07-28 `flash`/`pro` bug.
 //   * 5 keys the live map could serve (gemini, gemini-pro, ollama, ollama-glm, reasoner) were
-//     rejected by the command, so working models were unreachable.
+//     rejected by the command, so working models were unreachable. (`ollama` / `ollama-glm` were
+//     later removed from the live map and from this repo entirely, 2026-09-30: Ollama is dropped.)
 //
 // The deeper cause was not code drift between repo copies: `nullsafe-triad-skills` has no git
 // remote by design (it must never be published), so the VPS clone and the workstation clone are

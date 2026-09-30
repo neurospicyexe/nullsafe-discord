@@ -135,15 +135,6 @@ describe("output length ceiling (Drevan cut-off fix)", () => {
     expect(get().max_tokens).toBe(1500);
   });
 
-  it("Ollama caps via options.num_predict, not max_tokens", async () => {
-    const mock = jest.fn(async () => ({ ok: true, json: async () => ({ message: { content: "hi" } }) } as any));
-    const adapter = createAdapter("ollama", "llama3.2", {}, { ollama: "http://x" }, mock as any);
-    await adapter.generate("system", [{ role: "user", content: "hi" }], 0.7, 1500);
-    const body = JSON.parse((mock.mock.calls[0][1] as any).body);
-    expect(body.options.num_predict).toBe(1500);
-    expect(body.max_tokens).toBeUndefined();
-  });
-
   it("replyMaxTokensFor gives Drevan headroom and others the default", () => {
     expect(replyMaxTokensFor("drevan")).toBe(1500);
     expect(replyMaxTokensFor("Drevan")).toBe(1500); // case-insensitive

@@ -34,12 +34,11 @@ export function loadBotConfig(): BotConfig {
     channelConfigUrl: process.env["CHANNEL_CONFIG_URL"]?.trim().replace(/^=+/, "") || undefined,
     inferenceProvider: (() => {
       const val = (process.env["INFERENCE_PROVIDER"] ?? "deepseek").trim().replace(/^=+/, "");
-      const valid = ["deepseek", "groq", "ollama", "lmstudio", "kimi", "openai", "anthropic", "mistral", "deepinfra"] as const;
-      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | ollama | lmstudio | kimi | openai | anthropic | mistral | deepinfra)`);
+      const valid = ["deepseek", "groq", "lmstudio", "kimi", "openai", "anthropic", "mistral", "deepinfra"] as const;
+      if (!valid.includes(val as typeof valid[number])) throw new Error(`Invalid INFERENCE_PROVIDER: "${val}" (must be deepseek | groq | lmstudio | kimi | openai | anthropic | mistral | deepinfra)`);
       return val as BotConfig["inferenceProvider"];
     })(),
     groqApiKey: process.env["GROQ_API_KEY"],
-    ollamaUrl: process.env["OLLAMA_URL"],
     lmstudioUrl: process.env["LMSTUDIO_URL"],
     kimiApiKey:      process.env["KIMI_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     openaiApiKey:    process.env["OPENAI_API_KEY"]?.trim().replace(/^=+/, "") || undefined,

@@ -66,7 +66,6 @@ export interface BotConfig {
   channelConfigUrl?: string;
   inferenceProvider: InferenceProvider;
   groqApiKey?: string;
-  ollamaUrl?: string;
   lmstudioUrl?: string;
   kimiApiKey?: string;
   openaiApiKey?: string;

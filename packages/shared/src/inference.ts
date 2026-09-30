@@ -360,45 +360,8 @@ class GroqAdapter implements InferenceAdapter {
   }
 }
 
-class OllamaAdapter implements InferenceAdapter {
-  constructor(
-    private baseUrl: string,
-    private model: string = "llama3.2",
-    private fetchFn: typeof fetch = globalThis.fetch,
-  ) {}
-
-  async generate(systemPrompt: string, messages: ChatMessage[], temperature = DEFAULT_TEMP, maxTokens = DEFAULT_MAX_TOKENS): Promise<string | null> {
-    try {
-      const res = await this.fetchFn(`${this.baseUrl}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [
-            { role: "system", content: systemPrompt },
-            ...messages.map(toApiMessage),
-          ],
-          stream: false,
-          // Ollama caps output via options.num_predict (not max_tokens).
-          options: { temperature, num_predict: maxTokens },
-        }),
-      });
-      if (!res.ok) {
-        console.warn(`[inference:ollama] non-2xx response: ${res.status}`);
-        return null;
-      }
-      const data = await res.json() as { message: { content: string } };
-      return data.message?.content ?? null;
-    } catch (e: unknown) {
-      const cause = e instanceof Error && e.cause instanceof Error ? ` (cause: ${e.cause.message})` : "";
-      console.warn(`[inference:ollama] generate failed: ${e instanceof Error ? e.message : String(e)}${cause}`);
-      return null;
-    }
-  }
-}
-
 // OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
-// Uses /v1/chat/completions -- distinct from Ollama's /api/chat format.
+// Uses /v1/chat/completions.
 class LMStudioAdapter implements InferenceAdapter {
   constructor(
     private baseUrl: string,
@@ -891,7 +854,7 @@ export interface AdapterKeys {
 // `forceHermes` = when true (INFERENCE_MODE=hermes), every createAdapter call returns the
 // Hermes agent adapter regardless of the requested provider, so model-switch rebuilds can't
 // clobber the relay. Dormant when false.
-export interface AdapterUrls { ollama?: string; lmstudio?: string; hermes?: string; forceHermes?: boolean }
+export interface AdapterUrls { lmstudio?: string; hermes?: string; forceHermes?: boolean }
 
 // Build a single-provider adapter, or null when its credential / URL is absent.
 function buildAdapter(
@@ -910,7 +873,6 @@ function buildAdapter(
     case "anthropic": return keys.anthropic ? new AnthropicAdapter(keys.anthropic, model, fetchFn)            : null;
     case "mistral":   return keys.mistral   ? new MistralAdapter(keys.mistral, model, fetchFn, cacheKey)      : null;
     case "deepinfra": return keys.deepinfra ? new DeepInfraAdapter(keys.deepinfra, model, fetchFn)            : null;
-    case "ollama":    return urls.ollama    ? new OllamaAdapter(urls.ollama, model, fetchFn)                   : null;
     case "lmstudio":  return urls.lmstudio  ? new LMStudioAdapter(urls.lmstudio, model, fetchFn)              : null;
     default:          return null;
   }
@@ -938,7 +900,6 @@ const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   // Explicit model id so LM Studio JIT-loads the designated fallback workhorse even
   // when a different (or no) model is currently loaded in the UI.
   { provider: "lmstudio", model: "qwen/qwen3.5-9b" },
-  { provider: "ollama",   model: "llama3.2" },
 ];
 
 export function createAdapter(

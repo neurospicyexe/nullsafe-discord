@@ -88,7 +88,6 @@ const shared = {
   GAIA_CRON_INTER:       process.env.GAIA_CRON_INTER,
   INFERENCE_PROVIDER:    process.env.INFERENCE_PROVIDER    ?? "deepseek",
   GROQ_API_KEY:          process.env.GROQ_API_KEY,
-  OLLAMA_URL:            process.env.OLLAMA_URL,
   LMSTUDIO_URL:          process.env.LMSTUDIO_URL,
   OWNER_DISCORD_ID:        process.env.OWNER_DISCORD_ID,
   OWNER_NAME:              process.env.OWNER_NAME              ?? "the primary user",

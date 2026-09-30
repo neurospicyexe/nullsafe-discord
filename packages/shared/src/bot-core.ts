@@ -453,7 +453,6 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     hermes:    env.hermesApiKey,
   };
   const apiUrls: AdapterUrls = {
-    ollama:   env.ollamaUrl,
     lmstudio: env.lmstudioUrl,
     hermes:   env.hermesUrl,
     forceHermes: env.inferenceMode === "hermes" && !!env.hermesUrl,

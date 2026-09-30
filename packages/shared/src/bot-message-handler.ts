@@ -943,7 +943,6 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               "`gemini` `gemini-pro` -- Google\n" +
               "`kimi-k2` `kimi-k2.5` -- Moonshot\n" +
               "`mistral-large` -- Mistral (via OpenRouter)\n" +
-              "`ollama` `ollama-glm` -- Ollama Cloud\n" +
               "`gemma-local` `nemo-local` -- your LM Studio box");
             return;
           }
