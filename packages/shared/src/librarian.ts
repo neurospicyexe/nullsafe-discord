@@ -61,6 +61,24 @@ interface LibrarianOptions {
   secret: string;
   companionId: CompanionId;
   fetch?: typeof globalThis.fetch;
+  /** Admin-tier token for CLERK writes (POST /ledger). Halseth refuses a companion token there by
+   *  design: a clerk line is never the companion speaking. Defaults to env HALSETH_SECRET (the
+   *  admin token on the VPS), then to `secret`. See clerkSecretFrom. */
+  clerkSecret?: string;
+}
+
+/**
+ * The clerk's token (B41, 2026-09-30). The bots authenticate with their per-companion token
+ * (`<C>_HALSETH_SECRET`, bots/<c>/src/config.ts) whenever it is set, and until today writeLedger
+ * sent that same token. Halseth's POST /ledger is admin-only, so from the ledger lane's first
+ * deploy (09-27 07:25) every clerk line was refused 403 -- ~430 refusals, 1 row ever in
+ * ledger_entries -- and under LEDGER_DISTILL the Discord handoffs had no source. HALSETH_SECRET is
+ * the admin token (verified 09-30: 200 on the admin-only /ledger/soma-freshness). Same leading-`=`
+ * strip as config.ts. Only writeLedger uses it; every other call stays the companion's own token.
+ */
+export function clerkSecretFrom(env: NodeJS.ProcessEnv, explicit: string | undefined, fallback: string): string {
+  const pick = (v: string | undefined) => v?.trim().replace(/^=+/, "") || undefined;
+  return pick(explicit) ?? pick(env["HALSETH_SECRET"]) ?? fallback;
 }
 
 /**
@@ -196,12 +214,14 @@ export interface OwnNoteRecall {
 export class LibrarianClient {
   private url: string;
   private secret: string;
+  private clerkSecret: string;
   private companionId: CompanionId;
   private _fetch: typeof fetch;
 
   constructor(opts: LibrarianOptions) {
     this.url = opts.url.replace(/\/$/, "");
     this.secret = opts.secret;
+    this.clerkSecret = clerkSecretFrom(process.env, opts.clerkSecret, opts.secret);
     this.companionId = opts.companionId;
     this._fetch = opts.fetch ?? globalThis.fetch;
   }
@@ -479,7 +499,7 @@ export class LibrarianClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${this.secret}`,
+          "Authorization": `Bearer ${this.clerkSecret}`,
         },
         body: JSON.stringify(entry),
         signal: AbortSignal.timeout(8_000),

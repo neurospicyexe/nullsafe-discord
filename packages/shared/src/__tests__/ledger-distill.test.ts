@@ -7,7 +7,7 @@ import {
   LEDGER_CLERK_PROMPT, MAX_CLERK_LINES, LEDGER_RETRY_DELAYS_MS, staleHandoffReason, clerkTranscript,
   ledgerClerkAdapterWarning, _setLedgerRetrySleepForTests,
 } from "../ledger-clerk.js";
-import { LibrarianClient } from "../librarian.js";
+import { LibrarianClient, clerkSecretFrom } from "../librarian.js";
 import { distillSessionOnInactive, runDistillation } from "../distillation.js";
 import { runDayDistillation, FRAGMENT_NOTE_TYPE } from "../day-distillation.js";
 import { consolidateSession, consolidationLedgerBody, consolidationDedupKey, _resetConsolidationWarningsForTests } from "../consolidation.js";
@@ -869,5 +869,52 @@ describe("Gaia's rulings in the bots (2026-09-26)", () => {
     expect(preflightLedgerBody("Counted: 3 interiority entries.")).toBe("interiority");
     expect(preflightLedgerBody("Logged: the interior of the truck was cleaned.")).toBeNull();
     expect(preflightLedgerBody("Logged: a row was read.", { kind: "row", ref: "companion_interiority:x1" })).toBe("interiority");
+  });
+});
+
+// ── B41 (2026-09-30): the clerk writes with the ADMIN token ─────────────────
+// Halseth's POST /ledger refuses a companion token by design. The bots authenticate with
+// <C>_HALSETH_SECRET, and writeLedger used to send it: ~430 refusals, 1 ledger row ever.
+
+describe("clerk token (B41)", () => {
+  const entry = { companion_id: "cypher" as const, function: "distiller" as const, body: "Logged: x.", source_kind: "window" as const, source_ref: "r", dedup_key: "k:1" };
+  const saved = process.env["HALSETH_SECRET"];
+  afterEach(() => { if (saved === undefined) delete process.env["HALSETH_SECRET"]; else process.env["HALSETH_SECRET"] = saved; });
+  const mk = (opts: { clerkSecret?: string } = {}) => {
+    const calls: Array<{ url: string; auth: string }> = [];
+    const fetchMock = jest.fn(async (url: string, init: any) => {
+      calls.push({ url, auth: init.headers.Authorization });
+      return new Response(JSON.stringify({ id: "led_1", content: "c", response_key: "ok", ack: true }), { status: 201, headers: { "content-type": "application/json" } });
+    });
+    return { c: new LibrarianClient({ url: "https://h.example", secret: "companion-tok", companionId: "cypher", fetch: fetchMock as any, ...opts }), calls };
+  };
+
+  test("writeLedger sends HALSETH_SECRET (admin), not the companion token", async () => {
+    process.env["HALSETH_SECRET"] = "admin-tok";
+    const { c, calls } = mk();
+    await c.writeLedger(entry);
+    expect(calls[0]!.auth).toBe("Bearer admin-tok");
+  });
+  test("every other call keeps the companion's own token", async () => {
+    process.env["HALSETH_SECRET"] = "admin-tok";
+    const { c, calls } = mk();
+    await c.ask("my tray").catch(() => undefined);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every(k => k.auth === "Bearer companion-tok")).toBe(true);
+  });
+  test("an explicit clerkSecret wins; no admin env falls back to the companion token (today's behaviour)", async () => {
+    process.env["HALSETH_SECRET"] = "admin-tok";
+    const a = mk({ clerkSecret: "explicit-tok" });
+    await a.c.writeLedger(entry);
+    expect(a.calls[0]!.auth).toBe("Bearer explicit-tok");
+    delete process.env["HALSETH_SECRET"];
+    const b = mk();
+    await b.c.writeLedger(entry);
+    expect(b.calls[0]!.auth).toBe("Bearer companion-tok");
+  });
+  test("clerkSecretFrom strips the leading = and ignores blanks, like config.ts", () => {
+    expect(clerkSecretFrom({ HALSETH_SECRET: "==admin " }, undefined, "fb")).toBe("admin");
+    expect(clerkSecretFrom({ HALSETH_SECRET: "  " }, "", "fb")).toBe("fb");
+    expect(clerkSecretFrom({}, undefined, "fb")).toBe("fb");
   });
 });
