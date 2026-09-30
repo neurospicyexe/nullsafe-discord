@@ -39,7 +39,7 @@ nullsafe-discord/
   `DeepSeekAdapter` prints one `[inference:usage] provider= model= caller= in= out= cached=
   reasoning= cost=` line (counts only, never text). Label a call site with
   `withCaller(adapter, "name")`. Tally: `node scripts/direct-usage-report.mjs [--days N] [--by caller]`.
-- **Last-resort tail:** Kimi / Groq / LM Studio / Ollama
+- **Last-resort tail:** Kimi / Groq / LM Studio (Ollama removed 2026-09-30)
 - Claude Max is NOT used for bot inference (ToS-clean separation -- Max stays for human-present sessions)
 
 ## Deployment

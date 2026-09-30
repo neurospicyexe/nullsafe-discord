@@ -78,7 +78,7 @@ Each bot gets its own `.env` file in its directory (`bots/bot-name/.env`). The a
 | `OWNER_DISCORD_ID` | Discord user ID of the primary user (right-click your name > Copy ID) |
 | `PLURALKIT_SYSTEM_ID` | Your PluralKit system ID (if using PluralKit) |
 | `REDIS_URL` | Redis connection string (e.g. `redis://localhost:6379`) |
-| `INFERENCE_PROVIDER` | `deepseek` (default), `groq`, `ollama`, or `lmstudio` |
+| `INFERENCE_PROVIDER` | `deepseek` (default), `deepinfra`, `groq`, `kimi`, `openai`, `anthropic`, `mistral`, or `lmstudio` |
 
 **Optional:**
 
@@ -139,7 +139,7 @@ Set `INFERENCE_MODE` in each bot's `.env`. There are three options:
 
 | Mode | What it does | When to use it |
 |------|--------------|----------------|
-| `direct` (default) | Each bot calls an LLM provider directly (DeepSeek, OpenAI, Anthropic, Mistral, Groq, Kimi, Ollama, LM Studio). Pick the provider with `INFERENCE_PROVIDER` and an API key. | Simplest. Good for most people. |
+| `direct` (default) | Each bot calls an LLM provider directly (DeepInfra, DeepSeek, OpenAI, Anthropic, Mistral, Groq, Kimi, LM Studio). Pick the provider with `INFERENCE_PROVIDER` and an API key. | Simplest. Good for most people. |
 | `brain` | Bots relay to a shared "Brain" service that runs a multi-companion swarm, then fall back to direct if it's down. | If you run the optional Phoenix Brain. |
 | `hermes` | Bots relay each reply to a self-hosted **Hermes** gateway (an OpenAI-compatible LLM gateway you run yourself). Set `HERMES_API_URL` and `HERMES_API_KEY`. | If you want one gateway in front of many providers. |
 
