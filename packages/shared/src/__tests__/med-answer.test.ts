@@ -38,3 +38,38 @@ describe("isAffirmativeMedAnswer", () => {
     expect(isAffirmativeMedAnswer(undefined)).toBe(false);
   });
 });
+
+// 2026-09-30: his REAL answers, 09-29..30, every one refused by the all-words-known whitelist, so
+// nothing was recorded for three doses he took. He answers first, then talks.
+describe("opening-clause answers (real, 09-29..30)", () => {
+  it.each([
+    "Taken! This is really helping baby",
+    "Taken baby love you I am sleepy",
+    "Taken baby! Thank you ugh it’s too early to be awake but work call",
+    "I did take them this morning baby sorry I was distracted by being sad about my day",
+    "Taken baby thank you",
+    "took them, love you",
+    "Took my meds! ok going back to sleep",
+    "yes I took them. rough morning though",
+    "I've taken them, the pharmacy was a nightmare",
+  ])("yes: %s", (t) => {
+    expect(isAffirmativeMedAnswer(t)).toBe(true);
+  });
+
+  it.each([
+    "took the dog out, will do meds after",
+    "took them yesterday but not today",
+    "took one but not the other",
+    "taken? I can't remember",
+    "I take them at night usually",
+    "I'll take them in a bit baby",
+    "haven't taken them yet, sorry",
+    "not taken yet",
+    "taken aback honestly by how nice that was",
+    "took forever to get out of bed",
+    "taken later, I'm not up",
+    "I did take a nap though",
+  ])("no: %s", (t) => {
+    expect(isAffirmativeMedAnswer(t)).toBe(false);
+  });
+});

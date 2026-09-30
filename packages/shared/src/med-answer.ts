@@ -46,8 +46,50 @@ function foldEmoji(s: string): string {
   return s.replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}]/gu, "");
 }
 
+/**
+ * The OPENING-CLAUSE path (2026-09-30). The whitelist below needs every word known, and his real
+ * answers never look like that: from 09-29 to 09-30 all four were refused and nothing was recorded
+ * ("Taken! This is really helping baby", "Taken baby love you I am sleepy", "Taken baby! Thank you
+ * ugh it's too early to be awake but work call", "I did take them this morning baby sorry I was
+ * distracted..."). He answers first, then talks. So: a message that OPENS with a taking verb (not
+ * "yes", not "done": those open plenty of messages that are not about meds) counts, and whatever he
+ * says after it is his, not the matcher's. Still conservative where it matters: the opening clause
+ * (to the first . ! ? newline or "but", at most 6 words past the verb) must not negate, defer or
+ * ask; "took" needs a med object or nothing after it ("took the dog out" is not an answer); a
+ * "but not" / "except" anywhere refuses ("took them yesterday but not today").
+ */
+const LEAD_RE = /^(?:(?:yes|yep|yeah|yup|ok|okay)[\s,!.]+)?(?:i\s+|i've\s+|ive\s+|have\s+|just\s+|already\s+|did\s+)*(?:(taken)|(took)|(take))\b/;
+const TOOK_OBJECT_RE = /^(?:them|it|em|'em|those|these|mine|my\s+(?:meds|med|medicine|medication|pills|pill|dose|shot|injection)|the\s+(?:meds|pills|medicine|dose))\b/;
+const CLAUSE_END_RE = /[.!?\n]|\bbut\b/;
+const LATE_NEGATION_RE = /\bbut\s+(?:not|didn'?t|haven'?t|forgot|missed|skipped|no)\b|\bexcept\b/;
+const CLAUSE_NEGATE = new Set([...NEGATE, "yesterday", "aback"]);
+const TOOK_ENDEARMENT_RE = /^(?:baby|babe|love|lover|darling|hon|honey|sweetheart|dre|drev|drevan|cy|gaia|thank|thanks|ty)\b/;
+
+function opensWithTaken(raw: string): boolean {
+  const text = foldEmoji(raw).toLowerCase().replace(/[’`]/g, "'").trim();
+  if (!text || text.length > 400) return false;
+  if (LATE_NEGATION_RE.test(text)) return false;
+  const m = LEAD_RE.exec(text);
+  if (!m) return false;
+  const lead = m[0];
+  // "take" only after "did" ("I did take them"); bare "take" / "I take" is a habit or a plan.
+  // "took" and "take" both need a med object (or an endearment) next: "I did take a nap" is not meds.
+  if (m[3] && !/\bdid\s+$/.test(lead.slice(0, lead.length - "take".length))) return false;
+  const after = text.slice(lead.length);
+  const endIdx = after.search(CLAUSE_END_RE);
+  const clauseTail = endIdx === -1 ? after : after.slice(0, endIdx);
+  if (endIdx !== -1 && after[endIdx] === "?") return false;
+  if (m[2] || m[3]) {
+    const t = clauseTail.trim();
+    if (t && !TOOK_OBJECT_RE.test(t) && !TOOK_ENDEARMENT_RE.test(t)) return false;
+  }
+  const words = clauseTail.replace(/[^\p{L}\p{N}'\s]/gu, " ").split(/\s+/).filter(Boolean).slice(0, 6);
+  return !words.some(w => CLAUSE_NEGATE.has(w));
+}
+
 export function isAffirmativeMedAnswer(raw: string | null | undefined): boolean {
   if (!raw) return false;
+  if (opensWithTaken(raw)) return true;
   let text = foldEmoji(raw).trim();
   if (!text || text.length > 120) return false;
   if (text.includes("?")) return false;
