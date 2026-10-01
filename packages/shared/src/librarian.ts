@@ -26,11 +26,20 @@ export interface ReachLaneVerdict {
 
 export interface MedDueDose { slot_key: string; local_date: string; kind: "first" | "followup"; label: string; local_time: string }
 export interface MedDoseKey { slot_key: string; local_date: string; kind: "first" | "followup" }
-/** One dose's state (Halseth /mind/med/today). answered_local null = NO ANSWER, never "not taken". */
+/**
+ * One dose's state (Halseth /mind/med/today). Since mig 0141: `outcome` is "taken", "missed" (ONLY
+ * because he said so) or null = NO ANSWER, never "not taken"; `told_local` / `told_to` are when and
+ * to whom he said it (either outcome). `answered_local` / `answered_to` stay TAKEN-only, so a
+ * Halseth from before 0141 (no outcome field) still reads correctly here.
+ */
 export interface MedStateDoseWire {
   slot_key: string; label: string; local_time: string; local_date: string;
   day: "today" | "yesterday"; answered_local: string | null; answered_to: string | null;
+  outcome?: "taken" | "missed" | null; told_local?: string | null; told_to?: string | null;
 }
+
+/** One dose a med answer recorded (slot keys only; never a label). */
+export interface MedAnswerRecorded { slot_key: string; local_date: string; answered_local: string | null; outcome: "taken" | "missed" }
 
 export interface SharedObject {
   ref_type: "question" | "tension" | "council";
@@ -1983,6 +1992,44 @@ export class LibrarianClient {
       if (!res.ok) return null;
       const data = await res.json() as { recorded?: { slot_key: string; local_date: string; answered_local: string | null } | null };
       return data.recorded ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Record his parsed answer (parseMedAnswer, ruling 2026-10-01): named doses, "*" for every open
+   * one, stated misses. Posts to /mind/med/answers, a route a pre-0141 Halseth does not have: there
+   * it 404s, and only a plain unnamed "taken" falls back to the old route. A stated miss is never
+   * sent anywhere it could be recorded as a taken. Returns every dose recorded (possibly []), or
+   * null on error.
+   */
+  async medAnswers(
+    answeredAtIso: string,
+    entries: Array<{ slot: string | null; outcome: "taken" | "missed" }>,
+  ): Promise<MedAnswerRecorded[] | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/med/answers`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companion_id: this.companionId,
+          answered_at: answeredAtIso,
+          answers: entries.map(e => ({ slot_key: e.slot, outcome: e.outcome })),
+        }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (res.status === 404) {
+        const plainYes = entries.length === 1 && entries[0]!.slot === null && entries[0]!.outcome === "taken";
+        if (!plainYes) return null;
+        const one = await this.medAnswer(answeredAtIso);
+        return one ? [{ ...one, outcome: "taken" }] : [];
+      }
+      if (!res.ok) return null;
+      const data = await res.json() as { results?: Array<{ recorded?: MedAnswerRecorded[] }> };
+      if (!Array.isArray(data.results)) return null;
+      return data.results.flatMap(r => (Array.isArray(r.recorded) ? r.recorded : []))
+        .map(r => ({ slot_key: r.slot_key, local_date: r.local_date, answered_local: r.answered_local ?? null, outcome: r.outcome === "missed" ? "missed" : "taken" }));
     } catch {
       return null;
     }

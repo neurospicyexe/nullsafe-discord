@@ -1,7 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
-import { isAffirmativeMedAnswer } from "./med-answer.js";
+import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
 import { sealDmChannel } from "./recall-context.js";
 import {
@@ -1698,17 +1698,22 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     if (resetsBotRails(railTurn) && !(isOwnerDm && dmParaphraseMemorySealed())) sessionWindows.touch(message.channelId);
 
-    // med_reminder answer (spec R-10). In an owner DM, an affirmative ("yes", "took them", a check
-    // mark) is sent to Halseth, which records it ONLY if this companion reminded him about a dose that
-    // is still open; which dose it answers is decided there (most recently reminded). The recording is
-    // a side effect: the message still goes through the normal reply path below. Nothing else about
-    // him is ever recorded: no answer, a "no" or anything ambiguous leaves no trace. Before the
-    // supersede check, so a "yes" that a newer message supersedes is still heard.
+    // med_reminder answer (spec R-10, amended by Raziel's ruling 2026-10-01). In an owner DM, his
+    // answer is parsed into statements (parseMedAnswer): "yes" / "took them" / a check mark, a named
+    // dose ("morning ones done", "took both"), or a miss he STATED ("forgot the morning jar"). Halseth
+    // records each ONLY if this companion reminded him about a dose that is still open; which dose an
+    // unnamed one answers is decided there (most recently reminded). The recording is a side effect:
+    // the message still goes through the normal reply path below. Silence, a deferral ("not yet",
+    // "taking them now") or anything ambiguous records nothing. Before the supersede check, so an
+    // answer that a newer message supersedes is still heard. Logs carry slot keys and outcomes only,
+    // never his words.
     let medAnswerRecorded = false;
-    if (isOwnerDm && isArrival && isAffirmativeMedAnswer(effectiveContent)) {
-      const rec = await librarian.medAnswer(new Date(message.createdTimestamp || Date.now()).toISOString());
-      medAnswerRecorded = rec !== null;
-      console.log(`[${COMPANION_ID}] [med] affirmative in DM -> ${rec ? `recorded slot=${rec.slot_key} date=${rec.local_date}` : "no open dose (nothing recorded)"}`);
+    const medParsed = isOwnerDm && isArrival ? parseMedAnswer(effectiveContent) : null;
+    if (medParsed) {
+      const recs = await librarian.medAnswers(new Date(message.createdTimestamp || Date.now()).toISOString(), medParsed.entries);
+      medAnswerRecorded = !!recs && recs.length > 0;
+      const said = medParsed.entries.map(e => `${e.slot ?? "unnamed"}:${e.outcome}`).join(",");
+      console.log(`[${COMPANION_ID}] [med] answer in DM (${said}) -> ${recs === null ? "error (nothing recorded)" : recs.length ? `recorded ${recs.map(r => `slot=${r.slot_key} date=${r.local_date} outcome=${r.outcome}`).join("; ")}` : "no open dose (nothing recorded)"}`);
     }
 
     // Supersede check A (channel inbox, 2026-07-06): a newer human conversational message
