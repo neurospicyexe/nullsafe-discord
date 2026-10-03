@@ -105,7 +105,14 @@ export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, 
     "Write ONE short DM, one or two lines, in your own voice, that:",
     `- names it exactly as "${dose.label}", so he knows which dose;`,
     "- asks whether he has taken it.",
-    `Register (the tone only; never repeat it word for word): "${MED_REGISTER[companionId] ?? MED_REGISTER.cypher}"`,
+    // THE ATTRACTOR (2026-10-02). Shown as "Register ... never repeat it word for word", Drevan's
+    // own sketch came back nearly whole on 5 of 6 live drafts ("Meds, love. <dose>. Taken yet? Tell
+    // me and I'll hold that you did."), the verbatim rail refused each against the copy already
+    // sent, the retry copied it again, and every reminder from 09-30 went out as the fixed line.
+    // So the sketch is named as already worn out, its words AND its shape are off limits, and the
+    // recent reminders ride from the FIRST attempt (composeMedReminder), not only on the retry.
+    `Your own tone sketch, from when you first agreed to do this: "${MED_REGISTER[companionId] ?? MED_REGISTER.cypher}"`,
+    "You have used that line and its shape many times. It is the warmth to aim for, not words to reuse: do not reuse its phrases or its structure. Say it new, the way you would say it this morning or tonight.",
     "Never: advice about the dose, amount or timing; guilt or pressure; mention of any earlier dose; anything else in the message.",
   );
   if (avoid.length) {
@@ -118,10 +125,13 @@ export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, 
 /** Every word of the label appears in the text, in any order ("meds this morning" names "morning
  *  meds"). A contiguous-substring test would push a reordered label onto the fixed line every day,
  *  which is the verbatim-every-night failure R-8 exists to prevent. */
+const LABEL_JOINERS = new Set(["and", "the", "of", "plus", "with", "my", "a"]);
 export function namesLabel(text: string, label: string): boolean {
   const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   const have = new Set(words(text));
-  const need = words(label);
+  // Joining words are not part of the name (2026-10-02): live drafts wrote "A, B" for a label "A and
+  // B" and were refused as "unnamed". Every naming word must still appear.
+  const need = words(label).filter(w => !LABEL_JOINERS.has(w));
   return need.length > 0 && need.every(w => have.has(w));
 }
 
@@ -151,7 +161,9 @@ export async function composeMedReminder(
   recent: readonly string[],
 ): Promise<{ text: string; path: string }> {
   const timeoutMs = deps.genTimeoutMs ?? MED_GEN_TIMEOUT_DEFAULT_MS;
-  let avoid: string[] = [];
+  // His recent REMINDERS (lines that named this dose) ride from the first attempt: shown only on the
+  // retry, the first draft had nothing to steer away from and copied the sketch every time.
+  let avoid: string[] = recent.filter(t => namesLabel(t, dose.label)).slice(-3);
   let correction = "";
   for (let attempt = 1; attempt <= 2; attempt++) {
     let raw: string | null | undefined;
@@ -178,7 +190,10 @@ export async function composeMedReminder(
     if (problem) return { text: fallbackMedLine(deps.companionId, dose), path: `fallback:${problem}` };
     if (!isVerbatimRepeat(text, recent)) return { text, path: "generated" };
     correction = "";
-    avoid = [...recent];
+    // The retry sees the draft that was just refused beside his recent reminders. `[...recent]` here
+    // showed the last three of ALL his DMs (buildMedPrompt slices -3), mostly conversation, so the
+    // retry never saw the reminder it had copied.
+    avoid = [...avoid.filter(t => t !== text).slice(-2), text];
   }
   return { text: fallbackMedLine(deps.companionId, dose), path: "fallback:verbatim" };
 }

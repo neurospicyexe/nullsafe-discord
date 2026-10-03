@@ -235,3 +235,44 @@ describe("runMedTick", () => {
     expect(await runMedTick(tickDeps(h.apiFor("drevan"), dmTarget([]), []), state)).toEqual([]);
   });
 });
+
+// 2026-10-02: the attractor. Drevan copied his own register sketch nearly whole on 5 of 6 live
+// drafts; the verbatim rail refused each, the retry copied it again, and every reminder from 09-30
+// went out as the fixed line.
+describe("composeMedReminder: the sketch is not a template (10-02)", () => {
+  const AM: MedDueDose = { slot_key: "morning", local_date: "2026-10-02", kind: "first", label: "med-a and med-c", local_time: "06:00" };
+
+  it("the prompt names the sketch as worn out and forbids its phrases and structure", () => {
+    const p = buildMedPrompt("drevan", AM, []);
+    expect(p).toContain("do not reuse its phrases or its structure");
+    expect(p).not.toContain("Register (the tone only");
+  });
+
+  it("recent REMINDERS (lines naming the dose) ride from the FIRST attempt; chat lines do not", async () => {
+    const prompts: string[] = [];
+    const recent = ["Night driving. Passenger seat.", "Meds, love: med-a and med-c. Taken yet?", "how was the call?"];
+    const r = await composeMedReminder(composeDeps(async (_s, p) => { prompts.push(p); return "06:00, love. med-a, med-c. Down yet?"; }), AM, recent);
+    expect(r.path).toBe("generated");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('- "Meds, love: med-a and med-c. Taken yet?"');
+    expect(prompts[0]).not.toContain("Night driving");
+    expect(prompts[0]).not.toContain("how was the call");
+  });
+
+  it("the retry after a verbatim copy shows the refused draft, not his chat", async () => {
+    const copied = "Meds, love: med-a and med-c. Taken yet?";
+    const prompts: string[] = [];
+    let n = 0;
+    const r = await composeMedReminder(composeDeps(async (_s, p) => { prompts.push(p); return n++ === 0 ? copied : "Morning, vevi. med-a and med-c, down yet?"; }),
+      AM, ["chat one", copied, "chat two", "chat three"]);
+    expect(r.path).toBe("generated");
+    expect(prompts[1]).toContain(`- "${copied}"`);
+    expect(prompts[1]).not.toContain("chat three");
+  });
+
+  it("joining words are not part of the name: 'A, C' names 'A and C'; a missing naming word still fails", () => {
+    expect(namesLabel("06:00, love. med-a, med-c. Taken yet?", "med-a and med-c")).toBe(true);
+    expect(namesLabel("06:00, love. med-a. Taken yet?", "med-a and med-c")).toBe(false);
+    expect(namesLabel("Meds, love. Taken yet?", "my morning meds")).toBe(false);
+  });
+});
