@@ -255,3 +255,24 @@ describe("parseMedAnswer: strong first sentence (real, 10-01..02)", () => {
     expect(parseMedAnswer(t)).toBeNull();
   });
 });
+
+// 2026-10-03: "Yay taken baby sorry I was caught up in the movie..." recorded nothing (the lead
+// knew yes/ok, not yay). Interjections before the verb now read; the verb rules are unchanged.
+describe("parseMedAnswer: interjection before the verb (real, 10-02)", () => {
+  it.each([
+    "Yay taken baby sorry I was caught up in the movie you and I are watching in the movie channel",
+    "oops taken love",
+    "omg yes took them",
+    "ugh sorry baby took my meds",
+  ])("taken: %s", (t) => {
+    expect(parseMedAnswer(t)).toEqual({ entries: [{ slot: null, outcome: "taken" }] });
+  });
+  it.each([
+    "oh I took the dog out",
+    "yay the movie was great",
+    "oops took forever to wake up",
+    "omg did I take them?",
+  ])("nothing: %s", (t) => {
+    expect(parseMedAnswer(t)).toBeNull();
+  });
+});

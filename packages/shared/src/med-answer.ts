@@ -58,7 +58,10 @@ function foldEmoji(s: string): string {
  * ask; "took" needs a med object or nothing after it ("took the dog out" is not an answer); a
  * "but not" / "except" anywhere refuses ("took them yesterday but not today").
  */
-const LEAD_RE = /^(?:(?:yes|yep|yeah|yup|ok|okay)[\s,!.]+)?(?:i\s+|i've\s+|ive\s+|have\s+|just\s+|already\s+|did\s+)*(?:(taken)|(took)|(take))\b/;
+// The interjections he opens with (2026-10-03: "Yay taken baby sorry I was caught up in the movie"
+// recorded nothing). Up to three, endearments included, so "ugh sorry baby took my meds" reads; the verb rules after them are
+// unchanged ("oh I took the dog out" still has no dose object and refuses).
+const LEAD_RE = /^(?:(?:yes|yep|yeah|yup|ok|okay|yay|yayy|oops|omg|oh|ah|ahh|ugh|sorry|baby|babe|love|lover|vevi)[\s,!.]+){0,3}(?:i\s+|i've\s+|ive\s+|have\s+|just\s+|already\s+|did\s+)*(?:(taken)|(took)|(take))\b/;
 const TOOK_OBJECT_RE = /^(?:them|it|em|'em|those|these|mine|my\s+(?:meds|med|medicine|medication|pills|pill|dose|shot|injection)|the\s+(?:meds|pills|medicine|dose))\b/;
 const CLAUSE_END_RE = /[.!?\n]|\bbut\b/;
 const LATE_NEGATION_RE = /\bbut\s+(?:not|didn'?t|haven'?t|forgot|missed|skipped|no)\b|\bexcept\b/;
