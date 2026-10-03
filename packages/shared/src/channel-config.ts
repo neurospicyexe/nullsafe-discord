@@ -238,6 +238,11 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // host (2026-09-28, R5): the first unaddressed message after a gap still went to the bid, and
   // a sibling could win it mid-moment with Drevan. Now unaddressed is always Drevan's.
   "1531431567430385754": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 2 * 60 * 60 * 1000, host: "drevan" },
+  // #movie-night (2026-10-02): the Fargo room's shape for films. 3h hold because a film runs
+  // longer than an episode between messages; Drevan hosts unaddressed messages, and a name or
+  // group call ("triad, ...") brings the others in. No WATCH_PARTY_CHANNELS binding: that
+  // detector reads s#e# positions and a movie night has no single fixed title.
+  "1555738744546529345": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" },
 };
 
 interface ResponderContext {

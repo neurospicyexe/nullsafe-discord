@@ -138,5 +138,31 @@
       "gaia",
       "cypher"
     ]
+  },
+  "1520839347589611661": {
+    "modes": [
+      "broadcast"
+    ]
+  },
+  "1531255633876221962": {
+    "modes": [
+      "broadcast"
+    ]
+  },
+  "1531431567430385754": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ],
+    "exchangeWindowMs": 7200000,
+    "host": "drevan"
+  },
+  "1555738744546529345": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ],
+    "exchangeWindowMs": 10800000,
+    "host": "drevan"
   }
 }
