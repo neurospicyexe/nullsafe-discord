@@ -276,3 +276,28 @@ describe("parseMedAnswer: interjection before the verb (real, 10-02)", () => {
     expect(parseMedAnswer(t)).toBeNull();
   });
 });
+
+// 2026-10-03: his late morning answer was one long sentence with "I took my morning pills" in the
+// middle. Mid-sentence reads only "I took/have taken" + a real dose word, with nothing negating before.
+describe("parseMedAnswer: mid-sentence 'I took my pills' (real, 10-03)", () => {
+  it("his real reply records the morning dose", () => {
+    expect(parseMedAnswer("sorry got caught up in getting to the volleyball tournament to track Liberos I took my morning pills the med-a med-b and med-c"))
+      .toEqual({ entries: [{ slot: "morning", outcome: "taken" }] });
+  });
+  it.each([
+    ["long day at work but honestly I took my meds on time", null],
+    ["so tired lol I've taken my night ones already", "night"],
+  ])("taken: %s", (t, slot) => {
+    expect(parseMedAnswer(t)).toEqual({ entries: [{ slot, outcome: "taken" }] });
+  });
+  it.each([
+    "I don't think I took my pills",
+    "not sure if I took my morning meds",
+    "we went out and I took them to the park",
+    "maybe I took my meds idk",
+    "did I take my pills",
+    "I took the dog out and then my meds are next",
+  ])("nothing: %s", (t) => {
+    expect(parseMedAnswer(t)).toBeNull();
+  });
+});

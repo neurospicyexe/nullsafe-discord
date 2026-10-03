@@ -174,6 +174,7 @@ const MED_NOUN = new Set([
   "one", "ones", "shot", "injection",
 ]);
 const TAKE_VERB = new Set(["take", "taking", "took", "taken", "takes"]);
+const PLACE_PREP = new Set(["to", "out", "for", "with", "home", "outside", "back", "over", "around", "into", "inside", "along", "off"]);
 /** Words that may make up a dose reference ("my morning jar", "both", "the night ones too"). */
 const REGION = new Set([
   ...PRONOUN_OBJ, ...MED_NOUN, ...Object.keys(SLOT_WORD), ...ENDEAR,
@@ -264,6 +265,9 @@ function takenClause(c: Clause): SlotRef | "ambig" | null {
   if (m[2] || m[3]) {
     if (after.length && !region.length) return null;                     // "took forever"
     if (region.some(w => !ENDEAR.has(w)) && !hasObject(region)) return null; // "took the dog out"
+    // A bare pronoun going somewhere is not a dose ("I took them to the park", 2026-10-03).
+    const pronounOnly = region.length > 0 && region.every(w => PRONOUN_OBJ.has(w) || ENDEAR.has(w));
+    if (pronounOnly && PLACE_PREP.has(after[region.length] ?? "")) return null;
   }
   if (after.slice(0, 6).some(w => CLAUSE_NEGATE.has(w))) return "ambig";  // "took them yesterday", "taken aback"
   return slotsOf(region);
@@ -389,6 +393,30 @@ export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer 
   if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && clauses.length > 1
       && clauses[1]!.sep === "terminal" && !clauses[0]!.question && strongBareSentence(clauses[0]!.words)) {
     push(slotsOf(clauses[0]!.words), "taken");
+  }
+  // MID-SENTENCE "I took my pills" (2026-10-03). His late morning answer was one long sentence:
+  // "sorry got caught up in getting to the volleyball tournament ... I took my morning pills ...",
+  // and the taking verb was nowhere near the start. Strict, because nothing anchors it: "I"
+  // + took / have taken / 've taken, then a REAL dose word (pills, meds, my morning ones; never a
+  // bare "them": "I took them to the park"), and no negating or hedging word anywhere before it in
+  // the clause ("I don't think I took my pills" refuses). Only when no clause said anything else.
+  if (statements.length === 0 && !deferredUnnamed && deferred.size === 0) {
+    for (const c of clauses) {
+      if (c.question) continue;
+      const w = c.words;
+      for (let i = 0; i < w.length - 1; i++) {
+        if (w[i] !== "i" && w[i] !== "i've" && w[i] !== "ive") continue;
+        let j = i + 1;
+        while (j < w.length && (w[j] === "just" || w[j] === "already" || w[j] === "did" || w[j] === "have" || w[j] === "also")) j++;
+        if (!(w[j] === "took" || w[j] === "taken" || (w[j] === "take" && w[j - 1] === "did"))) continue;
+        const region = regionOf(w.slice(j + 1));
+        const realDose = region.some(x => MED_NOUN.has(x) || !!SLOT_WORD[x]);
+        if (!realDose || w.slice(0, i).some(x => CLAUSE_NEGATE.has(x))) continue;
+        push(slotsOf(region), "taken");
+        break;
+      }
+      if (statements.length) break;
+    }
   }
   if (statements.length === 0) return null;
 
