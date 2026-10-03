@@ -230,3 +230,28 @@ describe("parseMedAnswer: what must record NOTHING under the ruling", () => {
     }
   });
 });
+
+// 2026-10-02: a strong bare first SENTENCE, then talk. His 10-02 morning "Done baby! This has
+// really really been helping thank you lover" recorded nothing and the follow-up fired.
+describe("parseMedAnswer: strong first sentence (real, 10-01..02)", () => {
+  const unnamedTaken = { entries: [{ slot: null, outcome: "taken" }] };
+  it.each([
+    "Done baby! This has really really been helping thank you lover",
+    "Oops sorry baby!! Yes taken",
+    "Taken baby!! A little late but got it",
+    "Done love. rough night though",
+    "did baby!\nwhat are you up to",
+  ])("taken: %s", (t) => {
+    expect(parseMedAnswer(t)).toEqual(unnamedTaken);
+  });
+  it.each([
+    "yes, and then we watched the whole season of that show last night",
+    "Yes! the movie was great",
+    "done with work! finally",
+    "Done baby! taking the night ones later",
+    "Done? I can't remember",
+    "done, and then I napped",
+  ])("nothing: %s", (t) => {
+    expect(parseMedAnswer(t)).toBeNull();
+  });
+});

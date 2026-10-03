@@ -331,6 +331,11 @@ function classify(c: Clause, prev: Statement | null): Statement {
  * Parse one DM into med-answer statements, or null when there is nothing to record. The rules are
  * in the block comment above; `isAffirmativeMedAnswer` (unchanged) stays the reaction path's test.
  */
+const STRONG_BARE = new Set(["done", "taken", "did"]);
+function strongBareSentence(words: string[]): boolean {
+  return words.some(w => STRONG_BARE.has(w)) && isAffirmativeMedAnswer(words.join(" "));
+}
+
 export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer | null {
   if (!raw) return null;
   const folded = foldEmoji(raw);
@@ -348,7 +353,8 @@ export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer 
     else statements.push({ slot: slots.star ? "*" : null, outcome });
   };
 
-  for (const c of splitClauses(text)) {
+  const clauses = splitClauses(text);
+  for (const c of clauses) {
     const s = classify(c, prev);
     if (s.kind === "refuse" || s.kind === "ambig") return null;
     if (s.kind === "defer") {
@@ -369,6 +375,17 @@ export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer 
   // Nothing any clause said: the whole-message whitelist (emoji-only "✅", "👍 done").
   if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && isAffirmativeMedAnswer(raw)) {
     push(slotsOf(tokensOf(text)), "taken");
+  }
+  // A FIRST SENTENCE that is a strong bare answer, then talk (2026-10-02). His 10-02 morning answer
+  // "Done baby! This has really really been helping thank you lover" recorded nothing (and the
+  // follow-up fired): a bare "done" counted only as the WHOLE message, because "yes, and then we
+  // watched..." must not read as an answer. The difference is a full stop: here the first clause
+  // ENDS a sentence (. ! newline) and holds only a strong word (done / taken / did; not "yes", too
+  // generic) plus filler and endearments. A comma or "and" join still refuses; so does any later
+  // clause that deferred, refused or was ambiguous (those returned above).
+  if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && clauses.length > 1
+      && clauses[1]!.sep === "terminal" && !clauses[0]!.question && strongBareSentence(clauses[0]!.words)) {
+    push(slotsOf(clauses[0]!.words), "taken");
   }
   if (statements.length === 0) return null;
 
