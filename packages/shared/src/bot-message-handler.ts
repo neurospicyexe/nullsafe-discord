@@ -93,6 +93,10 @@ import { readWritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
 import { stampRelative } from "./relative-time.js";
 import {
+  WatchalongDelivery, watchalongEnabled, handleMovieCommand, handleAtCommand, readCaptionAttachment,
+  type PreparedDelivery, type CaptionAttachment,
+} from "./watchalong.js";
+import {
   appliesBotRails, resetsBotRails, clearsStaleRails, botRailSilence, runsAmbientClassifier, mayVoice, turnFraming,
   followUpPassEnabled, ArrivalMediaCache, arrivalMediaPlan,
 } from "./pass-turn.js";
@@ -203,6 +207,15 @@ const arrivalMedia = new ArrivalMediaCache();
 // messages later shouldn't re-POST). Empty when WATCH_PARTY_CHANNELS is unset, so the block below
 // is a no-op on every box that hasn't configured it.
 const lastPassiveWatchProgress = new Map<string, string>();
+
+// Watchalong delivery state (spec 2026-10-02): per-channel lastDelivered + a <=10s read cache.
+// Module-level = per-process = per companion bot, the hermesDeliveredMark idiom. Built lazily on the
+// first turn because the Halseth secret arrives with the bot's cfg, not at module load.
+let _watchalongDelivery: WatchalongDelivery | null = null;
+function watchalongDeliveryFor(secret: string, companionId: string): WatchalongDelivery {
+  if (!_watchalongDelivery) _watchalongDelivery = new WatchalongDelivery({ secret, companionId });
+  return _watchalongDelivery;
+}
 
 async function getImpContext(
   librarian: LibrarianClient,
@@ -344,6 +357,8 @@ export interface MessageHandlerDeps {
   INTO_TRIGGER?: RegExp;
   RETRACT_TRIGGER?: RegExp;
   WATCH_TRIGGER?: RegExp;
+  MOVIE_TRIGGER?: RegExp;
+  MOVIE_AT_TRIGGER?: RegExp;
   COMMAND_GUARD?: RegExp;
   BLUE_FRAMING: string;
   GUEST_FRAMING: string;
@@ -473,7 +488,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     connectVoice, leaveVoice, resetCycleGuard, pushRazielMessage,
     COMPANION_ID, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE,
     MODEL_SWITCH_TRIGGER, MODEL_SWITCH_LIST_INTRO, MODEL_SWITCH_SUCCESS,
-    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, RETRACT_TRIGGER, WATCH_TRIGGER, COMMAND_GUARD,
+    LISTEN_TRIGGER, CLUB_TRIGGER, SEARCH_TRIGGER, IMAGINE_TRIGGER, PET_TRIGGER, COUNCIL_TRIGGER, IMPS_TRIGGER, HEX_TRIGGER, LOG_TRIGGER, INTO_TRIGGER, RETRACT_TRIGGER, WATCH_TRIGGER, MOVIE_TRIGGER, MOVIE_AT_TRIGGER, COMMAND_GUARD,
     BLUE_FRAMING, GUEST_FRAMING, IN_CHARACTER_FALLBACK,
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
@@ -908,8 +923,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // would then get eaten by the guard instead of by the trigger -- the same harm through a second door.
     // Testing the narrowed watch trigger here excludes real watch commands while leaving that sentence to
     // be recorded and answered as the conversation it is.
+    // Same reasoning for the watchalong triggers (2026-10-02): neither is in the guard (a conversational
+    // "cy: movie night tonight?" / "dre: at least we tried" must stay conversation), so the real forms are
+    // tested here directly.
     const isOwnerCommand = attribution.isOwner
-      && (!!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent));
+      && (!!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
+        || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent));
     if (!isOwnerCommand) {
       stmStore.appendInboundOnce(message.channelId, message.id, {
         role: "user",
@@ -1210,6 +1229,54 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const reply = await handleWatchCommand(watchMatch[1] ?? "", cfg.halsethSecret, COMPANION_ID)
           .catch(err => `watch command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await sendLong(message.channel as TextChannel, reply);
+        return;
+      }
+    }
+
+    // Owner watchalong commands (spec 2026-10-02): "<prefix>: movie start <title>" (+ optional attached
+    // .srt/.vtt), "<prefix>: movie pause|play|status|done", "<prefix>: at 47:12". Deterministic Halseth
+    // writes + literal acks, never inference. Per-bot aliases, so only the addressed bot matches.
+    //
+    // The caption attachment is read HERE, from message.attachments, before any addressing/relevance
+    // gate: these blocks sit above all of them, and the STT/vision passes above ignore text files, so
+    // an .srt reaches this point untouched. Owner `movie start` messages only -- no other message ever
+    // has its text attachments fetched.
+    if (attribution.isOwner && MOVIE_TRIGGER) {
+      const m = effectiveContent.match(MOVIE_TRIGGER);
+      if (m) {
+        const sub = m[1] ?? m[3] ?? "";
+        const ch = message.channel as TextChannel;
+        let attachment: CaptionAttachment | null = null;
+        if (/^start$/i.test(sub)) {
+          // Captions can take a while (OpenSubtitles, yt-dlp); show the channel something.
+          await ch.sendTyping().catch(() => {});
+          if (message.attachments.size > 0) {
+            attachment = await readCaptionAttachment(
+              [...message.attachments.values()].map(a => ({ name: a.name, url: a.url, size: a.size })),
+            );
+          }
+        }
+        const delivery = watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID);
+        const reply = await handleMovieCommand(sub, m[2] ?? "", {
+          secret: cfg.halsethSecret, channelId: message.channelId, companionId: COMPANION_ID,
+          startedBy: cfg.ownerDisplayName,
+          attachment, onChanged: () => delivery.invalidate(message.channelId),
+        }).catch(err => `movie command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        console.log(`[${COMPANION_ID}] watchalong movie ${sub.toLowerCase()} in ${message.channelId}${attachment ? ` (attachment ${attachment.name})` : ""}`);
+        await sendLong(ch, reply);
+        return;
+      }
+    }
+    if (attribution.isOwner && MOVIE_AT_TRIGGER) {
+      const m = effectiveContent.match(MOVIE_AT_TRIGGER);
+      if (m) {
+        const delivery = watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID);
+        const reply = await handleAtCommand(m[1] ?? "", {
+          secret: cfg.halsethSecret, channelId: message.channelId, companionId: COMPANION_ID,
+          onChanged: () => delivery.invalidate(message.channelId),
+        }).catch(err => `at command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+        console.log(`[${COMPANION_ID}] watchalong at ${m[1]} in ${message.channelId}`);
+        await (message.channel as TextChannel).send(reply);
         return;
       }
     }
@@ -1655,6 +1722,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       );
     });
 
+    // Watchalong delivery read (spec 2026-10-02), STARTED here and awaited at the system-prompt step, so
+    // the Halseth round trip overlaps the context assembly in between. Placed after every response gate
+    // above, so only turns this bot is actually taking pay for it. prepare() never throws and resolves
+    // null on any failure: a Halseth outage can never block a reply. DMs never carry a session.
+    const watchalongPending: Promise<PreparedDelivery | null> = !isOwnerDm && watchalongEnabled()
+      ? watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID).prepare(message.channelId)
+      : Promise.resolve(null);
+
     const memberLabel = isSol ? SOL_AUTHOR_LABEL
       : pkMemberName
       ? `${pkMemberName} (via PK)`
@@ -2094,6 +2169,10 @@ ${widened}`;
       categoryName: !isThreadCh && "parent" in liveChannel ? parentOf(liveChannel) : null,
       modes: channelEntry?.modes ?? [],
     });
+    // Watchalong standing line (spec 2026-10-02): title, playhead, and the soft gate. Nice-to-have only;
+    // the [ON SCREEN] block on the live user turn (below, after the liveHistory swap) carries the film.
+    const watchalong = await watchalongPending;
+    if (watchalong) contextPrompt += watchalong.standingLine;
     // Today's med state + the dosing rule (spec P-2, P-1), DM only: the block names medications.
     if (isOwnerDm) {
       contextPrompt += renderMedStateBlock(await librarian.medToday(), COMPANION_ID);
@@ -2409,6 +2488,32 @@ ${widened}`;
       if (!swapped) liveHistory.push({ role: "user", content: effectiveContent });
     }
 
+    // Watchalong delivery (spec 2026-10-02): the cues between this bot's lastDelivered and the playhead,
+    // appended to the LIVE user turn only -- the [HEARD] pattern above. NOT to effectiveContent: that
+    // string already fed the address/relevance gates and the director bus, and caption text ("KEVIN:
+    // Where's Dad?") must never steer who speaks. NOT the system prompt either: Hermes may reuse the
+    // stamped session prompt (B40). The block reaches the gateway inside this turn's delta and stays in
+    // its transcript, so the film accumulates there with no duplicates; STM gets a one-line marker at
+    // commit (after the gateway answers). The live turn is located the same way the swap above finds it.
+    let watchalongInjected = false;
+    if (watchalong?.block) {
+      for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const m = liveHistory[i]!;
+        if (m.role === "user" && m.content.endsWith(effectiveContent)) {
+          if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${watchalong.block}` };
+          watchalongInjected = true;
+          break;
+        }
+      }
+      if (watchalongInjected) {
+        console.log(`[${COMPANION_ID}] watchalong: ${watchalong.session.title} -> ${watchalong.throughSec.toFixed(0)}s injected (${watchalong.block.split("\n").length - 1} lines)`);
+      } else {
+        // Not delivered, so not committed: the next turn re-sends the same delta.
+        console.warn(`[${COMPANION_ID}] watchalong: live turn not found in history; cues held for next turn`);
+      }
+    }
+
     // Hermes delta turn (2026-07-02, reworked 07-03): with the session pinned, the gateway
     // loads history from state.db and discards the request-body history -- so sending the
     // full STM window wasted payload AND silently dropped every turn this bot didn't reply
@@ -2462,6 +2567,18 @@ ${widened}`;
     // a failed call leaves the mark alone so its delta re-sends next turn.
     if (hermesOut && hermesOut.deliveredThroughTs !== null) {
       hermesDeliveredMark.set(message.channelId, hermesOut.deliveredThroughTs);
+    }
+    // Watchalong lastDelivered advances on the same edge, for the same reason: the gateway has the cues
+    // now, even if supersede check B below drops the reply. An empty delta (no block) still commits, so
+    // the position moves to the playhead and a first-join "last ten minutes" is never repeated. A block
+    // that never made it into the turn is NOT committed. STM gets the one-line marker (in-memory window;
+    // the persisted row keeps its arrival content -- record-on-arrival wrote it before this turn knew
+    // about the film).
+    if (watchalong && (!watchalong.block || watchalongInjected)) {
+      watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID).commit(watchalong);
+      if (watchalong.stmMarker) {
+        stmStore.amendInbound(message.channelId, message.createdTimestamp, stmContent, watchalong.stmMarker);
+      }
     }
 
     // Supersede check B (channel inbox, 2026-07-06): a newer human message arrived WHILE

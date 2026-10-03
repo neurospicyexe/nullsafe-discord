@@ -311,6 +311,9 @@ export interface RunBotConfig {
   /** `<prefix>: retract` as a reply to one of this bot's messages (2026-09-26). */
   retractTrigger?: RegExp;
   watchTrigger?: RegExp;
+  /** Watchalong (2026-10-02): `<prefix>: movie start|pause|play|status|done` and `<prefix>: at 47:12`. */
+  movieTrigger?: RegExp;
+  movieAtTrigger?: RegExp;
   commandGuard?: RegExp;
   redisUrl: string | undefined;
   mistralApiKey: string | undefined;
@@ -344,7 +347,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, retractTrigger, watchTrigger, commandGuard,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, retractTrigger, watchTrigger, movieTrigger, movieAtTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig, surface,
   } = brc;
@@ -1037,6 +1040,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       ...(intoTrigger ? { INTO_TRIGGER: intoTrigger } : {}),
       ...(retractTrigger ? { RETRACT_TRIGGER: retractTrigger } : {}),
       ...(watchTrigger ? { WATCH_TRIGGER: watchTrigger } : {}),
+      ...(movieTrigger ? { MOVIE_TRIGGER: movieTrigger } : {}),
+      ...(movieAtTrigger ? { MOVIE_AT_TRIGGER: movieAtTrigger } : {}),
       ...(commandGuard ? { COMMAND_GUARD: commandGuard } : {}),
       BLUE_FRAMING: blueFraming, GUEST_FRAMING: guestFraming, IN_CHARACTER_FALLBACK: inCharacterFallback,
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,

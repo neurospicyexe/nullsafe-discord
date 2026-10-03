@@ -27,6 +27,8 @@ export interface CommandTriggers {
   retract: RegExp;
   into: RegExp;
   watch: RegExp;
+  movie: RegExp;
+  movieAt: RegExp;
   guard: RegExp;
 }
 
@@ -84,6 +86,23 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
         `[\\s\\S]*?\\b(?:s\\s*\\d{1,2}\\s*[\\s._-]*e\\s*\\d{1,3}|\\d{1,2}\\s*x\\s*\\d{1,3}|season\\s*\\d{1,2}|ep(?:isode)?\\s*\\d{1,3})\\b[\\s\\S]*|` +
         `[\\s\\S]*?\\b(?:finished|done|complete|completed|paused|pause|hold|abandoned|dropped|abandon|resumed?)\\s*` +
       `)$`,
+      "i",
+    ),
+    // Watchalong (spec 2026-10-02). "<prefix>: movie start <title>" (+ optional .srt/.vtt attachment;
+    // title optional so an attachment-only start still matches and the handler names it from the file)
+    // and "<prefix>: movie pause|play|resume|status|done|end|stop" as the WHOLE message. Groups: 1 = "start",
+    // 2 = the title, 3 = any other subcommand. Neither `movie` nor `at` is in the guard, deliberately:
+    // "cy: movie night tonight?" and "dre: at least we tried" are conversation, and the guard would eat
+    // them with a usage reply. A message is only claimed when it is unambiguously one of these forms.
+    movie: new RegExp(
+      `^(?:${alt})\\b[,:]?\\s*movie\\b[,:]?\\s+(?:(start)\\b[,:]?(?:\\s+([\\s\\S]*?))?|(pause|play|resume|status|done|end|stop))\\s*[.!]?\\s*$`,
+      "i",
+    ),
+    // "<prefix>: at 47:12" / "at 1:02:03" / "at 47m" / "at 47 min" / "at 1h02m" -- seek + play (resync).
+    // STRICT: only a time after `at`, then end of message. "dre: at least we tried" / "cy: at 8 tonight"
+    // / "cy: at 8pm" never match. Group 1 = the time text (parsed by watchalong.ts parseWatchTime).
+    movieAt: new RegExp(
+      `^(?:${alt})\\b[,:]?\\s*at\\s+(\\d{1,2}:\\d{2}(?::\\d{2})?|\\d{1,3}\\s*(?:m|min|mins|minutes?)|\\d{1,2}\\s*h(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minutes?)?)?)\\s*[.!]?\\s*$`,
       "i",
     ),
     guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
@@ -150,5 +169,7 @@ export function commandUsage(companionId: string): string {
     `\`${p}: model <name>\` (or \`${p}: model \` + space to list)`,
     `\`${p}: log <thought>\` (drop a note in your Hearth log -- no reply needed)`,
     `\`${p}: into <thing>\` (add to your shelf) -- also \`into list\` / \`into drop <name>\``,
+    `\`${p}: movie start <title>\` (watchalong; attach an .srt/.vtt to use your own captions) -- also \`movie pause|play|status|done\``,
+    `\`${p}: at 47:12\` (watchalong: where the movie is right now, also \`at 1:02:03\` / \`at 47m\`)`,
   ].join("\n");
 }

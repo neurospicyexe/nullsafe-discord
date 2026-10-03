@@ -171,6 +171,31 @@ export class StmStore {
   }
 
   /**
+   * Append a one-line marker to an inbound turn ALREADY in the in-memory window (Watchalong,
+   * 2026-10-02: `[on screen: <title> to 47:12]` after the cues were delivered). Matched by timestamp
+   * + content suffix, newest first, so a repeated message text cannot be mistaken for this one.
+   *
+   * In-memory only: record-on-arrival persisted the row before the turn knew about the film, and
+   * there is no update path for a persisted STM row. A restart therefore loses the marker, which
+   * costs nothing -- the gateway transcript, not STM, is where the delivered cues live.
+   *
+   * Returns true when a turn was amended. Idempotent: a marker already present is not added twice.
+   */
+  amendInbound(channelId: string, timestamp: number, content: string, marker: string): boolean {
+    const history = this.memory.get(channelId);
+    if (!history?.length) return false;
+    for (let i = history.length - 1; i >= 0; i--) {
+      const e = history[i]!;
+      if (e.role !== "user" || e.timestamp !== timestamp) continue;
+      if (e.content.endsWith(`${content.trimEnd()}\n${marker}`)) return true;
+      if (!e.content.endsWith(content)) continue;
+      history[i] = { ...e, content: `${e.content.trimEnd()}\n${marker}` };
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Clears in-memory history for a channel (called after synthesis on timeout).
    * DB entries remain for potential restart recovery until pruned on next write.
    */

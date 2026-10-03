@@ -165,6 +165,15 @@ const shared = {
   YTDLP_EXTRA_ARGS:      process.env.YTDLP_EXTRA_ARGS,
   HEAR_MUSIC_PATH:       process.env.HEAR_MUSIC_PATH,
   MEDIA_CACHE_DIR:       process.env.MEDIA_CACHE_DIR,
+  // Watchalong (2026-10-02, docs/SPEC-watchalong-2026-10-02.md). OPENSUBTITLES_API_KEY enables the
+  // OpenSubtitles caption source for `<p>: movie start <title>` (without it, attach an .srt);
+  // USERNAME/PASSWORD are optional and only raise the daily download quota. WATCHALONG_ENABLED is the
+  // per-turn delivery kill switch: default ON, `off`/`0`/`false`/`no` stops the fetch + [ON SCREEN]
+  // injection (the commands keep working). Allowlisted here per this file's standing rule.
+  OPENSUBTITLES_API_KEY:  process.env.OPENSUBTITLES_API_KEY,
+  OPENSUBTITLES_USERNAME: process.env.OPENSUBTITLES_USERNAME,
+  OPENSUBTITLES_PASSWORD: process.env.OPENSUBTITLES_PASSWORD,
+  WATCHALONG_ENABLED:     process.env.WATCHALONG_ENABLED,
   // Writeback gate (2026-09-21, S3). WRITEBACK_GATE picks which judgment decides what the
   // companions remember: legacy (today's generative judge, the default), jev-shadow (judge
   // still decides and writes; Jev runs alongside and only logs what it would have done), or

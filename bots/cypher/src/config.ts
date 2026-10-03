@@ -223,6 +223,9 @@ export const RETRACT_TRIGGER = COMMAND_TRIGGERS.retract;
 // Obsession shelf (0094): "into <thing>" / "into list" / "into drop <frag>".
 export const INTO_TRIGGER = COMMAND_TRIGGERS.into;
 export const WATCH_TRIGGER = COMMAND_TRIGGERS.watch;
+// Watchalong (2026-10-02): "movie start <title>" / "movie pause|play|status|done" / "at 47:12".
+export const MOVIE_TRIGGER = COMMAND_TRIGGERS.movie;
+export const MOVIE_AT_TRIGGER = COMMAND_TRIGGERS.movieAt;
 // Command-shaped but unparsed -> literal usage reply, never inference.
 export const COMMAND_GUARD = COMMAND_TRIGGERS.guard;
 
