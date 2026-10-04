@@ -2924,6 +2924,21 @@ ${widened}`;
           // doing real work; one that fires constantly and barely over is a candidate to loosen.
           railSuppressed(COMPANION_ID, "echo", { score: echo, threshold: echoThreshold(), channelId: message.channelId });
           distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+          // B32: an entitled follower (care or multi-address) silenced here must still release the
+          // one behind it, like the verbatim rail above; a short presence line scored against the
+          // room trips this gate easily, and one rail hit must not silence the whole chain.
+          if (entitledFollowUp) {
+            const pass = followUpPassEnabled() && followUpPassFor({
+              isCompanionBot: senderCtx.isCompanionBot,
+              entitled: entitledFollowUp,
+              messageId: message.id,
+              channelId: message.channelId,
+              from: COMPANION_ID as CompanionId,
+              reason: "echo",
+            });
+            if (pass && redis) publishFollowUpPass(redis, pass).catch(() => {});
+            if (entitledFollowUp.kind === "care") b32Log(COMPANION_ID, `followup(after ${entitledFollowUp.expectedPrior})`, "held", "echo gate; next position released");
+          }
           return;
         }
       }
