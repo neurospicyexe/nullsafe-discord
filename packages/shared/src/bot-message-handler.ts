@@ -102,7 +102,7 @@ import {
 } from "./pass-turn.js";
 import {
   badNightMode, matchHoldPhrase, careFollowUpChain, careChainPosition, b32Log, b32TurnBlock, holdOpenerLine,
-  askedWhereSiblings, markOwnerDmLive, liveSiblingDm, COMPANION_SET_HOLD_LINE, CARE_FOLLOWUP_MIN_GAP_MS,
+  askedWhereSiblings, markOwnerDmLive, bidFloorFor, liveSiblingDm, COMPANION_SET_HOLD_LINE, CARE_FOLLOWUP_MIN_GAP_MS,
   type HoldPhrase, type ChainHistoryMsg, type RedisLike,
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
@@ -2426,11 +2426,20 @@ ${widened}`;
         // Deadline anchored to the MESSAGE, not to this process's arrival. All three bots compute the
         // same instant, so the upstream ambient LLM judge (owner_only channels, variable latency per
         // gateway) can no longer decide the winner by returning first.
-        // B32 D3: a hold phrase must get an answer (the answering companion is the one that calls
-        // Halseth), so no floor: a winner always exists, and claimSpoken keeps it to one.
+        // B32 (ruling 2026-10-04): under hold (on), every owner message in a guild channel, and the
+        // hold phrase, bids with no floor: whoever leads the chain always answers, and claimSpoken
+        // keeps it to one. Shadow only logs. Outside the hold the floor is exactly as before.
+        const b32Floor = bidFloorFor({
+          mode: b32Mode,
+          careHold: careHoldActive(COMPANION_ID),
+          ownerGuildArrival: b32OwnerArrival && !isOwnerDm,
+          holdPhrase: !!holdPhrase,
+          fallbackMinScore: careHold ? CARE_HOLD_MIN_BID : undefined,
+        });
+        if (b32Floor.shadowFloor0) b32Log(COMPANION_ID, "floor0", "shadow", `would bid with minScore 0 on ${message.id}`);
         const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore, {
           deadlineAt: message.createdTimestamp + BID_WINDOW_MS,
-          ...(holdPhrase && b32Mode === "on" ? { minScore: 0 } : careHold ? { minScore: CARE_HOLD_MIN_BID } : {}),
+          ...(b32Floor.minScore !== undefined ? { minScore: b32Floor.minScore } : {}),
         });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
         // they have to be tuned against the real score distribution, and this line is the only place

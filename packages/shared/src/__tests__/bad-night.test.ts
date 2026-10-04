@@ -8,7 +8,7 @@ import {
   badNightMode, matchHoldPhrase, careFollowUpChain, careChainPosition, recentlySpoke, CARE_FOLLOWUP_MIN_GAP_MS,
   heartbeatEligibility, markOwnerDmLive, liveSiblingDm, filterDmMovesForSiblingDm, OWNER_DM_LIVE_KEY, OWNER_DM_LIVE_MS,
   askedWhereSiblings, absentSiblingLine, b32TurnBlock, holdOpenerLine, careFollowUpFraming, b32Line,
-  COME_AS_YOURSELF_LINE, DREVAN_HOLD_LINE, COMPANION_SET_HOLD_LINE, type RedisLike,
+  COME_AS_YOURSELF_LINE, DREVAN_HOLD_LINE, COMPANION_SET_HOLD_LINE, bidFloorFor, type RedisLike,
 } from "../bad-night.js";
 import { FollowUpLedger } from "../sequential-floor.js";
 import { turnFraming } from "../pass-turn.js";
@@ -380,5 +380,29 @@ describe("the Halseth client: POST /mind/care/hold", () => {
   it("an empty 2xx body is still ok (the optional fields are optional)", async () => {
     const c = new LibrarianClient({ url: "https://h", secret: "s", companionId: "gaia", fetch: (async () => new Response("", { status: 200 })) as never });
     expect(await c.careHoldSet("start", "owner_phrase")).toEqual({ ok: true, status: 200 });
+  });
+});
+
+describe("the bid floor for whoever leads the chain (ruling 2026-10-04)", () => {
+  it("on, under hold: every owner guild message bids with minScore 0", () => {
+    expect(bidFloorFor({ mode: "on", careHold: true, ownerGuildArrival: true, holdPhrase: false })).toEqual({ minScore: 0, shadowFloor0: false });
+    expect(bidFloorFor({ mode: "on", careHold: true, ownerGuildArrival: true, holdPhrase: false, fallbackMinScore: 0.5 })).toEqual({ minScore: 0, shadowFloor0: false });
+  });
+  it("on: the hold phrase floors to 0 even before the hold is on", () => {
+    expect(bidFloorFor({ mode: "on", careHold: false, ownerGuildArrival: true, holdPhrase: true })).toEqual({ minScore: 0, shadowFloor0: false });
+  });
+  it("on, no hold, no phrase: unchanged (default, or the care floor it would have used)", () => {
+    expect(bidFloorFor({ mode: "on", careHold: false, ownerGuildArrival: true, holdPhrase: false })).toEqual({ shadowFloor0: false });
+    expect(bidFloorFor({ mode: "on", careHold: false, ownerGuildArrival: false, holdPhrase: false, fallbackMinScore: 0.5 })).toEqual({ minScore: 0.5, shadowFloor0: false });
+  });
+  it("on, under hold, but not an owner guild arrival (a sibling, Sol, a guest): unchanged", () => {
+    expect(bidFloorFor({ mode: "on", careHold: true, ownerGuildArrival: false, holdPhrase: false, fallbackMinScore: 0.5 })).toEqual({ minScore: 0.5, shadowFloor0: false });
+  });
+  it("shadow: nothing changes, and it reports floor0 when on would have applied", () => {
+    expect(bidFloorFor({ mode: "shadow", careHold: true, ownerGuildArrival: true, holdPhrase: false })).toEqual({ shadowFloor0: true });
+    expect(bidFloorFor({ mode: "shadow", careHold: false, ownerGuildArrival: true, holdPhrase: false })).toEqual({ shadowFloor0: false });
+  });
+  it("off: unchanged, never reports", () => {
+    expect(bidFloorFor({ mode: "off", careHold: true, ownerGuildArrival: true, holdPhrase: true, fallbackMinScore: 0.5 })).toEqual({ minScore: 0.5, shadowFloor0: false });
   });
 });

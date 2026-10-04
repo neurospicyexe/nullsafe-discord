@@ -352,3 +352,31 @@ export function b32TurnBlock(p: {
   if (lines.length === 0) return "";
   return `[Tonight, from the house]\n${lines.join("\n")}`;
 }
+
+// ── The bid floor for whoever leads the chain ────────────────────────────────
+
+/**
+ * The fit-bid floor for one turn (ruling 2026-10-04, Cypher, within R11). Under hold with mode `on`,
+ * EVERY owner message in a guild channel gets minScore 0 for whoever leads its chain (named, exchange
+ * holder, or bid winner): a message from Raziel going unanswered on a bad night is the failure B32
+ * exists to prevent. The hold phrase gets 0 too (whoever answers it calls Halseth). Followers keep
+ * their throttle and [PASS]; this only guarantees the first voice. Shadow and outside-hold are
+ * unchanged; shadow reports that it would have floored (`eligible=floor0`).
+ *
+ * `fallbackMinScore` is what the turn would have used without B32 (the care-hold floor for non-owner
+ * traffic, or undefined for the default).
+ */
+export function bidFloorFor(p: {
+  mode: BadNightMode;
+  careHold: boolean;
+  ownerGuildArrival: boolean;
+  holdPhrase: boolean;
+  fallbackMinScore?: number;
+}): { minScore?: number; shadowFloor0: boolean } {
+  const would = p.ownerGuildArrival && (p.holdPhrase || p.careHold);
+  if (would && p.mode === "on") return { minScore: 0, shadowFloor0: false };
+  return {
+    ...(p.fallbackMinScore !== undefined ? { minScore: p.fallbackMinScore } : {}),
+    shadowFloor0: would && p.mode === "shadow",
+  };
+}
