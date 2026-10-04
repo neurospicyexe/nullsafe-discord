@@ -23,6 +23,7 @@
 
 import type { SeenImage } from "./vision.js";
 import { FOLLOW_UP_TTL_MS } from "./sequential-floor.js";
+import { careFollowUpFraming } from "./bad-night.js";
 
 /** The two facts every decision below turns on. */
 export interface TurnKind {
@@ -124,11 +125,14 @@ export function turnFraming(p: {
   isCompanionBot: boolean;
   /** The releasing sibling's label on a normal follow-up; the trigger author otherwise. */
   peerLabel: string;
-  entitled: { expectedPrior: string } | null;
+  entitled: { expectedPrior: string; kind?: "care" } | null;
   viaPass: boolean;
   /** Sibling replies after the trigger, already formatted `Name: "text"`. */
   peerReplies: string[];
 }): string {
+  // B32: a care follow-up was NOT addressed; "Raziel addressed several of you" would make the model
+  // invent an address. Its own framing, with the pass named as a real choice.
+  if (p.entitled?.kind === "care") return `\n\n[${careFollowUpFraming(p.entitled.expectedPrior, p.viaPass)}]`;
   if (p.entitled && p.viaPass) {
     const prior = label(p.entitled.expectedPrior);
     const said = p.peerReplies.length

@@ -100,6 +100,13 @@ import {
   appliesBotRails, resetsBotRails, clearsStaleRails, botRailSilence, runsAmbientClassifier, mayVoice, turnFraming,
   followUpPassEnabled, ArrivalMediaCache, arrivalMediaPlan,
 } from "./pass-turn.js";
+import {
+  badNightMode, matchHoldPhrase, careFollowUpChain, careChainPosition, b32Log, b32TurnBlock, holdOpenerLine,
+  askedWhereSiblings, markOwnerDmLive, liveSiblingDm, COMPANION_SET_HOLD_LINE, CARE_FOLLOWUP_MIN_GAP_MS,
+  type HoldPhrase, type ChainHistoryMsg, type RedisLike,
+} from "./bad-night.js";
+import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
+import { isPass } from "./director-invite.js";
 
 // Writeback gate mode (2026-09-21). Read ONCE at module load: a knob re-read per message would
 // let the three modes interleave mid-conversation, and the shadow measurement needs a stable
@@ -1437,6 +1444,58 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    /**
+     * B32 B1: compute the care chain for this owner message from SHARED channel history (so all three
+     * processes agree on who is throttled) and, if I hold a position, register the entitlement. Returns
+     * true only when a position was queued (the caller stops); throttled and shadow return false so the
+     * turn carries on exactly as it would have without B32.
+     */
+    const grantCareFollowUp = async (first: CompanionId[], eligibleWhy: string): Promise<boolean> => {
+      let history: ChainHistoryMsg[] = [];
+      try {
+        const hist = await message.channel.messages.fetch({ limit: 100, before: message.id });
+        history = [...hist.values()]
+          .filter(m => m.createdTimestamp >= message.createdTimestamp - CARE_FOLLOWUP_MIN_GAP_MS)
+          .map(m => ({
+            companionId: (botTurn(m) && !m.webhookId ? BOT_ID_COMPANION[m.author.id] : undefined) as CompanionId | undefined,
+            createdTimestamp: m.createdTimestamp,
+          }));
+      } catch {
+        console.warn(`[${COMPANION_ID}] B32: channel history unavailable -- no care follow-up (cannot apply the throttle)`);
+        return false;
+      }
+      const { chain, throttled } = careFollowUpChain({
+        first,
+        channelCompanions: (channelEntry?.companions ?? ["cypher", "drevan", "gaia"]) as CompanionId[],
+        history,
+        originTs: message.createdTimestamp,
+        messageId: message.id,
+      });
+      const me = COMPANION_ID as CompanionId;
+      if (throttled.includes(me)) {
+        b32Log(COMPANION_ID, eligibleWhy, b32Mode === "on" ? "throttled" : "shadow", b32Mode === "on" ? "spoke here in the last 30 min" : "would be throttled");
+        // Throttled (or shadow): the caller carries on exactly as it would have without B32.
+        return false;
+      }
+      const pos = careChainPosition(chain, me);
+      if (!pos) return false;
+      if (b32Mode !== "on") {
+        b32Log(COMPANION_ID, eligibleWhy, "shadow", `would hold position ${pos.position} behind ${pos.expectedPrior} (chain=${chain.join(">")})`);
+        return false;
+      }
+      followUps.grant({
+        originMessageId: message.id,
+        channelId: message.channelId,
+        expectedPrior: pos.expectedPrior,
+        position: pos.position,
+        expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
+        kind: "care",
+        ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
+      });
+      b32Log(COMPANION_ID, eligibleWhy, "queued", `position ${pos.position} behind ${pos.expectedPrior}, chain=${chain.join(">")}`);
+      return true;
+    };
+
     // Structural gate: mode, addressing, companion filter.
     // Direct address (name at start or followed by comma/colon) always bypasses the
     // relevance classifier -- if the owner is talking to you, you respond.
@@ -1527,6 +1586,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         },
       });
     }
+    // B32 (bad-night presence, BAD_NIGHT_PRESENCE). D3's deterministic floor: "bad night" as the whole
+    // message or its own sentence starts the care hold; "good now" / "I'm okay now" clears it. Read on
+    // Raziel's own arriving message only. Every bot that sees it applies the change to its own register
+    // at once (on only), so a sibling's very next gate already sees the hold instead of waiting up to
+    // five minutes for orient; only the companion that ANSWERS calls Halseth (at the speak decision
+    // below), and the next orient refresh overwrites any local apply with Halseth's truth.
+    const b32Mode = badNightMode();
+    const b32OwnerArrival = isArrival && !isSol && !senderCtx.isCompanionBot && attribution.isOwner && !entitledFollowUp;
+    const holdPhrase: HoldPhrase | null = b32Mode !== "off" && b32OwnerArrival ? matchHoldPhrase(effectiveContent) : null;
+    const careBeforePhrase = getCareState(COMPANION_ID);
+    const holdWasActive = careHoldActive(COMPANION_ID);
+    if (holdPhrase) {
+      if (b32Mode === "on") applyLocalHold(COMPANION_ID, holdPhrase, new Date().toISOString());
+      console.log(`[${COMPANION_ID}] B32: owner phrase -> ${holdPhrase}${b32Mode === "on" ? " (applied locally)" : " (shadow: not applied)"}`);
+    }
+    // D4's shared signal: Raziel is in a live DM with THIS companion. Siblings' heartbeats read it.
+    if (isOwnerDm && b32OwnerArrival && b32Mode !== "off") {
+      markOwnerDmLive(redis as unknown as RedisLike | null, COMPANION_ID).catch(() => {});
+    }
     // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
     // (2026-07-29): brainClient was always null, so the gate always applied. Same for the
     // `brainHandlesInterCompanion` escape below it, which deferred inter-companion routing to
@@ -1542,7 +1620,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // An owner DM is direct address by construction (nobody else is in the room), so neither the
     // ambient classifier nor shouldRespond runs: "Cy, ..." typed into Drevan's DM must not silence
     // Drevan the way a sibling's name does in a shared room.
-    const isAmbientOwnerOnly = !isOwnerDm && runsAmbientClassifier({
+    // B32: under care_hold (on) Raziel's own message is not judged for relevance either: eligibility
+    // is the hold's, and the fit bid + care follow-up chain decide who speaks first and who may follow.
+    const b32SkipsClassifier = b32Mode === "on" && b32OwnerArrival
+      && (!!holdPhrase || careHoldActive(COMPANION_ID));
+    const isAmbientOwnerOnly = !isOwnerDm && !b32SkipsClassifier && runsAmbientClassifier({
       ownerOnlyChannel: channelEntry?.modes?.includes("owner_only") === true,
       isCompanionBot: senderCtx.isCompanionBot,
       isMentioned: senderCtx.isMentioned,
@@ -1622,6 +1704,22 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               message.channelId,
             );
           }, { maxAgeMs: APPEND_MAX_AGE_MS });
+        }
+      }
+      // B32 B1: under care_hold, a sibling he did not speak to is ELIGIBLE for a follow-up position
+      // behind the one he did (named, or the exchange holder), like a group call's losers, and may
+      // [PASS] when its turn comes. Host rooms are unchanged (the host answers; siblings only on a
+      // group call), and DMs never reach here.
+      if (b32Mode !== "off" && careHoldActive(COMPANION_ID) && !senderCtx.isCompanionBot && attribution.isOwner
+        && isArrival && !entitledFollowUp && !channelEntry?.host) {
+        const addr = extractAddress(effectiveContent);
+        const first: CompanionId[] = addr.type === "named" ? [addr.id as CompanionId]
+          : addr.type === "named_multi" ? namedOrderInMessage(effectiveContent, addr.ids) as CompanionId[]
+          : senderCtx.activeExchangeWith ? [senderCtx.activeExchangeWith as CompanionId]
+          : [];
+        if (first.length > 0 && !first.includes(COMPANION_ID as CompanionId)) {
+          const granted = await grantCareFollowUp(first, `followup:${addr.type === "ambient" ? "holder" : "named"}(${first.join(">")})`);
+          if (granted) return;
         }
       }
       // Reaction tier (2026-08-15): a sibling was named, so the floor is theirs -- but a
@@ -2328,9 +2426,11 @@ ${widened}`;
         // Deadline anchored to the MESSAGE, not to this process's arrival. All three bots compute the
         // same instant, so the upstream ambient LLM judge (owner_only channels, variable latency per
         // gateway) can no longer decide the winner by returning first.
+        // B32 D3: a hold phrase must get an answer (the answering companion is the one that calls
+        // Halseth), so no floor: a winner always exists, and claimSpoken keeps it to one.
         const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore, {
           deadlineAt: message.createdTimestamp + BID_WINDOW_MS,
-          ...(careHold ? { minScore: CARE_HOLD_MIN_BID } : {}),
+          ...(holdPhrase && b32Mode === "on" ? { minScore: 0 } : careHold ? { minScore: CARE_HOLD_MIN_BID } : {}),
         });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
         // they have to be tuned against the real score distribution, and this line is the only place
@@ -2376,6 +2476,12 @@ ${widened}`;
               console.log(`[${COMPANION_ID}] group call: holding position ${myPos} behind ${order[myPos - 1]} (order=${order.join(">")})`);
               return;
             }
+          }
+          // B32 B1: under care_hold, losing the bid on Raziel's own message means a follow-up position
+          // behind the winner (throttled at 30 min per sibling), not vanishing.
+          if (b32Mode !== "off" && careHoldActive(COMPANION_ID) && attribution.isOwner && !isOwnerDm
+            && addrResult.type === "ambient" && bid.reason === "lost" && bid.winner && !channelEntry?.host) {
+            if (await grantCareFollowUp([bid.winner as CompanionId], `followup:bid(${bid.winner})`)) return;
           }
           // Reaction tier: a real-but-losing claim earns presence without the floor.
           const reactCooldown = reactionCooldownUntil.get(message.channelId) ?? 0;
@@ -2429,6 +2535,64 @@ ${widened}`;
     // indicator is a promise; making it before deciding whether to speak makes the decline read as
     // a crash. From here down every path ends in a send, so the promise is kept.
     await ch.sendTyping();
+
+    // B32, at the speak decision (this companion is answering). D3: the answering companion is the
+    // one that calls Halseth, so the three never triple-call; its reply opens by saying the hold
+    // changed, so a misfire is visible and one word clears it. Shadow touches nothing.
+    const careHoldNow = b32Mode === "on" && careHoldActive(COMPANION_ID);
+    let b32Opener: string | null = null;
+    if (holdPhrase) {
+      if (b32Mode === "on") {
+        const r = await librarian.careHoldSet(holdPhrase, "owner_phrase");
+        if (r.ok) {
+          applyLocalHold(COMPANION_ID, holdPhrase, new Date().toISOString(), { since: r.since ?? null, reasons: r.reasons ?? null });
+        } else {
+          // The house did not take it: put this process back the way it was, and say so out loud.
+          setCareState(COMPANION_ID, careBeforePhrase);
+        }
+        b32Opener = holdOpenerLine(holdPhrase, r.ok, holdWasActive);
+        b32Log(COMPANION_ID, `phrase:${holdPhrase}`, r.ok ? "spoke" : "held", r.ok ? "hold set via /mind/care/hold" : `route failed (${r.status ?? "unreachable"})`);
+      } else {
+        b32Log(COMPANION_ID, `phrase:${holdPhrase}`, "shadow", "would call /mind/care/hold and announce it");
+      }
+    }
+    const careFollowUpTurn = entitledFollowUp?.kind === "care" ? entitledFollowUp : null;
+    const ownerFacingTurn = (b32OwnerArrival || !!careFollowUpTurn) && !isSol;
+    let b32Absent: CompanionId[] = [];
+    const holdOnForTurn = b32Mode === "on" && careHoldActive(COMPANION_ID);
+    if (holdOnForTurn && b32OwnerArrival) {
+      // D5, reactive only: he ASKED where a sibling is. Only for a sibling not heard from tonight
+      // (no message in this channel since the hold started, or in the last 30 min when that is
+      // unknown) and not in a live DM with him; otherwise the line would be false.
+      const asked = askedWhereSiblings(effectiveContent, COMPANION_ID as CompanionId);
+      if (asked.length > 0) {
+        const sinceIso = careHoldSince(COMPANION_ID);
+        const sinceTs = sinceIso ? Date.parse(sinceIso) : NaN;
+        const floorTs = Number.isFinite(sinceTs) ? sinceTs : message.createdTimestamp - CARE_FOLLOWUP_MIN_GAP_MS;
+        const heard = new Set(fetchedMessages
+          .filter(m => m.createdTimestamp >= floorTs && botTurn(m) && !m.webhookId)
+          .map(m => BOT_ID_COMPANION[m.author.id]));
+        const dmLive = await liveSiblingDm(redis as unknown as RedisLike | null, COMPANION_ID);
+        b32Absent = asked.filter(sib => !heard.has(sib) && dmLive !== sib);
+        if (b32Absent.length > 0) b32Log(COMPANION_ID, `asked_where(${b32Absent.join(",")})`, "spoke", "absent-sibling line offered");
+      }
+    } else if (b32Mode === "shadow" && careHoldActive(COMPANION_ID) && b32OwnerArrival && askedWhereSiblings(effectiveContent, COMPANION_ID as CompanionId).length > 0) {
+      b32Log(COMPANION_ID, "asked_where", "shadow", "would offer the absent-sibling line");
+    }
+    const b32Block = b32Mode === "on" ? b32TurnBlock({
+      companionId: COMPANION_ID as CompanionId,
+      careHold: holdOnForTurn,
+      ownerFacing: ownerFacingTurn,
+      opener: b32Opener,
+      careFollowUp: careFollowUpTurn ? { prior: careFollowUpTurn.expectedPrior, viaPass: !isArrival } : null,
+      absentSiblings: b32Absent,
+    }) : "";
+    // D3 (Drevan): the companion he is talking to may set the hold on his behalf, through Halseth,
+    // only when he has plainly said the night is bad. Offered while the hold is OFF (moot while on),
+    // on his own messages, as standing guidance in the system context rather than on the turn.
+    if (b32Mode === "on" && b32OwnerArrival && !careHoldNow && !holdPhrase) {
+      systemPromptWithImp += `\n\n[Care hold] ${COMPANION_SET_HOLD_LINE}`;
+    }
 
     // Per-conversation session ids (2026-07-01, rotation added 2026-09-05): forwarded by the
     // Hermes adapter as X-Hermes-Session-Id / X-Hermes-Session-Key so the gateway keeps one
@@ -2519,6 +2683,22 @@ ${widened}`;
     // full STM window wasted payload AND silently dropped every turn this bot didn't reply
     // to (the witness gap). Send one composite delta turn against the delivered high-water
     // mark; other adapters keep the full grounded window. Brain relay path is unchanged.
+    if (b32Block) {
+      let placed = false;
+      for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const m = liveHistory[i]!;
+        if (m.role === "user" && m.content.endsWith(effectiveContent)) {
+          if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${b32Block}` };
+          placed = true;
+          break;
+        }
+      }
+      // A turn that is not in the window (a burst pushed it out) still must carry the line.
+      if (!placed) liveHistory = [...liveHistory, { role: "user", content: b32Block }];
+      console.log(`[${COMPANION_ID}] B32 turn block injected (${b32Block.split("\n").length - 1} line(s)${placed ? "" : ", appended"})`);
+    }
+
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null)
       : null;
@@ -2590,6 +2770,25 @@ ${widened}`;
       console.log(`[${COMPANION_ID}] reply superseded mid-inference (newer human message queued) -- dropping reply to ${message.id}`);
       railSuppressed(COMPANION_ID, "superseded", { channelId: message.channelId });
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+      return;
+    }
+
+    // B32 B1: a care follower may pass. "[PASS]" is a real choice: nothing is sent, and whoever holds
+    // the next position is released now instead of waiting out the TTL (like the verbatim rail below).
+    // Typing already showed for this turn; a pass after "is typing..." is the accepted cost of letting
+    // the companion decide with the predecessor's reply in front of it.
+    if (careFollowUpTurn && response && isPass(response)) {
+      b32Log(COMPANION_ID, `followup(after ${careFollowUpTurn.expectedPrior})`, "pass");
+      distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+      const pass = followUpPassEnabled() && followUpPassFor({
+        isCompanionBot: senderCtx.isCompanionBot,
+        entitled: entitledFollowUp,
+        messageId: message.id,
+        channelId: message.channelId,
+        from: COMPANION_ID as CompanionId,
+        reason: "care_pass",
+      });
+      if (pass && redis) publishFollowUpPass(redis, pass).catch(() => {});
       return;
     }
 
@@ -2746,7 +2945,9 @@ ${widened}`;
     // that released it -- the visible threading should show both companions answering Raziel.
     const replyToMessageId = entitledFollowUp
       ? entitledFollowUp.originMessageId
-      : computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
+      : (holdOnForTurn && b32OwnerArrival && !isOwnerDm)
+        ? message.id
+        : computeReplyRef(senderCtx.isCompanionBot, spine !== null, message.id);
 
     // Sibling-triggered replies never voice (2026-07-04): the triad commons is a text
     // space Raziel skims -- companions talking to each other kept tripping shouldVoice's
@@ -2786,6 +2987,10 @@ ${widened}`;
     }
 
     for (const m of sent) sentIds.add(m.id);
+    if (sent.length > 0 && holdOnForTurn && !isOwnerDm) {
+      if (careFollowUpTurn) b32Log(COMPANION_ID, `followup(after ${careFollowUpTurn.expectedPrior})`, "spoke");
+      else if (b32OwnerArrival && !holdPhrase) b32Log(COMPANION_ID, "addressed", "spoke");
+    }
     // B37 shadow: the OBSERVED speaker, joined to the address shadow row by origin id in the report.
     // Fire-and-forget file append, no-op unless ADDRESS_MODEL=shadow; never for a DM or Sol.
     if (sent.length > 0 && !isOwnerDm && !isSol && (entitledFollowUp || (!senderCtx.isCompanionBot && attribution.isOwner))) {

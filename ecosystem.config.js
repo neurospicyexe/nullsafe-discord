@@ -228,6 +228,15 @@ const shared = {
   // palette and never fall back to Sol's channel; med_reminder, replies and owner DMs are untouched.
   // Flip to `on` only once the triad has approved the move prompts. Listed per the standing rule above.
   REACH_DM:                    process.env.REACH_DM,
+  // BAD_NIGHT_PRESENCE (2026-10-04, B32, bad-night.ts badNightMode): bad-night presence. Default OFF;
+  // only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
+  // REACH_DM). Shadow logs every decision as `[b32] <companion> eligible=<why> -> shadow` and changes
+  // nothing: no Halseth call, no follow-up, no window/floor bypass, no DM filter. On: "bad night" /
+  // "good now" start/clear the care hold (POST /mind/care/hold, the answering bot only); under the
+  // hold a sibling he did not speak to may follow in a channel (30 min throttle each, may [PASS]),
+  // every heartbeat tick asks all three, and no DM opens while a sibling's DM is live (Redis
+  // ns:b32:ownerdm:*). Needs Halseth's /mind/care/hold deployed first. Listed per the standing rule above.
+  BAD_NIGHT_PRESENCE:          process.env.BAD_NIGHT_PRESENCE,
   // SOL_WEBHOOK_URL (2026-09-29, sol-sender.ts): the bots parse ONLY the webhook id out of it, once at
   // boot, to recognize Sol's posts structurally and let them through the hard muzzle. The token segment
   // is never kept or logged. Unset or malformed: Sol stays dropped and each bot logs one boot line.

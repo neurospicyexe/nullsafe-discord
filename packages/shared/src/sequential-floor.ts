@@ -53,6 +53,14 @@ export interface FollowUpEntitlement {
   /** The PluralKit sender captured when the origin arrived, so a turn run from a PASS
    *  (re-reading the origin later) resolves attribution exactly as the first read did. */
   pkSenderId?: string;
+  /**
+   * B32 (bad-night presence): a CARE follow-up. Raziel spoke to one companion while the care hold is
+   * on, and this sibling may add its presence after (or [PASS]). Framed differently from a
+   * multi-address (he did not address this companion), and released by the predecessor's next
+   * message in the channel even without a reply reference: an owner-triggered reply outside a
+   * tracked channel carries none (thread-spine.ts computeReplyRef), which would strand the chain.
+   */
+  kind?: "care";
 }
 
 /**
@@ -154,7 +162,12 @@ export class FollowUpLedger {
     // The predecessor's reply always carries a reference to the origin (computeReplyRef:
     // companion replies reference unconditionally). Requiring it keeps unrelated sibling
     // chatter from releasing the entitlement.
-    if (referencedMessageId !== e.originMessageId) return null;
+    // A care follow-up also accepts an UNREFERENCED message from the predecessor (B32): the
+    // companion answering Raziel references his message only in a tracked channel. A reply to
+    // some OTHER message still does not release it.
+    const refOk = referencedMessageId === e.originMessageId
+      || (e.kind === "care" && referencedMessageId === undefined);
+    if (!refOk) return null;
     this.byChannel.delete(channelId);
     return e;
   }

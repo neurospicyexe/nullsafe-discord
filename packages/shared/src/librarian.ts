@@ -22,6 +22,20 @@ export interface ReachLaneVerdict {
   daily_cap_care_hold: number;
   care_count: number;
   care_ceiling: number;
+  /** B32 D2 (Halseth contract 0.19.0): this companion's presence lane while the care hold is on, or
+   *  null/absent when there is no hold (or no companion was named). When present, presence moves are
+   *  gated on `open` instead of the triad-wide gap_open / quiet_presence_taken. */
+  hold_presence?: HoldPresenceVerdict | null;
+}
+
+export interface HoldPresenceVerdict {
+  since: string | null;
+  open: boolean;
+  triad_gap_open: boolean;
+  own_gap_open: boolean;
+  count: number;
+  max: number;
+  quiet_taken: boolean;
 }
 
 export interface MedDueDose { slot_key: string; local_date: string; kind: "first" | "followup"; label: string; local_time: string }
@@ -1844,6 +1858,38 @@ export class LibrarianClient {
     return { reserved: false, reason: r?.reason ?? "unreachable" };
   }
 
+  /**
+   * B32: start or clear the care hold (Halseth POST /mind/care/hold). Direct, never ask_librarian:
+   * the owner's own phrase must not depend on a classifier. Non-throwing; `ok` is a 2xx. The optional
+   * fields are read when the server returns them and ignored when it does not.
+   */
+  async careHoldSet(action: "start" | "clear", source: "owner_phrase" | "companion"): Promise<{
+    ok: boolean; status: number | null; care_hold?: boolean; since?: string | null; reasons?: string[] | null;
+  }> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/care/hold`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ action, source, companion: this.companionId }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) return { ok: false, status: res.status };
+      const d = await res.json().catch(() => null) as Record<string, unknown> | null;
+      const src = (d && typeof d === "object" && d["raziel_state"] && typeof d["raziel_state"] === "object")
+        ? d["raziel_state"] as Record<string, unknown> : d;
+      return {
+        ok: true,
+        status: res.status,
+        ...(src && typeof src["care_hold"] === "boolean" ? { care_hold: src["care_hold"] as boolean } : {}),
+        ...(src && typeof src["care_hold_since"] === "string" ? { since: src["care_hold_since"] as string } : {}),
+        ...(src && Array.isArray(src["care_hold_reason"]) ? { reasons: (src["care_hold_reason"] as unknown[]).filter((x): x is string => typeof x === "string") } : {}),
+      };
+    } catch (e) {
+      console.warn("[librarian] careHoldSet failed:", String(e));
+      return { ok: false, status: null };
+    }
+  }
+
   async reachDelivered(id: number, path: string): Promise<boolean> {
     return (await this.reachPost<{ updated?: boolean }>("delivered", { id, path }))?.updated === true;
   }
@@ -2437,6 +2483,11 @@ export interface RazielState {
   front_state: string | null;
   /** True while a low reading is inside its hold window. fit-bid reads this to soften stakes. */
   care_hold: boolean;
+  /** B32 (contract: orient/refresh `world.raziel_state`): when the current hold started (ISO) and which
+   *  rules hold it (e.g. `owner_said`, `meds_said_missed`, `low_spoons`). Optional: an older Halseth
+   *  omits both, and every reader treats absent as unknown. */
+  care_hold_since?: string | null;
+  care_hold_reason?: string[] | null;
   /** A gesture assigned to THIS companion, un-acted. One at most. */
   pending_care: { id: string; rule: string; detail: string; detected_at: string } | null;
   /** The custodianship clause (C6, contract 0.7.0): non-null only after 14+ days of total owner
@@ -2477,7 +2528,12 @@ export function renderRazielRegister(rs: RazielState | null | undefined): string
   if (readings.length > 0) lines.push(readings.join(", ") + age);
   if (rs.front_state) lines.push(`Fronting: ${rs.front_state}`);
   if (rs.care_hold) {
-    lines.push("Care hold is ON -- a low reading fired recently. Soften stakes: lighter register, defer heavy threads, presence over production.");
+    // B32: a hold he set in his own words ("bad night", or a companion on his plain word) is not "a low
+    // reading fired"; saying so would misstate why the house is quiet. Absent reasons = the old wording.
+    const said = (rs.care_hold_reason ?? []).some(r => /owner|companion|said/.test(r) && !/meds/.test(r));
+    lines.push(said
+      ? "Care hold is ON -- Raziel said tonight is a bad night. Soften stakes: lighter register, defer heavy threads, presence over production."
+      : "Care hold is ON -- a low reading fired recently. Soften stakes: lighter register, defer heavy threads, presence over production.");
   }
   if (rs.pending_care) {
     lines.push(`You hold a pending care gesture (${rs.pending_care.rule}: ${rs.pending_care.detail}). A small act, not a fix -- a short note, a commons drop, presence.`);

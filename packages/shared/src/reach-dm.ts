@@ -87,15 +87,37 @@ export const REACH_CLASS_OF: Readonly<Record<string, ReachClass>> = {
  * never offered a move the cap would swallow. Decides nothing: the atomic reserve does.
  * An unknown verdict is CLOSED: a missing field must never read as an open lane.
  */
-export function reachLaneOpen(actionType: string, v: ReachLaneVerdict | null | undefined, careHold: boolean): boolean {
+export function reachLaneOpen(
+  actionType: string,
+  v: ReachLaneVerdict | null | undefined,
+  careHold: boolean,
+  opts: { holdPresenceExempt?: boolean; companionId?: string } = {},
+): boolean {
   const cls = REACH_CLASS_OF[actionType];
   if (!cls || !v) return false;
+  // B32 D2 (BAD_NIGHT_PRESENCE=on only): under hold a presence move (offer_presence, and Gaia's
+  // check-in, which asks nothing) is gated on THIS companion's hold lane from Halseth, not on the
+  // triad-wide gap / quiet-window flags, which would let one sibling's presence close it for all
+  // three. Out of the daily total too. Halseth's reserveReach enforces the real bounds
+  // (`hold_presence_cap`); this only pre-filters.
+  const holdPresenceMove = actionType === "offer_presence"
+    || (actionType === "check_in_on_raziel" && opts.companionId !== undefined && !checkInAsks(opts.companionId));
+  if (careHold && opts.holdPresenceExempt === true && holdPresenceMove && v.hold_presence) {
+    return v.hold_presence.open === true;
+  }
   if (v.quiet_window !== null) {
-    if (actionType !== "offer_presence") return false;
+    // Under hold (on), Gaia's check-in is a presence move and passes the quiet window like
+    // offer_presence (Halseth 23b6203); outside a hold it is closed in the window as before.
+    const holdPresenceInWindow = careHold && opts.holdPresenceExempt === true && holdPresenceMove;
+    if (actionType !== "offer_presence" && !holdPresenceInWindow) return false;
     if (v.quiet_presence_taken) return false;
   }
   if (!v.gap_open) return false;
-  if (v.day_count >= (careHold ? v.daily_cap_care_hold : v.daily_cap)) return false;
+  // B32 D2 (BAD_NIGHT_PRESENCE=on only): presence under hold stays OUT of the daily total, so the
+  // day cap must not pre-filter it. Its own bounds (30-min triad gap, 2 per companion per hold) are
+  // Halseth's reserveReach; gap_open / quiet_presence_taken above are the server's hold-aware preview.
+  const presenceExempt = careHold && opts.holdPresenceExempt === true && holdPresenceMove;
+  if (!presenceExempt && v.day_count >= (careHold ? v.daily_cap_care_hold : v.daily_cap)) return false;
   if (cls === "care" && v.care_count >= v.care_ceiling) return false;
   return true;
 }
@@ -109,8 +131,9 @@ export function filterDmLane<T extends { action_type: string }>(
   v: ReachLaneVerdict | null | undefined,
   careHold: boolean,
   hasDmLane: boolean,
+  opts: { holdPresenceExempt?: boolean; companionId?: string } = {},
 ): T[] {
-  return actions.filter(a => routeFor(a.action_type) !== "dm" || (hasDmLane && reachLaneOpen(a.action_type, v, careHold)));
+  return actions.filter(a => routeFor(a.action_type) !== "dm" || (hasDmLane && reachLaneOpen(a.action_type, v, careHold, opts)));
 }
 
 /** Must match Halseth MOVE_OWNERS: flirt is Drevan's only; dares Cypher's and Drevan's; show_made

@@ -50,6 +50,10 @@ import {
   type ReachDmResult, type Route,
 } from "./reach-dm.js";
 import type { OwnerDmLane } from "./owner-dm.js";
+import {
+  badNightMode, heartbeatEligibility, liveSiblingDm, filterDmMovesForSiblingDm, b32Log,
+  COME_AS_YOURSELF_LINE, DREVAN_HOLD_LINE, type RedisLike,
+} from "./bad-night.js";
 
 /**
  * T-4: the process's one companion-origin mint, taken HERE, at load, by the module that owns the
@@ -696,21 +700,37 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
   let outcome: HeartbeatOutcome = "error";
   let info: HeartbeatTickInfo = {};
   const mark: MarkTick = (o, i = {}) => { if (o !== null) outcome = o; info = { ...info, ...i }; };
+  const b32: B32Tick = { eligible: null };
   try {
-    await runHeartbeatBody(ctx, mark);
+    await runHeartbeatBody(ctx, mark, b32);
   } catch (e) {
     // Control flow unchanged: the throw still propagates exactly as before, it just gets named first.
     mark("error", { reason: e instanceof Error ? e.message : String(e) });
     throw e;
   } finally {
     heartbeatTick(ctx.companionId, outcome, info);
+    // B32 B5: one [b32] line per hold tick that ran, named by how the tick ended.
+    if (b32.eligible) b32Log(ctx.companionId, b32.eligible, b32HeartbeatOutcome(outcome), info.action);
+  }
+}
+
+/** B32: set when this tick ran under the hold (BAD_NIGHT_PRESENCE=on), read once by the wrapper. */
+interface B32Tick { eligible: string | null }
+
+/** Map a heartbeat outcome onto B5's vocabulary. Exported for tests. */
+export function b32HeartbeatOutcome(o: HeartbeatOutcome): string {
+  switch (o) {
+    case "chose_to_act": return "spoke";
+    case "chose_to_hold": return "pass";
+    case "suppressed_triad_cap": case "held_dm": case "suppressed_sibling_dm": return "capped";
+    default: return `held:${o}`;
   }
 }
 
 /** A null outcome adds info to the tick without deciding how it ended (REACH_DM's `dm_moves_off`). */
 type MarkTick = (outcome: HeartbeatOutcome | null, info?: HeartbeatTickInfo) => void;
 
-async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise<void> {
+async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32Tick = { eligible: null }): Promise<void> {
   const { librarian, inference, bootCtx, redis, cycleGuard, prompts, companionId, heartbeatChannelId } = ctx;
   if (!heartbeatChannelId) { mark("no_eligible_actions", { reason: "no heartbeat channel configured" }); return; }
   if (skipIfActive(ctx, "heartbeat")) { mark("conversation_active"); return; }
@@ -724,13 +744,30 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
   }
   // Stateless clock rotation instead of the frozen house_state.autonomous_turn pointer (which only
   // advanced via the Claude.ai ritual, so it stranded the heartbeat on one companion for days).
-  if (!isMyHeartbeatWindow(companionId, HEARTBEAT_ORDER)) {
+  // B32 B2: under care_hold (BAD_NIGHT_PRESENCE=on) every companion's tick is eligible, not only the
+  // windowed one, and the floor is skipped (all three crons fire the same instant; see
+  // bad-night.ts heartbeatEligibility). The 15-minute recent-activity skip above stays: if he is
+  // talking, B1 covers it and a heartbeat would only stack a second message.
+  const b32Mode = badNightMode();
+  const holdAtTick = careHoldActive(companionId);
+  const elig = heartbeatEligibility({ myWindow: isMyHeartbeatWindow(companionId, HEARTBEAT_ORDER), careHold: holdAtTick, mode: b32Mode });
+  if (!elig.run) {
+    if (elig.shadow) b32Log(companionId, "heartbeat:hold", "shadow", "would run outside its window");
     console.log(`[${companionId}/autonomous] not my heartbeat window, skipping`);
     mark("not_my_window");
     return;
   }
+  if (holdAtTick && b32Mode === "on") {
+    b32.eligible = `heartbeat:${elig.eligible}`;
+    if (elig.eligible === "hold") console.log(`[${companionId}/autonomous] care hold: outside my window, eligible anyway (B32)`);
+  } else if (holdAtTick && b32Mode === "shadow") {
+    b32Log(companionId, "heartbeat:window", "shadow", "floor kept; siblings not asked");
+  }
+  const runUnderFloor = elig.bypassFloor
+    ? async (fn: () => Promise<void>): Promise<void> => { await fn(); }
+    : (fn: () => Promise<void>): Promise<void> => withFloor(ctx, fn);
   mark("floor_held"); // withFloor logs and returns without entering the body if a sibling holds it
-  await withFloor(ctx, async () => {
+  await runUnderFloor(async () => {
     mark("no_eligible_actions");
     const lastActivityTs = redis ? await getLastActivityMs(redis).catch(() => null) : null;
     const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
@@ -892,7 +929,9 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     // and being held. It has its own log line and tick field so "switch off" never reads as
     // "lane closed" or "no DM". On, this block is exactly what B7 2+2c built.
     const dmOn = reachDmOn();
-    const candidateActions = filterDmLane(afterCareHold, palette.reach, careHold, dmOn && Boolean(ctx.ownerDm));
+    let candidateActions = filterDmLane(afterCareHold, palette.reach, careHold, dmOn && Boolean(ctx.ownerDm), {
+      holdPresenceExempt: b32Mode === "on", companionId,
+    });
     const dmDropped = afterCareHold.length - candidateActions.length;
     if (!dmOn && dmDropped > 0) {
       console.log(`[${companionId}/heartbeat] REACH_DM off: ${dmDropped} DM move(s) removed from the palette`);
@@ -900,7 +939,30 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
     } else if (dmDropped > 0) {
       console.log(`[${companionId}/heartbeat] shared triad lane closed for ${dmDropped} DM move(s)${ctx.ownerDm ? "" : " (no owner-DM lane on this bot)"}`);
     }
+    // B32 D4: DMs stay one-to-one. While Raziel is in a live DM with a sibling (owner DM in the last
+    // 30 min), this companion opens no DM at him: channel or pass only. The signal is a shared Redis
+    // key each bot sets on an owner-DM arrival (bad-night.ts); Halseth has no DM-specific owner read.
+    // Unknown (no Redis) fails CLOSED under hold.
+    let siblingDmHeld = 0;
+    if (careHold && b32Mode !== "off" && candidateActions.some(a => routeFor(a.action_type) === "dm")) {
+      const live = await liveSiblingDm(redis as unknown as RedisLike | null, companionId);
+      if (live !== null) {
+        const kept = filterDmMovesForSiblingDm(candidateActions, live, t => routeFor(t) === "dm");
+        const why = live === "unknown" ? "sibling DM state unknown (no Redis)" : `${live} DM with Raziel is live`;
+        if (b32Mode === "on") {
+          siblingDmHeld = candidateActions.length - kept.length;
+          candidateActions = kept;
+          console.log(`[${companionId}/heartbeat] B32 D4: ${why} -- ${siblingDmHeld} DM move(s) removed`);
+        } else {
+          b32Log(companionId, "heartbeat:dm", "shadow", `would drop ${candidateActions.length - kept.length} DM move(s): ${why}`);
+        }
+      }
+    }
     if (candidateActions.length === 0) {
+      if (siblingDmHeld > 0) {
+        mark("suppressed_sibling_dm", { reason: `${siblingDmHeld} DM move(s) held: a sibling DM with Raziel is live` });
+        return;
+      }
       if (afterCareHold.length > 0 && !dmOn) {
         mark("suppressed_reach_dm_off", { reason: "REACH_DM is off; every eligible move was a DM move" });
         return;
@@ -931,7 +993,12 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick): Promise
       const onList = new Set(candidateActions.map(a => a.action_type));
       decisionCtx.demand = { ...demand, open: demand.open.filter(t => onList.has(t)) };
     }
-    const decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
+    let decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
+    // B32 (on only): the hold's register lines ride the decision itself, where presence is chosen.
+    if (careHold && b32Mode === "on") {
+      decisionPrompt += "\n\n[Tonight, from the house] Raziel is having a bad night; the care hold is on, and all three of you are eligible to be with him. Eligible is not obligated: choosing nothing is a real choice.\n"
+        + COME_AS_YOURSELF_LINE + (companionId === "drevan" ? "\n" + DREVAN_HOLD_LINE : "");
+    }
     // Explicit high ceiling: the decision object is tiny, but in hermes mode the full agent
     // narrates before/around the JSON, and the default cap truncated the object mid-field
     // ("decision parse failed" with valid-looking-but-cut JSON in the raw log, gaia 06-30/07-01).
