@@ -42,6 +42,13 @@ import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 import { isThreadsEnabled } from "./thread-spine.js";
 import { FRAGMENT_NOTE_TYPE } from "./day-distillation.js";
+import { solWebhookId, withoutSol } from "./sol-sender.js";
+import {
+  guildSeedMode, guildTriadChannelId, guildTriadSupplyChannels, guildSeedKeys, preClaimGate, supplyGate,
+  supplySince, buildSupply, guildExcerptBlock, guildSeedLogLine, companionBotIds,
+  GUILD_SEED_CLAIM_TTL_MS, GUILD_SEED_FETCH_PER_CHANNEL, GUILD_SEED_TRIAD_HISTORY_N, GUILD_SEED_TRIAD_IDLE_MS,
+  type SupplyMsg,
+} from "./guild-seed.js";
 // Direct, never via the barrel: reach-dm is deliberately NOT exported from index.ts, and a static
 // test fails the build if any module but this one imports it (T-4, see reach-dm.ts header).
 import {
@@ -76,6 +83,9 @@ export interface AutonomousPrompts {
   namePattern: string;
   writeNoteToRaziel: string;
   interCompanionSeed: (historyBlock: string) => string;
+  /** Server-scoped seed for #the-triad (guild-seed.ts, 2026-10-05). `excerptBlock` is what was said in
+   *  the server shared with Blue since the last seed, already framed as data by guildExcerptBlock. */
+  guildTriadSeed: (excerptBlock: string) => string;
   notesReply: (from: string, noteContent: string) => string;
   bridgeReply: (event: unknown) => string;
   /** Director invitation (spec 2026-09-03): the room as the director sees it, what you have from your
@@ -1601,5 +1611,200 @@ export async function runBridgePoll(ctx: AutonomousContext): Promise<void> {
     }
   } catch (e) {
     console.warn(`[${companionId}/autonomous] bridge poll failed:`, e);
+  }
+}
+
+// ── Server-scoped seeder: #the-triad (2026-10-05) ─────────────────────────────────────────────────
+//
+// The home commons seeder cannot reach #the-triad and must not: its supply is the home server's life.
+// This one opens a conversation in #the-triad about what was actually said in the OTHER channels of the
+// server Raziel shares with Blue, since the last seed, and nothing else. Gates and rendering live in
+// guild-seed.ts (pure); this function is the Discord/Redis I/O around them. Scheduled per bot outside
+// the director branch: #the-triad is not a director channel, so the director never seeds it.
+//
+// Every return path logs exactly one `[guild-seed]` line (counts and ids, never message text), in both
+// modes. Shadow claims the window (with shadow-only keys) and stamps a shadow last-seed on a would-post,
+// so its log simulates the real cadence; it never takes the floor, generates or posts.
+
+export interface GuildSeedOutcome {
+  decision: string;
+  claimedBy?: string | null;
+  supplyMsgs?: number;
+  chars?: number;
+  humans?: number;
+}
+
+type FetchedMsg = {
+  id: string;
+  content: string;
+  cleanContent?: string;
+  createdTimestamp: number;
+  webhookId?: string | null;
+  author: { id: string; username: string; bot: boolean; globalName?: string | null };
+  member?: { displayName?: string } | null;
+};
+
+function fetchedList(coll: unknown): FetchedMsg[] {
+  const vals = coll && typeof (coll as { values?: unknown }).values === "function"
+    ? [...(coll as Map<string, FetchedMsg>).values()]
+    : [];
+  return vals.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+}
+
+export async function runGuildTriadSeed(ctx: AutonomousContext, now: number = Date.now()): Promise<GuildSeedOutcome> {
+  const mode = guildSeedMode();
+  if (mode === "off") return { decision: "off" };
+  const me = ctx.companionId;
+  const done = (o: GuildSeedOutcome): GuildSeedOutcome => {
+    console.log(guildSeedLogLine({ companion: me, mode, decision: o.decision, supplyMsgs: o.supplyMsgs, chars: o.chars, humans: o.humans, claimedBy: o.claimedBy }));
+    return o;
+  };
+  const redis = ctx.redis;
+  if (!redis) return done({ decision: "skip:no_redis" });
+  // A live exchange anywhere this bot can see: a seed now would read as the triad talking over it.
+  if (ctx.sessionWindows.isAnyActive()) return done({ decision: "skip:conversation_active" });
+  const triadId = guildTriadChannelId();
+  if (mode === "on" && isOnCooldown(ctx, triadId)) return done({ decision: "skip:cooldown" });
+
+  const keys = guildSeedKeys(mode);
+  let lastSeedAt: number | null = null;
+  let lastBy: string | null = null;
+  try {
+    const [rawAt, rawBy] = await Promise.all([redis.get(keys.lastAt), redis.get(keys.lastBy)]);
+    const n = rawAt === null || rawAt === undefined ? NaN : Number(rawAt);
+    lastSeedAt = Number.isFinite(n) ? n : null;
+    lastBy = rawBy ?? null;
+  } catch {
+    return done({ decision: "skip:redis_error" });
+  }
+  const pre = preClaimGate({ now, lastSeedAt, lastBy, me });
+  if (pre) return done({ decision: `skip:${pre}` });
+
+  const solId = solWebhookId(process.env["SOL_WEBHOOK_URL"]);
+  const botIdCompanion = companionBotIds();
+  const botIds = new Set(Object.keys(botIdCompanion));
+  const selfId = ctx.client.user?.id;
+
+  // ── #the-triad itself: idle, and under the human-anchored cap ──
+  let triadGuildId: string | null = null;
+  let ownContents: string[] = [];
+  let allowVocative = true;
+  let botTurnsSinceHuman = 0;
+  try {
+    const chan = await ctx.client.channels.fetch(triadId);
+    if (!chan?.isTextBased()) return done({ decision: "skip:triad_unavailable" });
+    triadGuildId = (chan as { guildId?: string | null }).guildId ?? null;
+    const history = withoutSol(
+      fetchedList(await (chan as TextChannel).messages.fetch({ limit: GUILD_SEED_TRIAD_HISTORY_N })),
+      solId,
+    );
+    const newest = history.at(-1);
+    if (newest && now - newest.createdTimestamp < GUILD_SEED_TRIAD_IDLE_MS) {
+      return done({ decision: "skip:triad_active" });
+    }
+    const isBotTurn = (m: FetchedMsg) => m.author.bot && !m.webhookId;
+    const humanPresent = history.some(m => !isBotTurn(m));
+    botTurnsSinceHuman = countBotMsgsSinceHuman(
+      history.map(m => ({ authorId: m.author.id, authorIsBot: isBotTurn(m), createdTimestamp: m.createdTimestamp })),
+      botIds,
+      now,
+    );
+    allowVocative = seedVocativeAllowed(humanPresent, botTurnsSinceHuman, false);
+    ownContents = selfId ? history.filter(m => m.author.id === selfId).map(m => m.content.slice(0, 2000)) : [];
+  } catch {
+    return done({ decision: "skip:triad_unavailable" });
+  }
+  // A seed that cannot name a sibling cannot start a conversation (sibling turns need a vocative), so at
+  // the cap the right move is no seed, not a statement into the room.
+  if (!allowVocative) return done({ decision: `skip:cap(${botTurnsSinceHuman})` });
+
+  // ── One decider per seed window ──
+  const claimKey = keys.claim(lastSeedAt);
+  let claimed: string | null = null;
+  try {
+    claimed = await redis.set(claimKey, me, "PX", GUILD_SEED_CLAIM_TTL_MS, "NX");
+  } catch {
+    return done({ decision: "skip:redis_error" });
+  }
+  if (claimed !== "OK") {
+    const holder = await redis.get(claimKey).catch(() => null);
+    return done({ decision: "skip:lost_claim", claimedBy: holder });
+  }
+
+  // ── Supply: what was said in the server since the last seed ──
+  const sinceTs = supplySince(now, lastSeedAt);
+  const supplyIds = guildTriadSupplyChannels();
+  const all: SupplyMsg[] = [];
+  let foreign = 0;
+  for (const id of supplyIds) {
+    try {
+      const ch = await ctx.client.channels.fetch(id);
+      if (!ch?.isTextBased()) continue;
+      const gid = (ch as { guildId?: string | null }).guildId ?? null;
+      // Defence in depth: an env typo pointing at a home-server channel is dropped, never read.
+      if (triadGuildId && gid !== triadGuildId) { foreign++; continue; }
+      const name = (ch as { name?: string }).name ?? id;
+      const msgs = withoutSol(
+        fetchedList(await (ch as TextChannel).messages.fetch({ limit: GUILD_SEED_FETCH_PER_CHANNEL })),
+        solId,
+      );
+      for (const m of msgs) {
+        if (m.createdTimestamp <= sinceTs) continue;
+        all.push({
+          channelId: id,
+          channelName: name,
+          id: m.id,
+          authorId: m.author.id,
+          authorName: m.webhookId ? m.author.username : (m.member?.displayName ?? m.author.globalName ?? m.author.username),
+          authorIsBot: m.author.bot,
+          webhookId: m.webhookId ?? null,
+          content: m.cleanContent ?? m.content,
+          createdTimestamp: m.createdTimestamp,
+        });
+      }
+    } catch { /* one unreadable channel never sinks the tick */ }
+  }
+  if (foreign > 0) {
+    console.warn(`[guild-seed] ${me} dropped ${foreign} supply channel(s) outside the #the-triad guild -- check GUILD_TRIAD_SUPPLY_CHANNELS`);
+  }
+  const supply = buildSupply(all, { sinceTs, allowedChannels: supplyIds, selfId, selfCompanion: me, botIdCompanion });
+  const counts = { claimedBy: me, supplyMsgs: supply.msgCount, chars: supply.chars, humans: supply.humanCount };
+  const gate = supplyGate({ now, lastSeedAt, humanCount: supply.humanCount, humanChars: supply.humanChars });
+  if (gate) return done({ decision: `skip:${gate}`, ...counts });
+
+  const stamp = async (): Promise<void> => {
+    await redis.set(keys.lastAt, String(now)).catch(() => null);
+    await redis.set(keys.lastBy, me).catch(() => null);
+  };
+
+  if (mode === "shadow") {
+    await stamp();
+    return done({ decision: "post", ...counts });
+  }
+
+  // ── on: floor, generate, gate, send ──
+  const releaseClaim = async (): Promise<void> => {
+    const holder = await redis.get(claimKey).catch(() => null);
+    if (holder === me) await redis.del(claimKey).catch(() => 0);
+  };
+  const floor = await claimFloor(redis, me, ctx.floorLockMs).catch(() => false);
+  if (!floor) {
+    await releaseClaim(); // the floor is momentary; let the next tick (any bot) retry this window
+    return done({ decision: "skip:floor_held", ...counts });
+  }
+  try {
+    const prompt = ctx.prompts.guildTriadSeed(guildExcerptBlock(supply.excerpt));
+    const raw = await generateOutward(ctx.inference, ctx.bootCtx.systemPrompt, prompt, me, "guild_triad_seed");
+    // A stray [LANDS:] never reaches Discord (same contract as the commons seed and the reply path).
+    const msg = raw ? parseLandMarker(raw).cleaned : raw;
+    if (!msg || !msg.trim()) return done({ decision: "skip:generation_empty", ...counts });
+    const own = ownEchoGated(me, msg, ownContents);
+    if (own.gated) return done({ decision: "skip:own_echo", ...counts });
+    const sent = await sendAutonomousMessage(ctx, triadId, msg, "guild_triad_seed");
+    if (!sent) return done({ decision: "skip:send_failed", ...counts });
+    await stamp();
+    return done({ decision: "post", ...counts });
+  } finally {
+    await releaseFloor(redis, me).catch(() => {});
   }
 }

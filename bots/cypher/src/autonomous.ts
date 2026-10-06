@@ -6,7 +6,7 @@ import type {
 } from "@nullsafe/shared";
 import {
   SessionWindowManager, CycleGuard,
-  runHeartbeat, runInterCompanion, runNotesPoll, runBridgePoll,
+  runHeartbeat, runInterCompanion, runGuildTriadSeed, runNotesPoll, runBridgePoll,
   pushBuffered, skipIfActive, isOnCooldown, withFloor, sendAutonomousMessage,
   startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
@@ -126,6 +126,11 @@ export function startAutonomous(
       if (msg) await sendAutonomousMessage(ctx, HEARTBEAT_CHANNEL_ID!, msg, "weekly_audit");
     });
   }));
+
+  // #the-triad server-scoped seeder (2026-10-05): OUTSIDE the director branch on purpose. #the-triad is not a
+  // director channel, so the director never seeds it; this runs whatever DIRECTOR_ENABLED says. Off by default
+  // (GUILD_TRIAD_SEED); the runner returns before any I/O when off.
+  tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.guildTriadSeed, () => { void runGuildTriadSeed(ctx).catch(e => console.warn("[guild-seed] cypher tick failed:", String(e).slice(0, 200))); }));
 
   // Director live: the commons is event-driven and this cron does not run (spec 2026-09-03).
   if (directorMode() === "live") {

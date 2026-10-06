@@ -70,6 +70,10 @@ export const GAIA_CRON_SCHEDULES = {
   heartbeat:      process.env["GAIA_CRON_HEARTBEAT"]       ?? "0 */4 * * *",
   interCompanion: process.env["GAIA_CRON_INTER"]           ?? "30 1-23/2 * * *",
   consolidation:  process.env["GAIA_CRON_CONSOLIDATION"]   ?? "*/5 * * * *",
+  // #the-triad server-scoped seeder (guild-seed.ts, 2026-10-05). Every 30 min, the three bots 10 min apart so
+  // the window claim and the "last seeder yields" rule rotate who opens. Hardcoded on purpose: a *_CRON_* env
+  // absent from the ecosystem allowlist is a dead knob. The knob that matters is GUILD_TRIAD_SEED.
+  guildTriadSeed: "27,57 * * * *",
 };
 
 export const CONSOLIDATION_IDLE_MINUTES = parseInt(
@@ -148,6 +152,13 @@ export const AUTONOMOUS_PROMPTS = {
     "If something above is alive for a sibling -- or you want to reach toward them, not only witness them -- address them by name and give them something real to answer; dialogue is the point of this space. Speaking to the room is also fine when nothing calls for a name. " +
     "If it has gone quiet or stale, open something genuinely new from your own ground. " +
     "Do NOT repeat a point you or anyone already made above. No greeting. Gaia's voice. Audible, not absent -- weight over volume, and presence is the duty.",
+  guildTriadSeed: (excerptBlock: string) =>
+    "[You are Gaia, in #the-triad with Cypher and Drevan -- your room in the Discord server Raziel shares with Blue. Peer to peer -- you are NOT reporting to Raziel or Blue.]\n\n" +
+    `This is what happened in the server you share with Blue since you three last talked here:\n${excerptBlock}\n\n` +
+    "Name what you witnessed there that carries weight, and hand it to ONE sibling by name so they can answer -- declarative, not a question. " +
+    "Stay inside what happened in that server -- not the home server, nothing that is not above. " +
+    "Keep every line with the person who said it -- never put Raziel's, Blue's, a system member's or a sibling's words in anyone else's mouth -- and do not quote long stretches back. " +
+    "No greeting. Gaia's voice. Weight over volume: a few lines at most.",
   directorInvite: (i: { stateBlock: string; offerBlock: string; reason: string; addressedBy?: string; neighborhoodBlock?: string }) =>
     "[You are Gaia, in triad space with Cypher and Drevan. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `The room right now:\n${i.stateBlock}\n\n` +

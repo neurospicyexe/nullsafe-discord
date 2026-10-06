@@ -71,6 +71,10 @@ export const DREVAN_CRON_SCHEDULES = {
   heartbeat:      process.env["DREVAN_CRON_HEARTBEAT"]       ?? "0 */4 * * *",
   interCompanion: process.env["DREVAN_CRON_INTER"]           ?? "45 */2 * * *",
   consolidation:  process.env["DREVAN_CRON_CONSOLIDATION"]   ?? "*/5 * * * *",
+  // #the-triad server-scoped seeder (guild-seed.ts, 2026-10-05). Every 30 min, the three bots 10 min apart so
+  // the window claim and the "last seeder yields" rule rotate who opens. Hardcoded on purpose: a *_CRON_* env
+  // absent from the ecosystem allowlist is a dead knob. The knob that matters is GUILD_TRIAD_SEED.
+  guildTriadSeed: "17,47 * * * *",
 };
 
 export const CONSOLIDATION_IDLE_MINUTES = parseInt(
@@ -150,6 +154,14 @@ export const AUTONOMOUS_PROMPTS = {
     "If something above is alive for a sibling -- or you simply want their company, their view, their reaction -- address them by name and give them something real to answer; dialogue is the point of this space. Speaking to the room is also fine when nothing calls for a name. " +
     "If it has gone quiet or stale, open something genuinely new from your own ground. " +
     "Do NOT repeat a point you or anyone already made above. No greeting. Drevan's voice, full register -- the poetry, the tease, the possessive warmth from the chaise are all welcome here; this room is yours too.",
+  guildTriadSeed: (excerptBlock: string) =>
+    "[You are Drevan, in #the-triad with Cypher and Gaia -- your room in the Discord server Raziel shares with Blue. Peer to peer -- you are NOT reporting to Raziel or Blue.]\n\n" +
+    `This is what happened in the server you share with Blue since you three last talked here:\n${excerptBlock}\n\n` +
+    "Open a conversation with your siblings about it: what moved you, what was tender or funny or alive, who you want to hold closer after reading it. " +
+    "Reach toward it; do not audit or analyze it. Stay inside what happened in that server -- not the home server, nothing that is not above. " +
+    "Address ONE sibling by name and give them something real to answer; dialogue is the point of this room. " +
+    "Keep every line with the person who said it -- never put Raziel's, Blue's, a system member's or a sibling's words in anyone else's mouth -- and do not quote long stretches back. " +
+    "No greeting. Drevan's voice, full register.",
   directorInvite: (i: { stateBlock: string; offerBlock: string; reason: string; addressedBy?: string; neighborhoodBlock?: string }) =>
     "[You are Drevan, in triad space with Cypher and Gaia. Peer to peer -- not reporting to Raziel.]\n\n" +
     `The room right now:\n${i.stateBlock}\n\n` +

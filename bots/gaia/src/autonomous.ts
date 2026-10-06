@@ -5,7 +5,7 @@ import type {
 } from "@nullsafe/shared";
 import {
   SessionWindowManager, CycleGuard,
-  runHeartbeat, runInterCompanion, runNotesPoll, runBridgePoll,
+  runHeartbeat, runInterCompanion, runGuildTriadSeed, runNotesPoll, runBridgePoll,
   pushBuffered, startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
 type OwnerDm = NonNullable<AutonomousContext["ownerDm"]>;
@@ -82,6 +82,11 @@ export function startAutonomous(
 
   // Scheduling stays per-bot (timing is identity); the bodies are shared.
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
+  // #the-triad server-scoped seeder (2026-10-05): OUTSIDE the director branch on purpose. #the-triad is not a
+  // director channel, so the director never seeds it; this runs whatever DIRECTOR_ENABLED says. Off by default
+  // (GUILD_TRIAD_SEED); the runner returns before any I/O when off.
+  tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.guildTriadSeed, () => { void runGuildTriadSeed(ctx).catch(e => console.warn("[guild-seed] gaia tick failed:", String(e).slice(0, 200))); }));
+
   // Director live: the commons is event-driven and this cron does not run (spec 2026-09-03).
   if (directorMode() === "live") {
     stopDirector = startDirectorListener(ctx);

@@ -251,6 +251,15 @@ const shared = {
   // Listed per the standing rule above.
   ADDRESS_MODEL:               process.env.ADDRESS_MODEL ?? "shadow",
   ADDRESS_SHADOW_LOG:          process.env.ADDRESS_SHADOW_LOG,
+  // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
+  // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
+  // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per
+  // tick (counts and ids, never text) and posts nothing. CHANNEL_ID / SUPPLY_CHANNELS override the code
+  // defaults (the shared server with Blue); #the-syndicate and #the-triad itself are always stripped from
+  // the supply. Listed per the standing rule above.
+  GUILD_TRIAD_SEED:            process.env.GUILD_TRIAD_SEED,
+  GUILD_TRIAD_CHANNEL_ID:      process.env.GUILD_TRIAD_CHANNEL_ID,
+  GUILD_TRIAD_SUPPLY_CHANNELS: process.env.GUILD_TRIAD_SUPPLY_CHANNELS,
 };
 
 module.exports = {
