@@ -249,7 +249,9 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // here is owner_only (that runs his unaddressed turns through the relevance filter). #the-syndicate belongs to
   // Blue's companions; the triad stays out of it until they land on their own Halseth.
   "1556107154568777762": {                                               modes: ["open", "inter_companion"] }, // #blabbing
-  "1556336939861278800": {                                               modes: ["open", "inter_companion"] }, // #human-system-chat
+  // #human-system-chat: Raziel's and Blue's systems talking system stuff. The triad answers ONLY when
+  // named (or replied to): no "open", so an unaddressed human message falls through shouldRespond.
+  "1556336939861278800": {                                               modes: ["inter_companion"] },         // #human-system-chat
   // #the-triad: their room for talking about THIS server. Deliberately NOT autonomous+inter_companion:
   // that pair makes it a triad commons, which opts it into the director, whose supply pool is the
   // home server's topics. The home commons' seeds/heartbeats target env ids only and cannot reach it.

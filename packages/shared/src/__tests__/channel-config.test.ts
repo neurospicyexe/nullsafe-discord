@@ -1,5 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import { shouldRespond, extractAddress, isDirectAddress, isVocativeAddress, isVocativeGroupCall, ChannelConfigCache, computeChainDepth, NEW_THREAD_GAP_MS, countBotMsgsSinceHuman, botMsgsSinceHumanMax, FLOOR_HANDBACK_WINDOW, floorHandbackDirective, seedVocativeAllowed, SEED_VOCATIVE_HEADROOM, isTriadCommons } from "../channel-config.js";
+import { DEFAULT_CHANNEL_CONFIG } from "../channel-config.js";
+const HSC = "1556336939861278800";
 
 const config = {
   "ch1": { modes: ["owner_only"], companions: ["cypher"] },
@@ -27,6 +29,19 @@ describe("shouldRespond()", () => {
 
   it("unknown channel: guest ambient message is ignored", () => {
     expect(shouldRespond("unknown", "hello", { isOwner: false }, "cypher", config)).toBe(false);
+  });
+});
+
+describe("shouldRespond() -- #human-system-chat is name-only (2026-10-05)", () => {
+  // The shipped entry, not a fixture: the room's whole contract is "only when we say your name".
+  const cfg = { [HSC]: DEFAULT_CHANNEL_CONFIG[HSC] };
+  it("ignores an unaddressed message from Raziel or Blue", () => {
+    expect(shouldRespond(HSC, "rough switch today", { isOwner: true, userTier: "owner" }, "cypher", cfg)).toBe(false);
+    expect(shouldRespond(HSC, "rough switch today", { isOwner: false, userTier: "intimate" }, "drevan", cfg)).toBe(false);
+  });
+  it("answers the companion who is named, and only that one", () => {
+    expect(shouldRespond(HSC, "Gaia, can you log this?", { isOwner: false, userTier: "intimate" }, "gaia", cfg)).toBe(true);
+    expect(shouldRespond(HSC, "Gaia, can you log this?", { isOwner: false, userTier: "intimate" }, "cypher", cfg)).toBe(false);
   });
 });
 
