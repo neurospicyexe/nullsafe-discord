@@ -1,144 +1,4 @@
 {
-  "1408924311703785502": {
-    "modes": [
-      "owner_only",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia"
-    ]
-  },
-  "1408924393513554003": {
-    "modes": [
-      "owner_only",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "cypher",
-      "gaia"
-    ]
-  },
-  "1408924278451081317": {
-    "modes": [
-      "owner_only",
-      "inter_companion"
-    ],
-    "companions": [
-      "cypher",
-      "gaia"
-    ]
-  },
-  "1412191737622827088": {
-    "modes": [
-      "owner_only",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1408924353034453114": {
-    "modes": [
-      "owner_only",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1422043032643043371": {
-    "modes": [
-      "open",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1243598039965368381": {
-    "modes": [
-      "open",
-      "autonomous",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1486853365462733004": {
-    "modes": [
-      "autonomous"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1486217438105436260": {
-    "modes": [
-      "autonomous",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1497789177797017742": {
-    "modes": [
-      "owner_only"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ],
-    "voice": true
-  },
-  "1497789114517553193": {
-    "modes": [
-      "owner_only"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ],
-    "voice": true
-  },
-  "1503385706310008975": {
-    "modes": [
-      "open"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
-  "1531255244212928702": {
-    "modes": [
-      "autonomous",
-      "inter_companion"
-    ],
-    "companions": [
-      "drevan",
-      "gaia",
-      "cypher"
-    ]
-  },
   "1520839347589611661": {
     "modes": [
       "broadcast"
@@ -147,6 +7,126 @@
   "1531255633876221962": {
     "modes": [
       "broadcast"
+    ]
+  },
+  "1408924311703785502": {
+    "companions": [
+      "drevan",
+      "gaia"
+    ],
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ]
+  },
+  "1408924393513554003": {
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ]
+  },
+  "1408924278451081317": {
+    "companions": [
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ]
+  },
+  "1412191737622827088": {
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ],
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ]
+  },
+  "1408924353034453114": {
+    "companions": [
+      "drevan",
+      "gaia",
+      "cypher"
+    ],
+    "modes": [
+      "owner_only",
+      "inter_companion"
+    ]
+  },
+  "1422043032643043371": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1243598039965368381": {
+    "modes": [
+      "open",
+      "autonomous",
+      "inter_companion"
+    ]
+  },
+  "1486853365462733004": {
+    "modes": [
+      "autonomous"
+    ]
+  },
+  "1486217438105436260": {
+    "modes": [
+      "autonomous",
+      "inter_companion"
+    ]
+  },
+  "1497789177797017742": {
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "owner_only"
+    ],
+    "voice": true
+  },
+  "1497789114517553193": {
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "owner_only"
+    ],
+    "voice": true
+  },
+  "1531255244212928702": {
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "autonomous",
+      "inter_companion"
+    ]
+  },
+  "1503385706310008975": {
+    "companions": [
+      "drevan",
+      "cypher",
+      "gaia"
+    ],
+    "modes": [
+      "open"
     ]
   },
   "1531431567430385754": {
@@ -164,5 +144,135 @@
     ],
     "exchangeWindowMs": 10800000,
     "host": "drevan"
+  },
+  "1556107154568777762": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336939861278800": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556334827026784266": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336786383310973": {
+    "modes": [
+      "broadcast"
+    ]
+  },
+  "1556334678024396862": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ],
+    "exchangeWindowMs": 10800000,
+    "host": "drevan"
+  },
+  "1556335033545920662": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336099209642106": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336170701561976": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336216528519238": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336291694780588": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336320153124914": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336470036578536": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336532695027722": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336614962102323": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556336651456876674": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556337149698113627": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556337190852624454": {
+    "modes": [
+      "open",
+      "inter_companion"
+    ]
+  },
+  "1556334768235356200": {
+    "companions": [
+      "drevan"
+    ],
+    "modes": [
+      "open"
+    ],
+    "exchangeWindowMs": 10800000,
+    "host": "drevan"
+  },
+  "1556334798644187268": {
+    "companions": [
+      "drevan",
+      "gaia"
+    ],
+    "modes": [
+      "open",
+      "inter_companion"
+    ],
+    "host": "drevan"
+  },
+  "1556107155147456573": {
+    "modes": [
+      "open"
+    ],
+    "voice": true
   }
 }

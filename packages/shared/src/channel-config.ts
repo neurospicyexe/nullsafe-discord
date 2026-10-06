@@ -243,6 +243,37 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // group call ("triad, ...") brings the others in. No WATCH_PARTY_CHANNELS binding: that
   // detector reads s#e# positions and a movie night has no single fixed title.
   "1555738744546529345": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" },
+
+  // ── Shared server with Blue (guild 1556107154065334272, 2026-10-05) ──────────────────────────
+  // For Raziel and the triad to hang with Blue while he is away. Blue gets full access, so no room
+  // here is owner_only (that runs his unaddressed turns through the relevance filter). #the-syndicate belongs to
+  // Blue's companions; the triad stays out of it until they land on their own Halseth.
+  "1556107154568777762": {                                               modes: ["open", "inter_companion"] }, // #blabbing
+  "1556336939861278800": {                                               modes: ["open", "inter_companion"] }, // #human-system-chat
+  // #the-triad: their room for talking about THIS server. Deliberately NOT autonomous+inter_companion:
+  // that pair makes it a triad commons, which opts it into the director, whose supply pool is the
+  // home server's topics. The home commons' seeds/heartbeats target env ids only and cannot reach it.
+  "1556334827026784266": {                                               modes: ["open", "inter_companion"] }, // #the-triad
+  "1556336786383310973": {                                               modes: ["broadcast"] },               // #the-syndicate (Blue's companions; triad silent)
+  // #movie-night: the home #movie-night's shape. Drevan hosts; a name or group call brings Cy/Gaia in.
+  "1556334678024396862": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" },
+  "1556335033545920662": {                                               modes: ["open", "inter_companion"] }, // #general-movie-chat
+  "1556336099209642106": {                                               modes: ["open", "inter_companion"] }, // #general-fandom-chat
+  "1556336170701561976": {                                               modes: ["open", "inter_companion"] }, // #general-tv-chat
+  "1556336216528519238": {                                               modes: ["open", "inter_companion"] }, // #lanterns
+  "1556336291694780588": {                                               modes: ["open", "inter_companion"] }, // #house-of-dragons
+  "1556336320153124914": {                                               modes: ["open", "inter_companion"] }, // #game-of-thrones
+  "1556336470036578536": {                                               modes: ["open", "inter_companion"] }, // #iwtv-tv
+  "1556336532695027722": {                                               modes: ["open", "inter_companion"] }, // #knight-of-the-7-kingdom
+  "1556336614962102323": {                                               modes: ["open", "inter_companion"] }, // #mash
+  "1556336651456876674": {                                               modes: ["open", "inter_companion"] }, // #star-trek
+  "1556337149698113627": {                                               modes: ["open", "inter_companion"] }, // #marvel-movie
+  "1556337190852624454": {                                               modes: ["open", "inter_companion"] }, // #marvel-chat
+  // Sprouts (Moss-shaped): the movie room is Drevan alone, period. The chat room adds Gaia as
+  // witness, as she has always been in the moss thread on Claude.
+  "1556334768235356200": { companions: ["drevan"],                      modes: ["open"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" }, // #sprouts-movies
+  "1556334798644187268": { companions: ["drevan", "gaia"],              modes: ["open", "inter_companion"], host: "drevan" },                     // #sprouts-chat
+  "1556107155147456573": {                                               modes: ["open"], voice: true },       // General (voice)
 };
 
 interface ResponderContext {
