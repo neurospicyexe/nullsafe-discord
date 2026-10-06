@@ -351,7 +351,7 @@ describe("dispatchWriteback -- keyed judge writes", () => {
     };
     await dispatchWriteback({ type: "companion_note", content: "he said 208" }, lib, { promoteToWm: true, channelId: "chan", messageId: "M1" });
     expect(calls.map(c => c[0])).toEqual(["journalJudgeNote", "writeWmNote"]);
-    expect(calls[0]![1]).toEqual(["he said 208", "chan", "M1"]);
+    expect(calls[0]![1]).toEqual(["he said 208", "chan", "M1", null]);
     expect(calls[1]![1][3]).toBe("judge:M1");
   });
   it("falls back to addCompanionNote when the librarian has no keyed writer (older fakes, other callers)", async () => {
@@ -389,5 +389,52 @@ describe("dispatchWriteback -- keyed judge writes", () => {
     };
     await dispatchWriteback({ type: "companion_note", content: "x" }, lib, { promoteToWm: false, messageId: "M1" });
     expect(calls[0]![1][2]).toEqual({ source: "memory_judge", tags: ["discord", "memory-judge"] });
+  });
+});
+
+// ROOM PROVENANCE (2026-10-05). The judge's row carries `room:<server>/#<channel>` beside the id, on
+// BOTH judge paths, so recall can say where the memory came from. A DM has no room tag at all.
+describe("dispatchWriteback / runWritebackGate -- room tag", () => {
+  const ROOM = "room:Nullsafe Halseth/#movie-night";
+  function recordingLib(withKeyed: boolean) {
+    const calls: Array<[string, unknown[]]> = [];
+    const lib: WritebackLibrarian = {
+      addCompanionNote: async (...a) => { calls.push(["addCompanionNote", a]); },
+      ...(withKeyed ? { journalJudgeNote: async (...a: unknown[]) => { calls.push(["journalJudgeNote", a]); } } : {}),
+      writeWmNote: async (...a) => { calls.push(["writeWmNote", a]); },
+      witnessLog: async (...a) => { calls.push(["witnessLog", a]); },
+      addLiveThread: async (p) => { calls.push(["addLiveThread", [p]]); },
+    };
+    return { lib, calls };
+  }
+
+  it("keyed judge path forwards the room tag", async () => {
+    const { lib, calls } = recordingLib(true);
+    await dispatchWriteback({ type: "companion_note", content: "c" }, lib, { promoteToWm: false, channelId: "chan", messageId: "M1", roomTag: ROOM });
+    expect(calls[0]).toEqual(["journalJudgeNote", ["c", "chan", "M1", ROOM]]);
+  });
+
+  it("keyless fallback puts the room tag beside the channel tag", async () => {
+    const { lib, calls } = recordingLib(false);
+    await dispatchWriteback({ type: "companion_note", content: "c" }, lib, { promoteToWm: false, channelId: "chan", messageId: "M1", roomTag: ROOM });
+    expect(calls[0]![1][2]).toEqual({ source: "memory_judge", tags: ["discord", "memory-judge", "channel:chan", ROOM] });
+  });
+
+  it("a DM (roomTag null) carries the channel tag but no room tag", async () => {
+    const { lib, calls } = recordingLib(false);
+    await dispatchWriteback({ type: "companion_note", content: "c" }, lib, { promoteToWm: false, channelId: "dm1", messageId: "M1", roomTag: null });
+    const tags = (calls[0]![1][2] as { tags: string[] }).tags;
+    expect(tags).toContain("channel:dm1");
+    expect(tags.some(t => t.startsWith("room:"))).toBe(false);
+  });
+
+  it("runWritebackGate threads ctx.roomTag down to the write", async () => {
+    const { lib, calls } = recordingLib(true);
+    const { adapter } = fakeInference("ACTION: companion_note\nCONTENT: Something shifted between us.");
+    const q = immediateEnqueue();
+    await runWritebackGate(ctx({ mode: "legacy", inference: adapter, librarian: lib, enqueue: q.enqueue, shadowLog: jest.fn(), roomTag: ROOM }));
+    await q.settle();
+    const judged = calls.find(c => c[0] === "journalJudgeNote");
+    expect(judged?.[1][3]).toBe(ROOM);
   });
 });

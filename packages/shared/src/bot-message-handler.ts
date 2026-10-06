@@ -5,6 +5,7 @@ import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
 import { sealDmChannel } from "./recall-context.js";
+import { roomTagForMessage } from "./room-tag.js";
 import {
   parseDiscordLivePath, mayWidenAcross, isServerRoom, buildRecallContext,
   WIDEN_BEFORE, WIDEN_AFTER, type RecalledMessage,
@@ -3075,7 +3076,7 @@ ${widened}`;
       // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
       // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
       writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
-        librarian.journalSpeech(response, message.channelId, sent[0]!.id), { maxAgeMs: APPEND_MAX_AGE_MS });
+        librarian.journalSpeech(response, message.channelId, sent[0]!.id, roomTagForMessage(message)), { maxAgeMs: APPEND_MAX_AGE_MS });
       // Discord thread -> Halseth mind-thread (2026-08-15, first cut of the floor rework's
       // thread mapping). Speaking inside a Discord thread upserts a wm_mind_thread keyed
       // `discord:<thread_id>` for THIS companion, titled with the thread's name -- so a
@@ -3173,6 +3174,8 @@ ${widened}`;
       assistantResponse: response,
       channelId: message.channelId,
       messageId: message.id,
+      // Null for a DM (no guild), so DM_MEMORY=carry can never write a room into a judged note.
+      roomTag: roomTagForMessage(message),
       inference: withCaller(directAdapter, "writeback") ?? adapterRef.current,
       librarian,
       enqueue: (label, fn) => writeQueue.fireAndForget(label, fn, { maxAgeMs: APPEND_MAX_AGE_MS }),
@@ -3210,7 +3213,7 @@ async function widenTopDiscordHit(
     if (!mayWidenAcross(config, ref.channelId, currentChannelId)) continue;
 
     const ch = await withTimeout(client.channels.fetch(ref.channelId), 2_000).catch(() => null) as
-      | { isTextBased?: () => boolean; name?: string; guildId?: string | null; messages?: { fetch(o: unknown): Promise<Map<string, unknown>> } }
+      | { isTextBased?: () => boolean; name?: string; guildId?: string | null; guild?: { name?: string } | null; messages?: { fetch(o: unknown): Promise<Map<string, unknown>> } }
       | null;
     if (!ch?.messages) return null;
     // A DM never widens, whatever the config says about it -- and the config says nothing, because
@@ -3235,7 +3238,7 @@ async function widenTopDiscordHit(
         isBot: d.author?.bot,
       };
     });
-    return buildRecallContext(msgs, ref.messageId, { channelLabel: ch.name });
+    return buildRecallContext(msgs, ref.messageId, { channelLabel: ch.name, serverName: ch.guild?.name });
   }
   return null;
 }

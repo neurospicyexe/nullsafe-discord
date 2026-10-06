@@ -31,7 +31,7 @@ export interface WritebackLibrarian {
   /** Keyed judge write (2026-09-26): same REST path as speech, `external_id = judge:<messageId>`,
    *  `source = memory_judge`. Optional so older fakes and other callers keep working; when absent
    *  the write falls back to the unkeyed Librarian NL path. */
-  journalJudgeNote?(content: string, channelId?: string, messageId?: string): Promise<unknown>;
+  journalJudgeNote?(content: string, channelId?: string, messageId?: string, roomTag?: string | null): Promise<unknown>;
   writeWmNote(content: string, channelId?: string, noteType?: string, correlationId?: string): Promise<unknown>;
   witnessLog(content: string, channelId?: string): Promise<unknown>;
   addLiveThread(params: { name: string; notes?: string }): Promise<unknown>;
@@ -45,6 +45,9 @@ export interface WritebackGateCtx {
   assistantResponse: string;
   channelId: string;
   messageId: string;
+  /** `room:<server>/#<channel>` from room-tag.ts (2026-10-05); null/absent for a DM. Rides beside
+   *  `channel:<id>` on the judge's journal row so recall can say where the memory came from. */
+  roomTag?: string | null;
   inference: InferenceAdapter;
   librarian: WritebackLibrarian;
   /** The handler passes the write queue's fireAndForget with APPEND_MAX_AGE_MS bound. */
@@ -106,14 +109,14 @@ export function __resetShadowLogWarning(): void {
 export async function dispatchWriteback(
   wb: Exclude<Writeback, null>,
   librarian: WritebackLibrarian,
-  opts: { promoteToWm: boolean; channelId?: string; messageId?: string },
+  opts: { promoteToWm: boolean; channelId?: string; messageId?: string; roomTag?: string | null },
 ): Promise<void> {
   if (wb.type === "companion_note") {
     // KEYED when possible (2026-09-26): the judge's note memorialising a fabricated number could
     // only be found by content and archived by hand. With the key, `<prefix>: retract` reaches it.
     const key = opts.messageId ? `judge:${opts.messageId}` : undefined;
     if (librarian.journalJudgeNote && opts.messageId) {
-      await librarian.journalJudgeNote(wb.content, opts.channelId, opts.messageId);
+      await librarian.journalJudgeNote(wb.content, opts.channelId, opts.messageId, opts.roomTag ?? null);
     } else {
       // Keyless fallback (no message id, or a client without the keyed writer). It still carries
       // PROVENANCE (2026-09-26): source-NULL here was indistinguishable from the companion's own
@@ -121,7 +124,11 @@ export async function dispatchWriteback(
       // halseth's imp-tray birth rule draft it, same as the keyed REST write.
       await librarian.addCompanionNote(wb.content, opts.channelId, {
         source: "memory_judge",
-        tags: ["discord", "memory-judge", ...(opts.channelId ? [`channel:${opts.channelId}`] : [])],
+        tags: [
+          "discord", "memory-judge",
+          ...(opts.channelId ? [`channel:${opts.channelId}`] : []),
+          ...(opts.roomTag ? [opts.roomTag] : []),
+        ],
       });
     }
     if (opts.promoteToWm) {
@@ -141,7 +148,7 @@ export async function dispatchWriteback(
 export async function runWritebackGate(ctx: WritebackGateCtx): Promise<void> {
   const {
     mode, companionId, speaker, userMessage, assistantResponse,
-    channelId, messageId, inference, librarian, enqueue,
+    channelId, messageId, roomTag, inference, librarian, enqueue,
   } = ctx;
   const now = ctx.now ?? Date.now;
   const jevEval = ctx.jevEval ?? jevWritebackEval;
@@ -150,7 +157,7 @@ export async function runWritebackGate(ctx: WritebackGateCtx): Promise<void> {
   const dispatch = (wb: Writeback, promoteToWm: boolean) => {
     if (!wb) return;
     enqueue(`writeback:${channelId}`, async () => {
-      await dispatchWriteback(wb, librarian, { promoteToWm, channelId, messageId });
+      await dispatchWriteback(wb, librarian, { promoteToWm, channelId, messageId, roomTag: roomTag ?? null });
     });
   };
 

@@ -20,6 +20,7 @@
 
 import type { ChannelConfig } from "./types.js";
 import { relativeTime } from "./relative-time.js";
+import { sanitizeRoomPart } from "./room-tag.js";
 
 /** `discord-live/<channel_id>/<message_id>.md` -> the two ids, or null if it is not that shape. */
 export function parseDiscordLivePath(vaultPath: string | undefined | null): { channelId: string; messageId: string } | null {
@@ -159,7 +160,7 @@ export const WIDEN_AFTER = 2;
 export function buildRecallContext(
   messages: readonly RecalledMessage[],
   anchorId: string,
-  opts: { channelLabel?: string; now?: number } = {},
+  opts: { channelLabel?: string; serverName?: string | null; now?: number } = {},
 ): string | null {
   if (!messages.length) return null;
   const ordered = [...messages].sort((a, b) => (a.createdTimestamp ?? 0) - (b.createdTimestamp ?? 0));
@@ -183,7 +184,12 @@ export function buildRecallContext(
   // work has been about.
   const stampFrom = (at >= 0 ? ordered[at] : window[window.length - 1])?.createdTimestamp;
   const age = stampFrom ? relativeTime(new Date(stampFrom).toISOString(), opts.now ?? Date.now()) : "";
-  const where = opts.channelLabel ? ` in #${opts.channelLabel}` : " in another channel";
+  // The SERVER too (2026-10-05): the triad lives in two (home + the one shared with Blue), and a
+  // channel name alone does not say which. Rendered compactly: "in #movie-night (Nullsafe Halseth)".
+  const server = sanitizeRoomPart(opts.serverName);
+  const where = opts.channelLabel
+    ? ` in #${opts.channelLabel}${server ? ` (${server})` : ""}`
+    : server ? ` in another channel of ${server}` : " in another channel";
   const found = at >= 0 ? " The ← line is the one your search matched." : " (The matched message itself is no longer there -- deleted, edited, or reposted by PluralKit -- so this is the conversation around where it was.)";
 
   return `[Recalled conversation${where}${age ? `, ${age}` : ""} -- what surrounded the line you found, so you can read it in context rather than guessing at it.${found}]\n${lines.join("\n")}`;

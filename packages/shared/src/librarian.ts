@@ -421,7 +421,7 @@ export class LibrarianClient {
    * (what `<prefix>: retract` keys on) and `source = memory_judge` (halseth weighs it as machine
    * output, 0.6). Same transient/rejected handling as journalSpeech below.
    */
-  async journalJudgeNote(content: string, channelId?: string, messageId?: string): Promise<void> {
+  async journalJudgeNote(content: string, channelId?: string, messageId?: string, roomTag?: string | null): Promise<void> {
     const text = content.trim();
     if (!text) return;
     const res = await this._fetch(`${this.url}/companion-journal`, {
@@ -430,7 +430,8 @@ export class LibrarianClient {
       body: JSON.stringify({
         agent: this.companionId,
         note_text: text.slice(0, 4000),
-        tags: ["discord", "memory-judge", ...(channelId ? [`channel:${channelId}`] : [])],
+        // room tag (2026-10-05, room-tag.ts): human-readable provenance beside the id. Null for a DM.
+        tags: ["discord", "memory-judge", ...(channelId ? [`channel:${channelId}`] : []), ...(roomTag ? [roomTag] : [])],
         source: "memory_judge",
         ...(messageId ? { external_id: `judge:${messageId}` } : {}),
       }),
@@ -461,7 +462,7 @@ export class LibrarianClient {
    * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
    * reply. The same key lets the 06-25 speech backfill be re-run safely.
    */
-  async journalSpeech(replyText: string, channelId: string, messageId: string): Promise<void> {
+  async journalSpeech(replyText: string, channelId: string, messageId: string, roomTag?: string | null): Promise<void> {
     const text = replyText.trim();
     if (!text) return;
     try {
@@ -474,7 +475,8 @@ export class LibrarianClient {
         body: JSON.stringify({
           agent: this.companionId,
           note_text: text.slice(0, 4000),   // endpoint hard-rejects >4000
-          tags: ["discord", "speech", `channel:${channelId}`],
+          // `room:<server>/#<channel>` (2026-10-05): where it was said, readable at recall. Null for a DM.
+          tags: ["discord", "speech", `channel:${channelId}`, ...(roomTag ? [roomTag] : [])],
           source: "discord_speech",
           external_id: `discord:${messageId}`,
         }),
