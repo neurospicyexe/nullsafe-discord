@@ -124,7 +124,8 @@ describe("runWritebackGate() -- legacy mode", () => {
     await runWritebackGate(ctx({ mode: "legacy", inference: adapter, librarian: lib, enqueue: q.enqueue, shadowLog: jest.fn() }));
     await q.settle();
     expect(names()).toEqual(["witnessLog"]);
-    expect(calls[0][1]).toEqual(["They ate.", "chan-1"]);
+    // (2026-10-06) the 2nd arg is the witness type, never the channel id.
+    expect(calls[0][1]).toEqual(["They ate.", "observation"]);
   });
 
   it("dispatches a thread_open", async () => {

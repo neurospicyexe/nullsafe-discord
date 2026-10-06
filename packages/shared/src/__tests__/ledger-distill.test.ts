@@ -473,7 +473,7 @@ describe("distillSessionOnInactive (LEDGER_DISTILL on)", () => {
     expect(clerk.generate).not.toHaveBeenCalled();
     expect(lib.writeLedger).not.toHaveBeenCalled();
     expect(wq.queued.slice(0, 4)).toEqual([`witnessLog:${CH}`, `synthesize:${CH}`, `promptCtx:${CH}`, `wmNote:${CH}`]);
-    expect(lib.witnessLog).toHaveBeenCalledWith("synth note", CH);
+    expect(lib.witnessLog).toHaveBeenCalledWith("synth note", "session_synthesis");
     expect(lib.writeWmNote).toHaveBeenCalledWith("synth note", CH);
     expect((lib.writeHandoff.mock.calls[0] as unknown[])[0]).toMatchObject({ summary: "synth note", title: "extract title", open_loops: ["extract loop"], state_hint: "heat: steady" });
     // Knob-off parity: the exact legacy queue order, SOMA update and feeling log included.

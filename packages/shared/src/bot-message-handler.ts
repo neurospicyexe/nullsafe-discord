@@ -1703,7 +1703,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           writeQueue.fireAndForget(`witness:pass:${message.channelId}:${message.id}`, async () => {
             await librarian.witnessLog(
               `[witnessed, did not respond] ${senderName}: ${snippet}`,
-              message.channelId,
+              // (2026-10-06) was message.channelId, stored as witness_type.
+              "witnessed_pass",
             );
           }, { maxAgeMs: APPEND_MAX_AGE_MS });
         }

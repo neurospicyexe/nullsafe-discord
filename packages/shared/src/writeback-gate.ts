@@ -33,7 +33,8 @@ export interface WritebackLibrarian {
    *  the write falls back to the unkeyed Librarian NL path. */
   journalJudgeNote?(content: string, channelId?: string, messageId?: string, roomTag?: string | null): Promise<unknown>;
   writeWmNote(content: string, channelId?: string, noteType?: string, correlationId?: string): Promise<unknown>;
-  witnessLog(content: string, channelId?: string): Promise<unknown>;
+  /** 2nd arg is the witness TYPE (2026-10-06), never a channel id. */
+  witnessLog(content: string, witnessType?: string): Promise<unknown>;
   addLiveThread(params: { name: string; notes?: string }): Promise<unknown>;
 }
 
@@ -135,7 +136,7 @@ export async function dispatchWriteback(
       await librarian.writeWmNote(`[discord:observation] ${wb.content}`, opts.channelId, undefined, key);
     }
   } else if (wb.type === "witness_log") {
-    await librarian.witnessLog(wb.content, opts.channelId);
+    await librarian.witnessLog(wb.content, "observation");
   } else if (wb.type === "thread_open") {
     await librarian.addLiveThread({ name: wb.name, notes: wb.notes });
   }

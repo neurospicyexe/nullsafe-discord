@@ -557,8 +557,11 @@ export class LibrarianClient {
     return { ok: false, status: res.status, ...(rule ? { rule } : {}), ...(error ? { error } : {}) };
   }
 
-  async witnessLog(entry: string, channel?: string) {
-    return this.askWrite("witness log", "witness log", JSON.stringify({ entry, channel }));
+  // (2026-10-06) the 2nd arg was a channel id, sent as `channel`, which Halseth read as an alias for
+  // witness_type: 3,489 of 3,499 gaia_witness rows carry a Discord snowflake as their type. It is
+  // the TYPE now, sent as witness_type, and no `channel` key goes on the wire.
+  async witnessLog(entry: string, witnessType: string = "observation") {
+    return this.askWrite("witness log", "witness log", JSON.stringify({ entry, witness_type: witnessType }));
   }
 
   /**

@@ -103,7 +103,7 @@ describe("LibrarianClient write wrappers throw on decline envelopes", () => {
 
   it("witnessLog throws on witness-only decline", async () => {
     const c = clientWithEnvelope({ response_key: "witness", witness: "I don't know how to handle that yet." });
-    await expect(c.witnessLog("entry", "ch")).rejects.toThrow(/witness log/);
+    await expect(c.witnessLog("entry", "observation")).rejects.toThrow(/witness log/);
   });
 
   it("synthesizeSession throws on misroute (read envelope)", async () => {
@@ -180,5 +180,44 @@ describe("WriteQueue integration: declines are loud, never silent -- and never r
     });
     await new Promise((r) => setTimeout(r, 10));
     expect(wq.pending).toBe(0);
+  });
+});
+
+// (2026-10-06) witnessLog's 2nd arg was a channel id sent as `channel`, which Halseth stored as
+// gaia_witness.witness_type (3,489 of 3,499 prod rows). The wire must carry witness_type, never a
+// `channel` key, and never a snowflake-shaped type.
+describe("witnessLog payload", () => {
+  function capturingClient() {
+    const fetchMock = jest.fn(async (_url: string, _init: { body: string }) =>
+      new Response(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [{ type: "text", text: JSON.stringify({ ack: true, id: "w1" }) }] } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const client = new LibrarianClient({
+      url: "https://halseth.test", secret: "s", companionId: "gaia", fetch: fetchMock as unknown as FetchFn,
+    });
+    const context = (): Record<string, unknown> => {
+      const body = JSON.parse(fetchMock.mock.calls[0]![1].body) as { params: { arguments: { context: string } } };
+      return JSON.parse(body.params.arguments.context) as Record<string, unknown>;
+    };
+    return { client, context };
+  }
+
+  it("sends the 2nd arg as witness_type and no channel key", async () => {
+    const { client, context } = capturingClient();
+    await client.witnessLog("the silence held", "presence");
+    const ctx = context();
+    expect(ctx).toEqual({ entry: "the silence held", witness_type: "presence" });
+    expect(ctx).not.toHaveProperty("channel");
+  });
+
+  it("defaults witness_type to observation, never a snowflake", async () => {
+    const { client, context } = capturingClient();
+    await client.witnessLog("seen");
+    const ctx = context();
+    expect(ctx.witness_type).toBe("observation");
+    expect(String(ctx.witness_type)).not.toMatch(/^\d{15,22}$/);
+    expect(ctx).not.toHaveProperty("channel");
   });
 });

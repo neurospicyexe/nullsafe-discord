@@ -96,7 +96,8 @@ export async function distillSessionOnInactive(
     return;
   }
 
-  wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, channelId); });
+  // (2026-10-06) 2nd arg is the witness TYPE; it was channelId, stored as witness_type.
+  wq.fireAndForget(`witnessLog:${channelId}`, async () => { await librarian.witnessLog(synthResult, "session_synthesis"); });
   wq.fireAndForget(`synthesize:${channelId}`, async () => { await librarian.synthesizeSession(synthResult, channelId); });
   wq.fireAndForget(`promptCtx:${channelId}`, async () => { await librarian.updatePromptContext(synthResult); });
   // Bridge to Claude.ai orient: wm_continuity_notes (salience=high) IS read by orient;
