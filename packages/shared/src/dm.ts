@@ -73,6 +73,10 @@ export interface PlaceInput {
   categoryName?: string | null;
   modes?: readonly string[];
   ownerDisplayName?: string;
+  /** The server's name (2026-10-05): with two servers live, "#movie-night" alone is ambiguous. */
+  serverName?: string | null;
+  /** True in the server Raziel shares with Blue: every room there has Blue in it. */
+  sharedWithBlue?: boolean;
 }
 
 /**
@@ -90,9 +94,15 @@ export function placeBlock(p: PlaceInput): string {
   let block = `\n\n[Where you are]\n• Channel: #${p.channelName}`;
   if (p.threadParentName) block += ` (a thread under #${p.threadParentName})`;
   else if (p.categoryName) block += ` (in ${p.categoryName})`;
+  if (p.serverName) block += `
+• Server: ${p.serverName}`;
   const modes = p.modes ?? [];
-  const place = modes.includes("owner_only") ? `a private space with ${owner}`
-    : modes.includes("inter_companion") ? "triad space -- you and your siblings"
+  // "Triad space" only where it is true: the commons pair (autonomous + inter_companion). Before
+  // 2026-10-05 any inter_companion room got it, which told the triad they were alone with each
+  // other in every room of the server shared with Blue, with Blue right there.
+  const place = p.sharedWithBlue ? `a room in the server ${owner} shares with Blue -- Blue and his system are here too`
+    : modes.includes("owner_only") ? `a private space with ${owner}`
+    : modes.includes("inter_companion") && modes.includes("autonomous") ? "triad space -- you and your siblings"
     : "a shared channel";
   block += `\n• This is ${place}.`;
   block += `\n• Keep it contained to here: don't carry private or DM detail into a shared channel unless ${owner} opens it in this room.`;

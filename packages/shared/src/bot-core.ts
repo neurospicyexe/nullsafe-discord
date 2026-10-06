@@ -51,6 +51,7 @@ import { followUpPassEnabled } from "./pass-turn.js";
 import { ChannelInbox } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
+import { mutedGuildIds, isMutedGuild } from "./guild-mute.js";
 import { sealDmChannel } from "./recall-context.js";
 import { isAffirmativeMedAnswer } from "./med-answer.js";
 import { startMedReminderScheduler, medReminderEnabled, medGenTimeoutMs, type MedDmTarget } from "./med-reminder.js";
@@ -884,9 +885,14 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // would be surveillance, not presence. Unrecognized bot reactors are dropped (describeReactor
   // returns null), same fail-closed shape as the unconfirmed-webhook muzzle.
   const seenReactions = new Set<string>();
+  // Whole-server mute (guild-mute.ts). Read once at boot like the other ids; logged so a muted
+  // server never reads as the bots ignoring someone.
+  const mutedGuilds = mutedGuildIds();
+  if (mutedGuilds.size > 0) console.log(`[${companionId}] muted guilds: ${[...mutedGuilds].join(",")}`);
   client.on(Events.MessageReactionAdd, async (reaction, user) => {
     try {
       if (user.id === client.user?.id) return; // own glyphs are not news
+      if (isMutedGuild(reaction.message.guildId, mutedGuilds)) return;
       // Owner gate for DM reactions, before any fetch (a partial carries guildId from the event).
       if (!reaction.message.guildId && user.id !== env.ownerDiscordId) return;
       const r = reaction.partial ? await reaction.fetch() : reaction;
@@ -933,6 +939,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   });
 
   client.on(Events.MessageCreate, (message: Message) => {
+    // MUTED SERVER, first line: nothing from it is read, paired, queued, answered or recorded.
+    if (isMutedGuild(message.guildId, mutedGuilds)) return;
     // DM OWNER GATE, first line: a stranger's DM never reaches the PK pairing, the inbox, or a turn.
     // No content is read or logged. handleMessage repeats the check (defence in depth).
     if (message.author.id !== client.user?.id

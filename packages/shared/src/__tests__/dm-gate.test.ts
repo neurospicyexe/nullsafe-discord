@@ -130,8 +130,21 @@ describe("placeBlock: a DM gets a place descriptor", () => {
     );
     expect(placeBlock({ isDm: false, channelName: "t", threadParentName: "parent", modes: ["owner_only"] }))
       .toContain("• Channel: #t (a thread under #parent)\n• This is a private space with Raziel.");
-    expect(placeBlock({ isDm: false, channelName: "c", categoryName: "Cat", modes: ["inter_companion"] }))
+    expect(placeBlock({ isDm: false, channelName: "c", categoryName: "Cat", modes: ["autonomous", "inter_companion"] }))
       .toContain("• Channel: #c (in Cat)\n• This is triad space -- you and your siblings.");
+  });
+
+  // 2026-10-05: inter_companion alone means "siblings may answer each other", not "only the triad".
+  it("an open inter_companion room is NOT called triad space", () => {
+    expect(placeBlock({ isDm: false, channelName: "general", modes: ["open", "inter_companion"] }))
+      .toContain("• This is a shared channel.");
+  });
+
+  it("names the server, and says Blue is present in the shared server", () => {
+    const b = placeBlock({ isDm: false, channelName: "blabbing", modes: ["open", "inter_companion"], serverName: "Hangout", sharedWithBlue: true });
+    expect(b).toContain("• Channel: #blabbing\n• Server: Hangout\n");
+    expect(b).toContain("Blue and his system are here too");
+    expect(b).not.toContain("triad space");
   });
 
   it("a nameless server channel still gets nothing (unchanged)", () => {

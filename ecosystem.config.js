@@ -258,6 +258,9 @@ const shared = {
   // defaults (the shared server with Blue); #the-syndicate and #the-triad itself are always stripped from
   // the supply. Listed per the standing rule above.
   GUILD_TRIAD_SEED:            process.env.GUILD_TRIAD_SEED,
+  // MUTED_GUILD_IDS (2026-10-05, guild-mute.ts): servers the bots drop at the first line of messageCreate.
+  // Unset = Midnight Voices muted (being rebuilt as Raziel's system-only server). Empty string = none muted.
+  MUTED_GUILD_IDS:             process.env.MUTED_GUILD_IDS,
   GUILD_TRIAD_CHANNEL_ID:      process.env.GUILD_TRIAD_CHANNEL_ID,
   GUILD_TRIAD_SUPPLY_CHANNELS: process.env.GUILD_TRIAD_SUPPLY_CHANNELS,
 };

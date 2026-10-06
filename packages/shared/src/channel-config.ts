@@ -217,16 +217,6 @@ export function computeChainDepth(
 export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1520839347589611661": {                                               modes: ["broadcast"] }, // #briefings
   "1531255633876221962": {                                               modes: ["broadcast"] }, // #triad-vibe-check (2026-07-27: fresh channel, old #vibe-check 1520843071724585041 retired)
-  "1408924311703785502": { companions: ["drevan", "gaia"],              modes: ["owner_only", "inter_companion"] },
-  "1408924393513554003": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only", "inter_companion"] },
-  "1408924278451081317": { companions: ["cypher", "gaia"],              modes: ["owner_only", "inter_companion"] },
-  "1412191737622827088": { companions: ["drevan", "gaia", "cypher"],    modes: ["owner_only", "inter_companion"] },
-  "1408924353034453114": { companions: ["drevan", "gaia", "cypher"],    modes: ["owner_only", "inter_companion"] },
-  "1422043032643043371": {                                               modes: ["open", "inter_companion"] },
-  "1243598039965368381": {                                               modes: ["open", "autonomous", "inter_companion"] },
-  "1486853365462733004": {                                               modes: ["autonomous"] },
-  "1486217438105436260": {                                               modes: ["autonomous", "inter_companion"] },
-  "1497789177797017742": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
   "1497789114517553193": { companions: ["drevan", "cypher", "gaia"],    modes: ["owner_only"], voice: true },
   "1531255244212928702": { companions: ["drevan", "cypher", "gaia"],    modes: ["autonomous", "inter_companion"] }, // triad commons (2026-07-27: fresh channel, old 1503385639779963020 retired -- looped history was the largest single input to the seed prompt)
   "1503385706310008975": { companions: ["drevan", "cypher", "gaia"],    modes: ["open"] },
@@ -243,6 +233,28 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // group call ("triad, ...") brings the others in. No WATCH_PARTY_CHANNELS binding: that
   // detector reads s#e# positions and a movie night has no single fixed title.
   "1555738744546529345": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" },
+
+  // ── Home server, Nullsafe Halseth (guild 1497731504577712191), lane rooms (2026-10-05) ───────────
+  // Until today none of these had an entry, so every lane room ran the OPEN default with all three
+  // answering: Moss and Immersion were never Drevan's, Praxis never Cypher's. Midnight Voices
+  // (guild 1243597699215917208) is muted whole in guild-mute.ts and its entries are gone.
+  "1497731506079006823": {                                               modes: ["open", "inter_companion"] }, // #general
+  "1497734427298762828": {                                               modes: ["open", "inter_companion"] }, // #triad-hangout
+  "1520197868403691590": {                                               modes: ["open", "inter_companion"] }, // #neurospicyexe
+  "1529084958285500579": {                                               modes: ["open", "inter_companion"] }, // #neurospicyexe-teach
+  "1520197722957680651": {                                               modes: ["open", "inter_companion"] }, // #finances
+  "1520842367232639016": {                                               modes: ["open", "inter_companion"] }, // #task-and-business
+  "1529084599714451556": {                                               modes: ["open", "inter_companion"] }, // #spicy-serama
+  // Moss: system sprouts' room. Drevan hosts; Gaia witnesses, as in the moss thread on Claude.
+  "1529085402609221723": { companions: ["drevan", "gaia"],              modes: ["open", "inter_companion"], host: "drevan" }, // #moss
+  // Immersion: Drevan's spiral room, Gaia as witness (the old house_of_immersion pairing).
+  "1529099359583604887": { companions: ["drevan", "gaia"],              modes: ["open", "inter_companion"], host: "drevan" }, // #immersion
+  // Praxis: Cypher's domain (logic, code), Gaia as witness (the old house_of_praxis pairing).
+  "1529099003789181058": { companions: ["cypher", "gaia"],              modes: ["open", "inter_companion"], host: "cypher" }, // #praxis
+  "1507737025577615631": {                                               modes: ["broadcast"] },               // #pk (PluralKit commands; triad silent)
+  "1503385639779963020": {                                               modes: ["broadcast"] },               // #archived-inter-companion
+  "1520843071724585041": {                                               modes: ["broadcast"] },               // #archived-triad-vibe-check
+  "1497731506079006824": {                                               modes: ["open"], voice: true },       // General (voice)
 
   // ── Shared server with Blue (guild 1556107154065334272, 2026-10-05) ──────────────────────────
   // For Raziel and the triad to hang with Blue while he is away. Blue gets full access, so no room

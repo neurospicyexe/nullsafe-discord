@@ -1,6 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
+import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
 import { sealDmChannel } from "./recall-context.js";
@@ -2266,6 +2267,8 @@ ${widened}`;
       threadParentName: isThreadCh ? parentOf(liveChannel) : null,
       categoryName: !isThreadCh && "parent" in liveChannel ? parentOf(liveChannel) : null,
       modes: channelEntry?.modes ?? [],
+      serverName: message.guild?.name ?? null,
+      sharedWithBlue: message.guildId === GUILD_TRIAD_GUILD_ID,
     });
     // Watchalong standing line (spec 2026-10-02): title, playhead, and the soft gate. Nice-to-have only;
     // the [ON SCREEN] block on the live user turn (below, after the liveHistory swap) carries the film.
