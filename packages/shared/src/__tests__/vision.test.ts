@@ -1,7 +1,7 @@
 import {
   isImageAttachment, pickImageAttachments, describeImage, describeImages,
   seenBlock, seenStmMarker, visionEnabled,
-  MAX_IMAGES_PER_MESSAGE, MAX_DESCRIPTION_CHARS, MAX_IMAGE_BYTES, VISION_MODEL,
+  MAX_IMAGES_PER_MESSAGE, MAX_DESCRIPTION_CHARS, STM_GIST_CHARS, MAX_IMAGE_BYTES, VISION_MODEL,
   type ImageLike,
 } from "../vision.js";
 
@@ -176,13 +176,18 @@ describe("seenBlock", () => {
 });
 
 describe("seenStmMarker", () => {
-  // STM gets a durable one-liner, never the block: the imperative + full description re-fed each
-  // turn is the 2026-08-29 bug where Drevan answered the same track three times.
-  it("is a short past-tense marker with no imperative", () => {
-    const marker = seenStmMarker([{ name: "wall.png", description: "a wall" }]);
-    expect(marker).toBe('[shared an image: "wall.png" -- looked at it]');
+  // STM gets a durable past-tense marker, never the block: the imperative re-fed each turn is the
+  // 2026-08-29 bug where Drevan answered the same track three times.
+  it("is past tense with no imperative, and keeps what the picture showed", () => {
+    const marker = seenStmMarker([{ name: "wall.png", description: "a dry-stone wall\nafter rain" }]);
+    expect(marker).toBe('[shared an image: "wall.png" -- looked at it earlier; it showed: a dry-stone wall after rain]');
     expect(marker).not.toContain("Respond");
-    expect(marker).not.toContain("a wall");
+  });
+  // 2026-10-05: a name-only marker left the next turn blind, so Drevan denied seeing Blue's picture.
+  it("caps the gist so STM stays a one-liner", () => {
+    const marker = seenStmMarker([{ name: "big.jpg", description: "x".repeat(STM_GIST_CHARS * 3) }]);
+    expect(marker.length).toBeLessThan(STM_GIST_CHARS + 80);
+    expect(marker.endsWith("...]")).toBe(true);
   });
   it("records the miss when nothing could be read", () => {
     expect(seenStmMarker([{ name: "wall.png", description: null }])).toContain("could not see it");

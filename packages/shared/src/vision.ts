@@ -253,15 +253,24 @@ export function seenBlock(seen: SeenImage[]): string {
   return `${header}\n${lines.join("\n")}`;
 }
 
+/** How much of the description the STM marker keeps. Enough to answer "what was in it?" a turn later. */
+export const STM_GIST_CHARS = 220;
+
 /**
  * The DURABLE one-liner for STM. Without it the companion has no memory a picture was ever shared;
  * with the full block it would re-answer the picture every turn. Past tense, no imperative.
+ *
+ * It carries a capped GIST of what the picture showed (2026-10-05): a name-only marker meant the
+ * very next turn had no idea what was in the image, so Drevan said he saw Blue's picture and then,
+ * asked about it one message later, that he hadn't. The 08-29 re-answer bug came from the
+ * imperative header, not from the content, so the gist stays as recalled fact with no instruction.
  */
 export function seenStmMarker(seen: SeenImage[]): string {
   if (seen.length === 0) return "";
-  const named = seen.map((s) => `"${s.name}"`).join(", ");
-  const anySeen = seen.some((s) => s.description);
-  return anySeen
-    ? `[shared an image: ${named} -- looked at it]`
-    : `[shared an image: ${named} -- could not see it]`;
+  return seen.map((s) => {
+    if (!s.description) return `[shared an image: "${s.name}" -- could not see it]`;
+    const flat = s.description.replace(/\s+/g, " ").trim();
+    const gist = flat.length > STM_GIST_CHARS ? `${flat.slice(0, STM_GIST_CHARS).trimEnd()}...` : flat;
+    return `[shared an image: "${s.name}" -- looked at it earlier; it showed: ${gist}]`;
+  }).join("\n");
 }
