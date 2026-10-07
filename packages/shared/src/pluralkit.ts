@@ -1,6 +1,6 @@
 import type { Message } from "discord.js";
 import type { Attribution } from "./types.js";
-import type { PkRoster } from "./pk-roster.js";
+import { cleanPronouns, type PkRoster } from "./pk-roster.js";
 
 // PluralKit's Discord application ID -- stable, not subject to change.
 // When PluralKit proxies a message via webhook, message.applicationId equals this value.
@@ -221,6 +221,7 @@ export async function resolveAttribution(
       isOwner: known.isOwner,
       discordUserId: known.discordUserId,
       frontMember: known.memberName,
+      frontPronouns: known.pronouns ?? null,
       frontState: "known",
       source: "pluralkit",
     };
@@ -239,12 +240,13 @@ export async function resolveAttribution(
       ).finally(() => clearTimeout(timeout));
 
       if (res.ok) {
-        const pk = await res.json() as { sender: string; member?: { name: string }; system?: { id: string } };
+        const pk = await res.json() as { sender: string; member?: { name: string; pronouns?: string | null }; system?: { id: string } };
         if (pk.sender === ownerDiscordId) {
           return {
             isOwner: true,
             discordUserId: pk.sender,
             frontMember: pk.member?.name ?? null,
+            frontPronouns: cleanPronouns(pk.member?.pronouns),
             frontState: "known",
             source: "pluralkit",
           };
@@ -256,6 +258,7 @@ export async function resolveAttribution(
           isOwner: false,
           discordUserId: isBlue ? (blueDiscordId ?? pk.sender) : pk.sender,
           frontMember: pk.member?.name ?? null,
+          frontPronouns: cleanPronouns(pk.member?.pronouns),
           frontState: "known",
           source: "pluralkit",
         };

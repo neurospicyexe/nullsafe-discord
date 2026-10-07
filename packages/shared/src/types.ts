@@ -35,6 +35,9 @@ export interface Attribution {
   isOwner: boolean;
   discordUserId: string;
   frontMember: string | null;
+  /** The front's pronouns as PluralKit publishes them (member `pronouns`), or null when unknown /
+   *  private / not a proxy. Read by the memory judge so it never has to guess (2026-10-07). */
+  frontPronouns?: string | null;
   frontState: "known" | "unknown";
   source: "direct" | "pluralkit" | "fallback";
 }

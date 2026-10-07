@@ -95,6 +95,7 @@ import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
+import { buildWritebackSpeaker, judgeExchangeFor } from "./memory.js";
 import { stampRelative } from "./relative-time.js";
 import {
   WatchalongDelivery, watchalongEnabled, handleMovieCommand, handleAtCommand, readCaptionAttachment,
@@ -732,6 +733,20 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       : isPKProxy
       ? (pkMemberName ?? cfg.ownerDisplayName)
       : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
+
+    // The memory judge's speaker for THIS message (2026-10-07): sibling / PK front (bare member name +
+    // the roster's pronouns) / owner account / guest. Built here, once, so a follow-up entitlement can
+    // carry it (see the judge call site) -- a later turn released by a sibling's reply must still judge
+    // the exchange as this origin's, not the sibling's.
+    const writebackSpeaker = buildWritebackSpeaker({
+      siblingId: BOT_ID_COMPANION[message.author.id] ?? null,
+      fixedLabel: isSol ? SOL_AUTHOR_LABEL : null,
+      pkMemberName: isPKProxy ? pkMemberName : null,
+      frontPronouns: attribution.frontPronouns ?? null,
+      isOwner: attribution.isOwner,
+      ownerName: cfg.ownerDisplayName,
+      authorUsername: message.author.username,
+    });
 
     // Positive trace (2026-07-27). Every PK path here logged only on FAILURE, so a working proxy
     // and a silently dropped one looked identical in the logs -- there was no way to verify the
@@ -1499,6 +1514,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
         kind: "care",
         ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
+        originSpeaker: writebackSpeaker,
+        originContent: effectiveContent,
       });
       b32Log(COMPANION_ID, eligibleWhy, "queued", `position ${pos.position} behind ${pos.expectedPrior}, chain=${chain.join(">")}`);
       return true;
@@ -2400,6 +2417,8 @@ ${widened}`;
           position: myNamedPos,
           expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
           ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
+          originSpeaker: writebackSpeaker,
+          originContent: effectiveContent,
         });
         console.log(`[${COMPANION_ID}] multi-address: holding position ${myNamedPos} behind ${namedOrder[myNamedPos - 1]} (order=${namedOrder.join(">")})`);
         return;
@@ -2521,6 +2540,8 @@ ${widened}`;
                 position: myPos,
                 expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
                 ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
+                originSpeaker: writebackSpeaker,
+                originContent: effectiveContent,
               });
               console.log(`[${COMPANION_ID}] group call: holding position ${myPos} behind ${order[myPos - 1]} (order=${order.join(">")})`);
               return;
@@ -3189,12 +3210,21 @@ ${widened}`;
     // Attribution comes from the message, never a default: in inter_companion channels the
     // triggering message is a sibling's, and labeling it "Raziel" fabricated human speech into
     // companion_journal + wm_continuity_notes (and from there into every orient).
-    const peerId = BOT_ID_COMPANION[message.author.id];
-    const writebackSpeaker = {
-      name: peerId ? peerId.charAt(0).toUpperCase() + peerId.slice(1) : memberLabel,
-      isOwner: attribution.isOwner,
-      ownerName: cfg.ownerDisplayName,
-    };
+    //
+    // ...except on a follow-up released by a sibling's REPLY (2026-10-07). Then `message` is the
+    // sibling's post, but this reply answers the human ORIGIN (replyToMessageId above). Judging it
+    // as "<sibling>: <sibling's words>" with the owner framed as absent wrote a front's events into
+    // the tray as the sibling's: 2026-09-27 17:41 CDT, Drevan held behind Gaia on a multi-address,
+    // was released by Gaia's reply, and his note on the origin landed as an exchange with Gaia.
+    // A PASS-released turn already runs on the origin message itself, so it needs nothing here.
+    const judgeExchange = judgeExchangeFor({
+      entitled: entitledFollowUp,
+      isPassTurn: !!followUpPass,
+      isCompanionBot: senderCtx.isCompanionBot,
+      speaker: writebackSpeaker,
+      userMessage: effectiveContent,
+    });
+    if ("skip" in judgeExchange) console.warn(`[${COMPANION_ID}] memory judge skipped: ${judgeExchange.skip}`);
     // judgeWriteback asks for ONE first-person sentence and needs zero tools. Measured
     // 2026-09-05: on the Hermes agent adapter this call spelunked the vault 161 times in one
     // session and ran to Hermes's 150-turn cap, burning >100M of a companion's weekly input
@@ -3202,11 +3232,11 @@ ${widened}`;
     // only when no direct key is configured.
     // Skipped on a recorded med answer even when DM memory carries: a judged note "he told me he took
     // them" would be a second record of compliance, which R-10 forbids.
-    if (!dmSealed && !medAnswerRecorded) runWritebackGate({
+    if (!dmSealed && !medAnswerRecorded && !("skip" in judgeExchange)) runWritebackGate({
       mode: writebackGateModeFor(COMPANION_ID),
       companionId: COMPANION_ID,
-      speaker: writebackSpeaker,
-      userMessage: effectiveContent,
+      speaker: judgeExchange.speaker,
+      userMessage: judgeExchange.userMessage,
       assistantResponse: response,
       channelId: message.channelId,
       messageId: message.id,

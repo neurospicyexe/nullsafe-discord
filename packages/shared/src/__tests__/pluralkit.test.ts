@@ -117,6 +117,16 @@ describe("resolveAttribution()", () => {
     } satisfies Partial<Attribution>);
   });
 
+  it("PK API path carries the member's pronouns (null when PK has none)", async () => {
+    const withP = { sender: OWNER_ID, member: { name: "Magpie", pronouns: "they/them" } };
+    const msg = { webhookId: "wh1", author: { id: "wh1", bot: true }, id: "m6" };
+    const a = await resolveAttribution(msg as any, OWNER_ID, undefined, mockFetch(withP));
+    expect(a.frontPronouns).toBe("they/them");
+    const without = { sender: OWNER_ID, member: { name: "Ash" } };
+    const b = await resolveAttribution({ ...msg, id: "m7" } as any, OWNER_ID, undefined, mockFetch(without));
+    expect(b.frontPronouns).toBeNull();
+  });
+
   it("PK API timeout with knownSenderId → attributes to known sender", async () => {
     const msg = { webhookId: "wh1", author: { id: "wh1", bot: true }, id: "m3" };
     const result = await resolveAttribution(msg as any, OWNER_ID, OWNER_ID, mockFetch(null, true));

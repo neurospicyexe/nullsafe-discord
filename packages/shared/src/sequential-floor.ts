@@ -35,6 +35,7 @@
 import type { CompanionId } from "./types.js";
 import { VOCATIVE_ALIASES } from "./channel-config.js";
 import { tiebreak } from "./fit-bid.js";
+import type { WritebackSpeaker } from "./memory.js";
 
 /** How long a follow-up entitlement waits for its predecessor's reply before expiring.
  *  Hermes turns run 30-120s and sendLong posts within seconds of generation finishing, so
@@ -61,6 +62,15 @@ export interface FollowUpEntitlement {
    * tracked channel carries none (thread-spine.ts computeReplyRef), which would strand the chain.
    */
   kind?: "care";
+  /**
+   * WHO the origin was and WHAT they said, captured at grant time for the memory judge
+   * (2026-10-07). A follow-up released by a sibling's reply runs with `message` = that SIBLING's
+   * post, while the reply itself answers this origin. The judge used to label the exchange with
+   * the sibling (and frame the owner as absent), so a front's words and events were written into
+   * Drevan's tray as Gaia's. Absent on an entitlement granted by an older build.
+   */
+  originSpeaker?: WritebackSpeaker;
+  originContent?: string;
 }
 
 /**

@@ -226,9 +226,13 @@ export function renderJevState(
   assistantResponse: string,
 ): string {
   const cName = (companionName ?? "").charAt(0).toUpperCase() + (companionName ?? "").slice(1);
+  // Owner and sibling lines are unchanged byte for byte (Jev's calibration was measured on them).
+  // A guest (Blue's system, Sol, a stranger) is no longer framed as a sibling (2026-10-07).
   const framing = speaker.isOwner
     ? `Exchange between ${cName} and ${speaker.name}, the owner.`
-    : `Triad space: ${cName} and sibling ${speaker.name}, peer to peer. ${speaker.ownerName} is not in this room.`;
+    : speaker.kind === "guest"
+      ? `Exchange between ${cName} and ${speaker.name}, who is neither the owner nor a sibling.`
+      : `Triad space: ${cName} and sibling ${speaker.name}, peer to peer. ${speaker.ownerName} is not in this room.`;
   return `${framing}\n\n${speaker.name}: ${clip(userMessage)}\n\n${cName}: ${clip(assistantResponse)}`;
 }
 

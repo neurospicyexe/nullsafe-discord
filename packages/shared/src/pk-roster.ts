@@ -21,6 +21,10 @@ export interface PkRosterMember {
   /** Discord user the system belongs to -- the sender identity a proxy stands in for. */
   discordUserId: string;
   isOwner: boolean;
+  /** PK member `pronouns` (free text, e.g. "they/them"), or null when unset or private.
+   *  Carried so the memory judge states a front's pronouns instead of guessing (2026-10-07:
+   *  Magpie, they/them on PK, was written as "she" in 8 of Drevan's judge notes). */
+  pronouns?: string | null;
 }
 
 export interface PkSystemSpec {
@@ -32,6 +36,7 @@ export interface PkSystemSpec {
 interface PkApiMember {
   name?: string | null;
   display_name?: string | null;
+  pronouns?: string | null;
 }
 
 /** Redis-ish surface (the same client bot-core already holds); optional. */
@@ -41,7 +46,9 @@ export interface RosterCache {
 }
 
 const REFRESH_MS = 60 * 60 * 1000; // hourly; member lists change rarely
-const CACHE_KEY = "ns:pk:roster:v1";
+// v2 (2026-10-07): rows carry `pronouns`. A new key, not a reuse of v1, so a deploy does not keep
+// serving pronoun-less cached rows for up to CACHE_TTL_S.
+const CACHE_KEY = "ns:pk:roster:v2";
 const CACHE_TTL_S = 6 * 60 * 60;
 
 /**
@@ -145,6 +152,7 @@ export class PkRoster {
               systemId: sys.systemId,
               discordUserId: sys.discordUserId,
               isOwner: sys.isOwner,
+              pronouns: cleanPronouns(m.pronouns),
               _key: norm(label),
             });
           }
@@ -170,10 +178,17 @@ export class PkRoster {
       const prior = next.get(key);
       // Cross-system name collision: neither side wins (identify() must not guess a tier).
       if (prior && prior.systemId !== r.systemId) { next.delete(key); continue; }
-      next.set(key, { memberName: r.memberName, systemId: r.systemId, discordUserId: r.discordUserId, isOwner: r.isOwner });
+      next.set(key, { memberName: r.memberName, systemId: r.systemId, discordUserId: r.discordUserId, isOwner: r.isOwner, pronouns: cleanPronouns(r.pronouns) });
     }
     this.byName = next;
   }
+}
+
+/** PK pronouns are free text; trim, cap, and treat blank as unknown. */
+export function cleanPronouns(p: unknown): string | null {
+  if (typeof p !== "string") return null;
+  const t = p.replace(/\s+/g, " ").trim();
+  return t ? t.slice(0, 60) : null;
 }
 
 /** Build the system list from env-style config; systems without an id are dropped. */

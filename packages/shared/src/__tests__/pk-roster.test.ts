@@ -193,3 +193,59 @@ describe("resolveAttribution() with a roster", () => {
     expect(got).toMatchObject({ isOwner: true, frontMember: "Ash", source: "pluralkit" });
   });
 });
+
+describe("PkRoster -- pronouns (2026-10-07)", () => {
+  // Drevan's judge notes called Magpie (they/them on PK) and Jude (he/him) "she": the roster
+  // fetched the member list and dropped `pronouns` on the floor, so nothing downstream knew.
+  async function pronounRoster(): Promise<PkRoster> {
+    const r = new PkRoster(SYSTEMS, memberApi({
+      [OWNER_SYS]: [
+        { name: "Magpie", display_name: "Magpie M.", pronouns: "they/them" } as never,
+        { name: "Jude", display_name: "Jude Vega Merlin", pronouns: " he/him " } as never,
+        { name: "Quiet", pronouns: "" } as never,
+        { name: "Private" },
+      ],
+    }));
+    await r.ensureLoaded();
+    return r;
+  }
+
+  it("carries the member's PK pronouns, trimmed", async () => {
+    const r = await pronounRoster();
+    expect(r.identify("Magpie M.")?.pronouns).toBe("they/them");
+    expect(r.identify("Jude Vega Merlin")?.pronouns).toBe("he/him");
+  });
+
+  it("treats blank or missing pronouns as unknown (null), never a default", async () => {
+    const r = await pronounRoster();
+    expect(r.identify("Quiet")?.pronouns).toBeNull();
+    expect(r.identify("Private")?.pronouns).toBeNull();
+  });
+
+  it("resolveAttribution's roster path hands the pronouns on as frontPronouns", async () => {
+    const r = await pronounRoster();
+    const fetchNever = jest.fn() as unknown as typeof fetch;
+    const a = await resolveAttribution(
+      { id: "m1", webhookId: "wh", author: { id: "wh", bot: true, username: "Magpie M." } },
+      OWNER, undefined, fetchNever, BLUE, BLUE_SYS, r,
+    );
+    expect(a).toMatchObject({ isOwner: true, frontMember: "Magpie M.", frontPronouns: "they/them", source: "pluralkit" });
+    expect(fetchNever).not.toHaveBeenCalled();
+  });
+
+  it("round-trips pronouns through the cache", async () => {
+    const store = new Map<string, string>();
+    const cache = {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: string) => { store.set(k, v); return "OK"; },
+    };
+    const first = new PkRoster(SYSTEMS, memberApi({
+      [OWNER_SYS]: [{ name: "Magpie", display_name: "Magpie M.", pronouns: "they/them" } as never],
+    }), cache);
+    await first.ensureLoaded();
+    expect([...store.keys()]).toEqual(["ns:pk:roster:v2"]);
+    const second = new PkRoster(SYSTEMS, jest.fn() as unknown as typeof fetch, cache);
+    await second.ensureLoaded();
+    expect(second.identify("Magpie M.")?.pronouns).toBe("they/them");
+  });
+});

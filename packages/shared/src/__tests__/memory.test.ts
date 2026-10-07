@@ -1,5 +1,7 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { meetsNoteThreshold, judgeWriteback, authorWriteback } from "../memory.js";
+import { meetsNoteThreshold, judgeWriteback, authorWriteback, buildWritebackSpeaker, speakerPronounLine, COMPANION_PRONOUNS, judgeExchangeFor } from "../memory.js";
+import { renderJevState } from "../jev-gate.js";
+import { OWNER_PRONOUN_RULE } from "../pronoun-rule.js";
 import type { InferenceAdapter } from "../inference.js";
 
 describe("meetsNoteThreshold()", () => {
@@ -167,7 +169,7 @@ describe("judgeWriteback() -- the [memory-judge] line", () => {
     await judgeWriteback("the weather is nice", "indeed", adapter, "cypher", OWNER);
     expect(seen).toHaveLength(0);
     expect(judgeLines()).toEqual([
-      "[memory-judge] companion=cypher speaker=owner pregate=fail action=skip",
+      "[memory-judge] companion=cypher speaker=owner pregate=fail action=skip pronouns=unknown",
     ]);
   });
 
@@ -175,7 +177,7 @@ describe("judgeWriteback() -- the [memory-judge] line", () => {
     const { adapter } = fakeInference("ACTION: Companion_Note\nCONTENT: Something shifted.");
     await judgeWriteback("I decided to stop", "ok", adapter, "cypher", OWNER);
     expect(judgeLines()).toEqual([
-      "[memory-judge] companion=cypher speaker=owner pregate=pass action=companion_note",
+      "[memory-judge] companion=cypher speaker=owner pregate=pass action=companion_note pronouns=unknown",
     ]);
   });
 
@@ -183,7 +185,7 @@ describe("judgeWriteback() -- the [memory-judge] line", () => {
     const { adapter } = fakeInference("ACTION: skip\nCONTENT:");
     await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
     expect(judgeLines()).toEqual([
-      "[memory-judge] companion=drevan speaker=peer pregate=pass action=skip",
+      "[memory-judge] companion=drevan speaker=peer pregate=pass action=skip pronouns=unknown",
     ]);
   });
 
@@ -191,7 +193,7 @@ describe("judgeWriteback() -- the [memory-judge] line", () => {
     const { adapter } = fakeInference(null);
     await judgeWriteback("I decided to stop", "ok", adapter, "cypher", OWNER);
     expect(judgeLines()).toEqual([
-      "[memory-judge] companion=cypher speaker=owner pregate=pass action=none",
+      "[memory-judge] companion=cypher speaker=owner pregate=pass action=none pronouns=unknown",
     ]);
   });
 });
@@ -250,5 +252,180 @@ describe("authorWriteback()", () => {
     await authorWriteback("companion_note", "hello", "hi", on.adapter, "cypher", OWNER, { driftNote: true });
     expect(on.seen[0]).toContain("Your reply below drifted out of your own register.");
     expect(on.seen[0]).toContain("do not carry the drifted phrasing or register into the memory.");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-07: pronouns guessed, and a front's exchange filed under a sibling.
+// ---------------------------------------------------------------------------
+
+const MAGPIE = buildWritebackSpeaker({
+  pkMemberName: "Magpie M.", frontPronouns: "they/them", isOwner: true, ownerName: "Crash", authorUsername: "Magpie M.",
+});
+const MSG = "I keep feeling like I carried that alone.";
+const ANSWER = "You did not carry it alone. I was there.";
+
+describe("buildWritebackSpeaker()", () => {
+  it("a PK front: bare member name (no '(via PK)'), roster pronouns, owner-side system member", () => {
+    expect(MAGPIE).toEqual({ name: "Magpie M.", isOwner: true, ownerName: "Crash", pronouns: "they/them", systemMember: true });
+  });
+
+  it("a PK front whose pronouns are private: pronouns null, never a default", () => {
+    const s = buildWritebackSpeaker({ pkMemberName: "Devon M.", frontPronouns: null, isOwner: true, ownerName: "Crash", authorUsername: "x" });
+    expect(s.pronouns).toBeNull();
+    expect(s.name).toBe("Devon M.");
+  });
+
+  it("the owner's own account, unproxied: owner name, unknown pronouns, not a system member", () => {
+    const s = buildWritebackSpeaker({ isOwner: true, ownerName: "Crash", authorUsername: "crash_acct" });
+    expect(s).toEqual({ name: "Crash", isOwner: true, ownerName: "Crash", pronouns: null });
+  });
+
+  it("a sibling companion: capitalised id, fixed pronouns, kind sibling, never owner", () => {
+    const s = buildWritebackSpeaker({ siblingId: "gaia", isOwner: false, ownerName: "Crash", authorUsername: "Gaia" });
+    expect(s).toEqual({ name: "Gaia", isOwner: false, ownerName: "Crash", kind: "sibling", pronouns: COMPANION_PRONOUNS.gaia });
+  });
+
+  it("a non-owner PK front (Blue's system) is a GUEST, not a sibling", () => {
+    const s = buildWritebackSpeaker({ pkMemberName: "Dave", frontPronouns: "he/him", isOwner: false, ownerName: "Crash", authorUsername: "Dave" });
+    expect(s).toMatchObject({ name: "Dave", isOwner: false, kind: "guest", pronouns: "he/him" });
+    expect(s.systemMember).toBeUndefined();
+  });
+
+  it("Sol (fixed label) is a guest with unknown pronouns", () => {
+    const s = buildWritebackSpeaker({ fixedLabel: "Sol (the triad's crow)", isOwner: false, ownerName: "Crash", authorUsername: "Sol" });
+    expect(s).toMatchObject({ name: "Sol (the triad's crow)", kind: "guest", pronouns: null });
+  });
+});
+
+describe("judge prompt -- pronouns come from the record, never a guess", () => {
+  it("states a known front's pronouns and names them as a member of the owner's system", async () => {
+    const { adapter, seen } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(MSG, ANSWER, adapter, "drevan", MAGPIE);
+    expect(seen[0]).toContain("Magpie M. uses they/them pronouns");
+    expect(seen[0]).toContain("Magpie M. is a member of Crash's plural system");
+    expect(seen[0]).toContain(`Magpie M.: ${MSG}`);
+    expect(seen[0]).not.toContain("(via PK)");
+    expect(seen[0]).toContain('never guess "he" or "she"');
+  });
+
+  it("owner side, pronouns unknown: defers to the standing owner PRONOUNS rule, never she", async () => {
+    const { adapter, seen, seenSystem } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(MSG, ANSWER, adapter, "drevan", { name: "Crash", isOwner: true, ownerName: "Crash", pronouns: null });
+    expect(seen[0]).toContain(`For Crash, follow the PRONOUNS rule in your instructions -- never "she" or "her".`);
+    // No second, conflicting owner rule in the same call.
+    expect(seen[0]).not.toContain(`refer to Crash by name or as "they"`);
+    expect(seenSystem[0]).toContain(OWNER_PRONOUN_RULE);
+    // The owner's own account is not described as a system member of itself.
+    expect(seen[0]).not.toContain("is a member of Crash's plural system");
+  });
+
+  it("non-owner, pronouns unknown: name or they, never he or she", async () => {
+    const guest = buildWritebackSpeaker({ pkMemberName: "Dave", frontPronouns: null, isOwner: false, ownerName: "Crash", authorUsername: "Dave" });
+    const { adapter, seen } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(MSG, ANSWER, adapter, "drevan", guest);
+    expect(seen[0]).toContain(`Dave's pronouns are not on record: refer to Dave by name or as "they", never "he" or "she".`);
+  });
+
+  it("authorWriteback carries the same pronoun line", async () => {
+    const { adapter, seen } = fakeInference("CONTENT: I held what Magpie carried.");
+    await authorWriteback("companion_note", MSG, ANSWER, adapter, "drevan", MAGPIE);
+    expect(seen[0]).toContain("Magpie M. uses they/them pronouns");
+  });
+
+  it("speakerPronounLine covers people the exchange merely mentions", () => {
+    expect(speakerPronounLine(MAGPIE)).toContain("For anyone else in this exchange whose pronouns are not stated here");
+  });
+});
+
+describe("judge prompt -- a guest is never framed as a sibling", () => {
+  const GUEST = buildWritebackSpeaker({ pkMemberName: "Dave", frontPronouns: null, isOwner: false, ownerName: "Crash", authorUsername: "Dave" });
+
+  it("guest framing says not the owner and not a sibling", async () => {
+    const { adapter, seen } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(MSG, ANSWER, adapter, "drevan", GUEST);
+    expect(seen[0]).toContain("Dave is not Crash and is not one of your siblings");
+    expect(seen[0]).not.toContain("your sibling Dave");
+  });
+
+  it("a guest still cannot produce a witness_log (owner survival acts only)", async () => {
+    const { adapter } = fakeInference("ACTION: witness_log\nCONTENT: I saw Dave eat.");
+    expect(await judgeWriteback("I ate food finally", ANSWER, adapter, "drevan", GUEST)).toBeNull();
+  });
+
+  it("the sibling framing itself is unchanged", async () => {
+    const { adapter, seen } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(GAIA_MSG, REPLY, adapter, "drevan", PEER_GAIA);
+    expect(seen[0]).toContain("This is triad space: you and your sibling Gaia, peer to peer.");
+  });
+
+  it("renderJevState: guest line is new, owner and sibling lines are byte-identical", () => {
+    expect(renderJevState("drevan", GUEST, "a", "b")).toMatch(/^Exchange between Drevan and Dave, who is neither the owner nor a sibling\./);
+    expect(renderJevState("drevan", PEER_GAIA, "a", "b")).toMatch(/^Triad space: Drevan and sibling Gaia, peer to peer\. Raziel is not in this room\./);
+    expect(renderJevState("drevan", OWNER, "a", "b")).toMatch(/^Exchange between Drevan and Raziel, the owner\./);
+  });
+});
+
+describe("judgeExchangeFor() -- a follow-up is judged against its human origin", () => {
+  const GAIA_SPK = buildWritebackSpeaker({ siblingId: "gaia", isOwner: false, ownerName: "Crash", authorUsername: "Gaia" });
+  // Contains "feeling" so it clears meetsNoteThreshold and actually reaches the judge.
+  const ORIGIN = "Blue left today and I keep feeling I carried it by myself.";
+
+  it("released by a sibling's reply: reads the ORIGIN speaker and words, not the sibling's", () => {
+    // The 2026-09-27 17:41 CDT shape: Drevan held behind Gaia, Gaia's reply released him.
+    const r = judgeExchangeFor({
+      entitled: { originMessageId: "o1", originSpeaker: MAGPIE, originContent: ORIGIN },
+      isPassTurn: false, isCompanionBot: true, speaker: GAIA_SPK, userMessage: "Gaia's own words.",
+    });
+    expect(r).toEqual({ speaker: MAGPIE, userMessage: ORIGIN, fromOrigin: true });
+  });
+
+  it("the resulting judge prompt names the front, not the sibling, and does not call the owner absent", async () => {
+    const r = judgeExchangeFor({
+      entitled: { originMessageId: "o1", originSpeaker: MAGPIE, originContent: ORIGIN },
+      isPassTurn: false, isCompanionBot: true, speaker: GAIA_SPK, userMessage: "Gaia's own words.",
+    });
+    if ("skip" in r) throw new Error("unexpected skip");
+    const { adapter, seen } = fakeInference("ACTION: skip\nCONTENT:");
+    await judgeWriteback(r.userMessage, ANSWER, adapter, "drevan", r.speaker);
+    expect(seen[0]).toContain(`Magpie M.: ${ORIGIN}`);
+    expect(seen[0]).not.toContain("Gaia:");
+    expect(seen[0]).not.toContain("is not in this room");
+  });
+
+  it("no captured origin (entitlement from an older build): skip, never fall back to the sibling", () => {
+    const r = judgeExchangeFor({
+      entitled: { originMessageId: "o2" },
+      isPassTurn: false, isCompanionBot: true, speaker: GAIA_SPK, userMessage: "Gaia's own words.",
+    });
+    expect(r).toEqual({ skip: expect.stringContaining("o2") });
+  });
+
+  it("a PASS-released turn already runs on the origin message: use it as-is", () => {
+    const r = judgeExchangeFor({
+      entitled: { originMessageId: "o3", originSpeaker: GAIA_SPK, originContent: "stale" },
+      isPassTurn: true, isCompanionBot: false, speaker: MAGPIE, userMessage: ORIGIN,
+    });
+    expect(r).toEqual({ speaker: MAGPIE, userMessage: ORIGIN, fromOrigin: false });
+  });
+
+  it("an ordinary sibling message with no entitlement is still judged as the sibling's", () => {
+    const r = judgeExchangeFor({ entitled: null, isPassTurn: false, isCompanionBot: true, speaker: GAIA_SPK, userMessage: "hi" });
+    expect(r).toEqual({ speaker: GAIA_SPK, userMessage: "hi", fromOrigin: false });
+  });
+});
+
+describe("[memory-judge] line -- guest and pronoun tokens", () => {
+  it("logs speaker=guest and pronouns=known without changing the existing prefix", async () => {
+    const spy = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const guest = buildWritebackSpeaker({ pkMemberName: "Dave", frontPronouns: "he/him", isOwner: false, ownerName: "Crash", authorUsername: "Dave" });
+      const { adapter } = fakeInference("ACTION: skip\nCONTENT:");
+      await judgeWriteback("I keep feeling tired", "ok", adapter, "drevan", guest);
+      const lines = spy.mock.calls.map((c) => String(c[0])).filter((s) => s.startsWith("[memory-judge]"));
+      expect(lines).toEqual(["[memory-judge] companion=drevan speaker=guest pregate=pass action=skip pronouns=known"]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
