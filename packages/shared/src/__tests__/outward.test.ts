@@ -40,6 +40,7 @@ describe("generateOutward", () => {
     const msg = await generateOutward(inf, "sys", "One line in Gaia's voice.", "gaia", "heartbeat");
     expect(msg).toBe("Extremophiles thrive where nothing should.");
     expect(inf.calls[0][0].content).toContain(OUTWARD_NUDGE);
+    expect(inf.calls[0][0].content).toMatch(/^\[Now: [^\]]+\]\n/);
   });
 
   it("retries once when the draft is inward, returning the clean rewrite", async () => {

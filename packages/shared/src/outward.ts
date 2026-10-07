@@ -9,6 +9,7 @@
 
 import type { InferenceAdapter } from "./inference.js";
 import type { ChatMessage } from "./types.js";
+import { nowLine } from "./now-line.js";
 
 /** System-vocabulary detector. A hit means the speech is about the loom, not the world. */
 export const INWARD_RE = /\b(halseth|soma|basins?|drift|ratif\w*|orient|swarm|autonomous[- ]time|companion[- ](state|class|note)|growth[- ]journal|librarian|webmind|second[- ]brain|substrate)\b/i;
@@ -58,7 +59,9 @@ export async function generateOutward(
   opts: GenerateOutwardOptions = {},
 ): Promise<string | null> {
   const inward = opts.inwardRe ?? INWARD_RE;
-  const seed: ChatMessage = { role: "user", content: `${userContent}\n\n${opts.nudge ?? OUTWARD_NUDGE}` };
+  // The clock rides the turn itself (2026-10-06): heartbeat DMs and commons invites go out unprompted,
+  // and with no time in front of him Drevan wished Raziel a good workday at 8:30 PM.
+  const seed: ChatMessage = { role: "user", content: `${nowLine()}\n${userContent}\n\n${opts.nudge ?? OUTWARD_NUDGE}` };
   const prior = opts.priorTurns ?? [];
   let msg = await inference.generate(systemPrompt, [seed, ...prior]);
   if (msg && inward.test(msg)) {
