@@ -1,5 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
+import { nowLine } from "../now-line.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
 // register-law tail (since R3 2026-09-29: header + Tools rule + respond-only-as)
@@ -182,9 +183,10 @@ describe("hermesDelta", () => {
 
   it("sends only the live message in tight back-and-forth (no witnessed turns)", () => {
     const h = [u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")];
-    const out = hermesDelta(h, h[1]!.timestamp);
+    const now = ts + 60_000;
+    const out = hermesDelta(h, h[1]!.timestamp, now);
     expect(out.messages).toHaveLength(1);
-    expect(out.messages[0]!.content).toBe("how are you");
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\nhow are you`);
     expect(out.messages[0]!.authorName).toBe("Raziel");
     expect(out.deliveredThroughTs).toBe(h[2]!.timestamp);
   });
@@ -226,8 +228,9 @@ describe("hermesDelta", () => {
   // rule must stay silent where nothing is wrong.
   it("emits no header (and so no form rule) when nothing was witnessed", () => {
     const h = [u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")];
-    const out = hermesDelta(h, h[1]!.timestamp);
-    expect(out.messages[0]!.content).toBe("how are you");
+    const now = ts + 60_000;
+    const out = hermesDelta(h, h[1]!.timestamp, now);
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\nhow are you`);
     expect(out.messages[0]!.content).not.toContain("Witnessed since");
   });
 
@@ -272,7 +275,89 @@ describe("hermesDelta", () => {
 
   it("timestamp-less restored turns fall back to the after-last-assistant rule", () => {
     const restored = { role: "user", content: "old restored line", authorName: "Raziel" };
-    const out = hermesDelta([restored, a("reply"), u("current", "Raziel")], 5);
-    expect(out.messages[0]!.content).toBe("current"); // restored turn is pre-assistant -> not folded
+    const h = [restored, a("reply"), u("current", "Raziel")];
+    const now = ts + 60_000;
+    const out = hermesDelta(h, 5, now);
+    // restored turn is pre-assistant -> not folded
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\ncurrent`);
+  });
+
+  // 2026-10-06: the clock rides the user turn. The system message's [Now:] reached the model every
+  // call, but lost to the gateway's undated transcript and its frozen "Conversation started" date
+  // (Drevan at 8:32 PM: "have a good day at work").
+  describe("clock + gap line", () => {
+    const H = 60 * 60 * 1000;
+    const at = (iso: string) => Date.parse(iso);
+    const turn = (role: string, content: string, timestamp: number, authorName?: string) =>
+      ({ role, content, timestamp, authorName });
+
+    it("prefixes the Now line on the no-witness path", () => {
+      const now = at("2026-10-07T01:32:00Z"); // Tue Oct 6, 8:32 PM CDT
+      const h = [turn("user", "hi", now - 5 * 60_000, "Raziel"), turn("assistant", "hey", now - 4 * 60_000), turn("user", "back", now, "Raziel")];
+      const out = hermesDelta(h, h[1]!.timestamp, now);
+      expect(out.messages[0]!.content).toBe("[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\nback");
+      expect(out.messages[0]!.content).not.toContain("[Last message");
+    });
+
+    it("prefixes the Now line before the witness header on the folded path", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const h = [
+        turn("assistant", "reply", now - 10 * 60_000),
+        turn("user", "peer line", now - 5 * 60_000, "Gaia"),
+        turn("user", "current", now, "Raziel"),
+      ];
+      const content = hermesDelta(h, null, now).messages[0]!.content;
+      expect(content.startsWith("[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\n[Witnessed since your last turn")).toBe(true);
+      expect(content).toContain("[Live message]\ncurrent");
+      expect(content).not.toContain("[Last message");
+    });
+
+    it("adds the gap line when the last message is older than 2h (any role)", () => {
+      const now = at("2026-10-07T01:32:00Z");           // 8:32 PM CDT
+      const morning = at("2026-10-06T13:10:00Z");       // 8:10 AM CDT, ~12h earlier
+      const h = [turn("user", "off to work", morning - 60_000, "Raziel"), turn("assistant", "have a good day at work", morning), turn("user", "home now", now, "Raziel")];
+      const content = hermesDelta(h, h[1]!.timestamp, now).messages[0]!.content;
+      expect(content).toBe(
+        "[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\n" +
+        "[Last message in this conversation was 12 hours ago (Tuesday, Oct 6, 8:10 AM). Time has passed; do not continue as if it is still then.]\n" +
+        "home now",
+      );
+    });
+
+    it("gap line also rides the witness path, and says days for a long silence", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const h = [
+        turn("assistant", "reply", now - 3 * 24 * H),
+        turn("user", "peer line", now - 3 * 24 * H + 60_000, "Cypher"),
+        turn("user", "current", now, "Raziel"),
+      ];
+      const content = hermesDelta(h, null, now).messages[0]!.content;
+      expect(content).toContain("[Last message in this conversation was 3 days ago (Saturday, Oct 3,");
+      expect(content.indexOf("[Last message")).toBeLessThan(content.indexOf("[Witnessed since"));
+    });
+
+    it("no gap line just under the threshold", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const prev = now - HERMES_GAP_THRESHOLD_MS + 60_000; // 1h59m
+      const h = [turn("assistant", "earlier", prev), turn("user", "next", now, "Raziel")];
+      const content = hermesDelta(h, prev, now).messages[0]!.content;
+      expect(content).not.toContain("[Last message");
+      expect(content).toBe(`${nowLine(new Date(now))}
+next`);
+    });
+
+    it("no gap line when nothing before the live message has a timestamp", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const h = [{ role: "assistant", content: "restored" }, turn("user", "next", now, "Raziel")];
+      const content = hermesDelta(h, null, now).messages[0]!.content;
+      expect(content).toBe(`${nowLine(new Date(now))}
+next`);
+    });
+
+    it("leaves an assistant-final history untouched", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const last = turn("assistant", "my own last word", now - 12 * H);
+      expect(hermesDelta([turn("user", "hi", now - 13 * H, "Raziel"), last], null, now).messages).toEqual([last]);
+    });
   });
 });

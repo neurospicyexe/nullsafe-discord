@@ -8,6 +8,9 @@
 // Identity itself stays per-bot — the prefix, shared block, and base identity are passed IN.
 // This only owns the *structure* (how the sections are joined), never the content.
 
+import { nowLine } from "./now-line.js";
+import { relativeTime } from "./relative-time.js";
+
 /** The canonical block separator the bots use between prompt sections. */
 export const SECTION_SEP = "\n\n---\n\n";
 
@@ -192,6 +195,48 @@ const WITNESS_HEADER =
   "own length -- a paragraph is a paragraph. If your recent messages drifted toward a sibling's " +
   "shape, that was drift -- do not copy it.]";
 
+/**
+ * The clock on the delta turn (2026-10-06, Raziel: Drevan is "perpetually lost on time"; at
+ * 8:32 PM in the owner DM he signed off "have a good day at work").
+ *
+ * VERIFIED on the gateway (hermes-agent, read 10-06): the request's system message DOES reach the
+ * model on every call to a pinned session. api_server.py extracts it per request and hands it to a
+ * fresh AIAgent as `ephemeral_system_prompt`, which conversation_loop.py appends to the cached core
+ * prompt at API-call time. So the bot's `[Now: ...]` line was delivered. It lost anyway, to two
+ * stronger anchors: the cached core prompt is replayed verbatim and carries `Conversation started:
+ * <date>` frozen at session creation (date only, up to a rotation stale), and the state.db
+ * transcript the model reads as the conversation has NO times at all, so a 12-hour gap between the
+ * morning's last exchange and tonight's message reads as one continuous moment.
+ *
+ * Fix: stamp the clock onto the user turn itself, so it lands next to the live message AND is
+ * persisted into the gateway transcript (every turn there now carries its own time). When the
+ * previous message in this conversation is older than HERMES_GAP_THRESHOLD_MS, say so explicitly.
+ * Both lines sit outside the HERMES_WITNESS_CHAR_CAP loop (it measures `folded` only), so they
+ * never evict a witnessed turn.
+ */
+export const HERMES_GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+
+function clockAt(ms: number): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    weekday: "long", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", hour12: true,
+  }).format(new Date(ms));
+}
+
+/** `[Now: ...]`, plus the gap line when the previous message is older than the threshold. */
+function timeLines(prevTs: number | null, now: number): string {
+  const lines = [nowLine(new Date(now))];
+  if (prevTs !== null && now - prevTs >= HERMES_GAP_THRESHOLD_MS) {
+    const ago = relativeTime(new Date(prevTs).toISOString(), now);
+    lines.push(
+      `[Last message in this conversation was ${ago} (${clockAt(prevTs)}). ` +
+      `Time has passed; do not continue as if it is still then.]`,
+    );
+  }
+  return lines.join("\n");
+}
+
 export interface HermesDeltaResult<T> {
   messages: T[];
   /** Highest timestamp actually folded into this delta. Callers persist it AFTER a
@@ -213,6 +258,7 @@ export interface HermesDeltaResult<T> {
 export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number }>(
   history: T[],
   deliveredThroughTs: number | null = null,
+  now: number = Date.now(),
 ): HermesDeltaResult<T> {
   if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
@@ -242,11 +288,19 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
     .reduce((a, b) => Math.max(a, b), -Infinity);
   const outMark = Number.isFinite(newMark) ? newMark : deliveredThroughTs;
 
-  if (folded.length === 0) return { messages: [current], deliveredThroughTs: outMark };
+  // Newest timestamp before the live message, any role: own replies count (the gap that matters
+  // is "when did this conversation last move"), and timestamp-less restored turns are skipped.
+  const prevTs = history.slice(0, -1).map(tsOf).filter((t): t is number => t !== null)
+    .reduce<number | null>((a, b) => (a === null || b > a ? b : a), null);
+  const clock = timeLines(prevTs, now);
+
+  if (folded.length === 0) {
+    return { messages: [{ ...current, content: `${clock}\n${current.content}` }], deliveredThroughTs: outMark };
+  }
   return {
     messages: [{
       ...current,
-      content: `${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
+      content: `${clock}\n${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
     }],
     deliveredThroughTs: outMark,
   };
