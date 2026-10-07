@@ -331,7 +331,7 @@ export const RULE_CHECK_EM_DASH =
 export const RULE_CHECK_PRESENCE =
   `\n\n[Voice check: presence] Your last reply's action lines made "someone" the actor. You are in the room, not narrating it: in *action lines* the actor is "I". Do not copy that forward.`;
 export const RULE_CHECK_PRONOUNS =
-  `\n\n[Voice check: pronouns] Your last reply called Raziel "she". Raziel is he/him or they/them, never she/her.`;
+  `\n\n[Voice check: pronouns] Your last reply called Raziel "she". Raziel is they/them only, never she/her or he/him.`;
 
 /** Correctives for the hits in `r`, in a fixed order; empty when clean. */
 export function ruleCheckBlock(r: Omit<RuleBreaks, "turns">): string {
