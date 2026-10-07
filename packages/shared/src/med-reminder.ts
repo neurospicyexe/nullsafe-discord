@@ -20,6 +20,74 @@
 import type { CompanionId } from "./types.js";
 import type { MedDueDose, MedDoseKey } from "./librarian.js";
 import { isVerbatimRepeat as sharedVerbatimRepeat, cleanOneLiner, isDmBlocked, withTimeout, type OwnerDmTarget } from "./owner-dm.js";
+import { labelWords } from "./med-answer.js";
+
+/** Raziel's clock. The schedule rows carry their own tz in Halseth; the prompt's "now" uses his. */
+export const MED_TZ = "America/Chicago";
+
+export type PartOfDay = "morning" | "afternoon" | "evening" | "night";
+
+/** Part of day for an hour 0-23 on his clock: 5-11 morning, 12-16 afternoon, 17-20 evening, else night. */
+export function partOfDay(hour: number): PartOfDay {
+  if (hour >= 5 && hour < 12) return "morning";
+  if (hour >= 12 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 21) return "evening";
+  return "night";
+}
+
+/** "8:30 PM CDT", "Tuesday", and the hour, on his clock. */
+export function medLocalClock(nowMs: number, tz = MED_TZ): { time: string; weekday: string; hour: number } {
+  const d = new Date(nowMs);
+  const time = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true, timeZoneName: "short" }).format(d);
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "long" }).format(d);
+  const hour = parseInt(new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hourCycle: "h23" }).format(d), 10) % 24;
+  return { time, weekday, hour };
+}
+
+/** "8:30 PM" (no zone) on his clock, for the DM context block. */
+export function medLocalTime(nowMs: number, tz = MED_TZ): string {
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(new Date(nowMs));
+}
+
+// ── Reminders this process sent (2026-10-06) ──────────────────────────────────────────────────
+// Halseth's /mind/med/today says what he ANSWERED, not whether a reminder went out (medState: "reminded
+// or not does not matter"). Two things need the latter: the DM context block ("night reminder sent
+// 8:30 PM, no answer yet", so a bare "taken!" in conversation has a referent) and the answer
+// classifier's gate (only ask a model when a reminder is actually outstanding). So the scheduler
+// notes each delivered reminder here. Per process (each bot is its own pm2 process): a restart
+// forgets, which costs only the extra context line and the classifier until the next reminder.
+// Keyed slot|date; slot keys and times only, never the label.
+export interface MedReminderSent {
+  slot_key: string;
+  local_date: string;
+  /** Epoch ms of the first reminder and of the follow-up, when each was delivered by this process. */
+  firstAt: number | null;
+  followupAt: number | null;
+}
+/** A reminder stops being "outstanding" this long after the last send (the next slot owns the DM). */
+export const MED_REMINDER_OUTSTANDING_MS = 4 * 60 * 60_000;
+const sentReminders = new Map<string, MedReminderSent>();
+
+export function noteMedReminderSent(key: MedDoseKey, atMs: number): void {
+  const k = `${key.slot_key}|${key.local_date}`;
+  const cur = sentReminders.get(k) ?? { slot_key: key.slot_key, local_date: key.local_date, firstAt: null, followupAt: null };
+  if (key.kind === "followup") cur.followupAt = atMs; else cur.firstAt = atMs;
+  sentReminders.set(k, cur);
+  // Bounded: a few slots a day.
+  while (sentReminders.size > 20) {
+    const first = sentReminders.keys().next();
+    if (first.done) break;
+    sentReminders.delete(first.value);
+  }
+}
+
+/** Reminders this process delivered whose last send is within the outstanding window. */
+export function medRemindersSent(nowMs: number): MedReminderSent[] {
+  return [...sentReminders.values()].filter(r => nowMs - Math.max(r.firstAt ?? 0, r.followupAt ?? 0) < MED_REMINDER_OUTSTANDING_MS);
+}
+
+/** Tests only. */
+export function resetMedRemindersSent(): void { sentReminders.clear(); }
 
 export interface MedApi {
   medDue(): Promise<MedDueDose[] | null>;
@@ -93,10 +161,29 @@ export function fallbackMedLine(companionId: CompanionId, dose: Pick<MedDueDose,
   }
 }
 
-export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, "label" | "kind" | "local_time">, avoid: readonly string[] = []): string {
+/** The part-of-day lines for the prompt (2026-10-06: the 20:30 night reminder and the reply to it
+ *  talked as if it were a workday morning; the prompt never said what time it was). */
+function medNowLines(nowMs: number): { now: string; when: string } {
+  const { time, weekday, hour } = medLocalClock(nowMs);
+  const part = partOfDay(hour);
+  const steer = part === "morning"
+    ? "Speak to the morning."
+    : `Speak to the ${part}; do not mention work, the morning, or the day ahead.`;
+  const when = part === "morning" ? "this morning" : part === "afternoon" ? "this afternoon" : part === "evening" ? "this evening" : "tonight";
+  return { now: `It is now ${time} on ${weekday}, ${part}. ${steer}`, when };
+}
+
+export function buildMedPrompt(
+  companionId: CompanionId,
+  dose: Pick<MedDueDose, "label" | "kind" | "local_time">,
+  avoid: readonly string[] = [],
+  nowMs: number = Date.now(),
+): string {
+  const { now, when } = medNowLines(nowMs);
   const lines = [
     `[Med reminder: a private DM to Raziel, from you]`,
     `It is time for his ${dose.local_time} dose: "${dose.label}".`,
+    now,
   ];
   if (dose.kind === "followup") {
     lines.push("You reminded him about half an hour ago and have no answer. This is the one follow-up; there will not be another.");
@@ -112,7 +199,7 @@ export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, 
     // So the sketch is named as already worn out, its words AND its shape are off limits, and the
     // recent reminders ride from the FIRST attempt (composeMedReminder), not only on the retry.
     `Your own tone sketch, from when you first agreed to do this: "${MED_REGISTER[companionId] ?? MED_REGISTER.cypher}"`,
-    "You have used that line and its shape many times. It is the warmth to aim for, not words to reuse: do not reuse its phrases or its structure. Say it new, the way you would say it this morning or tonight.",
+    `You have used that line and its shape many times. It is the warmth to aim for, not words to reuse: do not reuse its phrases or its structure. Say it new, the way you would say it ${when}.`,
     "Never: advice about the dose, amount or timing; guilt or pressure; mention of any earlier dose; anything else in the message.",
   );
   if (avoid.length) {
@@ -125,13 +212,12 @@ export function buildMedPrompt(companionId: CompanionId, dose: Pick<MedDueDose, 
 /** Every word of the label appears in the text, in any order ("meds this morning" names "morning
  *  meds"). A contiguous-substring test would push a reordered label onto the fixed line every day,
  *  which is the verbatim-every-night failure R-8 exists to prevent. */
-const LABEL_JOINERS = new Set(["and", "the", "of", "plus", "with", "my", "a"]);
 export function namesLabel(text: string, label: string): boolean {
-  const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const have = new Set(words(text));
+  const have = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean));
   // Joining words are not part of the name (2026-10-02): live drafts wrote "A, B" for a label "A and
-  // B" and were refused as "unnamed". Every naming word must still appear.
-  const need = words(label).filter(w => !LABEL_JOINERS.has(w));
+  // B" and were refused as "unnamed". Every naming word must still appear. labelWords (med-answer.ts)
+  // is the same word logic the answer parser uses to read the label as a dose word.
+  const need = labelWords(label);
   return need.length > 0 && need.every(w => have.has(w));
 }
 
@@ -156,7 +242,7 @@ export const isVerbatimRepeat = sharedVerbatimRepeat;
  * second timeout on a reminder that should already be out).
  */
 export async function composeMedReminder(
-  deps: Pick<MedSchedulerDeps, "companionId" | "generate" | "systemPrompt" | "genTimeoutMs">,
+  deps: Pick<MedSchedulerDeps, "companionId" | "generate" | "systemPrompt" | "genTimeoutMs" | "now">,
   dose: MedDueDose,
   recent: readonly string[],
 ): Promise<{ text: string; path: string }> {
@@ -168,7 +254,7 @@ export async function composeMedReminder(
   for (let attempt = 1; attempt <= 2; attempt++) {
     let raw: string | null | undefined;
     try {
-      raw = await withTimeout(Promise.resolve(deps.generate(deps.systemPrompt(), buildMedPrompt(deps.companionId, dose, avoid) + correction)), timeoutMs);
+      raw = await withTimeout(Promise.resolve(deps.generate(deps.systemPrompt(), buildMedPrompt(deps.companionId, dose, avoid, (deps.now ?? Date.now)()) + correction)), timeoutMs);
     } catch (e) {
       const reason = e instanceof Error && e.message === "timeout" ? "timeout" : "error";
       return { text: fallbackMedLine(deps.companionId, dose), path: `fallback:${reason}` };
@@ -272,6 +358,7 @@ export async function runMedTick(deps: MedSchedulerDeps, state: MedSchedulerStat
       }
       // Never resend from this process, even if Halseth did not take the delivery mark.
       state.backoffUntil.set(doseKey(key), Number.MAX_SAFE_INTEGER);
+      noteMedReminderSent(key, now());
       try { await deps.onSent?.(dm.channelId, text, messageId); } catch { /* bookkeeping only */ }
       log(`${tag} ${where} outcome=sent path=${path}${recorded ? "" : " DELIVERY_MARK_FAILED (a stale-claim takeover could resend)"}`);
       results.push({ ...key, outcome: "sent", path });

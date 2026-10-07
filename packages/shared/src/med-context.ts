@@ -56,15 +56,43 @@ function whom(to: string | null | undefined, self: string): string {
   return to === self || !to ? "you" : titleCase(to);
 }
 
-function doseLine(d: MedStateDose, self: string): string {
+/**
+ * A reminder THIS bot delivered for a dose (med-reminder.ts medRemindersSent), times already on his
+ * clock ("8:30 PM"). Halseth's state does not carry whether a reminder went out, so without this a
+ * bare "taken!" right after the reminder reached the reply with nothing saying what it answered
+ * (2026-10-06: the night reply talked about the morning).
+ */
+export interface MedReminderNote {
+  slot_key: string;
+  local_date: string;
+  first_local: string | null;
+  followup_local: string | null;
+}
+
+/** Rendered only when a dose above has a reminder out with no answer. */
+export const MED_PENDING_REMINDER_RULE =
+  "A dose marked \"reminder sent, no answer yet\" is the one your reminder just asked about: if his message now says \"taken\", \"done\" or the like, that is the dose he means.";
+
+function reminderFor(d: MedStateDose, notes: readonly MedReminderNote[]): MedReminderNote | undefined {
+  return notes.find(n => n.slot_key === d.slot_key && n.local_date === d.local_date && (n.first_local || n.followup_local));
+}
+
+function doseLine(d: MedStateDose, self: string, notes: readonly MedReminderNote[]): string {
   const when = d.day === "yesterday" ? `yesterday's ${d.local_time}` : `today's ${d.local_time}`;
+  const sent = reminderFor(d, notes);
   // A stated miss is checked first: it is never rendered as taken, whatever else the row carries.
   const state = d.outcome === "missed"
     ? `he told ${whom(d.told_to, self)}${d.told_local ? ` at ${d.told_local}` : ""} that he missed this one.`
     : d.answered_local
       ? `he told ${whom(d.answered_to, self)} he took it at ${d.answered_local}.`
-      : "you have no answer from him for this one.";
+      : sent
+        ? `${d.slot_key} reminder sent ${[sent.first_local, sent.followup_local && `follow-up ${sent.followup_local}`].filter(Boolean).join(", ")}, no answer yet; you have no answer from him for this one.`
+        : "you have no answer from him for this one.";
   return `• ${d.label} (${when}): ${state}`;
+}
+
+function hasPendingReminder(d: MedStateDose, notes: readonly MedReminderNote[]): boolean {
+  return d.outcome !== "missed" && !d.answered_local && !!reminderFor(d, notes);
 }
 
 /**
@@ -72,7 +100,7 @@ function doseLine(d: MedStateDose, self: string): string {
  * the companion is told it cannot see it, so it neither guesses nor reads the gap as "not taken".
  * An empty list still carries the dosing rule, because the question can come at any hour.
  */
-export function renderMedStateBlock(doses: MedStateDose[] | null, selfId: string): string {
+export function renderMedStateBlock(doses: MedStateDose[] | null, selfId: string, reminders: readonly MedReminderNote[] = []): string {
   const head = "\n\n[Meds -- private to this DM, never to be mentioned in any server channel]";
   if (doses === null) {
     return `${head}\n• You cannot see today's med state right now. If he asks whether he took something, say you can't see it at the moment; do not guess either way.\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
@@ -81,5 +109,6 @@ export function renderMedStateBlock(doses: MedStateDose[] | null, selfId: string
     return `${head}\n• No doses have come due yet today.\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
   }
   const statedMiss = doses.some(d => d.outcome === "missed") ? `\n${MED_STATED_MISS_RULE}` : "";
-  return `${head}\n${doses.map(d => doseLine(d, selfId)).join("\n")}\n${MED_ABSENCE_RULE}${statedMiss}\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
+  const pending = doses.some(d => hasPendingReminder(d, reminders)) ? `\n${MED_PENDING_REMINDER_RULE}` : "";
+  return `${head}\n${doses.map(d => doseLine(d, selfId, reminders)).join("\n")}\n${MED_ABSENCE_RULE}${statedMiss}${pending}\n${MED_NO_RAISE_RULE}\n${MED_DOSING_RULE}`;
 }

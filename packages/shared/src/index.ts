@@ -83,6 +83,7 @@ export * from "./thread-spine.js";
 export * from "./director-invite.js";
 export * from "./dm.js";
 export * from "./med-answer.js";
+export * from "./med-answer-classify.js";
 export * from "./med-context.js";
 export * from "./med-reminder.js";
 // The owner-DM lane types (B7 2+2c). reach-dm.ts is deliberately NOT exported here (T-4).

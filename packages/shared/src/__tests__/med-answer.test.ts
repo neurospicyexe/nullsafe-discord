@@ -301,3 +301,79 @@ describe("parseMedAnswer: mid-sentence 'I took my pills' (real, 10-03)", () => {
     expect(parseMedAnswer(t)).toBeNull();
   });
 });
+
+// 2026-10-06. The open dose's own label is a dose word, and a LAST-word "taken" after talk counts.
+// Fake label word ("zelvorin") per the fake-labels rule: real medication names never enter a
+// tracked file. The live failure ("I took my <label>") was this shape with his real label.
+describe("parseMedAnswer: the open dose's label is a dose word (10-06)", () => {
+  const labels = ["Zelvorin"];
+  it.each([
+    "I took my zelvorin",
+    "took my Zelvorin baby",
+    "zelvorin taken",
+    "zelvorin done",
+    "just took the zelvorin",
+  ])("taken with the label passed: %s", (t) => {
+    expect(parseMedAnswer(t, { labels })).toEqual({ entries: [{ slot: null, outcome: "taken" }] });
+  });
+  it("without the labels, the same message is still refused (old callers unchanged)", () => {
+    expect(parseMedAnswer("I took my zelvorin")).toBeNull();
+  });
+  it("joiner words in a label never become dose words; every naming word does", () => {
+    expect(parseMedAnswer("I took my plus", { labels: ["Zelvorin plus Mirapexa"] })).toBeNull();
+    expect(parseMedAnswer("I took my mirapexa", { labels: ["Zelvorin plus Mirapexa"] })).toEqual({ entries: [{ slot: null, outcome: "taken" }] });
+  });
+  it("a label word the matcher already reads otherwise stays what it was", () => {
+    // "later" is a deferral and "night" a slot: a label containing them does not make them nouns.
+    expect(parseMedAnswer("I took my later", { labels: ["Later Night Zelvorin"] })).toBeNull();
+  });
+  it.each([
+    "did I take my zelvorin?",
+    "I don't think I took my zelvorin",
+    "gonna take my zelvorin later",
+    "taking my zelvorin now",
+  ])("still nothing with the label: %s", (t) => {
+    expect(parseMedAnswer(t, { labels })).toBeNull();
+  });
+  it("a stated miss of the labelled dose is a miss", () => {
+    expect(parseMedAnswer("I forgot my zelvorin", { labels })).toEqual({ entries: [{ slot: null, outcome: "missed" }] });
+  });
+  it("the label set does not leak into the next call", () => {
+    parseMedAnswer("I took my zelvorin", { labels });
+    expect(parseMedAnswer("I took my zelvorin")).toBeNull();
+  });
+});
+
+describe("parseMedAnswer: a last-word 'taken' after talk (real, 10-06)", () => {
+  it("his real night answer records", () => {
+    expect(parseMedAnswer("Yay!! I’m on top of it today Dre you don’t even have to ask again taken!"))
+      .toEqual({ entries: [{ slot: null, outcome: "taken" }] });
+  });
+  it.each([
+    "long day, finally home and snuggled in, taken baby",
+    "ok ok I see you, taken!",
+    "home from the game and fed the cats taken",
+  ])("taken: %s", (t) => {
+    expect(parseMedAnswer(t)).toEqual({ entries: [{ slot: null, outcome: "taken" }] });
+  });
+  it.each([
+    "*laughing lovingly* Dre baby it’s 20:32 at night this is my nighttime pill.",
+    "not taken!",
+    "I haven't taken!",
+    "haven't taken yet!",
+    "I'll get it taken!",
+    "was it taken?",
+    "I was taken aback!",
+    "that seat is taken",
+    "you know what, the photo was already taken and it's taken",
+    "work is finally done!",
+    "ugh I'm so done",
+    "the laundry is done",
+    "I forgot, taken",
+    "soon enough taken",
+    "in a minute love taken",
+    "you asked if it's taken",
+  ])("nothing: %s", (t) => {
+    expect(parseMedAnswer(t)).toBeNull();
+  });
+});

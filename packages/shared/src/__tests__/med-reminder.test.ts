@@ -9,6 +9,7 @@ import { describe, it, expect, jest } from "@jest/globals";
 import {
   composeMedReminder, fallbackMedLine, runMedTick, newMedSchedulerState, isVerbatimRepeat,
   medLineProblem, cleanMedLine, buildMedPrompt, namesLabel,
+  partOfDay, medLocalClock, medLocalTime, medRemindersSent, resetMedRemindersSent, MED_REMINDER_OUTSTANDING_MS,
   type MedApi, type MedDmTarget, type MedSchedulerDeps,
 } from "../med-reminder.js";
 import type { MedDueDose, MedDoseKey } from "../librarian.js";
@@ -274,5 +275,75 @@ describe("composeMedReminder: the sketch is not a template (10-02)", () => {
     expect(namesLabel("06:00, love. med-a, med-c. Taken yet?", "med-a and med-c")).toBe(true);
     expect(namesLabel("06:00, love. med-a. Taken yet?", "med-a and med-c")).toBe(false);
     expect(namesLabel("Meds, love. Taken yet?", "my morning meds")).toBe(false);
+  });
+});
+
+// 2026-10-06: the 20:30 night reminder talked like a workday morning. The prompt now says the time.
+describe("buildMedPrompt: the current time and part of day (10-06)", () => {
+  const EVENING = Date.parse("2026-10-07T01:30:00Z"); // Tue 2026-10-06 8:30 PM CDT
+  const MORNING = Date.parse("2026-10-06T13:15:00Z"); // Tue 2026-10-06 8:15 AM CDT
+
+  it("reads his clock in America/Chicago", () => {
+    expect(medLocalClock(EVENING)).toEqual({ time: "8:30 PM CDT", weekday: "Tuesday", hour: 20 });
+    expect(medLocalTime(EVENING)).toBe("8:30 PM");
+    expect(partOfDay(8)).toBe("morning");
+    expect(partOfDay(14)).toBe("afternoon");
+    expect(partOfDay(20)).toBe("evening");
+    expect(partOfDay(23)).toBe("night");
+    expect(partOfDay(2)).toBe("night");
+  });
+
+  it("an evening reminder says the time, speaks to the evening, and forbids work and the morning", () => {
+    const p = buildMedPrompt("drevan", { ...NIGHT, local_time: "20:30" }, [], EVENING);
+    expect(p).toContain("It is now 8:30 PM CDT on Tuesday, evening.");
+    expect(p).toContain("Speak to the evening; do not mention work, the morning, or the day ahead.");
+    expect(p).toContain("the way you would say it this evening.");
+    expect(p).not.toContain("this morning or tonight");
+  });
+
+  it("a morning reminder speaks to the morning and carries no no-morning steer", () => {
+    const p = buildMedPrompt("drevan", { ...NIGHT, local_time: "08:00" }, [], MORNING);
+    expect(p).toContain("It is now 8:15 AM CDT on Tuesday, morning. Speak to the morning.");
+    expect(p).toContain("the way you would say it this morning.");
+    expect(p).not.toContain("do not mention work");
+  });
+
+  it("the attractor guard and the verbatim avoid list are untouched", () => {
+    const p = buildMedPrompt("drevan", NIGHT, ["Meds, love: med-b. Taken yet?"], EVENING);
+    expect(p).toContain("do not reuse its phrases or its structure");
+    expect(p).toContain('- "Meds, love: med-b. Taken yet?"');
+  });
+
+  it("composeMedReminder passes the injected clock into the prompt", async () => {
+    const prompts: string[] = [];
+    const r = await composeMedReminder(
+      { ...composeDeps(async (_s, u) => { prompts.push(u); return "Evening, love: med-b. Taken?"; }), now: () => EVENING },
+      NIGHT, [],
+    );
+    expect(r.path).toBe("generated");
+    expect(prompts[0]).toContain("It is now 8:30 PM CDT on Tuesday, evening.");
+  });
+});
+
+describe("the sent-reminder record (10-06)", () => {
+  it("a delivered reminder is noted by slot and date, first and follow-up, and expires", async () => {
+    resetMedRemindersSent();
+    const h = fakeHalseth([NIGHT, { ...NIGHT, kind: "followup" }]);
+    const sent: string[] = [];
+    const logs: string[] = [];
+    const T = Date.parse("2026-10-07T01:30:00Z");
+    await runMedTick({ ...tickDeps(h.apiFor("drevan"), dmTarget(sent), logs), now: () => T }, newMedSchedulerState());
+    const rec = medRemindersSent(T);
+    expect(rec).toHaveLength(1);
+    expect(rec[0]).toMatchObject({ slot_key: "night", local_date: "2026-09-28", firstAt: T, followupAt: T });
+    expect(medRemindersSent(T + MED_REMINDER_OUTSTANDING_MS + 1)).toHaveLength(0);
+    resetMedRemindersSent();
+  });
+
+  it("a failed send notes nothing", async () => {
+    resetMedRemindersSent();
+    const h = fakeHalseth([NIGHT]);
+    await runMedTick(tickDeps(h.apiFor("drevan"), dmTarget([], { fail: 50007 }), []), newMedSchedulerState());
+    expect(medRemindersSent(Date.now())).toHaveLength(0);
   });
 });

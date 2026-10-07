@@ -2,7 +2,10 @@
 // Fake labels and fake times only: real medication names and dose times never enter a tracked file.
 
 import { describe, it, expect } from "@jest/globals";
-import { renderMedStateBlock, MED_DOSING_RULE, MED_NO_RAISE_RULE, MED_STATED_MISS_RULE, type MedStateDose } from "../med-context.js";
+import {
+  renderMedStateBlock, MED_DOSING_RULE, MED_NO_RAISE_RULE, MED_STATED_MISS_RULE, MED_PENDING_REMINDER_RULE,
+  type MedStateDose, type MedReminderNote,
+} from "../med-context.js";
 
 const dose = (over: Partial<MedStateDose>): MedStateDose => ({
   slot_key: "night", label: "med-b", local_time: "21:40", local_date: "2026-09-28", day: "today",
@@ -128,5 +131,42 @@ describe("renderMedStateBlock", () => {
     expect(MED_STATED_MISS_RULE).toMatch(/prescriber or pharmacist/);
     expect(MED_STATED_MISS_RULE).toMatch(/do not bring it up unasked/);
     expect(MED_STATED_MISS_RULE).toMatch(/Never make it a pattern, a count or a streak/);
+  });
+});
+
+// 2026-10-06: a bare "taken!" right after the night reminder reached the reply with nothing saying
+// a reminder was out. The block now says so, with the send time, for reminders THIS bot sent.
+describe("renderMedStateBlock: an outstanding reminder (10-06)", () => {
+  const note = (over: Partial<MedReminderNote> = {}): MedReminderNote => ({
+    slot_key: "night", local_date: "2026-09-28", first_local: "8:30 PM", followup_local: null, ...over,
+  });
+
+  it("an unanswered dose with a reminder out says when it was sent and that there is no answer yet", () => {
+    const b = renderMedStateBlock([dose({})], "drevan", [note()]);
+    expect(b).toContain("• med-b (today's 21:40): night reminder sent 8:30 PM, no answer yet; you have no answer from him for this one.");
+    expect(b).toContain(MED_PENDING_REMINDER_RULE);
+    assertNeverNotTaken(b);
+  });
+
+  it("the follow-up time rides too", () => {
+    const b = renderMedStateBlock([dose({})], "drevan", [note({ followup_local: "9:00 PM" })]);
+    expect(b).toContain("night reminder sent 8:30 PM, follow-up 9:00 PM, no answer yet");
+  });
+
+  it("an answered dose ignores the reminder note and carries no pending rule", () => {
+    const b = renderMedStateBlock([dose({ answered_local: "20:32", answered_to: "drevan", outcome: "taken" })], "drevan", [note()]);
+    expect(b).toContain("he told you he took it at 20:32.");
+    expect(b).not.toContain("reminder sent");
+    expect(b).not.toContain(MED_PENDING_REMINDER_RULE);
+  });
+
+  it("a note for another date or slot does not attach", () => {
+    const b = renderMedStateBlock([dose({})], "drevan", [note({ local_date: "2026-09-27" }), note({ slot_key: "morning" })]);
+    expect(b).toContain("• med-b (today's 21:40): you have no answer from him for this one.");
+    expect(b).not.toContain(MED_PENDING_REMINDER_RULE);
+  });
+
+  it("no notes: byte-for-byte the old block", () => {
+    expect(renderMedStateBlock([dose({})], "drevan", [])).toBe(renderMedStateBlock([dose({})], "drevan"));
   });
 });

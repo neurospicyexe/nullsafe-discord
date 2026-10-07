@@ -46,6 +46,14 @@ function foldEmoji(s: string): string {
   return s.replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0E}\u{FE0F}]/gu, "");
 }
 
+/** Joining words are not part of a dose's name ("A and B" is named by "A, B"). */
+export const LABEL_JOINERS = new Set(["and", "the", "of", "plus", "with", "my", "a"]);
+/** The naming words of a dose label, lowercased, joiners dropped. Shared with namesLabel
+ *  (med-reminder.ts), so "names the dose" and "a dose word" mean the same words. */
+export function labelWords(label: string): string[] {
+  return label.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(w => w && !LABEL_JOINERS.has(w));
+}
+
 /**
  * The OPENING-CLAUSE path (2026-09-30). The whitelist below needs every word known, and his real
  * answers never look like that: from 09-29 to 09-30 all four were refused and nothing was recorded
@@ -194,6 +202,28 @@ const DEFER_BARE = new Set([
 ]);
 const CLAUSE_EXTRA_FILLER = new Set(["are", "is", "ones", "jar", "jars", "last", "of", "today"]);
 
+// THE OPEN DOSE'S OWN NAME IS A DOSE WORD (2026-10-06). "I took my <label>" recorded nothing: the
+// label word was unknown, so "my <label>" was no dose object and "took" read like "took the dog
+// out". The caller passes the labels of the doses that are open; their naming words count as dose
+// nouns for THIS parse only. parseMedAnswer is synchronous, so a module-scoped set assigned at entry
+// and cleared in `finally` cannot leak between calls. A word the matcher already gives another
+// meaning (negation, affirmative, taking verb, pronoun, endearment, deferral, filler) and any word
+// under three letters never becomes a dose noun.
+let labelNouns: ReadonlySet<string> = new Set();
+const isMedNoun = (w: string) => MED_NOUN.has(w) || labelNouns.has(w);
+const inRegion = (w: string) => REGION.has(w) || labelNouns.has(w);
+function labelNounsOf(labels: readonly string[] | undefined): Set<string> {
+  const out = new Set<string>();
+  for (const l of labels ?? []) {
+    for (const w of labelWords(l)) {
+      if (w.length < 3 || NEGATE.has(w) || AFFIRM.has(w) || TAKE_VERB.has(w) || PRONOUN_OBJ.has(w)
+        || ENDEAR.has(w) || DEFER_BARE.has(w) || FILLER.has(w) || SLOT_WORD[w]) continue;
+      out.add(w);
+    }
+  }
+  return out;
+}
+
 type ClauseKind = "taken" | "missed" | "defer" | "neg" | "inherit" | "none" | "ambig" | "refuse";
 interface Clause { words: string[]; sep: "start" | "terminal" | "join" | "but"; question: boolean }
 interface SlotRef { named: Set<MedNamedSlot>; star: boolean }
@@ -225,13 +255,13 @@ function slotsOf(words: string[]): SlotRef {
 /** Leading words of `words` that form a dose reference (stops at the first word that cannot). */
 function regionOf(words: string[]): string[] {
   const out: string[] = [];
-  for (const w of words) { if (!REGION.has(w)) break; out.push(w); }
+  for (const w of words) { if (!inRegion(w)) break; out.push(w); }
   return out;
 }
 
-const hasObject = (ws: string[]) => ws.some(w => PRONOUN_OBJ.has(w) || MED_NOUN.has(w) || !!SLOT_WORD[w] || w === "both");
-const hasDoseVocab = (ws: string[]) => ws.some(w => TAKE_VERB.has(w) || MED_NOUN.has(w) || PRONOUN_OBJ.has(w));
-const asksAboutMeds = (ws: string[]) => ws.some(w => TAKE_VERB.has(w) || MED_NOUN.has(w));
+const hasObject = (ws: string[]) => ws.some(w => PRONOUN_OBJ.has(w) || isMedNoun(w) || !!SLOT_WORD[w] || w === "both");
+const hasDoseVocab = (ws: string[]) => ws.some(w => TAKE_VERB.has(w) || isMedNoun(w) || PRONOUN_OBJ.has(w));
+const asksAboutMeds = (ws: string[]) => ws.some(w => TAKE_VERB.has(w) || isMedNoun(w));
 
 function splitClauses(text: string): Clause[] {
   const parts = text.split(/(\?+|[.!;\n…]+|,|\bbut\b|\band\b)/);
@@ -297,7 +327,7 @@ function whitelistClause(words: string[]): boolean {
   for (const w of words) {
     if (NEGATE.has(w)) return false;
     if (AFFIRM.has(w) || /^ye+s+$/.test(w) || /^ye+p+$/.test(w)) { affirm = true; continue; }
-    if (FILLER.has(w) || REGION.has(w) || CLAUSE_EXTRA_FILLER.has(w)) continue;
+    if (FILLER.has(w) || inRegion(w) || CLAUSE_EXTRA_FILLER.has(w)) continue;
     return false;
   }
   return affirm;
@@ -317,7 +347,7 @@ function classify(c: Clause, prev: Statement | null): Statement {
   if (w[0] === "not") {
     const rest = w.slice(1);
     const s = slotsOf(rest);
-    if (joinedToStatement && prev!.kind === "taken" && rest.every(x => REGION.has(x)) && (s.named.size || s.star)) {
+    if (joinedToStatement && prev!.kind === "taken" && rest.every(x => inRegion(x)) && (s.named.size || s.star)) {
       return { kind: "neg", slots: s };
     }
     return { kind: joinedToStatement || hasDoseVocab(w) ? "ambig" : "none", slots: none };
@@ -326,7 +356,7 @@ function classify(c: Clause, prev: Statement | null): Statement {
   if (taken === "ambig") return { kind: "ambig", slots: none };
   if (taken) return { kind: "taken", slots: taken };
   if (whitelistClause(w)) return { kind: "taken", slots: slotsOf(w) };
-  if (c.sep === "join" && prev && w.every(x => REGION.has(x) || x === "as" || x === "well")) {
+  if (c.sep === "join" && prev && w.every(x => inRegion(x) || x === "as" || x === "well")) {
     const s = slotsOf(w);
     if (s.named.size || s.star) return { kind: "inherit", slots: s };
   }
@@ -343,7 +373,60 @@ function strongBareSentence(words: string[]): boolean {
   return words.some(w => STRONG_BARE.has(w)) && isAffirmativeMedAnswer(words.join(" "));
 }
 
-export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer | null {
+export interface ParseMedAnswerOptions {
+  /** Labels of the doses open right now (Halseth /mind/med/today). Their naming words count as dose
+   *  nouns, so "I took my <label>" reads like "I took my pills". Optional: without it, unchanged. */
+  labels?: readonly string[];
+}
+
+export function parseMedAnswer(raw: string | null | undefined, opts?: ParseMedAnswerOptions): ParsedMedAnswer | null {
+  labelNouns = labelNounsOf(opts?.labels);
+  try {
+    return parseMedAnswerInner(raw);
+  } finally {
+    labelNouns = new Set();
+  }
+}
+
+/** The whole-message whitelist with every label noun read as "meds" ("<label> done" is "meds done"). */
+function wholeMessageAffirmative(raw: string): boolean {
+  if (!labelNouns.size) return isAffirmativeMedAnswer(raw);
+  const swapped = foldEmoji(raw).replace(/[\p{L}\p{N}']+/gu, w => (labelNouns.has(w.toLowerCase()) ? "meds" : w));
+  return isAffirmativeMedAnswer(swapped);
+}
+
+// A LAST WORD "taken" (2026-10-06). "Yay!! I'm on top of it today Dre you don't even have to ask
+// again taken!" recorded nothing and the follow-up fired: the answer came LAST, after a sentence
+// whose "don't" and "again" sink every clause rule (rightly: they guard real negations). So: the
+// message's final word, ignoring trailing endearments and punctuation, is "taken" ("done" only when
+// a dose word is also in the message: "work is finally done!" is not an answer), the word before it
+// is not one that turns it into a description or a negation ("not taken", "was taken", "get it
+// taken", "haven't taken", "taken aback" never ends a message on "taken"), and nothing in the
+// message asks, defers or states a miss. Only when no other rule found anything.
+const TRAILING_SOFT = new Set([...ENDEAR, "lol", "haha", "hehe", "xx", "xo"]);
+// Not NEGATE wholesale: it holds "again", which is exactly the word before "taken" in his message.
+const BEFORE_FINAL_BLOCK = new Set([
+  "no", "not", "never", "nope", "nah", "yet", "forgot", "skipped", "missed", "should", "will", "gonna",
+  "maybe", "almost", "nearly", "need", "needs", "if", "or", "think",
+  "be", "been", "being", "is", "was", "are", "were", "get", "got", "gets", "getting", "gotta",
+  "it", "them", "it's", "its", "that's", "thats", "i'm", "im", "i've", "ive", "we're", "you're", "they're",
+  "have", "has", "had", "so", "all", "finally", "now", "the", "seat", "place", "spot", "name", "username",
+]);
+function trailingTaken(text: string, clauses: Clause[]): boolean {
+  if (text.includes("?") || clauses.some(c => c.question)) return false;
+  if (DEFER_RE.test(text)) return false;
+  const all = tokensOf(text);
+  while (all.length && TRAILING_SOFT.has(all[all.length - 1]!)) all.pop();
+  const last = all[all.length - 1];
+  const before = all[all.length - 2];
+  if (last !== "taken" && last !== "done") return false;
+  if (last === "done" && !all.slice(0, -1).some(w => isMedNoun(w) || !!SLOT_WORD[w])) return false;
+  if (before !== undefined && (BEFORE_FINAL_BLOCK.has(before) || /n'?t$/.test(before))) return false;
+  if (clauses.some(c => MISS_RE.test(c.words.join(" ")))) return false;
+  return true;
+}
+
+function parseMedAnswerInner(raw: string | null | undefined): ParsedMedAnswer | null {
   if (!raw) return null;
   const folded = foldEmoji(raw);
   if (!folded.trim() || folded.length > 400) return null;
@@ -380,7 +463,7 @@ export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer 
   }
 
   // Nothing any clause said: the whole-message whitelist (emoji-only "✅", "👍 done").
-  if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && isAffirmativeMedAnswer(raw)) {
+  if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && wholeMessageAffirmative(raw)) {
     push(slotsOf(tokensOf(text)), "taken");
   }
   // A FIRST SENTENCE that is a strong bare answer, then talk (2026-10-02). His 10-02 morning answer
@@ -410,13 +493,16 @@ export function parseMedAnswer(raw: string | null | undefined): ParsedMedAnswer 
         while (j < w.length && (w[j] === "just" || w[j] === "already" || w[j] === "did" || w[j] === "have" || w[j] === "also")) j++;
         if (!(w[j] === "took" || w[j] === "taken" || (w[j] === "take" && w[j - 1] === "did"))) continue;
         const region = regionOf(w.slice(j + 1));
-        const realDose = region.some(x => MED_NOUN.has(x) || !!SLOT_WORD[x]);
+        const realDose = region.some(x => isMedNoun(x) || !!SLOT_WORD[x]);
         if (!realDose || w.slice(0, i).some(x => CLAUSE_NEGATE.has(x))) continue;
         push(slotsOf(region), "taken");
         break;
       }
       if (statements.length) break;
     }
+  }
+  if (statements.length === 0 && !deferredUnnamed && deferred.size === 0 && trailingTaken(text, clauses)) {
+    push({ named: new Set(), star: false }, "taken");
   }
   if (statements.length === 0) return null;
 

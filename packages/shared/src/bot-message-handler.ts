@@ -4,6 +4,8 @@ import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock }
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
+import { medRemindersSent, medLocalTime, medLocalClock } from "./med-reminder.js";
+import { openRemindedSlots, runMedAnswerClassifier } from "./med-answer-classify.js";
 import { sealDmChannel } from "./recall-context.js";
 import { roomTagForMessage } from "./room-tag.js";
 import {
@@ -1883,13 +1885,34 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // "taking them now") or anything ambiguous records nothing. Before the supersede check, so an
     // answer that a newer message supersedes is still heard. Logs carry slot keys and outcomes only,
     // never his words.
+    //
+    // 2026-10-06: today's med state is read ONCE here (it was read only for the context block below)
+    // so the open doses' labels reach the parser ("I took my <label>"), and reused by the context
+    // block unless an answer was just recorded. When the parser finds nothing and a reminder THIS bot
+    // sent is still unanswered, one small classifier call (direct lane, caller "med-answer", 8s)
+    // runs DETACHED: the reply never waits on it, and it records only taken/missed.
     let medAnswerRecorded = false;
-    const medParsed = isOwnerDm && isArrival ? parseMedAnswer(effectiveContent) : null;
+    const medTodayEarly = isOwnerDm ? await librarian.medToday() : null;
+    const medOpenLabels = (medTodayEarly ?? []).filter(d => d.outcome !== "taken" && !d.answered_local).map(d => d.label);
+    const medParsed = isOwnerDm && isArrival ? parseMedAnswer(effectiveContent, { labels: medOpenLabels }) : null;
+    const medAnsweredAt = new Date(message.createdTimestamp || Date.now()).toISOString();
     if (medParsed) {
-      const recs = await librarian.medAnswers(new Date(message.createdTimestamp || Date.now()).toISOString(), medParsed.entries);
+      const recs = await librarian.medAnswers(medAnsweredAt, medParsed.entries);
       medAnswerRecorded = !!recs && recs.length > 0;
       const said = medParsed.entries.map(e => `${e.slot ?? "unnamed"}:${e.outcome}`).join(",");
       console.log(`[${COMPANION_ID}] [med] answer in DM (${said}) -> ${recs === null ? "error (nothing recorded)" : recs.length ? `recorded ${recs.map(r => `slot=${r.slot_key} date=${r.local_date} outcome=${r.outcome}`).join("; ")}` : "no open dose (nothing recorded)"}`);
+    } else if (isOwnerDm && isArrival && directAdapter) {
+      const medOpen = openRemindedSlots(medTodayEarly, medRemindersSent(Date.now()), ms => medLocalTime(ms));
+      if (medOpen.length) {
+        const medClassifierAdapter = withCaller(directAdapter, "med-answer");
+        const clock = medLocalClock(Date.now());
+        // Detached on purpose: never awaited, never throws (runMedAnswerClassifier catches all).
+        void runMedAnswerClassifier({
+          companionId: COMPANION_ID,
+          generate: (system, user, signal) => medClassifierAdapter.generate(system, [{ role: "user", content: user }], 0, 150, undefined, undefined, signal),
+          record: (at, entries) => librarian.medAnswers(at, entries),
+        }, effectiveContent, medOpen, `${clock.time} on ${clock.weekday}`, medAnsweredAt);
+      }
     }
 
     // Supersede check A (channel inbox, 2026-07-06): a newer human conversational message
@@ -2278,7 +2301,15 @@ ${widened}`;
     if (watchalong) contextPrompt += watchalong.standingLine;
     // Today's med state + the dosing rule (spec P-2, P-1), DM only: the block names medications.
     if (isOwnerDm) {
-      contextPrompt += renderMedStateBlock(await librarian.medToday(), COMPANION_ID);
+      // Reuse the read from the answer step unless an answer was just recorded (then it is stale).
+      // The reminders this bot sent ride along, so "taken!" right after one has a referent.
+      const medState = medAnswerRecorded || !medTodayEarly ? await librarian.medToday() : medTodayEarly;
+      const medNotes = medRemindersSent(Date.now()).map(r => ({
+        slot_key: r.slot_key, local_date: r.local_date,
+        first_local: r.firstAt ? medLocalTime(r.firstAt) : null,
+        followup_local: r.followupAt ? medLocalTime(r.followupAt) : null,
+      }));
+      contextPrompt += renderMedStateBlock(medState, COMPANION_ID, medNotes);
     }
 
     // Floor handback (2026-07-01): in the last allowed turns before the human-anchored
