@@ -48,6 +48,15 @@ describe("director invite handling", () => {
     const res = JSON.parse(published[0]![1]);
     expect(res.outcome).toBe("spoke"); expect(res.landed).toBe("memory is a kind of loyalty"); expect(res.usedOfferIds).toEqual(["f1"]);
   });
+  test("an invite into a muted server is passed without generating or sending", async () => {
+    const { ctx, sent, published } = ctxWith("I would have said something.");
+    const channel = { guildId: "1243597699215917208", isTextBased: () => true, send: jest.fn(async () => ({ id: "x" })), messages: { fetch: jest.fn(async () => new Map()) } };
+    (ctx.client as unknown as { channels: { fetch: jest.Mock } }).channels.fetch = jest.fn(async () => channel);
+    await handleDirectorInvite(ctx, invite());
+    expect(sent).toHaveLength(0);
+    expect((ctx.inference as unknown as { generate: jest.Mock }).generate).not.toHaveBeenCalled();
+    expect(JSON.parse(published[0]![1]).outcome).toBe("passed");
+  });
   test("an expired invite is dropped and reported expired", async () => {
     const { ctx, sent, published } = ctxWith("late");
     await handleDirectorInvite(ctx, invite({ expiresAt: new Date(Date.now() - 1000).toISOString() }));

@@ -26,6 +26,27 @@ describe("silence floor", () => {
     const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()), lastBotAt: new Date(T - 3600_000).toISOString() };
     expect(floorSelection({ ...base, states: [s], supply: [item("cypher", "p2")] })).toBeNull();
   });
+  // 2026-10-06: the floor re-fired every 15 min because nothing it did moved its own clock. A
+  // pass never posts, and a post into a room the bots no longer read (muted Midnight Voices #triad)
+  // never comes back as lastBotAt -- Drevan posted 8 times in 2h, 4 on the same item.
+  it("a floor invite inside the silence window -> no second fire, even with no bot turn seen", () => {
+    const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()), lastInviteAt: new Date(T - 15 * 60_000).toISOString() };
+    expect(floorSelection({ ...base, states: [s], supply: [item("cypher", "p2")] })).toBeNull();
+  });
+  it("a floor invite older than the silence window -> fires again", () => {
+    const s = { ...emptyState("c1", new Date(T - 9 * 3600_000).toISOString()), lastInviteAt: new Date(T - 7 * 3600_000).toISOString() };
+    expect(floorSelection({ ...base, states: [s], supply: [item("cypher", "p2")] })).toMatchObject({ companionId: "cypher" });
+  });
+  it("never re-offers an item this room was already handed", () => {
+    const s = {
+      ...emptyState("c1", new Date(T - 9 * 3600_000).toISOString()),
+      lastInviteAt: new Date(T - 7 * 3600_000).toISOString(),
+      offered: [{ id: "p2", kind: "project" as const, toCompanion: "cypher" as const, inviteId: "i1", usedBy: null }],
+    };
+    const r = floorSelection({ ...base, states: [s], supply: [item("cypher", "p2"), item("cypher", "p9")] });
+    expect(r!.offer.id).toBe("p9");
+    expect(floorSelection({ ...base, states: [s], supply: [item("cypher", "p2")] })).toBeNull();
+  });
   it("off hours -> null", () => {
     const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()) };
     expect(floorSelection({ ...base, nowMs: Date.parse("2026-09-03T08:00:00.000Z"), states: [s], supply: [item("cypher", "p2")] })).toBeNull();

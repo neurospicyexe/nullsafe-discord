@@ -11,6 +11,7 @@ import { parseLandMarker } from "./thread-spine.js";
 import { ownEchoGated } from "./echo-guard.js";
 import { sendAutonomousMessage, type AutonomousContext } from "./autonomous-core.js";
 import type { CompanionId } from "./types.js";
+import { isMutedGuild } from "./guild-mute.js";
 
 const PASS_RE = /^\s*\[?PASS\]?(\s|$)/i;
 export function isPass(text: string): boolean { return PASS_RE.test(text); }
@@ -76,6 +77,14 @@ export async function handleDirectorInvite(ctx: AutonomousContext, invite: Direc
     ctx.redis ? publishDirectorResult(ctx.redis, { inviteId: invite.inviteId, companionId: ctx.companionId, channelId: invite.channelId, outcome, usedOfferIds: extra.usedOfferIds ?? [], messageId: extra.messageId, landed: extra.landed ?? null }) : Promise.resolve();
 
   if (Date.parse(invite.expiresAt) < now()) { console.warn(`[${ctx.companionId}/director] invite ${invite.inviteId} expired -- dropping`); await report("expired"); return; }
+
+  // A muted server is muted for the director too (2026-10-06). The worker kept a pre-mute channel in
+  // memory and invited Drevan into Midnight Voices #triad every 15 min; the bot posted each time.
+  try {
+    const target = await ctx.client.channels.fetch(invite.channelId);
+    const guildId = target && "guildId" in target ? (target as { guildId: string | null }).guildId : null;
+    if (isMutedGuild(guildId)) { console.warn(`[${ctx.companionId}/director] invite ${invite.inviteId} targets a muted server -- passing`); await report("passed"); return; }
+  } catch { /* unresolvable channel: the send below fails and reports empty */ }
 
   const prompt = ctx.prompts.directorInvite({ stateBlock: invite.stateBlock, offerBlock: renderOffer(invite), reason: invite.reason, addressedBy: invite.addressedBy, neighborhoodBlock: invite.neighborhoodBlock });
   const raw = await generateOutward(ctx.inference, ctx.bootCtx.systemPrompt, prompt, ctx.companionId, "director");

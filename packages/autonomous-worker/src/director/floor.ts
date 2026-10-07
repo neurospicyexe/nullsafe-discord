@@ -21,14 +21,18 @@ export interface FloorInput {
 export function floorSelection(i: FloorInput): { channelId: string; companionId: CompanionId; offer: DirectorSupplyItem } | null {
   if (!isWakingHour(i.nowMs, i.wakingStartHour, i.wakingEndHour, i.tzOffsetHours)) return null;
   const quietMs = i.silenceHours * 3600_000;
+  // The floor's own invite touches the room (2026-10-06). lastBotAt alone never moved when the
+  // invitee passed, or posted into a room the bots no longer read, so the floor re-fired every tick.
+  const touchedAt = (s: ConversationState) => Math.max(Date.parse(s.lastBotAt ?? s.startedAt), s.lastInviteAt ? Date.parse(s.lastInviteAt) : 0);
   const quiet = i.states
-    .map((s) => ({ s, sinceMs: i.nowMs - Date.parse(s.lastBotAt ?? s.startedAt) }))
+    .map((s) => ({ s, sinceMs: i.nowMs - touchedAt(s) }))
     .filter((x) => x.sinceMs >= quietMs)
     .sort((a, b) => b.sinceMs - a.sinceMs);
   if (quiet.length === 0) return null;
+  const handed = new Set(quiet[0]!.s.offered.map((o) => o.id));
   const order = [...COMPANIONS].sort((a, b) => i.turnsBySpeaker7d[a] - i.turnsBySpeaker7d[b]);
   for (const who of order) {
-    const own = i.supply.filter((it) => it.owner === who && !it.consumed_by.includes(who));
+    const own = i.supply.filter((it) => it.owner === who && !it.consumed_by.includes(who) && !handed.has(it.id));
     if (own.length === 0) continue;
     return { channelId: quiet[0]!.s.channelId, companionId: who, offer: rankOffer(own, "heat")[0]! };
   }
