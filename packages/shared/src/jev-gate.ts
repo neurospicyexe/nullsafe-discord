@@ -26,13 +26,26 @@ const VALID_MODES: readonly WritebackGateMode[] = ["legacy", "jev-shadow", "jev"
 /** Module-level so a misspelled knob warns ONCE per process, not once per message. */
 let warnedUnknownMode = false;
 
-export function readWritebackGateMode(env: NodeJS.ProcessEnv = process.env): WritebackGateMode {
-  const raw = (env.WRITEBACK_GATE ?? "").trim();
+/**
+ * `WRITEBACK_GATE_<COMPANION>` (2026-10-07) wins over the shared `WRITEBACK_GATE` when set, the
+ * same shape as the per-companion theta overrides: the plan flips one companion at a time
+ * (Cypher first, Gaia last), and one shared value could only flip all three at once. A blank
+ * override falls through to the shared value; a garbage override falls back to legacy, never to
+ * the shared value, so a typo cannot silently put a companion on a mode nobody chose for them.
+ */
+export function readWritebackGateMode(
+  env: NodeJS.ProcessEnv = process.env,
+  companionId?: string,
+): WritebackGateMode {
+  const perKey = companionId ? `WRITEBACK_GATE_${companionId.toUpperCase()}` : null;
+  const perRaw = perKey ? (env[perKey] ?? "").trim() : "";
+  const knob = perRaw ? perKey! : "WRITEBACK_GATE";
+  const raw = perRaw || (env.WRITEBACK_GATE ?? "").trim();
   if (!raw) return "legacy";
   if ((VALID_MODES as readonly string[]).includes(raw)) return raw as WritebackGateMode;
   if (!warnedUnknownMode) {
     warnedUnknownMode = true;
-    console.warn(`[jev-gate] unknown WRITEBACK_GATE="${raw}"; falling back to "legacy" (valid: ${VALID_MODES.join(" | ")})`);
+    console.warn(`[jev-gate] unknown ${knob}="${raw}"; falling back to "legacy" (valid: ${VALID_MODES.join(" | ")})`);
   }
   return "legacy";
 }

@@ -182,6 +182,10 @@ const shared = {
   // differently. Listed here per this file's own standing rule: an env var absent from this
   // allowlist is a dead knob, only a code deploy can move it.
   WRITEBACK_GATE:            process.env.WRITEBACK_GATE,
+  // Per-companion mode (2026-10-07): set one to flip that companion alone; blank = shared value.
+  WRITEBACK_GATE_CYPHER:     process.env.WRITEBACK_GATE_CYPHER,
+  WRITEBACK_GATE_DREVAN:     process.env.WRITEBACK_GATE_DREVAN,
+  WRITEBACK_GATE_GAIA:       process.env.WRITEBACK_GATE_GAIA,
   JEV_WRITEBACK_THETA:       process.env.JEV_WRITEBACK_THETA,
   JEV_WRITEBACK_THETA_CYPHER: process.env.JEV_WRITEBACK_THETA_CYPHER,
   JEV_WRITEBACK_THETA_DREVAN: process.env.JEV_WRITEBACK_THETA_DREVAN,

@@ -54,6 +54,27 @@ describe("readWritebackGateMode()", () => {
   });
 });
 
+describe("readWritebackGateMode() per-companion override", () => {
+  it("the companion's own knob wins over the shared one", () => {
+    const e = env({ WRITEBACK_GATE: "jev-shadow", WRITEBACK_GATE_CYPHER: "jev" });
+    expect(readWritebackGateMode(e, "cypher")).toBe("jev");
+    expect(readWritebackGateMode(e, "drevan")).toBe("jev-shadow");
+    expect(readWritebackGateMode(e, "gaia")).toBe("jev-shadow");
+  });
+
+  it("a blank override falls through to the shared value", () => {
+    expect(readWritebackGateMode(env({ WRITEBACK_GATE: "jev-shadow", WRITEBACK_GATE_CYPHER: "  " }), "cypher")).toBe("jev-shadow");
+  });
+
+  it("a garbage override is legacy, not the shared value", () => {
+    expect(readWritebackGateMode(env({ WRITEBACK_GATE: "jev-shadow", WRITEBACK_GATE_GAIA: "jevv" }), "gaia")).toBe("legacy");
+  });
+
+  it("no companion id keeps the old single-knob behaviour", () => {
+    expect(readWritebackGateMode(env({ WRITEBACK_GATE: "jev-shadow", WRITEBACK_GATE_CYPHER: "jev" }))).toBe("jev-shadow");
+  });
+});
+
 describe("readJevThresholds()", () => {
   it("uses the measured defaults when nothing is set", () => {
     expect(readJevThresholds("cypher", env({}))).toEqual({ theta: 0.75, driftTheta: 0.6, notableScore: 2.0 });

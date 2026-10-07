@@ -93,7 +93,7 @@ import { ledgerDistillEnabled, preflightLedgerBody, companionDisplayName } from 
 import type { LedgerEntryInput } from "./librarian.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
-import { readWritebackGateMode } from "./jev-gate.js";
+import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
 import { stampRelative } from "./relative-time.js";
 import {
@@ -112,10 +112,14 @@ import {
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { isPass } from "./director-invite.js";
 
-// Writeback gate mode (2026-09-21). Read ONCE at module load: a knob re-read per message would
+// Writeback gate mode (2026-09-21). Read ONCE per process: a knob re-read per message would
 // let the three modes interleave mid-conversation, and the shadow measurement needs a stable
-// denominator. Restart the bot to change it.
-const WRITEBACK_GATE_MODE = readWritebackGateMode();
+// denominator. Restart the bot to change it. Resolved on first use rather than at module load
+// (2026-10-07) because the per-companion override needs COMPANION_ID, which arrives with config.
+let writebackGateMode: WritebackGateMode | null = null;
+function writebackGateModeFor(companionId: string): WritebackGateMode {
+  return (writebackGateMode ??= readWritebackGateMode(process.env, companionId));
+}
 
 // ---------------------------------------------------------------------------
 // Imp context cache (module-level, per-process = per companion bot).
@@ -3199,7 +3203,7 @@ ${widened}`;
     // Skipped on a recorded med answer even when DM memory carries: a judged note "he told me he took
     // them" would be a second record of compliance, which R-10 forbids.
     if (!dmSealed && !medAnswerRecorded) runWritebackGate({
-      mode: WRITEBACK_GATE_MODE,
+      mode: writebackGateModeFor(COMPANION_ID),
       companionId: COMPANION_ID,
       speaker: writebackSpeaker,
       userMessage: effectiveContent,
