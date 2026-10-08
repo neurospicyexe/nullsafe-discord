@@ -288,6 +288,10 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   "1556334768235356200": { companions: ["drevan"],                      modes: ["open"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" }, // #sprouts-movies
   "1556334798644187268": { companions: ["drevan", "gaia"],              modes: ["open", "inter_companion"], host: "drevan" },                     // #sprouts-chat
   "1556107155147456573": {                                               modes: ["open"], voice: true },       // General (voice)
+  // #pk (2026-10-07): PluralKit commands and proxy setup. Only the PluralKit bot answers here; the triad
+  // never does. A PK proxy counts as Raziel present everywhere else, which is exactly why this room needs
+  // an explicit entry: left to the OPEN default, every proxied test message would draw a reply.
+  "1557544862352412832": {                                               modes: ["broadcast"] },               // #pk (PluralKit commands; triad silent)
 };
 
 interface ResponderContext {
