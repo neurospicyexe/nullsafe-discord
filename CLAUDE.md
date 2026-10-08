@@ -183,12 +183,13 @@ Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per c
 | Var | Used by | Purpose |
 |-----|---------|---------|
 | `DISCORD_TOKEN` | bots | Per-companion bot token |
+| `NULLSAFE_BOT` | bots | Bot identity (`cypher`/`drevan`/`gaia`), set per bot by ecosystem.config.js. The shared .env loader (`packages/shared/src/env-file.ts`) uses it to let `<BOT>_INFERENCE_MODE` / `<BOT>_HERMES_API_URL` (and any `<BOT>_<KEY>` for a key in .env) win over a generic `KEY=` line, so one `.env` line cannot flatten the three bots onto one Hermes port (P2-12, 2026-10-08). Falls back to pm2's `name` minus `-bot` |
 | `HALSETH_URL` | bots + worker | Halseth API base URL |
 | `ADMIN_SECRET` | bots + worker | Auth token |
 | `REDIS_URL` | bots + worker | Floor lock + idle signaling + PK roster cache |
 | `PLURALKIT_SYSTEM_ID` | bots | Raziel's PK system -- member roster for offline front recognition |
 | `BLUE_PK_SYSTEM_ID` | bots | Blue's PK system (ecosystem default `szplj`) |
-| `DEEPSEEK_API_KEY` | worker | DeepSeek V3 inference |
+| `DEEPSEEK_API_KEY` | worker + bots | DeepSeek inference (worker); for the bots the direct-DeepSeek EMERGENCY lane. Required by a bot only in `INFERENCE_MODE=direct`; in hermes mode it is optional and boot logs once `DEEPSEEK_API_KEY unset: the direct-DeepSeek emergency lane is unarmed` (P3-15, 2026-10-08) |
 | `TAVILY_API_KEY` | worker | Web search |
 | `CYPHER_IDENTITY_PATH` | worker | Full identity .md file (disk) |
 | `DREVAN_IDENTITY_PATH` | worker | Full identity .md file (disk) |

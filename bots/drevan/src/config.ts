@@ -18,6 +18,14 @@ export function loadBotConfig(): BotConfig {
     if (!val) throw new Error(`Missing env: ${key}`);
     return val;
   };
+  const optional = (key: string) => process.env[key]?.trim().replace(/^=+/, "") || undefined;
+  // Resolved before the literal so DEEPSEEK_API_KEY can be conditional on it (P3-15).
+  // "brain" was a third mode, removed 2026-07-29 with BrainClient. It is deliberately still
+  // RECOGNISED here so a leftover INFERENCE_MODE=brain (the VPS .env carried one) resolves to
+  // "direct" loudly rather than being silently treated as an unknown string. bot-core logs the
+  // fallback at boot, so the stale value is visible instead of inferred.
+  const inferenceMode: "direct" | "hermes" =
+    (process.env["INFERENCE_MODE"] ?? "hermes").trim().replace(/^=+/, "") === "hermes" ? "hermes" : "direct";
   return {
     companionId: COMPANION_ID,
     discordBotToken: required("DISCORD_BOT_TOKEN"),
@@ -26,7 +34,9 @@ export function loadBotConfig(): BotConfig {
     // leaked bot env grants companion-tier access only, not admin. Falls back to
     // the shared HALSETH_SECRET for setups that haven't split tokens yet.
     halsethSecret: process.env["DREVAN_HALSETH_SECRET"]?.trim().replace(/^=+/, "") || required("HALSETH_SECRET"),
-    deepseekApiKey: required("DEEPSEEK_API_KEY"),
+    // P3-15 (2026-10-08): required only in direct mode. In hermes mode direct DeepSeek is the ~$10
+    // emergency lane; absent, bot-core logs once at boot that the lane is unarmed.
+    deepseekApiKey: inferenceMode === "direct" ? required("DEEPSEEK_API_KEY") : optional("DEEPSEEK_API_KEY"),
     ownerDiscordId: required("OWNER_DISCORD_ID"),
     // Configurable owner display name. Set OWNER_DISPLAY_NAME in your .env.
     ownerDisplayName: process.env["OWNER_DISPLAY_NAME"]?.trim().replace(/^=+/, "") || "Owner",
@@ -48,14 +58,7 @@ export function loadBotConfig(): BotConfig {
     inferenceModel:  process.env["INFERENCE_MODEL"]?.trim().replace(/^=+/, "") || undefined,
     disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["PARTNER_DISCORD_ID"] ?? process.env["BLUE_DISCORD_ID"] ?? undefined,
-    inferenceMode: (() => {
-      // "brain" was a third mode, removed 2026-07-29 with BrainClient. It is deliberately still
-      // RECOGNISED here so a leftover INFERENCE_MODE=brain (the VPS .env carried one) resolves to
-      // "direct" loudly rather than being silently treated as an unknown string. bot-core logs the
-      // fallback at boot, so the stale value is visible instead of inferred.
-      const v = (process.env["INFERENCE_MODE"] ?? "hermes").trim().replace(/^=+/, "");
-      return (v === "hermes" ? "hermes" : "direct") as "direct" | "hermes";
-    })(),
+    inferenceMode,
     hermesUrl: process.env["HERMES_API_URL"]?.trim().replace(/^=+/, "") || undefined,
     hermesApiKey: process.env["HERMES_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     // Optional override for the LIVE hermes-model-map.json the model watcher reads. Left unset

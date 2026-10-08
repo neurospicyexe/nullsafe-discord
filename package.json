@@ -4,7 +4,9 @@
   "workspaces": ["packages/*", "bots/*"],
   "scripts": {
     "build": "npm run build -w packages/shared && npm run build --workspaces --if-present",
+    "pretest": "npm run build -w packages/shared",
     "test": "npm test --workspaces --if-present",
+    "pretype-check": "npm run build -w packages/shared",
     "type-check": "npm run type-check --workspaces --if-present"
   },
   "dependencies": {

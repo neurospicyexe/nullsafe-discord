@@ -281,7 +281,7 @@ export interface RunBotConfig {
   botDir: string;
   /** Display name used in slash commands and log lines ("Cypher" | "Drevan" | "Gaia"). */
   companionLabel: string;
-  /** Discord system-prompt prefix (lane rules). Per-bot env var, e.g. DISCORD_COMPANION_PREFIX. */
+  /** Discord system-prompt prefix (lane rules). Per-bot constant: DISCORD_CYPHER_PREFIX / DISCORD_DREVAN_PREFIX / DISCORD_GAIA_PREFIX. */
   discordPrefix: string;
   companionId: CompanionId;
   contextWindowSize: number;
@@ -468,6 +468,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // null when neither key is configured; both judges then fall back to adapterRef.current.
   const directKeys = { deepinfra: env.deepinfraApiKey, deepseek: env.deepseekApiKey };
   const directAdapter = createDirectAdapter(directKeys);
+  // P3-15 (2026-10-08): DEEPSEEK_API_KEY is optional in hermes mode (direct DeepSeek is the ~$10
+  // emergency lane). Say once at boot when that lane is unarmed so its absence is a visible choice.
+  if (!env.deepseekApiKey) {
+    console.warn(`[${companionId}] DEEPSEEK_API_KEY unset: the direct-DeepSeek emergency lane is unarmed (direct chain: ${directChainNames(directKeys).join(" -> ") || "none"})`);
+  }
   // The label names the chain that was BUILT (directChainNames reads the same resolver), never a
   // hard-coded "deepinfra-first": that string stayed true-looking for 12h on 2026-09-11 while the
   // chain was DeepSeek-direct-only and every judge call 402'd.
@@ -1059,14 +1064,45 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     });
   }
 
+  // Shutdown budget (P3-14, 2026-10-08). pm2 sends SIGINT, waits kill_timeout (8000 in
+  // ecosystem.config.js) and SIGKILLs. Every await below is bounded so the sum stays under it:
+  // closure flush 1.5s + session close 5s + subscriber quit 1s = 7.5s worst case. Before this the
+  // flush was UNBOUNDED -- closeAll() fires one distillSessionOnInactive (a model call) per open
+  // session window and the handler awaited them all -- so a bot restarted mid-session blew the
+  // old 5000 and was SIGKILLed with its Halseth session never closed. Cypher alone showed it
+  // because he is the one with a window open when Raziel restarts from a work session; the
+  // stop paths of the three bots are identical. The backstop timer exits regardless.
+  const SHUTDOWN_FLUSH_MS = 1500;
+  const SHUTDOWN_SESSION_CLOSE_MS = 5000;
+  const SHUTDOWN_SUBS_MS = 1000;
+  const SHUTDOWN_BACKSTOP_MS = 7800;
+  function bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out (${ms}ms)`)), ms).unref()),
+    ]);
+  }
+
+  let shuttingDown = false;
   async function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`[${companionId}] shutting down...`);
+    setTimeout(() => {
+      console.warn(`[${companionId}] shutdown backstop hit after ${SHUTDOWN_BACKSTOP_MS}ms; exiting`);
+      process.exit(0);
+    }, SHUTDOWN_BACKSTOP_MS).unref();
     autonomous.stop();
     if (stopMedReminder) stopMedReminder();
     sessionWindows.closeAll();
     if (pendingClosures.size > 0) {
-      console.log(`[${companionId}] flushing ${pendingClosures.size} active channel(s)...`);
-      await Promise.allSettled([...pendingClosures]);
+      const n = pendingClosures.size;
+      console.log(`[${companionId}] flushing ${n} active channel(s)...`);
+      try {
+        await bounded(Promise.allSettled([...pendingClosures]), SHUTDOWN_FLUSH_MS, "closure flush");
+      } catch {
+        console.warn(`[${companionId}] closure flush: ${pendingClosures.size}/${n} still pending after ${SHUTDOWN_FLUSH_MS}ms; continuing`);
+      }
     }
     // Close the Halseth session before the write queue stops. An unclosed session freezes the
     // boot narrative and the SOMA close ritual; a machine spine is the floor, not the ceiling.
@@ -1085,7 +1121,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
             // received a stop signal" -- a pm2 reload presented as the last thing that happened.
             closeKind: "shutdown",
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("session close timed out (5s)")), 5000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`session close timed out (${SHUTDOWN_SESSION_CLOSE_MS}ms)`)), SHUTDOWN_SESSION_CLOSE_MS).unref()),
         ]);
         console.log(`[${companionId}] session ${bootCtx.sessionId} closed at shutdown`);
       } catch (e) {
@@ -1095,7 +1131,10 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     writeQueue.stop();
     if (presenceInterval) clearInterval(presenceInterval);
     clearInterval(dayDistillInterval);
-    if (cleanupEventSubs) await cleanupEventSubs();
+    if (cleanupEventSubs) {
+      try { await bounded(cleanupEventSubs(), SHUTDOWN_SUBS_MS, "event subscriber quit"); }
+      catch (e) { console.warn(`[${companionId}] ${e instanceof Error ? e.message : String(e)}; continuing`); }
+    }
     if (stopPassListener) stopPassListener();
     client.destroy();
     process.exit(0);

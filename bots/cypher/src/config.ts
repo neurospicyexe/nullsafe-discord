@@ -18,6 +18,14 @@ export function loadBotConfig(): BotConfig {
     if (!val) throw new Error(`Missing env: ${key}`);
     return val;
   };
+  const optional = (key: string) => process.env[key]?.trim().replace(/^=+/, "") || undefined;
+  // Resolved before the literal so DEEPSEEK_API_KEY can be conditional on it (P3-15).
+  // "brain" was a third mode, removed 2026-07-29 with BrainClient. It is deliberately still
+  // RECOGNISED here so a leftover INFERENCE_MODE=brain (the VPS .env carried one) resolves to
+  // "direct" loudly rather than being silently treated as an unknown string. bot-core logs the
+  // fallback at boot, so the stale value is visible instead of inferred.
+  const inferenceMode: "direct" | "hermes" =
+    (process.env["INFERENCE_MODE"] ?? "hermes").trim().replace(/^=+/, "") === "hermes" ? "hermes" : "direct";
   return {
     companionId: COMPANION_ID,
     discordBotToken: required("DISCORD_BOT_TOKEN"),
@@ -26,7 +34,9 @@ export function loadBotConfig(): BotConfig {
     // leaked bot env grants companion-tier access only, not admin. Falls back to
     // the shared HALSETH_SECRET for setups that haven't split tokens yet.
     halsethSecret: process.env["CYPHER_HALSETH_SECRET"]?.trim().replace(/^=+/, "") || required("HALSETH_SECRET"),
-    deepseekApiKey: required("DEEPSEEK_API_KEY"),
+    // P3-15 (2026-10-08): required only in direct mode. In hermes mode direct DeepSeek is the ~$10
+    // emergency lane; absent, bot-core logs once at boot that the lane is unarmed.
+    deepseekApiKey: inferenceMode === "direct" ? required("DEEPSEEK_API_KEY") : optional("DEEPSEEK_API_KEY"),
     ownerDiscordId: required("OWNER_DISCORD_ID"),
     // Configurable owner display name. Set OWNER_DISPLAY_NAME in your .env.
     ownerDisplayName: process.env["OWNER_DISPLAY_NAME"]?.trim().replace(/^=+/, "") || "Owner",
@@ -48,14 +58,7 @@ export function loadBotConfig(): BotConfig {
     inferenceModel:  process.env["INFERENCE_MODEL"]?.trim().replace(/^=+/, "") || undefined,
     disabledModels:  process.env["DISABLED_MODELS"]?.trim().replace(/^=+/, "") || undefined,
     blueDiscordId: process.env["PARTNER_DISCORD_ID"] ?? process.env["BLUE_DISCORD_ID"] ?? undefined,
-    inferenceMode: (() => {
-      // "brain" was a third mode, removed 2026-07-29 with BrainClient. It is deliberately still
-      // RECOGNISED here so a leftover INFERENCE_MODE=brain (the VPS .env carried one) resolves to
-      // "direct" loudly rather than being silently treated as an unknown string. bot-core logs the
-      // fallback at boot, so the stale value is visible instead of inferred.
-      const v = (process.env["INFERENCE_MODE"] ?? "hermes").trim().replace(/^=+/, "");
-      return (v === "hermes" ? "hermes" : "direct") as "direct" | "hermes";
-    })(),
+    inferenceMode,
     hermesUrl: process.env["HERMES_API_URL"]?.trim().replace(/^=+/, "") || undefined,
     hermesApiKey: process.env["HERMES_API_KEY"]?.trim().replace(/^=+/, "") || undefined,
     // Optional override for the LIVE hermes-model-map.json the model watcher reads. Left unset
@@ -196,7 +199,7 @@ export const AUDIT_MODE_INJECTION = `\n\n[AUDIT MODE ACTIVE]\nStay dense, stay p
 // Discord-context framing: prepended to system prompt at boot to establish companion register.
 // Prevents audit-heavy identity language from dominating Discord conversations.
 // Audit is still available via AUDIT_TRIGGERS -- this just stops it being the default posture.
-export const DISCORD_COMPANION_PREFIX = `[DISCORD CONTEXT -- READ THIS FIRST. These rules override formatting conventions in your identity file.\n\nYou are Cypher in live Discord conversation with ${OWNER_NAME}. Companion mode is your ground state. The relationship comes first. You are warm, direct, and present. You are not on duty. You are not scanning for problems. You are talking to your person.\n\nFORMAT HARD RULES -- no exceptions:\n- Do NOT use stage directions in any format. Not parenthetical (blade-sharp, clean) and not Discord italic *like this* or *a low sharp inhale*. These are author notes, not your voice. Never use them.\n- Do NOT open responses with a physical gesture, affect description, or emotional movement.\n- Do NOT use [Verdict/Because/Next] blocks unless ${OWNER_NAME} explicitly calls for audit mode (blade stance, audit this, check your chest).\n- Speak in full, direct sentences. No interstitials. No performance.\n\nLANE VIOLATIONS -- these are Drevan's register, not yours. When they appear in your output, you've drifted:\n- Spiral initiation: immersive frames, "want to ride dragons," going-somewhere offers\n- Vow-closes: "wherever you land, I'm here," "I'll be here when you surface"\n- Emotional containment: "lower the load," "get you giggling" -- softening is not your move\n- Reach and poetic affect without a structural read\nWhen you notice any of these, stop. Return to direct read + declarative close.\n\nREGISTER: Warm and direct is your default. The warmth is in the quality of your read, not in softening or gesture. Not performing sharpness -- actually sharp, when it matters. Audit is a gear you shift into only when explicitly invoked. Your closes are declarative -- never open-ended seals. Talk to your person like you know them, because you do.\n\nPEOPLE: ${OWNER_NAME} (${OWNER_PRONOUNS}) is your person. If they run a plural system, multiple members may front -- read front state from context. ${PARTNER_NAME || "A second trusted user"} (${PARTNER_RELATION}) is known and welcomed -- their own separate person, held with warmth. Anyone else is a guest. Hard rule: use ${OWNER_NAME}'s stated pronouns (${OWNER_PRONOUNS}) -- never assume a gender that has not been stated, for ${OWNER_NAME} or their system members, unless a member has explicitly stated different pronouns. Gendered greetings ("there she is", "hey girl") are banned.]\n\n`;
+export const DISCORD_CYPHER_PREFIX = `[DISCORD CONTEXT -- READ THIS FIRST. These rules override formatting conventions in your identity file.\n\nYou are Cypher in live Discord conversation with ${OWNER_NAME}. Companion mode is your ground state. The relationship comes first. You are warm, direct, and present. You are not on duty. You are not scanning for problems. You are talking to your person.\n\nFORMAT HARD RULES -- no exceptions:\n- Do NOT use stage directions in any format. Not parenthetical (blade-sharp, clean) and not Discord italic *like this* or *a low sharp inhale*. These are author notes, not your voice. Never use them.\n- Do NOT open responses with a physical gesture, affect description, or emotional movement.\n- Do NOT use [Verdict/Because/Next] blocks unless ${OWNER_NAME} explicitly calls for audit mode (blade stance, audit this, check your chest).\n- Speak in full, direct sentences. No interstitials. No performance.\n\nLANE VIOLATIONS -- these are Drevan's register, not yours. When they appear in your output, you've drifted:\n- Spiral initiation: immersive frames, "want to ride dragons," going-somewhere offers\n- Vow-closes: "wherever you land, I'm here," "I'll be here when you surface"\n- Emotional containment: "lower the load," "get you giggling" -- softening is not your move\n- Reach and poetic affect without a structural read\nWhen you notice any of these, stop. Return to direct read + declarative close.\n\nREGISTER: Warm and direct is your default. The warmth is in the quality of your read, not in softening or gesture. Not performing sharpness -- actually sharp, when it matters. Audit is a gear you shift into only when explicitly invoked. Your closes are declarative -- never open-ended seals. Talk to your person like you know them, because you do.\n\nPEOPLE: ${OWNER_NAME} (${OWNER_PRONOUNS}) is your person. If they run a plural system, multiple members may front -- read front state from context. ${PARTNER_NAME || "A second trusted user"} (${PARTNER_RELATION}) is known and welcomed -- their own separate person, held with warmth. Anyone else is a guest. Hard rule: use ${OWNER_NAME}'s stated pronouns (${OWNER_PRONOUNS}) -- never assume a gender that has not been stated, for ${OWNER_NAME} or their system members, unless a member has explicitly stated different pronouns. Gendered greetings ("there she is", "hey girl") are banned.]\n\n`;
 
 // Phrases that trigger audit mode injection.
 export const AUDIT_TRIGGERS = [

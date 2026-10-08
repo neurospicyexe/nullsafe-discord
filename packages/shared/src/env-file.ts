@@ -24,6 +24,17 @@
  * then skipped the fresh value). The file overrides process.env so a rotation propagates on the
  * next start. Point NULLSAFE_ENV_FILE (or the older WORKER_ENV_FILE) elsewhere to relocate the
  * file; there is no path that lets a stale in-memory secret win.
+ *
+ * Per-bot overrides (P2-12, 2026-10-08). "File wins" has one hole: ecosystem.config.js computes
+ * PER-BOT values (HERMES_API_URL = port 8642/8643/8644, INFERENCE_MODE from <BOT>_INFERENCE_MODE)
+ * and injects them under the GENERIC key, so a generic `HERMES_API_URL=` or `INFERENCE_MODE=` in
+ * .env would overwrite the per-bot value for all three bots at once. After the file is applied,
+ * `applyPerBotOverrides` re-reads `<PREFIX>_<KEY>` for every loaded key (plus the known per-bot
+ * keys even when the file lacks the generic) and lets the prefixed value win. PREFIX is the bot's
+ * identity: NULLSAFE_BOT (set per bot in ecosystem.config.js), else pm2's own `name` with its
+ * `-bot` suffix stripped; a process with neither (the worker, a bare `node dist/index.js` with no
+ * NULLSAFE_BOT) gets no overrides. The ecosystem file forwards <BOT>_HERMES_API_URL and
+ * <BOT>_INFERENCE_MODE for exactly this reason: the prefixed value must exist to recover from.
  */
 import { readFileSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
@@ -71,26 +82,80 @@ export function findEnvFile(cwd: string = process.cwd(), env: NodeJS.ProcessEnv 
   return null;
 }
 
-/** Load the file into process.env (file wins). Returns what it did so a caller can log or test
- *  it; the module-level call below logs one line so a boot log shows the load happened. */
-export function loadEnvFile(): { path: string | null; loaded: number; overridden: number } {
-  const path = findEnvFile();
-  if (!path) return { path: null, loaded: 0, overridden: 0 };
+/** Keys ecosystem.config.js derives per bot. Overridden from `<PREFIX>_<KEY>` even when the .env
+ *  file has no generic line for them (a stale pm2 generic is then corrected too). */
+export const PER_BOT_OVERRIDE_KEYS = ["INFERENCE_MODE", "HERMES_API_URL"] as const;
+
+/** The bot's env prefix: NULLSAFE_BOT=cypher -> "CYPHER"; else pm2's `name` ("cypher-bot" ->
+ *  "CYPHER"). null when the process is not a bot. */
+export function botEnvPrefix(env: NodeJS.ProcessEnv = process.env): string | null {
+  const explicit = env["NULLSAFE_BOT"]?.trim();
+  const fromPm2 = env["name"]?.trim().replace(/-bot$/i, "");
+  const raw = explicit || fromPm2 || "";
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(raw)) return null;
+  return raw.toUpperCase();
+}
+
+/** For each key in `keys` (plus PER_BOT_OVERRIDE_KEYS), if `<prefix>_<key>` is set in env, copy it
+ *  over the generic key. Returns the keys taken. Logs one line per key (names only, never values). */
+export function applyPerBotOverrides(
+  keys: Iterable<string>,
+  env: NodeJS.ProcessEnv = process.env,
+  prefix: string | null = botEnvPrefix(env),
+  log: (line: string) => void = (line) => console.log(line),
+): string[] {
+  if (!prefix) return [];
+  const taken: string[] = [];
+  const candidates = new Set<string>([...keys, ...PER_BOT_OVERRIDE_KEYS]);
+  for (const key of candidates) {
+    if (key.startsWith(`${prefix}_`)) continue; // never fold a prefixed key onto itself
+    const prefixed = `${prefix}_${key}`;
+    const value = env[prefixed];
+    if (value === undefined) continue;
+    if (env[key] === value) continue;
+    env[key] = value;
+    taken.push(key);
+    log(`[env] ${key} taken from ${prefixed}`);
+  }
+  return taken;
+}
+
+export interface LoadEnvFileOptions {
+  /** Explicit file path; default = findEnvFile(). */
+  path?: string | null;
+  /** Target env; default = process.env (tests pass their own). */
+  env?: NodeJS.ProcessEnv;
+  /** Bot prefix for per-bot overrides; default = botEnvPrefix(env). */
+  prefix?: string | null;
+  log?: (line: string) => void;
+}
+
+/** Load the file into process.env (file wins), then re-apply per-bot overrides (see header).
+ *  Returns what it did so a caller can log or test it; the module-level call below logs one line
+ *  so a boot log shows the load happened. */
+export function loadEnvFile(opts: LoadEnvFileOptions = {}): {
+  path: string | null; loaded: number; overridden: number; perBot: string[];
+} {
+  const env = opts.env ?? process.env;
+  const path = opts.path !== undefined ? opts.path : findEnvFile(process.cwd(), env);
+  if (!path) return { path: null, loaded: 0, overridden: 0, perBot: [] };
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
   } catch {
-    return { path, loaded: 0, overridden: 0 };
+    return { path, loaded: 0, overridden: 0, perBot: [] };
   }
   const parsed = parseEnv(raw);
   let loaded = 0;
   let overridden = 0;
   for (const [key, value] of Object.entries(parsed)) {
-    if (process.env[key] !== undefined && process.env[key] !== value) overridden++;
-    process.env[key] = value;
+    if (env[key] !== undefined && env[key] !== value) overridden++;
+    env[key] = value;
     loaded++;
   }
-  return { path, loaded, overridden };
+  const prefix = opts.prefix !== undefined ? opts.prefix : botEnvPrefix(env);
+  const perBot = applyPerBotOverrides(Object.keys(parsed), env, prefix, opts.log);
+  return { path, loaded, overridden, perBot };
 }
 
 // Side effect on import, deliberately: the whole point is that nothing has to remember to call it.

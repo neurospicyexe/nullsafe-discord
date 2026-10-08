@@ -59,7 +59,9 @@ export interface BotConfig {
   discordBotToken: string;
   halsethUrl: string;
   halsethSecret: string;
-  deepseekApiKey: string;
+  /** Optional since 2026-10-08 (P3-15): required only when inferenceMode === "direct"; in hermes
+   *  mode direct DeepSeek is the emergency lane and bot-core logs once when it is unarmed. */
+  deepseekApiKey?: string;
   ownerDiscordId: string;
   /** Display name for the owner in author labels and PluralKit fallbacks.
    * Defaults to "Raziel" when OWNER_DISPLAY_NAME env var is unset (preserves

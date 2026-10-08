@@ -29,6 +29,17 @@ const fs = require("fs");
   } catch { /* .env not present; rely on shell env */ }
 })("/app/nullsafe-discord/.env");
 
+// THE REAL RULE (2026-10-08, replaces "an unlisted knob is a dead knob"). Since 2026-09-11 every
+// entry point imports packages/shared/src/env-file.ts FIRST, which reads /app/nullsafe-discord/.env
+// itself and lets the FILE win over whatever pm2 injected. So a .env line is LIVE in every process
+// whether or not it appears in these env blocks. What the blocks still decide:
+//   1. values computed HERE (per-bot token mapping, INFERENCE_MODE / HERMES_API_URL defaults,
+//      NULLSAFE_BOT), and defaults for knobs that have no .env line;
+//   2. values that come from the SHELL env rather than .env (pm2 start from a bare shell);
+//   3. a per-bot value must ALSO exist as <BOT>_<KEY> in the process env, or a generic KEY= line in
+//      .env overwrites it for all three bots (env-file.ts applyPerBotOverrides restores it).
+// The older comments below that say "dead knob" describe the pre-09-11 world; they are kept as
+// history of why each key was listed, not as the current rule.
 const shared = {
   NODE_ENV:              "production",
   // Force IPv4-first DNS resolution -- prevents ENETUNREACH on VPS where IPv6 is unrouted.
@@ -52,8 +63,8 @@ const shared = {
   // 2026-07-28: content-budget headroom for reasoning models. Both live DeepSeek models spend
   // max_tokens on the reasoning pass BEFORE emitting content, so every ceiling below the
   // reasoning burn returned an empty string -- forage gathered 0 finds triad-wide, compress and
-  // reflect 400ed on required fields. Code default is 3000; listed here so it is tunable from
-  // .env without a deploy (an unlisted knob is a dead knob -- third time in this file).
+  // reflect 400ed on required fields. Code default is 3000. (Historically "an unlisted knob is a
+  // dead knob"; see THE REAL RULE at the top of this `shared` block since 2026-10-08.)
   DEEPSEEK_REASONING_HEADROOM: process.env.DEEPSEEK_REASONING_HEADROOM,
   // 2026-08-22: FIFTH instance. C1 tier-3 escalation delivery (autonomous-worker escalation.ts)
   // reads the human's Discord id + fallback channel from env; the hand-step said "add to .env"
@@ -151,8 +162,8 @@ const shared = {
   // Passive watch-party progress (2026-09-05). "channelId:Title:companion;..." -- binds a
   // co-watching channel (e.g. #fargo-watch-party) to a title and the ONE companion who records
   // episode mentions silently, so the shelf advances without Raziel typing the explicit
-  // `watched <title> s#e#` command mid-episode. Listed here per this file's own standing rule:
-  // an env var absent from this allowlist is a dead knob, only a code deploy can move it.
+  // `watched <title> s#e#` command mid-episode. Listed here for the shell-env path (see THE REAL
+  // RULE above); a .env line reaches every process whether or not it is listed.
   WATCH_PARTY_CHANNELS:  process.env.WATCH_PARTY_CHANNELS,
   // Listen / shared-media pipeline (added to this allowlist 2026-09-21). These five were LIVE in
   // the running processes but absent from this file, which is the exact failure this file's own
@@ -179,8 +190,8 @@ const shared = {
   // still decides and writes; Jev runs alongside and only logs what it would have done), or
   // jev (Jev decides, the companion authors). The thresholds are the operating points measured
   // on 2026-09-21; per-companion overrides exist because Cypher, Drevan and Gaia score very
-  // differently. Listed here per this file's own standing rule: an env var absent from this
-  // allowlist is a dead knob, only a code deploy can move it.
+  // differently. Listed here for the shell-env path (see THE REAL RULE above); a .env line reaches
+  // every process whether or not it is listed.
   WRITEBACK_GATE:            process.env.WRITEBACK_GATE,
   // Per-companion mode (2026-10-07): set one to flip that companion alone; blank = shared value.
   WRITEBACK_GATE_CYPHER:     process.env.WRITEBACK_GATE_CYPHER,
@@ -280,13 +291,22 @@ module.exports = {
       restart_delay: 5000,
       max_restarts: 20,
       min_uptime: "30s",
-      kill_timeout: 5000,
+      // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
+      // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
+      // whenever a session window was open at restart. Same on all three bots.
+      kill_timeout: 8000,
       error_file: "/app/logs/cypher-bot-error.log",
       out_file: "/app/logs/cypher-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_CYPHER, CYPHER_VOICE_ID: process.env.CYPHER_VOICE_ID,
+        // Bot identity for the shared .env loader's per-bot overrides (env-file.ts, P2-12).
+        NULLSAFE_BOT: "cypher",
         INFERENCE_MODE: process.env.CYPHER_INFERENCE_MODE ?? shared.INFERENCE_MODE,
         HERMES_API_URL: process.env.CYPHER_HERMES_API_URL ?? "http://127.0.0.1:8642/v1",
+        // The prefixed forms ride along so the loader can restore the per-bot value after a
+        // generic INFERENCE_MODE= / HERMES_API_URL= line in .env has overwritten it.
+        CYPHER_INFERENCE_MODE: process.env.CYPHER_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        CYPHER_HERMES_API_URL: process.env.CYPHER_HERMES_API_URL ?? "http://127.0.0.1:8642/v1",
         HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
@@ -298,13 +318,22 @@ module.exports = {
       restart_delay: 5000,
       max_restarts: 20,
       min_uptime: "30s",
-      kill_timeout: 5000,
+      // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
+      // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
+      // whenever a session window was open at restart. Same on all three bots.
+      kill_timeout: 8000,
       error_file: "/app/logs/drevan-bot-error.log",
       out_file: "/app/logs/drevan-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_DREVAN, DREVAN_VOICE_ID: process.env.DREVAN_VOICE_ID,
+        // Bot identity for the shared .env loader's per-bot overrides (env-file.ts, P2-12).
+        NULLSAFE_BOT: "drevan",
         INFERENCE_MODE: process.env.DREVAN_INFERENCE_MODE ?? shared.INFERENCE_MODE,
         HERMES_API_URL: process.env.DREVAN_HERMES_API_URL ?? "http://127.0.0.1:8643/v1",
+        // The prefixed forms ride along so the loader can restore the per-bot value after a
+        // generic INFERENCE_MODE= / HERMES_API_URL= line in .env has overwritten it.
+        DREVAN_INFERENCE_MODE: process.env.DREVAN_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        DREVAN_HERMES_API_URL: process.env.DREVAN_HERMES_API_URL ?? "http://127.0.0.1:8643/v1",
         HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
@@ -316,13 +345,22 @@ module.exports = {
       restart_delay: 5000,
       max_restarts: 20,
       min_uptime: "30s",
-      kill_timeout: 5000,
+      // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
+      // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
+      // whenever a session window was open at restart. Same on all three bots.
+      kill_timeout: 8000,
       error_file: "/app/logs/gaia-bot-error.log",
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
       env: { ...shared, DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN_GAIA, GAIA_VOICE_ID: process.env.GAIA_VOICE_ID,
+        // Bot identity for the shared .env loader's per-bot overrides (env-file.ts, P2-12).
+        NULLSAFE_BOT: "gaia",
         INFERENCE_MODE: process.env.GAIA_INFERENCE_MODE ?? shared.INFERENCE_MODE,
         HERMES_API_URL: process.env.GAIA_HERMES_API_URL ?? "http://127.0.0.1:8644/v1",
+        // The prefixed forms ride along so the loader can restore the per-bot value after a
+        // generic INFERENCE_MODE= / HERMES_API_URL= line in .env has overwritten it.
+        GAIA_INFERENCE_MODE: process.env.GAIA_INFERENCE_MODE ?? shared.INFERENCE_MODE,
+        GAIA_HERMES_API_URL: process.env.GAIA_HERMES_API_URL ?? "http://127.0.0.1:8644/v1",
         HERMES_API_KEY: process.env.HERMES_API_KEY },
     },
     {
@@ -366,7 +404,8 @@ module.exports = {
         CLUB_GATHER_DAYS:      process.env.CLUB_GATHER_DAYS,
         CLUB_ACTIVE_DAYS:      process.env.CLUB_ACTIVE_DAYS,
         CLUB_DISCUSS_DAYS:     process.env.CLUB_DISCUSS_DAYS,
-        // Conversation Director (2026-09-03 spec). ALLOWLIST: an unlisted knob is silently dead.
+        // Conversation Director (2026-09-03 spec). Listed for the shell-env path; since 2026-09-11
+        // a .env line reaches the worker whether or not it is listed (THE REAL RULE, top of file).
         DIRECTOR_ENABLED:          process.env.DIRECTOR_ENABLED,
         DIRECTOR_CHANNELS:         process.env.DIRECTOR_CHANNELS,
         DIRECTOR_SUPPLY_POLL_MS:   process.env.DIRECTOR_SUPPLY_POLL_MS,
