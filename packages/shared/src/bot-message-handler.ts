@@ -2288,7 +2288,7 @@ ${widened}`;
     // corrective rides the next turn only on a hit. Same window as the gates above; logged both
     // ways so "is it running?" has an answer (`grep -hE "rule check (ok|hit)"`).
     const ruleCheck = ruleCheckAppend(COMPANION_ID as VoiceCompanionId, selfTurns);
-    const ruleCounts = `em_dash=${ruleCheck.result.emDash} someone=${ruleCheck.result.someone} she_her=${ruleCheck.result.sheHer} turns=${ruleCheck.result.turns}`;
+    const ruleCounts = `em_dash=${ruleCheck.result.emDash} someone=${ruleCheck.result.someone} she_her=${ruleCheck.result.sheHer} own_name=${ruleCheck.result.ownName} turns=${ruleCheck.result.turns}`;
     if (ruleCheck.text) {
       contextPrompt += ruleCheck.text;
       console.warn(`[${COMPANION_ID}] rule check hit (${ruleCounts}); injecting voice check`);
@@ -2770,7 +2770,7 @@ ${widened}`;
     }
 
     const hermesOut = inferenceMode === "hermes"
-      ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null)
+      ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID))
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 

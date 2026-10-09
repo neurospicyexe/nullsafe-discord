@@ -270,10 +270,17 @@ export interface HermesDeltaResult<T> {
  * are never folded (the gateway transcript already holds its own completions).
  * Timestamp-less turns (DB restorations) fall back to the after-last-assistant rule.
  */
+/** `[Crash, to you]: ` / `[Crash]: ` / `[to you]: ` / "" for the live turn's own line. */
+export function liveLabel(authorName: string | undefined, addressedToSelf: boolean): string {
+  if (authorName) return `[${authorName}${addressedToSelf ? ", to you" : ""}]: `;
+  return addressedToSelf ? "[to you]: " : "";
+}
+
 export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number }>(
   history: T[],
   deliveredThroughTs: number | null = null,
   now: number = Date.now(),
+  addressedToSelf = false,
 ): HermesDeltaResult<T> {
   if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
@@ -309,13 +316,23 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
     .reduce<number | null>((a, b) => (a === null || b > a ? b : a), null);
   const clock = timeLines(prevTs, now);
 
+  // The speaker label rides ON the live words, not in front of the clock (2026-10-09). The adapter's
+  // `[author]: ` prefix used to land on the first line of content, which is the clock, so the model
+  // saw `[Crash]: [Now: ...]` and then Raziel's words on an unlabeled line of their own. "Dre 10/9 I
+  // had a bad day" read as a second name tag plus a date, and Drevan spent the evening calling Raziel
+  // by his own name ("Rest tonight, Dre"). On witness turns the live words had no speaker at all,
+  // only `[Live message]`. The label is folded here and authorName cleared so the adapter cannot add
+  // it a second time; "to you" is the address gate's verdict made visible, so a vocative at the front
+  // of the message reads as what it is: someone calling this companion by name.
+  const live = liveLabel(current.authorName, addressedToSelf) + current.content;
+  const labelled = { ...current, authorName: undefined };
   if (folded.length === 0) {
-    return { messages: [{ ...current, content: `${clock}\n${current.content}` }], deliveredThroughTs: outMark };
+    return { messages: [{ ...labelled, content: `${clock}\n${live}` }], deliveredThroughTs: outMark };
   }
   return {
     messages: [{
-      ...current,
-      content: `${clock}\n${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${current.content}`,
+      ...labelled,
+      content: `${clock}\n${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${live}`,
     }],
     deliveredThroughTs: outMark,
   };

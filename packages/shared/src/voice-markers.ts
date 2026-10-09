@@ -257,6 +257,8 @@ export interface RuleBreaks {
   someone: number;
   /** Sentences that refer to Raziel / Crash / the Architect and then use she/her. */
   sheHer: number;
+  /** The companion calling someone else by its OWN name or nickname ("Rest tonight, Dre"). */
+  ownName: number;
   /** Self turns inspected (0 = nothing to judge, the caller logs nothing). */
   turns: number;
 }
@@ -319,9 +321,38 @@ function countSheHer(text: string): number {
   return n;
 }
 
-/** Count the three rule breaks in one reply. Pure; no state. */
+// The companion's own names, capitalised as written in a reply. Kept beside COMPANION_ALIASES
+// (channel-config.ts: drev, dre / cy), which is what Raziel types to call them.
+const OWN_NAMES: Record<VoiceCompanionId, string[]> = {
+  drevan: ["Drevan", "Drev", "Dre"],
+  cypher: ["Cypher", "Cy"],
+  gaia: ["Gaia"],
+};
+
+// Own name used as a VOCATIVE: someone else addressed by it (2026-10-09). Raziel opened two messages
+// with "Dre", the envelope lost the speaker label, and Drevan answered "Rest tonight, Dre" and then
+// "You're Dre, I'm Dre too" when corrected. A companion never needs to call anyone in the room by its
+// own name, so a comma-set vocative ("..., Dre." / "..., Dre" then a dash), a line-opening one
+// ("Dre, ..."), or "you're Dre" is the break. "you called me Dre" and "Dre's" do not match.
+function countOwnNameVocative(text: string, companionId: VoiceCompanionId): number {
+  const alt = OWN_NAMES[companionId].join("|");
+  const closes = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013]|$))";
+  const patterns = [
+    new RegExp(`,\\s*(?:${alt})${closes}`, "gm"),
+    new RegExp(`^\\s*(?:${alt})\\s*[,!]`, "gm"),
+    new RegExp(`\\byou(?:'re|\\u2019re| are)\\s+(?:${alt})\\b`, "gi"),
+  ];
+  return patterns.reduce((n, re) => n + (text.match(re)?.length ?? 0), 0);
+}
+
+/** Count the rule breaks in one reply. Pure; no state. */
 export function detectRuleBreaks(companionId: VoiceCompanionId, text: string): Omit<RuleBreaks, "turns"> {
-  return { emDash: countDashes(text), someone: countSomeone(text, companionId), sheHer: countSheHer(text) };
+  return {
+    emDash: countDashes(text),
+    someone: countSomeone(text, companionId),
+    sheHer: countSheHer(text),
+    ownName: countOwnNameVocative(text, companionId),
+  };
 }
 
 // Correctives. Each is far under the tail bytes it replaces, and none prints a dash character (the
@@ -333,12 +364,19 @@ export const RULE_CHECK_PRESENCE =
 export const RULE_CHECK_PRONOUNS =
   `\n\n[Voice check: pronouns] Your last reply called Raziel "she". Raziel is they/them only, never she/her or he/him.`;
 
+/** Names the companion's own names outright, so the corrective cannot be misread as about someone else. */
+export function ruleCheckOwnName(companionId: VoiceCompanionId): string {
+  const names = OWN_NAMES[companionId].map(n => `"${n}"`).join(", ");
+  return `\n\n[Voice check: names] Your last reply called someone else by your own name. ${names} ${OWN_NAMES[companionId].length > 1 ? "are" : "is"} YOUR name. When a message opens with it, someone is calling you. Raziel is Raziel, or the name the front signs with (Crash on this account).`;
+}
+
 /** Correctives for the hits in `r`, in a fixed order; empty when clean. */
-export function ruleCheckBlock(r: Omit<RuleBreaks, "turns">): string {
+export function ruleCheckBlock(r: Omit<RuleBreaks, "turns" | "ownName"> & { ownName?: number }, companionId?: VoiceCompanionId): string {
   return (
     (r.emDash > 0 ? RULE_CHECK_EM_DASH : "") +
     (r.someone > 0 ? RULE_CHECK_PRESENCE : "") +
-    (r.sheHer > 0 ? RULE_CHECK_PRONOUNS : "")
+    (r.sheHer > 0 ? RULE_CHECK_PRONOUNS : "") +
+    ((r.ownName ?? 0) > 0 && companionId ? ruleCheckOwnName(companionId) : "")
   );
 }
 
@@ -355,12 +393,13 @@ export function ruleCheckAppend(
   turns = RULE_CHECK_TURNS,
 ): { text: string; result: RuleBreaks } {
   const judged = selfTurns.slice(-turns);
-  const sum = { emDash: 0, someone: 0, sheHer: 0 };
+  const sum = { emDash: 0, someone: 0, sheHer: 0, ownName: 0 };
   for (const t of judged) {
     const r = detectRuleBreaks(companionId, t);
     sum.emDash += r.emDash;
     sum.someone += r.someone;
     sum.sheHer += r.sheHer;
+    sum.ownName += r.ownName;
   }
-  return { text: ruleCheckBlock(sum), result: { ...sum, turns: judged.length } };
+  return { text: ruleCheckBlock(sum, companionId), result: { ...sum, turns: judged.length } };
 }

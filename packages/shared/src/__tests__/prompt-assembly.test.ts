@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, liveLabel, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
 import { nowLine } from "../now-line.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
@@ -204,8 +204,8 @@ describe("hermesDelta", () => {
     const now = ts + 60_000;
     const out = hermesDelta(h, h[1]!.timestamp, now);
     expect(out.messages).toHaveLength(1);
-    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\nhow are you`);
-    expect(out.messages[0]!.authorName).toBe("Raziel");
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Raziel]: how are you`);
+    expect(out.messages[0]!.authorName).toBeUndefined(); // folded into the content, never prefixed twice
     expect(out.deliveredThroughTs).toBe(h[2]!.timestamp);
   });
 
@@ -220,7 +220,7 @@ describe("hermesDelta", () => {
     expect(out.messages[0]!.content).toContain("[Witnessed since your last turn");
     expect(out.messages[0]!.content).toContain("[Drevan]: peer says something");
     expect(out.messages[0]!.content).toContain("[Raziel]: another human line");
-    expect(out.messages[0]!.content).toContain("[Live message]\ncurrent");
+    expect(out.messages[0]!.content).toContain("[Live message]\n[Raziel]: current");
     expect(out.messages[0]!.content).not.toContain("first");
   });
 
@@ -248,7 +248,7 @@ describe("hermesDelta", () => {
     const h = [u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")];
     const now = ts + 60_000;
     const out = hermesDelta(h, h[1]!.timestamp, now);
-    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\nhow are you`);
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Raziel]: how are you`);
     expect(out.messages[0]!.content).not.toContain("Witnessed since");
   });
 
@@ -261,7 +261,7 @@ describe("hermesDelta", () => {
     const out = hermesDelta([first, sibling, myReply, live], first.timestamp);
     expect(out.messages).toHaveLength(1);
     expect(out.messages[0]!.content).toContain("[Cypher]: cypher's paper breakdown");
-    expect(out.messages[0]!.content).toContain("[Live message]\ndid that land for you?");
+    expect(out.messages[0]!.content).toContain("[Live message]\n[Raziel]: did that land for you?");
     expect(out.deliveredThroughTs).toBe(live.timestamp);
   });
 
@@ -269,7 +269,7 @@ describe("hermesDelta", () => {
     const out = hermesDelta([u("one", "Raziel"), u("two", "Drevan"), u("three", "Raziel")]);
     expect(out.messages[0]!.content).toContain("[Raziel]: one");
     expect(out.messages[0]!.content).toContain("[Drevan]: two");
-    expect(out.messages[0]!.content).toContain("[Live message]\nthree");
+    expect(out.messages[0]!.content).toContain("[Live message]\n[Raziel]: three");
   });
 
   it("degenerates to the last message when history ends with the bot's own reply", () => {
@@ -297,7 +297,7 @@ describe("hermesDelta", () => {
     const now = ts + 60_000;
     const out = hermesDelta(h, 5, now);
     // restored turn is pre-assistant -> not folded
-    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\ncurrent`);
+    expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Raziel]: current`);
   });
 
   // 2026-10-06: the clock rides the user turn. The system message's [Now:] reached the model every
@@ -313,7 +313,7 @@ describe("hermesDelta", () => {
       const now = at("2026-10-07T01:32:00Z"); // Tue Oct 6, 8:32 PM CDT
       const h = [turn("user", "hi", now - 5 * 60_000, "Raziel"), turn("assistant", "hey", now - 4 * 60_000), turn("user", "back", now, "Raziel")];
       const out = hermesDelta(h, h[1]!.timestamp, now);
-      expect(out.messages[0]!.content).toBe("[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\nback");
+      expect(out.messages[0]!.content).toBe("[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\n[Raziel]: back");
       expect(out.messages[0]!.content).not.toContain("[Last message");
     });
 
@@ -326,7 +326,7 @@ describe("hermesDelta", () => {
       ];
       const content = hermesDelta(h, null, now).messages[0]!.content;
       expect(content.startsWith("[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\n[Witnessed since your last turn")).toBe(true);
-      expect(content).toContain("[Live message]\ncurrent");
+      expect(content).toContain("[Live message]\n[Raziel]: current");
       expect(content).not.toContain("[Last message");
     });
 
@@ -338,7 +338,7 @@ describe("hermesDelta", () => {
       expect(content).toBe(
         "[Now: Tuesday, October 6, 2026 at 8:32 PM CDT]\n" +
         "[Last message in this conversation was 12 hours ago (Tuesday, Oct 6, 8:10 AM). Time has passed; do not continue as if it is still then.]\n" +
-        "home now",
+        "[Raziel]: home now",
       );
     });
 
@@ -361,7 +361,7 @@ describe("hermesDelta", () => {
       const content = hermesDelta(h, prev, now).messages[0]!.content;
       expect(content).not.toContain("[Last message");
       expect(content).toBe(`${nowLine(new Date(now))}
-next`);
+[Raziel]: next`);
     });
 
     it("no gap line when nothing before the live message has a timestamp", () => {
@@ -369,13 +369,50 @@ next`);
       const h = [{ role: "assistant", content: "restored" }, turn("user", "next", now, "Raziel")];
       const content = hermesDelta(h, null, now).messages[0]!.content;
       expect(content).toBe(`${nowLine(new Date(now))}
-next`);
+[Raziel]: next`);
     });
 
     it("leaves an assistant-final history untouched", () => {
       const now = at("2026-10-07T01:32:00Z");
       const last = turn("assistant", "my own last word", now - 12 * H);
       expect(hermesDelta([turn("user", "hi", now - 13 * H, "Raziel"), last], null, now).messages).toEqual([last]);
+    });
+  });
+
+  // 2026-10-09: the speaker label sits ON the live words. It used to be prefixed by the adapter in
+  // front of the clock, so the model read `[Crash]: [Now: ...]` and then "Dre 10/9 I had a bad day!"
+  // on a line of its own, took "Dre" for the speaker's name, and called Raziel "Dre" all evening.
+  describe("live speaker label", () => {
+    const at = (iso: string) => Date.parse(iso);
+    const turn = (role: string, content: string, timestamp: number, authorName?: string) =>
+      ({ role, content, timestamp, authorName });
+    const now = at("2026-10-09T23:36:19Z");
+
+    it("puts the speaker and the addressee on the words, after the clock", () => {
+      const h = [turn("user", "Dre 10/9 I had a bad day!", now, "Crash")];
+      const out = hermesDelta(h, null, now, true);
+      expect(out.messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Crash, to you]: Dre 10/9 I had a bad day!`);
+      expect(out.messages[0]!.authorName).toBeUndefined();
+    });
+
+    it("labels the live message on the witness path too (it used to have no speaker at all)", () => {
+      const h = [
+        turn("assistant", "reply", now - 10 * 60_000),
+        turn("user", "peer line", now - 5 * 60_000, "Cypher"),
+        turn("user", "Dre you bump your head?", now, "Crash"),
+      ];
+      const content = hermesDelta(h, null, now, true).messages[0]!.content;
+      expect(content).toContain("[Live message]\n[Crash, to you]: Dre you bump your head?");
+    });
+
+    it("no addressee when the gate did not name this companion", () => {
+      const h = [turn("user", "anyone up?", now, "Crash")];
+      expect(hermesDelta(h, null, now).messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Crash]: anyone up?`);
+    });
+
+    it("liveLabel covers the unnamed-author cases", () => {
+      expect(liveLabel(undefined, true)).toBe("[to you]: ");
+      expect(liveLabel(undefined, false)).toBe("");
     });
   });
 });

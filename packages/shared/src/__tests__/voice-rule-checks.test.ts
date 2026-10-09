@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import {
-  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock,
+  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock, ruleCheckOwnName,
   RULE_CHECK_EM_DASH, RULE_CHECK_PRESENCE, RULE_CHECK_PRONOUNS,
 } from "../voice-markers.js";
 
@@ -84,7 +84,7 @@ describe("ruleCheckAppend", () => {
   it("injects nothing on a clean reply but still reports it was judged", () => {
     const { text, result } = ruleCheckAppend("drevan", [CLEAN]);
     expect(text).toBe("");
-    expect(result).toEqual({ emDash: 0, someone: 0, sheHer: 0, turns: 1 });
+    expect(result).toEqual({ emDash: 0, someone: 0, sheHer: 0, ownName: 0, turns: 1 });
   });
 
   it("reports turns=0 on an empty window so the caller logs nothing", () => {
@@ -95,7 +95,7 @@ describe("ruleCheckAppend", () => {
     const dirty = `*someone settles in* Raziel, she ${EM} yes.`;
     expect(ruleCheckAppend("drevan", [dirty, CLEAN]).text).toBe("");
     const hit = ruleCheckAppend("drevan", [CLEAN, dirty]);
-    expect(hit.result).toEqual({ emDash: 1, someone: 1, sheHer: 1, turns: 1 });
+    expect(hit.result).toEqual({ emDash: 1, someone: 1, sheHer: 1, ownName: 0, turns: 1 });
     expect(hit.text).toBe(RULE_CHECK_EM_DASH + RULE_CHECK_PRESENCE + RULE_CHECK_PRONOUNS);
   });
 
@@ -103,6 +103,44 @@ describe("ruleCheckAppend", () => {
     expect(ruleCheckAppend("cypher", [`Ship it ${EM} now.`]).text).toBe(RULE_CHECK_EM_DASH);
     expect(ruleCheckAppend("drevan", ["*someone leans in*"]).text).toBe(RULE_CHECK_PRESENCE);
     expect(ruleCheckAppend("gaia", ["Raziel rests; let her sleep."]).text).toBe(RULE_CHECK_PRONOUNS);
+  });
+});
+
+// 2026-10-09, #triad-hangout: Raziel opened with "Dre 10/9 I had a bad day!" and Drevan called
+// Raziel by his own name for the rest of the evening. These are his actual lines.
+describe("own-name vocative", () => {
+  it("catches tonight's lines", () => {
+    expect(detectRuleBreaks("drevan", `Rest tonight, Dre ${EM} tomorrow we watch something.`).ownName).toBe(1);
+    expect(detectRuleBreaks("drevan", "Rest up tonight, Dre. Tomorrow's the good thing.").ownName).toBe(1);
+    expect(detectRuleBreaks("drevan", "You're Dre, I'm Dre too. Whole vibe got real confusing.").ownName).toBe(1);
+    expect(detectRuleBreaks("drevan", "Dre, come sit.").ownName).toBe(1);
+    expect(detectRuleBreaks("cypher", "Noted, Cy.").ownName).toBe(1);
+    expect(detectRuleBreaks("gaia", "Rest, Gaia.").ownName).toBe(1);
+  });
+
+  it("leaves his own name alone when it is not aimed at someone", () => {
+    for (const text of [
+      "You called me Dre and I felt it land.",
+      "That's Dre's couch spot, nobody else's.",
+      "Hey, love. Heard you, bad day.",
+      "Crash, come here.",
+      "Drevan here. I'm in.",
+      "I heard you say Dre, and I came.",
+      "Cypher's read was right, Raziel.",
+    ]) {
+      expect({ text, n: detectRuleBreaks("drevan", text).ownName }).toEqual({ text, n: 0 });
+    }
+    // A sibling's name is not this companion's own name.
+    expect(detectRuleBreaks("cypher", "Rest up, Dre.").ownName).toBe(0);
+  });
+
+  it("injects a corrective that names him outright", () => {
+    const { text, result } = ruleCheckAppend("drevan", ["Rest up tonight, Dre."]);
+    expect(result.ownName).toBe(1);
+    expect(text).toBe(ruleCheckOwnName("drevan"));
+    expect(text).toContain('"Drevan", "Drev", "Dre" are YOUR name');
+    expect(text).not.toContain(EM);
+    expect(ruleCheckOwnName("gaia")).toContain('"Gaia" is YOUR name');
   });
 });
 
