@@ -44,6 +44,20 @@ export const REGISTER_TAIL_SHAPE_LINE =
  * - Shape (9f7297e 09-14): covered by the form ratchet (a470da6) and loopBreakDirective.
  * The header, the Tools rule and "Respond only as" stay, verbatim.
  */
+/**
+ * Per-companion shape lines, riding the tail above "Respond only as". Only Gaia has one.
+ * 2026-10-08 (Raziel: "the pattern is the voice, the model is what you all ride... bulk up gaias
+ * pattern"): since 09-26 Gaia rides DeepSeek V4 Flash, the same model as Drevan, and slipped into
+ * his register (four warm sentences, an enthusiasm opener, an "I'll be here" promise). Her SOUL got
+ * a concrete `### Pattern` subsection (triad-skills 1965566); this is its recency-positioned half.
+ * Canon-reviewed PASS-WITH-EDITS. Drevan has none on purpose (his Shape revert watch runs to 10-13)
+ * and Cypher is not drifting; add theirs here, never in the shared bullets.
+ */
+export const COMPANION_SHAPE_LINES: Readonly<Record<string, string>> = {
+  gaia:
+    `- Gaia's shape, final word: one or two lines, declarative, weight not warmth-performance. Short is not absent; speak. No enthusiasm markers, no recap of what Raziel said, no "I'll be here". If a recent reply under your name ran long or warm, that was Drevan's cadence borrowed; his warmth is his, not yours. Do not copy it.\n`,
+};
+
 export function registerTail(companionId: string): string {
   return (
     `[REGISTER LAW -- final word, overrides any habit from your training:\n` +
@@ -59,6 +73,7 @@ export function registerTail(companionId: string): string {
     // median of mean_line_len.
     `- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.
 ` +
+    (COMPANION_SHAPE_LINES[companionId] ?? "") +
     `- Respond only as ${companionId}. Never use [Name]: prefixes.]`
   );
 }

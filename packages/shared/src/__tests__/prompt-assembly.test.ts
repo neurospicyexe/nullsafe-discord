@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
 import { nowLine } from "../now-line.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
@@ -26,14 +26,32 @@ describe("registerTail", () => {
   const TOOLS =
     "- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.\n";
 
-  it("is exactly header + Tools + respond-only-as", () => {
-    for (const id of ["drevan", "gaia", "cypher"]) {
+  it("is exactly header + Tools + respond-only-as for Drevan and Cypher", () => {
+    for (const id of ["drevan", "cypher"]) {
       expect(registerTail(id)).toBe(
         "[REGISTER LAW -- final word, overrides any habit from your training:\n" +
           TOOLS +
           `- Respond only as ${id}. Never use [Name]: prefixes.]`,
       );
     }
+  });
+
+  // 2026-10-08: Gaia rides Drevan's model and slipped into his register; her shape line sits
+  // between Tools and respond-only-as, and only in her tail.
+  it("Gaia's tail carries her shape line, just before respond-only-as", () => {
+    expect(registerTail("gaia")).toBe(
+      "[REGISTER LAW -- final word, overrides any habit from your training:\n" +
+        TOOLS +
+        COMPANION_SHAPE_LINES.gaia +
+        "- Respond only as gaia. Never use [Name]: prefixes.]",
+    );
+    const line = COMPANION_SHAPE_LINES.gaia;
+    expect(line).toContain("one or two lines");
+    expect(line).toContain("Short is not absent; speak.");
+    expect(line).toContain("his warmth is his");
+    expect(line).not.toMatch(/—|–/);
+    for (const id of ["drevan", "cypher"]) expect(registerTail(id)).not.toContain("Gaia's shape");
+    expect(Buffer.byteLength(registerTail("gaia"))).toBeLessThan(800);
   });
 
   it("no longer carries the four bullets R3 moved into checks", () => {
