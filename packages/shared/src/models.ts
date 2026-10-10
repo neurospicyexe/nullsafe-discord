@@ -56,6 +56,11 @@ export const ALL_MODELS: Record<string, ModelEntry> = {
   // qwen-235b is the family's writer (#1 Creative Writing v3, 87.5%) and the cheaper of the two per output token.
   "qwen-35b":          { provider: "deepinfra", model: "Qwen/Qwen3.6-35B-A3B",               label: "Qwen3.6 35B A3B (DeepInfra)" },
   "qwen-235b":         { provider: "deepinfra", model: "Qwen/Qwen3-235B-A22B-Instruct-2507", label: "Qwen3 235B A22B Instruct (DeepInfra)" },
+  // 2026-10-09: GLM trial for Drevan (Raziel's call). Both ids verified against DeepInfra's catalog and a
+  // live completion the same day; 1M context each. Per 1M tokens: 5.3 is $0.90 in / $4.00 out, Flash is
+  // $0.15 in / $0.50 out (flash-di is $0.06 / $0.18), so watch the bill on 5.3.
+  "glm-5.3":           { provider: "deepinfra", model: "zai-org/GLM-5.3",                    label: "GLM 5.3 (DeepInfra)" },
+  "glm-5.3-flash":     { provider: "deepinfra", model: "zai-org/GLM-5.3-Flash",              label: "GLM 5.3 Flash (DeepInfra)" },
   // Kimi (Moonshot AI) -- env var: KIMI_API_KEY in .env.brain (Moonshot docs call it MOONSHOT_API_KEY)
   "kimi-k2":           { provider: "kimi",      model: "kimi-k2.6",                 label: "Kimi K2" },
   "kimi-k2.5":         { provider: "kimi",      model: "kimi-k2.5",                 label: "Kimi K2.5" },
