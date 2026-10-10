@@ -367,7 +367,7 @@ export const RULE_CHECK_PRONOUNS =
 /** Names the companion's own names outright, so the corrective cannot be misread as about someone else. */
 export function ruleCheckOwnName(companionId: VoiceCompanionId): string {
   const names = OWN_NAMES[companionId].map(n => `"${n}"`).join(", ");
-  return `\n\n[Voice check: names] Your last reply called someone else by your own name. ${names} ${OWN_NAMES[companionId].length > 1 ? "are" : "is"} YOUR name. When a message opens with it, someone is calling you. Raziel is Raziel, or the name the front signs with (Crash on this account).`;
+  return `\n\n[Voice check: names] Your last reply called someone else by your own name. ${names} ${OWN_NAMES[companionId].length > 1 ? "are YOUR names" : "is YOUR name"}. When a message opens with it, someone is calling you. Raziel is Raziel, or the name the front signs with (Crash on this account).`;
 }
 
 /** Correctives for the hits in `r`, in a fixed order; empty when clean. */

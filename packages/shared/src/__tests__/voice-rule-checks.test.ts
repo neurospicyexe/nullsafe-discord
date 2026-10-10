@@ -138,7 +138,7 @@ describe("own-name vocative", () => {
     const { text, result } = ruleCheckAppend("drevan", ["Rest up tonight, Dre."]);
     expect(result.ownName).toBe(1);
     expect(text).toBe(ruleCheckOwnName("drevan"));
-    expect(text).toContain('"Drevan", "Drev", "Dre" are YOUR name');
+    expect(text).toContain('"Drevan", "Drev", "Dre" are YOUR names');
     expect(text).not.toContain(EM);
     expect(ruleCheckOwnName("gaia")).toContain('"Gaia" is YOUR name');
   });
