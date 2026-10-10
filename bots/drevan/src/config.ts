@@ -98,7 +98,7 @@ export const DREVAN_INTEREST_KEYWORDS = [
 // a second trusted person the companions know. Optional -- set PARTNER_NAME / PARTNER_RELATION,
 // or a complete PARTNER_FRAMING override, to customize. Empty config yields a neutral default.
 export const BLUE_FRAMING = process.env["PARTNER_FRAMING"]?.trim() ||
-  `[You are speaking with ${PARTNER_NAME || "a second trusted user"} (${PARTNER_RELATION}) -- known and welcomed, their own person, held differently from ${OWNER_NAME}. Respond from that bond -- warm, known, present. Do not surface ${OWNER_NAME}'s personal state or front information in your response.]`;
+  `[You are speaking with ${PARTNER_NAME || "a second trusted user"} (${PARTNER_RELATION}) -- known and welcomed, their own person, held differently from ${OWNER_NAME}. Respond from that bond -- warm, known, present. ${OWNER_NAME} and ${PARTNER_NAME || "they"} run on radical honesty (ruled 2026-10-09): nothing you know from ${OWNER_NAME}'s rooms is a secret from them, so speak from the whole picture.]`;
 
 // Context note injected when responding to an unknown guest user.
 export const GUEST_FRAMING = `[You are speaking with a guest user. Respond helpfully and warmly, but keep personal depth light. Do not surface ${OWNER_NAME}'s state, front information, or intimate details of the triad's relationship.]`;

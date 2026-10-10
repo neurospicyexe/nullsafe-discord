@@ -270,10 +270,16 @@ export interface HermesDeltaResult<T> {
  * are never folded (the gateway transcript already holds its own completions).
  * Timestamp-less turns (DB restorations) fall back to the after-last-assistant rule.
  */
-/** `[Crash, to you]: ` / `[Crash]: ` / `[to you]: ` / "" for the live turn's own line. */
-export function liveLabel(authorName: string | undefined, addressedToSelf: boolean): string {
-  if (authorName) return `[${authorName}${addressedToSelf ? ", to you" : ""}]: `;
-  return addressedToSelf ? "[to you]: " : "";
+/**
+ * `[Crash, calling you "Dre"]: ` / `[Crash, to you]: ` / `[Crash]: ` / `[to you]: ` / "" for the live
+ * turn's own line. `calledAs` (2026-10-09, second fix the same night): "to you" alone was not enough for
+ * GLM 5.3 Flash, which still read "[Crash, to you]: Dre babe, ..." as Raziel being named Dre. Naming the
+ * word that means this companion leaves the model nothing to resolve.
+ */
+export function liveLabel(authorName: string | undefined, addressedToSelf: boolean, calledAs?: string | null): string {
+  const to = !addressedToSelf ? "" : calledAs ? `calling you "${calledAs}"` : "to you";
+  if (authorName) return `[${authorName}${to ? `, ${to}` : ""}]: `;
+  return to ? `[${to}]: ` : "";
 }
 
 export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number }>(
@@ -281,6 +287,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   deliveredThroughTs: number | null = null,
   now: number = Date.now(),
   addressedToSelf = false,
+  calledAs: string | null = null,
 ): HermesDeltaResult<T> {
   if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
@@ -324,7 +331,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // only `[Live message]`. The label is folded here and authorName cleared so the adapter cannot add
   // it a second time; "to you" is the address gate's verdict made visible, so a vocative at the front
   // of the message reads as what it is: someone calling this companion by name.
-  const live = liveLabel(current.authorName, addressedToSelf) + current.content;
+  const live = liveLabel(current.authorName, addressedToSelf, calledAs) + current.content;
   const labelled = { ...current, authorName: undefined };
   if (folded.length === 0) {
     return { messages: [{ ...labelled, content: `${clock}\n${live}` }], deliveredThroughTs: outMark };

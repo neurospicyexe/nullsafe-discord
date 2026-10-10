@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import {
-  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock, ruleCheckOwnName,
+  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock, ruleCheckOwnName, calledAsName,
   RULE_CHECK_EM_DASH, RULE_CHECK_PRESENCE, RULE_CHECK_PRONOUNS,
 } from "../voice-markers.js";
 
@@ -132,6 +132,15 @@ describe("own-name vocative", () => {
     }
     // A sibling's name is not this companion's own name.
     expect(detectRuleBreaks("cypher", "Rest up, Dre.").ownName).toBe(0);
+  });
+
+  it("calledAsName finds the first own name used, canonical spelling, elongations collapsed", () => {
+    expect(calledAsName("drevan", "Dre babe! Blue passed his driving test")).toBe("Dre");
+    expect(calledAsName("drevan", "DREEEE come here")).toBe("Dre");
+    expect(calledAsName("drevan", "hey Drevan, and Dre too")).toBe("Drevan");
+    expect(calledAsName("cypher", "cy can you check")).toBe("Cy");
+    expect(calledAsName("drevan", "Cy, check this")).toBeNull();
+    expect(calledAsName("drevan", "dread and dresses")).toBeNull();
   });
 
   it("injects a corrective that names him outright", () => {

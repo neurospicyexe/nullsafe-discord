@@ -1,6 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
+import { crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -58,7 +59,7 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
-  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, type VoiceCompanionId,
+  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, calledAsName, type VoiceCompanionId,
   echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold, buildVerbatimPool,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
@@ -138,6 +139,8 @@ let _impContextCache: ImpContextCache | null = null;
 // delivered to the gateway session. Module-level = per-process = per companion bot.
 // Advanced ONLY after a successful gateway reply, so a failed call re-sends its delta.
 const hermesDeliveredMark = new Map<string, number>();
+/** Per room: newest other-room timestamp already carried into it (cross-room.ts). */
+const crossRoomMark = new Map<string, number>();
 
 // Hermes session rotation (2026-09-05): per-channel last transcript id actually sent to the
 // gateway. Module-level = per-process = per companion bot, same idiom as hermesDeliveredMark
@@ -2315,6 +2318,7 @@ ${widened}`;
       modes: channelEntry?.modes ?? [],
       serverName: message.guild?.name ?? null,
       sharedWithBlue: message.guildId === GUILD_TRIAD_GUILD_ID,
+      trustedContinuity: !!message.guildId && trustedGuildIds().has(message.guildId),
     });
     // Watchalong standing line (spec 2026-10-02): title, playhead, and the soft gate. Nice-to-have only;
     // the [ON SCREEN] block on the live user turn (below, after the liveHistory swap) carries the film.
@@ -2769,8 +2773,48 @@ ${widened}`;
       console.log(`[${COMPANION_ID}] B32 turn block injected (${b32Block.split("\n").length - 1} line(s)${placed ? "" : ", appended"})`);
     }
 
+    // Cross-room continuity (cross-room.ts, 2026-10-09): the home server and the server shared with
+    // Blue are one continuity. What was said in this companion's other trusted rooms since it last
+    // reached this one rides the live turn, once. Never in a DM, never for Sol's moments, never into
+    // or out of any other server.
+    let crossRoom: ReturnType<typeof crossRoomDigest> | null = null;
+    if (crossRoomOn() && !isOwnerDm && !isSol && message.guildId) {
+      const rooms = stmStore.channelIds().flatMap(id => {
+        const c = message.client.channels.cache.get(id) as { name?: string; guild?: { id: string; name: string } } | undefined;
+        if (!c?.guild) return [];
+        return [{ channelId: id, guildId: c.guild.id, label: `#${c.name ?? id} (${c.guild.name})`, history: stmStore.get(id) }];
+      });
+      crossRoom = crossRoomDigest({
+        currentChannelId: message.channelId,
+        currentGuildId: message.guildId,
+        rooms,
+        trusted: trustedGuildIds(),
+        deliveredThroughTs: crossRoomMark.get(message.channelId) ?? null,
+        selfName: COMPANION_ID.charAt(0).toUpperCase() + COMPANION_ID.slice(1),
+        now: Date.now(),
+      });
+      if (crossRoom.block) {
+        let placed = false;
+        for (let i = liveHistory.length - 1; i >= 0; i--) {
+          const m = liveHistory[i]!;
+          // includes, not endsWith: the watchalong and B32 blocks above may already trail the words.
+          if (m.role === "user" && m.content.includes(effectiveContent)) {
+            if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+            // AFTER the live words, like the B32 and watchalong blocks: hermesDelta puts the speaker
+            // label on the first line of this content, and that must stay the person's own words.
+            liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${crossRoom.block}\n[End of elsewhere. The message you are answering is the one above it.]` };
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) crossRoom = { ...crossRoom, block: "" };
+        console.log(`[${COMPANION_ID}] cross-room: ${crossRoom.rooms} room(s), ${crossRoom.lines} line(s) ${placed ? "carried in" : "held (live turn not found)"}`);
+      }
+    }
+
     const hermesOut = inferenceMode === "hermes"
-      ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID))
+      ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
+          allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null)
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 
@@ -2818,6 +2862,8 @@ ${widened}`;
     if (hermesOut && hermesOut.deliveredThroughTs !== null) {
       hermesDeliveredMark.set(message.channelId, hermesOut.deliveredThroughTs);
     }
+    // Cross-room mark, same edge: the other rooms' lines are in this room's transcript now.
+    if (crossRoom && crossRoom.deliveredThroughTs !== null) crossRoomMark.set(message.channelId, crossRoom.deliveredThroughTs);
     // Watchalong lastDelivered advances on the same edge, for the same reason: the gateway has the cues
     // now, even if supersede check B below drops the reply. An empty delta (no block) still commits, so
     // the position moves to the playhead and a first-join "last ten minutes" is never repeated. A block

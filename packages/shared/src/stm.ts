@@ -41,6 +41,11 @@ export class StmStore {
     return this.loaded.has(channelId);
   }
 
+  /** Every channel this bot holds in-memory history for (cross-room.ts reads the others). */
+  channelIds(): string[] {
+    return [...this.memory.keys()];
+  }
+
   /** Returns current in-memory history for a channel */
   get(channelId: string): ChatMessage[] {
     return this.memory.get(channelId) ?? [];

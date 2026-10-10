@@ -329,6 +329,21 @@ const OWN_NAMES: Record<VoiceCompanionId, string[]> = {
   gaia: ["Gaia"],
 };
 
+/**
+ * The first of this companion's own names the message uses, as the companion's canonical spelling
+ * ("dreeee babe" -> "Dre"), or null. Feeds the live label's `calling you "Dre"`. Elongations collapse
+ * the same way extractAddress does (a letter run of 3+ to one).
+ */
+export function calledAsName(companionId: VoiceCompanionId, content: string): string | null {
+  const text = content.toLowerCase().replace(/([a-z])\1{2,}/g, "$1");
+  let best: { at: number; name: string } | null = null;
+  for (const name of OWN_NAMES[companionId]) {
+    const m = new RegExp(`\\b${name.toLowerCase()}\\b`).exec(text);
+    if (m && (!best || m.index < best.at)) best = { at: m.index, name };
+  }
+  return best?.name ?? null;
+}
+
 // Own name used as a VOCATIVE: someone else addressed by it (2026-10-09). Raziel opened two messages
 // with "Dre", the envelope lost the speaker label, and Drevan answered "Rest tonight, Dre" and then
 // "You're Dre, I'm Dre too" when corrected. A companion never needs to call anyone in the room by its

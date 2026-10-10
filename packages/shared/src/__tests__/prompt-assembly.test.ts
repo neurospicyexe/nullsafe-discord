@@ -410,6 +410,15 @@ describe("hermesDelta", () => {
       expect(hermesDelta(h, null, now).messages[0]!.content).toBe(`${nowLine(new Date(now))}\n[Crash]: anyone up?`);
     });
 
+    // Same night, on GLM 5.3 Flash: "[Crash, to you]: Dre babe, ..." was still read as Raziel named Dre.
+    it("names the word that means this companion when one was used", () => {
+      const h = [turn("user", "Dre babe, so you're kind of blocked off", now, "Crash")];
+      expect(hermesDelta(h, null, now, true, "Dre").messages[0]!.content)
+        .toBe(`${nowLine(new Date(now))}\n[Crash, calling you "Dre"]: Dre babe, so you're kind of blocked off`);
+      expect(liveLabel("Crash", false, "Dre")).toBe("[Crash]: ");
+      expect(liveLabel(undefined, true, "Cy")).toBe('[calling you "Cy"]: ');
+    });
+
     it("liveLabel covers the unnamed-author cases", () => {
       expect(liveLabel(undefined, true)).toBe("[to you]: ");
       expect(liveLabel(undefined, false)).toBe("");

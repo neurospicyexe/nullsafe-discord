@@ -77,6 +77,8 @@ export interface PlaceInput {
   serverName?: string | null;
   /** True in the server Raziel shares with Blue: every room there has Blue in it. */
   sharedWithBlue?: boolean;
+  /** True in a trusted server (cross-room.ts): home or the one shared with Blue. Lifts containment. */
+  trustedContinuity?: boolean;
 }
 
 /**
@@ -105,6 +107,11 @@ export function placeBlock(p: PlaceInput): string {
     : modes.includes("inter_companion") && modes.includes("autonomous") ? "triad space -- you and your siblings"
     : "a shared channel";
   block += `\n• This is ${place}.`;
-  block += `\n• Keep it contained to here: don't carry private or DM detail into a shared channel unless ${owner} opens it in this room.`;
+  // 2026-10-09 (Raziel): his home server and the server he shares with Blue are one continuity, both
+  // directions; he and Blue run on radical honesty. Only DMs stay sealed. Any other server keeps the
+  // old containment until private/shareable marking exists.
+  block += p.trustedContinuity
+    ? `\n• This server and ${owner}'s home server are one continuity: what you know from either is yours to carry here, Blue included. Only DMs stay sealed.`
+    : `\n• Keep it contained to here: don't carry private or DM detail into a shared channel unless ${owner} opens it in this room.`;
   return block;
 }
