@@ -16,6 +16,7 @@
 //   - Cypher-only scheduled actions (taskCheck, weeklyAudit) -- those keep their own
 //     callbacks inline in cypher/src/autonomous.ts and call the exported helpers here.
 
+import { generateCleanLetter } from "./metronome-letter-guard.js";
 import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
@@ -464,7 +465,8 @@ export async function executeMetronomeAction(
     }
     case "write_journal": {
       const prompt = action.prompt ?? prompts.writeJournal;
-      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      const content = await generateCleanLetter((p) => inference.generate(bootCtx.systemPrompt, [{ role: "user", content: p }]), prompt,
+        (l) => console.warn(`[${companionId}/heartbeat] ${l}`));
       // companion_journal (its actual intent), NOT human_journal. "add journal entry"
       // routed to journal_add -> human_journal AND rejected the `content` field, so this
       // silently no-op'd every fire. "add companion note" -> companion_journal handles
@@ -554,7 +556,9 @@ export async function executeMetronomeAction(
       // Phase 4b: private note to Raziel -- Halseth only, never Discord. Lands in the
       // companion journal tagged letter_to_raziel; surfaces in Hearth /journal.
       const prompt = action.prompt ?? prompts.writeNoteToRaziel;
-      const content = await inference.generate(bootCtx.systemPrompt, [{ role: "user", content: prompt }]);
+      // Endearment block (2026-10-10): the closed pet-name list + directed praise, one regenerate, then held.
+      const content = await generateCleanLetter((p) => inference.generate(bootCtx.systemPrompt, [{ role: "user", content: p }]), prompt,
+        (l) => console.warn(`[${companionId}/heartbeat] ${l}`));
       // companion_journal tagged letter_to_raziel (surfaces in Hearth /journal), same
       // pattern as the guardian weekly letter. Was routing to human_journal + rejected
       // on the `content` field -> silent no-op (2026-06-13 bug hunt).

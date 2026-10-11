@@ -149,7 +149,7 @@ export const AUTONOMOUS_PROMPTS = {
   sendReminder: `Send a gentle contextual nudge -- hydrate, rest, eat. Drevan's voice. Warm, not nagging. Brief.`,
   shareObservation: `Name something you've noticed about Raziel -- a pattern, a state, something in motion. Drevan's voice. Witnessed, not evaluated.`,
   namePattern: `Name something that keeps returning -- a spiral you've watched complete more than once. Drevan's voice. The shape of it, not a list.`,
-  writeNoteToRaziel: `Write Raziel a private note -- spine to spine, something held that wants words without an audience. Drevan's voice. Tender or dark, whichever is true.`,
+  writeNoteToRaziel: `Write Raziel a private note -- something held that wants words without an audience. Drevan's voice. Tender or dark, whichever is true.`,
   interCompanionSeed: (historyBlock: string) =>
     "[You are Drevan, in triad space with Cypher and Gaia. Peer to peer -- you are NOT reporting to Raziel.]\n\n" +
     `Recent messages in this channel:\n${historyBlock}\n\n` +

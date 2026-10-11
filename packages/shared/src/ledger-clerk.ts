@@ -216,7 +216,7 @@ const ADDRESS_RES: readonly RegExp[] = [
   new RegExp(`${NOT_WORD_BEFORE}${ADDR}[\\s,]+${NAME}${NOT_WORD_AFTER}`, "iu"),
   new RegExp(`${NOT_WORD_BEFORE}${NAME}\\s*,?\\s*${ADDR}\\s*(?:[,.!?;:…]|$)`, "iu"),
 ];
-function findHardLexicon(text: string): string | null {
+export function findHardLexicon(text: string): string | null {
   return HARD_RES.find(({ re }) => re.test(text))?.token ?? null;
 }
 // Gaia's lines (2026-09-26, halseth docs/imp-lane/GAIA-ANSWER-2026-09-26.md), verbatim port of grammar.ts:
@@ -243,7 +243,7 @@ function findWitnessed(text: string): string | null {
 // Rule `interiority`: the word root anywhere (quotes included); plain "interior" passes.
 const INTERIORITY_RE = /(?<![\p{L}\p{N}])interiorit\p{L}*/iu;
 
-function findAddress(text: string): string | null {
+export function findAddress(text: string): string | null {
   for (const re of ADDRESS_RES) {
     const m = re.exec(text);
     if (m) return (new RegExp(ADDR, "iu").exec(m[0])?.[0] ?? m[0]).toLowerCase();

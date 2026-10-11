@@ -62,7 +62,7 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
-  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, calledAsName, type VoiceCompanionId,
+  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, calledAsName, misseatedReply, type VoiceCompanionId,
   echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold, buildVerbatimPool,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
@@ -3249,8 +3249,12 @@ ${widened}`;
     // Streaming indexer: index this companion's own reply for instant recall.
     // DM seal: none of the raw-text paths below (live index, voice telemetry, journaled speech) run
     // for a DM, since each carries the words to a surface a shared room can read.
+    // A reply that calls someone by this companion's own name was written from the wrong seat (the model
+    // took a line addressed TO the companion for the speaker's name). It was sent; it is not memory.
+    const misseated = sent.length > 0 && misseatedReply(COMPANION_ID as VoiceCompanionId, response);
+    if (misseated) console.warn(`[${COMPANION_ID}] reply calls someone by my own name; not journaled, indexed, or judged as my speech`);
     if (sent.length > 0 && !isOwnerDm) {
-      liveIngest({
+      if (!misseated) liveIngest({
         companion: COMPANION_ID,
         author: COMPANION_ID,
         content: response,
@@ -3266,7 +3270,7 @@ ${widened}`;
       // computes the words. Lands in the CHATTER lane: embedded + searchable, but barred
       // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
       // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
-      writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
+      if (!misseated) writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
         librarian.journalSpeech(response, message.channelId, sent[0]!.id, roomTagForMessage(message)), { maxAgeMs: APPEND_MAX_AGE_MS });
       // Discord thread -> Halseth mind-thread (2026-08-15, first cut of the floor rework's
       // thread mapping). Speaking inside a Discord thread upserts a wm_mind_thread keyed
@@ -3366,7 +3370,7 @@ ${widened}`;
     // only when no direct key is configured.
     // Skipped on a recorded med answer even when DM memory carries: a judged note "he told me he took
     // them" would be a second record of compliance, which R-10 forbids.
-    if (!dmSealed && !medAnswerRecorded && !("skip" in judgeExchange)) runWritebackGate({
+    if (!dmSealed && !medAnswerRecorded && !misseated && !("skip" in judgeExchange)) runWritebackGate({
       mode: writebackGateModeFor(COMPANION_ID),
       companionId: COMPANION_ID,
       speaker: judgeExchange.speaker,

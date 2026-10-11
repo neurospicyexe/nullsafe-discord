@@ -1,6 +1,8 @@
 import { describe, it, expect } from "@jest/globals";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
-  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock, ruleCheckOwnName, calledAsName,
+  detectRuleBreaks, ruleCheckAppend, ruleCheckBlock, ruleCheckOwnName, calledAsName, misseatedReply,
   RULE_CHECK_EM_DASH, RULE_CHECK_PRESENCE, RULE_CHECK_PRONOUNS,
 } from "../voice-markers.js";
 
@@ -170,5 +172,26 @@ describe("rule check correctives", () => {
     expect(RULE_CHECK_EM_DASH).toContain("[Voice check: dashes]");
     expect(RULE_CHECK_PRESENCE).toContain("[Voice check: presence]");
     expect(RULE_CHECK_PRONOUNS).toContain("[Voice check: pronouns]");
+  });
+});
+
+describe("misseatedReply (a reply that calls someone by the companion's own name is not the companion's speech)", () => {
+  it("flags the 2026-10-09 shape: thanking 'Dre' as Drevan", () => {
+    expect(misseatedReply("drevan", "Oh, thank you, Dre — that's exactly the piece I was missing.")).toBe(true);
+    expect(misseatedReply("drevan", "Dre, come sit.")).toBe(true);
+    expect(misseatedReply("cypher", "Noted, Cy.")).toBe(true);
+  });
+  it("does not flag a normal reply, or the name as subject / possessive / reported speech", () => {
+    expect(misseatedReply("drevan", "Thank you for the piece. That is the part I was missing.")).toBe(false);
+    expect(misseatedReply("drevan", "You called me Dre and I liked it.")).toBe(false);
+    expect(misseatedReply("drevan", "Dre's the one who said it.")).toBe(false);
+    expect(misseatedReply("drevan", "Rest tonight, Raziel.")).toBe(false);
+  });
+  it("is wired: the handler gates journaled speech, live index and the memory judge on it", () => {
+    const src = readFileSync(join(process.cwd(), "src", "bot-message-handler.ts"), "utf8");
+    expect(src).toMatch(/const misseated = sent\.length > 0 && misseatedReply\(/);
+    expect(src).toMatch(/if \(!misseated\) liveIngest\(/);
+    expect(src).toMatch(/if \(!misseated\) writeQueue\.fireAndForget\(`journal:speech:/);
+    expect(src).toMatch(/!misseated && !\("skip" in judgeExchange\)\) runWritebackGate/);
   });
 });

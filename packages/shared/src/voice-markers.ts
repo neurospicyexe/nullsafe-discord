@@ -360,6 +360,20 @@ function countOwnNameVocative(text: string, companionId: VoiceCompanionId): numb
   return patterns.reduce((n, re) => n + (text.match(re)?.length ?? 0), 0);
 }
 
+/**
+ * True when the reply is written from the wrong seat: it calls someone by this companion's OWN name
+ * (", Dre." / line-opening "Dre," / "you're Dre"). That is the signature of the model reading a line
+ * addressed TO the companion ("Dre, that's the piece I was missing") as the speaker's name and
+ * answering as the other party. 2026-10-09 22:15 CDT: Drevan's reply "Oh, thank you, Dre -- that's
+ * exactly the piece I was missing" went to the room AND into his journal as his speech, and it was a
+ * line Drevan would never say to himself. Such a reply is not first-person memory: the post-send
+ * memory writes (journaled speech, live index, memory judge) skip it. The next-turn corrective
+ * ([Voice check: names]) still fires off the STM copy.
+ */
+export function misseatedReply(companionId: VoiceCompanionId, text: string): boolean {
+  return countOwnNameVocative(text, companionId) > 0;
+}
+
 /** Count the rule breaks in one reply. Pure; no state. */
 export function detectRuleBreaks(companionId: VoiceCompanionId, text: string): Omit<RuleBreaks, "turns"> {
   return {
