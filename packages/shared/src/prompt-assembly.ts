@@ -252,6 +252,12 @@ function timeLines(prevTs: number | null, now: number): string {
   return lines.join("\n");
 }
 
+/** Blocks hermesDelta places around the live words (2026-10-11): `background` above the room, `frame` last. */
+export interface HermesDeltaExtras {
+  background?: string;
+  frame?: string;
+}
+
 export interface HermesDeltaResult<T> {
   messages: T[];
   /** Highest timestamp actually folded into this delta. Callers persist it AFTER a
@@ -288,6 +294,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   now: number = Date.now(),
   addressedToSelf = false,
   calledAs: string | null = null,
+  extras: HermesDeltaExtras = {},
 ): HermesDeltaResult<T> {
   if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
@@ -333,13 +340,19 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // of the message reads as what it is: someone calling this companion by name.
   const live = liveLabel(current.authorName, addressedToSelf, calledAs) + current.content;
   const labelled = { ...current, authorName: undefined };
+  // Order (2026-10-11, room rendering): background from elsewhere first (oldest, furthest away), then
+  // what this room said since the last turn, then the live words, then the seat frame LAST. Nothing
+  // that someone else said may sit between the live words and the reply.
+  const bg = extras.background ? `${extras.background}\n\n` : "";
+  const frame = extras.frame ? `\n\n${extras.frame}` : "";
   if (folded.length === 0) {
-    return { messages: [{ ...labelled, content: `${clock}\n${live}` }], deliveredThroughTs: outMark };
+    const liveBlock = bg ? `${bg}[Live message]\n${live}` : live;
+    return { messages: [{ ...labelled, content: `${clock}\n${liveBlock}${frame}` }], deliveredThroughTs: outMark };
   }
   return {
     messages: [{
       ...labelled,
-      content: `${clock}\n${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${live}`,
+      content: `${clock}\n${bg}${WITNESS_HEADER}\n${folded.join("\n")}\n\n[Live message]\n${live}${frame}`,
     }],
     deliveredThroughTs: outMark,
   };

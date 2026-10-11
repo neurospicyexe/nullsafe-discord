@@ -1,6 +1,6 @@
 import { describe, it, expect } from "@jest/globals";
 import {
-  crossRoomClose, crossRoomDigest, crossRoomOn, trustedGuildIds, DEFAULT_TRUSTED_GUILD_IDS,
+  CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds, DEFAULT_TRUSTED_GUILD_IDS,
   CROSS_ROOM_WINDOW_MS, CROSS_ROOM_PER_ROOM, CROSS_ROOM_CHAR_CAP,
 } from "../cross-room.js";
 import { placeBlock } from "../dm.js";
@@ -101,20 +101,12 @@ describe("placeBlock continuity line", () => {
 
 // 2026-10-11: the old close ("the one above it") pointed at the digest's last sibling line, ~1000
 // chars below Raziel's `[Crash, calling you "Dre"]` line, and Drevan answered him as "Dre".
-describe("crossRoomClose", () => {
-  it("names the speaker and claims the called-as name for the companion", () => {
-    const line = crossRoomClose("Crash", "Dre");
-    expect(line).toContain("You are answering Crash's message at the top of this turn");
-    expect(line).toContain(`Crash called you "Dre": that is YOUR name, not theirs.`);
-    expect(line).not.toContain("the one above it");
-  });
-  it("no calledAs: speaker only, no name clause", () => {
-    const line = crossRoomClose("Crash", null);
-    expect(line).toContain("Crash's message");
-    expect(line).not.toContain("called you");
-  });
-  it("no speaker: generic, still points at the top of the turn", () => {
-    expect(crossRoomClose(undefined, "Dre")).toBe(
-      "[End of elsewhere. You are answering the message at the top of this turn, not anything in the block above.]");
+describe("cross-room close lines", () => {
+  it("never points at 'the one above it'", () => {
+    for (const l of [CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER]) {
+      expect(l).not.toContain("the one above it");
+      expect(l).toContain("Background only");
+    }
+    expect(CROSS_ROOM_CLOSE).toContain("[Live message] below");
   });
 });

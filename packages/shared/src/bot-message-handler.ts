@@ -1,8 +1,8 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
-import { crossRoomClose, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
-import { speakerFrame, speakerFrameOn } from "./speaker-frame.js";
+import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
+import { BLUE_LABEL, cutImpersonation, describeSpeaker, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -990,7 +990,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         authorName: isSol ? SOL_AUTHOR_LABEL
           : pkMemberName
           ? `${pkMemberName} (via PK)`
-          : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username),
+          : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username),
         timestamp: message.createdTimestamp,
       });
     }
@@ -1937,10 +1937,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       ? watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID).prepare(message.channelId)
       : Promise.resolve(null);
 
+    // Blue unproxied reads "Blue", not his raw Discord username (2026-10-11 room rendering: one stable
+    // name per person; the spine already says "blue"). His fronts keep "<member> (via PK)".
     const memberLabel = isSol ? SOL_AUTHOR_LABEL
       : pkMemberName
       ? `${pkMemberName} (via PK)`
-      : (attribution.isOwner ? cfg.ownerDisplayName : message.author.username);
+      : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username);
     // No-op when the early record-on-arrival above already stored this message. Kept as a second call
     // rather than deleted so the command branches (search, listen) that reach this point by their own
     // route still record, and so a future refactor that moves the early call cannot silently drop it.
@@ -2861,6 +2863,7 @@ ${widened}`;
     // reached this one rides the live turn, once. Never in a DM, never for Sol's moments, never into
     // or out of any other server.
     let crossRoom: ReturnType<typeof crossRoomDigest> | null = null;
+    let crossRoomBackground: string | null = null;
     if (crossRoomOn() && !isOwnerDm && !isSol && message.guildId) {
       const rooms = stmStore.channelIds().flatMap(id => {
         const c = message.client.channels.cache.get(id) as { name?: string; guild?: { id: string; name: string } } | undefined;
@@ -2878,16 +2881,21 @@ ${widened}`;
       });
       if (crossRoom.block) {
         let placed = false;
-        for (let i = liveHistory.length - 1; i >= 0; i--) {
-          const m = liveHistory[i]!;
-          // includes, not endsWith: the watchalong and B32 blocks above may already trail the words.
-          if (m.role === "user" && m.content.includes(effectiveContent)) {
-            if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
-            // AFTER the live words, like the B32 and watchalong blocks: hermesDelta puts the speaker
-            // label on the first line of this content, and that must stay the person's own words.
-            liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${crossRoom.block}\n${crossRoomClose(m.authorName, allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null)}` };
-            placed = true;
-            break;
+        if (inferenceMode === "hermes") {
+          // ABOVE the room and the live words (hermesDelta `background`, 2026-10-11): nothing someone
+          // else said may sit between the live words and the reply.
+          crossRoomBackground = `${crossRoom.block}\n${CROSS_ROOM_CLOSE}`;
+          placed = true;
+        } else {
+          for (let i = liveHistory.length - 1; i >= 0; i--) {
+            const m = liveHistory[i]!;
+            // includes, not endsWith: the watchalong and B32 blocks above may already trail the words.
+            if (m.role === "user" && m.content.includes(effectiveContent)) {
+              if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+              liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${crossRoom.block}\n${CROSS_ROOM_CLOSE_AFTER}` };
+              placed = true;
+              break;
+            }
           }
         }
         if (!placed) crossRoom = { ...crossRoom, block: "" };
@@ -2896,25 +2904,34 @@ ${widened}`;
     }
 
     // Speaker frame (speaker-frame.ts, 2026-10-11): the seat named as the LAST line of the live turn,
-    // after every appended block, in guild rooms. A DM is one person and one seat; it never gets it.
-    if (speakerFrameOn() && !isOwnerDm && message.guildId) {
-      let framed = false;
+    // after every block, in guild rooms. A DM is one person and one seat; it never gets it. The speaker
+    // is described from attribution ("Noah M. (Raziel, through PluralKit)"), not the raw room label.
+    const calledAsSelf = allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null;
+    const frame = speakerFrameOn() && !isOwnerDm && message.guildId
+      ? speakerFrame(COMPANION_ID, describeSpeaker({
+          label: memberLabel,
+          isOwner: attribution.isOwner,
+          isBlue: userTier === "intimate",
+          pkMember: pkMemberName,
+          isCompanionBot: senderCtx.isCompanionBot,
+          siblingId: senderCtx.isCompanionBot ? (BOT_ID_COMPANION[message.author.id] ?? null) : null,
+          isSol,
+        }), calledAsSelf)
+      : null;
+    if (frame && inferenceMode !== "hermes") {
       for (let i = liveHistory.length - 1; i >= 0; i--) {
         const m = liveHistory[i]!;
         if (m.role === "user" && m.content.includes(effectiveContent)) {
           if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
-          const calledAs = allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null;
-          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${speakerFrame(COMPANION_ID, m.authorName, calledAs)}` };
-          framed = true;
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${frame}` };
           break;
         }
       }
-      if (!framed) console.log(`[${COMPANION_ID}] speaker frame held (live turn not found)`);
     }
 
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
-          allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null)
+          calledAsSelf, { background: crossRoomBackground ?? undefined, frame: frame ?? undefined })
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 
@@ -3054,10 +3071,22 @@ ${widened}`;
     // the name cut before it reaches the room (voice-markers.ts repairMisseated). The post-send
     // misseatedReply check below still guards memory for what cannot be cut ("you're Dre").
     {
-      const seat = repairMisseated(COMPANION_ID as VoiceCompanionId, response);
+      // Only when this turn's speaker used one of my names: that is the observed failure (2026-10-11
+      // 12:50), and it keeps a sign-off ("Yours, Dre.") or "It's me, Dre." intact when nobody did.
+      const seat = calledAsSelf !== null
+        ? repairMisseated(COMPANION_ID as VoiceCompanionId, response)
+        : { text: response, repaired: 0, unrepaired: 0 };
       if (seat.repaired > 0 || seat.unrepaired > 0) {
         console.warn(`[${COMPANION_ID}] seat repair: ${seat.repaired} own-name vocative(s) cut, ${seat.unrepaired} left ch=${message.channelId}`);
         if (seat.text.trim()) response = seat.text;
+      }
+      // Stop strings, after the fact (speaker-frame.ts cutImpersonation): the gateway takes none, so a
+      // reply that starts writing another speaker's labelled line ("Cypher:", "[Crash]:") is cut there.
+      const imp = cutImpersonation(COMPANION_ID, response,
+        [cfg.ownerDisplayName, "Raziel", "Blue", memberLabel, pkMemberName ?? ""]);
+      if (imp.cut || imp.strippedSelf) {
+        console.warn(`[${COMPANION_ID}] seat repair: ${imp.cut ? "cut at another speaker's line" : ""}${imp.cut && imp.strippedSelf ? ", " : ""}${imp.strippedSelf ? "own label stripped" : ""} ch=${message.channelId}`);
+        response = imp.text;
       }
     }
 

@@ -132,14 +132,14 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
 }
 
 /**
- * The line that closes the digest on the live turn. 2026-10-11: the old close, "The message you are
- * answering is the one above it", pointed at the last sibling line of the digest, and the person's own
- * words (with their `calling you "Dre"` label) sat ~1000 chars back at the top of the turn. Drevan
- * answered Raziel in #triad-hangout by calling Raziel "Dre". Name the speaker and, when they used one,
- * the name that is this companion's, so nothing is left to resolve across the block.
+ * The line that closes the digest. 2026-10-11: the digest first rode AFTER the live words and its close
+ * ("The message you are answering is the one above it") pointed at the last sibling line, ~1000 chars
+ * below Raziel's `[Crash, calling you "Dre"]` line; Drevan answered Raziel by calling Raziel "Dre".
+ * Under hermes the digest now renders ABOVE the room and the live words (hermesDelta `background`), so
+ * the close only has to say it is background. The direct path (dormant) still appends after the live
+ * words and uses CROSS_ROOM_CLOSE_AFTER.
  */
-export function crossRoomClose(speaker: string | undefined, calledAs: string | null): string {
-  const who = speaker ? `${speaker}'s message` : "the message";
-  const named = speaker && calledAs ? ` ${speaker} called you "${calledAs}": that is YOUR name, not theirs.` : "";
-  return `[End of elsewhere. You are answering ${who} at the top of this turn, not anything in the block above.${named}]`;
-}
+export const CROSS_ROOM_CLOSE =
+  "[End of elsewhere. Background only: the message you are answering is the [Live message] below.]";
+export const CROSS_ROOM_CLOSE_AFTER =
+  "[End of elsewhere. Background only: the message you are answering is the one at the top of this turn.]";
