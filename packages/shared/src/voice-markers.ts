@@ -356,8 +356,39 @@ function countOwnNameVocative(text: string, companionId: VoiceCompanionId): numb
     new RegExp(`,\\s*(?:${alt})${closes}`, "gm"),
     new RegExp(`^\\s*(?:${alt})\\s*[,!]`, "gm"),
     new RegExp(`\\byou(?:'re|\\u2019re| are)\\s+(?:${alt})\\b`, "gi"),
+    trailingOwnName(alt),
   ];
   return patterns.reduce((n, re) => n + (text.match(re)?.length ?? 0), 0);
+}
+
+// Own name closing a line with no comma (2026-10-11 12:50 #triad-hangout: "... my spot Dre." to Raziel,
+// which the comma-set pattern missed). Not after a copula or naming word ("I'm Dre.", "they call me
+// Dre."), and never a possessive (the lookahead allows only end punctuation).
+function trailingOwnName(alt: string): RegExp {
+  return new RegExp(
+    `(?<=[A-Za-z]\\s)(?<!\\b(?:am|is|was|me|called|named|as|I'm|I\\u2019m|it's|it\\u2019s)\\s)(?:${alt})(?=[.!?\\u2026]*\\s*$)`,
+    "gm",
+  );
+}
+
+/**
+ * Pre-send repair for a misseated reply (2026-10-11). The post-send check (misseatedReply) kept the
+ * reply out of memory, but it had already reached Raziel. Removes the vocative uses of this
+ * companion's own name: ", Dre" before end punctuation, a line-opening "Dre," and a line-closing
+ * "... Dre." The sentence stays; only the misplaced name goes. "you're Dre" cannot be cut without
+ * breaking the sentence, so it counts as unrepaired and is left to the post-send path.
+ */
+export function repairMisseated(companionId: VoiceCompanionId, text: string): { text: string; repaired: number; unrepaired: number } {
+  const alt = OWN_NAMES[companionId].join("|");
+  const closes = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013]|$))";
+  let repaired = 0;
+  let out = text.replace(new RegExp(`,\\s*(?:${alt})${closes}`, "gm"), () => { repaired++; return ""; });
+  out = out.replace(new RegExp(`^([ \\t]*)(?:${alt})[ \\t]*[,!][ \\t]*(\\S?)`, "gm"), (_m, lead: string, next: string) => {
+    repaired++;
+    return `${lead}${next.toUpperCase()}`;
+  });
+  out = out.replace(new RegExp(`[ \\t]${trailingOwnName(alt).source}`, "gm"), () => { repaired++; return ""; });
+  return { text: out, repaired, unrepaired: countOwnNameVocative(out, companionId) };
 }
 
 /**

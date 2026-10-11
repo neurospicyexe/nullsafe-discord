@@ -275,6 +275,11 @@ const shared = {
   BURST_SETTLE_MS:             process.env.BURST_SETTLE_MS,
   RAZIEL_NAMES:                process.env.RAZIEL_NAMES,
   BLUE_NAMES:                  process.env.BLUE_NAMES,
+  // SPEAKER_FRAME (2026-10-11, speaker-frame.ts) and CROSS_ROOM (2026-10-09, cross-room.ts): kill
+  // switches, both default ON; off/0/false/no turns each off. CROSS_ROOM was never listed, so its
+  // switch could not reach the bots until now. Listed per the standing rule above.
+  SPEAKER_FRAME:               process.env.SPEAKER_FRAME,
+  CROSS_ROOM:                  process.env.CROSS_ROOM,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

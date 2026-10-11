@@ -2,6 +2,7 @@ import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { crossRoomClose, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
+import { speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -62,7 +63,7 @@ import {
   isResponseCoherent,
   sendLong,
   liveIngest,
-  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, calledAsName, misseatedReply, type VoiceCompanionId,
+  reportVoiceScore, voiceFeedbackBlock, ruleCheckAppend, calledAsName, misseatedReply, repairMisseated, type VoiceCompanionId,
   echoScore, echoThreshold, ownEchoGated, verbatimCopyOf, verbatimCopyThreshold, buildVerbatimPool,
   detectSelfLoop, loopBreakDirective,
   formBreakAppend,
@@ -2894,6 +2895,23 @@ ${widened}`;
       }
     }
 
+    // Speaker frame (speaker-frame.ts, 2026-10-11): the seat named as the LAST line of the live turn,
+    // after every appended block, in guild rooms. A DM is one person and one seat; it never gets it.
+    if (speakerFrameOn() && !isOwnerDm && message.guildId) {
+      let framed = false;
+      for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const m = liveHistory[i]!;
+        if (m.role === "user" && m.content.includes(effectiveContent)) {
+          if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+          const calledAs = allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null;
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${speakerFrame(COMPANION_ID, m.authorName, calledAs)}` };
+          framed = true;
+          break;
+        }
+      }
+      if (!framed) console.log(`[${COMPANION_ID}] speaker frame held (live turn not found)`);
+    }
+
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
           allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null)
@@ -3031,6 +3049,17 @@ ${widened}`;
     // marker syntax instead of the real content.
     const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
     response = spineCleanedResponse;
+
+    // Pre-send seat repair (2026-10-11): a reply that calls someone by this companion's own name has
+    // the name cut before it reaches the room (voice-markers.ts repairMisseated). The post-send
+    // misseatedReply check below still guards memory for what cannot be cut ("you're Dre").
+    {
+      const seat = repairMisseated(COMPANION_ID as VoiceCompanionId, response);
+      if (seat.repaired > 0 || seat.unrepaired > 0) {
+        console.warn(`[${COMPANION_ID}] seat repair: ${seat.repaired} own-name vocative(s) cut, ${seat.unrepaired} left ch=${message.channelId}`);
+        if (seat.text.trim()) response = seat.text;
+      }
+    }
 
     // Verbatim-copy rail (2026-09-26). Runs on EVERY reply, whoever triggered the turn, before
     // the echo gate below and on the same cleaned text it scores.
