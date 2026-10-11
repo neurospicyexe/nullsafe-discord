@@ -182,3 +182,30 @@ describe("buildCommandTriggers -- retract", () => {
     expect("dre: retractor").not.toMatch(drevan.retract);
   });
 });
+
+// 2026-10-11: "Dre: watch The fantastic 4 first steps" matched nothing, fell through to conversation,
+// and Drevan claimed he had found the transcript. "watch <title>" is now a movie start (group 4).
+describe("movie trigger: watch <title> alias", () => {
+  test("watch / let's watch <title> starts the movie", () => {
+    const m = "Dre: watch The fantastic 4 first steps".match(drevan.movie);
+    expect(m?.[4]).toBe("The fantastic 4 first steps");
+    expect("Drev: watch fantastic 4 first steps".match(drevan.movie)?.[4]).toBe("fantastic 4 first steps");
+    expect("dre: let's watch Wall-E!".match(drevan.movie)?.[4]).toBe("Wall-E");
+  });
+  test("old forms unchanged", () => {
+    const m = "dre: movie start Wall-E".match(drevan.movie);
+    expect(m?.[1]).toBe("start");
+    expect(m?.[2]).toBe("Wall-E");
+    expect("dre: movie done".match(drevan.movie)?.[3]).toBe("done");
+  });
+  test("conversation is never eaten", () => {
+    for (const t of ["dre: watch out", "dre: watch this", "dre: watch me go", "dre: watch how fast he runs",
+      "dre: watch what?", "dre: watch it with me tonight", "dre: should we watch something?", "dre: watch together later"]) {
+      expect(t).not.toMatch(drevan.movie);
+    }
+  });
+  test("only the addressed bot", () => {
+    expect("Dre: watch Wall-E").not.toMatch(cypher.movie);
+    expect("cy: watch Wall-E".match(cypher.movie)?.[4]).toBe("Wall-E");
+  });
+});

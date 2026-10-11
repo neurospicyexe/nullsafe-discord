@@ -94,8 +94,16 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
     // 2 = the title, 3 = any other subcommand. Neither `movie` nor `at` is in the guard, deliberately:
     // "cy: movie night tonight?" and "dre: at least we tried" are conversation, and the guard would eat
     // them with a usage reply. A message is only claimed when it is unambiguously one of these forms.
+    // 2026-10-11: "<prefix>: watch <title>" / "<prefix>: let's watch <title>" is a movie start too (group
+    // 4 = the title). Raziel typed "Dre: watch The fantastic 4 first steps" twice; it matched nothing,
+    // fell through to conversation, and Drevan claimed he had found the transcript when no tool had run.
+    // The watch-progress organ (`watch` above) is checked FIRST in the handler, so "dre: watch Severance
+    // s2e3" / "dre: watching" / "dre: watch X finished" still go there. A title may not open with a
+    // conversational word ("watch out", "watch this", "watch me", "watch how ...") and may not be a
+    // question.
     movie: new RegExp(
-      `^(?:${alt})\\b[,:]?\\s*movie\\b[,:]?\\s+(?:(start)\\b[,:]?(?:\\s+([\\s\\S]*?))?|(pause|play|resume|status|done|end|stop))\\s*[.!]?\\s*$`,
+      `^(?:${alt})\\b[,:]?\\s*(?:movie\\b[,:]?\\s+(?:(start)\\b[,:]?(?:\\s+([\\s\\S]*?))?|(pause|play|resume|status|done|end|stop))` +
+      `|(?:let'?s\\s+|let\\u2019s\\s+)?watch\\b[,:]?\\s+(?!(?:out|this|that|it|me|us|him|her|them|over|your|my|yourself|for|how|what|when|while|as|with|together|now|later|something|tonight)\\b)([^?\\n]{2,120}?))\\s*[.!]?\\s*$`,
       "i",
     ),
     // "<prefix>: at 47:12" / "at 1:02:03" / "at 47m" / "at 47 min" / "at 1h02m" -- seek + play (resync).

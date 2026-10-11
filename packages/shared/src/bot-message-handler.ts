@@ -1300,7 +1300,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && MOVIE_TRIGGER) {
       const m = effectiveContent.match(MOVIE_TRIGGER);
       if (m) {
-        const sub = m[1] ?? m[3] ?? "";
+        // Group 4 is the "watch <title>" alias (command-triggers.ts): a start with that title.
+        const sub = m[1] ?? m[3] ?? (m[4] ? "start" : "");
+        const title = m[2] ?? m[4] ?? "";
         const ch = message.channel as TextChannel;
         let attachment: CaptionAttachment | null = null;
         if (/^start$/i.test(sub)) {
@@ -1313,7 +1315,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           }
         }
         const delivery = watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID);
-        const reply = await handleMovieCommand(sub, m[2] ?? "", {
+        const reply = await handleMovieCommand(sub, title, {
           secret: cfg.halsethSecret, channelId: message.channelId, companionId: COMPANION_ID,
           startedBy: cfg.ownerDisplayName,
           attachment, onChanged: () => delivery.invalidate(message.channelId),
