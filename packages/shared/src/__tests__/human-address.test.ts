@@ -9,6 +9,7 @@ import {
 } from "../human-address.js";
 import { activeExchangeHolder, shouldRespond, extractAddress, isDirectAddress } from "../channel-config.js";
 import { fastPathWinner } from "../fit-bid.js";
+import { namedOrderInMessage } from "../sequential-floor.js";
 
 const NAMES = { raziel: ["raziel", "raz"], blue: ["blue"] };
 
@@ -123,6 +124,18 @@ describe("burst naming (ruling 1): a companion named in an EARLIER burst message
     expect(fast).not.toBeNull();
     // Without the burst, the newest message alone is ambient and goes to the open bid.
     expect(extractAddress("also the other thing").type).toBe("ambient");
+  });
+
+  it("a multi-address in an earlier burst message keeps its speaking order (the order is read from the same text)", () => {
+    const single = namedOrderInMessage("Cy and Dre, thoughts?", ["cypher", "drevan"]);
+    const text = burstAddressText("also this", ["Cy and Dre, thoughts?"]);
+    const addr = extractAddress(text);
+    expect(addr.type).toBe("named_multi");
+    const ids = addr.type === "named_multi" ? addr.ids : [];
+    expect(namedOrderInMessage(text, ids)).toEqual(single);
+    expect(single).toEqual(["cypher", "drevan"]);
+    // The old read (newest text only) finds neither name and degrades to the unsorted input order.
+    expect(namedOrderInMessage("also this", ["drevan", "cypher"])).toEqual(["drevan", "cypher"]);
   });
 
   it("owner unaddressed path is unchanged: ambient burst of one -> proceed, text identical", () => {

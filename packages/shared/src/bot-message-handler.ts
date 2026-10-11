@@ -1814,7 +1814,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         && isArrival && !entitledFollowUp && !channelEntry?.host) {
         const addr = extractAddress(addressText);
         const first: CompanionId[] = addr.type === "named" ? [addr.id as CompanionId]
-          : addr.type === "named_multi" ? namedOrderInMessage(effectiveContent, addr.ids) as CompanionId[]
+          : addr.type === "named_multi" ? namedOrderInMessage(addressText, addr.ids) as CompanionId[]
           : senderCtx.activeExchangeWith ? [senderCtx.activeExchangeWith as CompanionId]
           : [];
         if (first.length > 0 && !first.includes(COMPANION_ID as CompanionId)) {
@@ -2481,7 +2481,7 @@ ${widened}`;
       // deterministic from shared data (name order in the text; the bid hash), so all three
       // processes agree without a new primitive.
       const namedOrder = addrResult.type === "named_multi" && addrResult.ids.length > 1 && addrResult.ids.includes(COMPANION_ID)
-        ? namedOrderInMessage(effectiveContent, addrResult.ids)
+        ? namedOrderInMessage(addressText, addrResult.ids)
         : null;
       const myNamedPos = namedOrder ? namedOrder.indexOf(COMPANION_ID) : 0;
       if (namedOrder && myNamedPos > 0) {
