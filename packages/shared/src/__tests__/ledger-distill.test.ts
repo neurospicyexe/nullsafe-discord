@@ -312,13 +312,16 @@ describe("postLedgerLines", () => {
 });
 
 describe("staleHandoffReason", () => {
-  const o = (p: Partial<{ notFound: number; rules: string[]; failed: number }>) => ({ accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [] as string[], notFound: 0, ...p });
+  const o = (p: Partial<{ notFound: number; rules: string[]; failed: number; authRefused: number }>) => ({ accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [] as string[], notFound: 0, ...p });
   test("404 > 422:<rules> > transport > no_lines", () => {
     expect(staleHandoffReason(null)).toBe("no_lines");
     expect(staleHandoffReason(o({}))).toBe("no_lines");
     expect(staleHandoffReason(o({ failed: 1 }))).toBe("transport");
     expect(staleHandoffReason(o({ rules: ["health", "first_person", "health"], failed: 1 }))).toBe("422:health,first_person");
     expect(staleHandoffReason(o({ notFound: 2, rules: ["health"] }))).toBe("404");
+    // 401/403 (companion token on the clerk, 10-08) used to read as no_lines; it now names the token.
+    expect(staleHandoffReason(o({ authRefused: 3 }))).toBe("auth");
+    expect(staleHandoffReason(o({ authRefused: 3, failed: 1 }))).toBe("auth");
   });
 });
 

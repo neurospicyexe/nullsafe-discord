@@ -530,6 +530,8 @@ export interface PostLedgerOutcome {
   rules: string[];
   /** Lines that got a 404 (Halseth /ledger not deployed). Counted inside `rejected`. */
   notFound: number;
+  /** Lines refused 401/403 (the clerk's token is wrong). Counted inside `rejected`; optional so older fixtures still type. */
+  authRefused?: number;
 }
 
 /**
@@ -560,7 +562,7 @@ export function _setLedgerRetrySleepForTests(fn: ((ms: number) => Promise<void>)
  * duplicate has no content and is counted separately.
  */
 export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerOpts): Promise<PostLedgerOutcome> {
-  const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [], notFound: 0 };
+  const out: PostLedgerOutcome = { accepted: [], duplicates: 0, rejected: 0, dropped: 0, failed: 0, rules: [], notFound: 0, authRefused: 0 };
   const fullDelays = o.retryDelaysMs ?? LEDGER_RETRY_DELAYS_MS;
   const sleep = o.sleep ?? defaultSleep;
   // Once one line has exhausted its retries, Halseth is down, not flaky: the remaining lines get ONE
@@ -594,6 +596,7 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
         if (!res.ok) {
           out.rejected++;
           if (res.status === 404) out.notFound++;
+          else if (res.status === 401 || res.status === 403) out.authRefused = (out.authRefused ?? 0) + 1;
           else if (res.status === 422) out.rules.push(res.rule ?? "?");
         } else if (res.duplicate) out.duplicates++;
         else out.accepted.push({ id: res.id, content: res.content });
@@ -620,7 +623,7 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
 
 /**
  * Why a pass that ended with zero accepted lines wrote no handoff, in the STALE_HANDOFF vocabulary:
- * `404` (route not deployed), `422:<rules>` (grammar rejects, local pre-filter drops included, since
+ * `404` (route not deployed), `auth` (401/403: the clerk's token is refused), `422:<rules>` (grammar rejects, local pre-filter drops included, since
  * they name the same server rules), `transport` (5xx/429/network after every retry), or `no_lines`
  * (the clerk returned nothing, or nothing but duplicates). Precedence: the reason an operator can
  * act on first.
@@ -628,6 +631,9 @@ export async function postLedgerLines(librarian: LibrarianClient, o: PostLedgerO
 export function staleHandoffReason(outcome: PostLedgerOutcome | null): string {
   if (!outcome) return "no_lines";
   if (outcome.notFound > 0) return "404";
+  // A 401/403 is the 2026-10-08 failure (the clerk carried a companion token): ~130 refused lines/day read
+  // as `no_lines`, i.e. "a quiet session", for two days. Name it so the alarm points at the token.
+  if ((outcome.authRefused ?? 0) > 0) return "auth";
   if (outcome.rules.length > 0) return `422:${[...new Set(outcome.rules)].join(",")}`;
   if (outcome.failed > 0) return "transport";
   return "no_lines";
