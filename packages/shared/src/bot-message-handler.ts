@@ -1,7 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
-import { crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
+import { crossRoomClose, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -2884,7 +2884,7 @@ ${widened}`;
             if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
             // AFTER the live words, like the B32 and watchalong blocks: hermesDelta puts the speaker
             // label on the first line of this content, and that must stay the person's own words.
-            liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${crossRoom.block}\n[End of elsewhere. The message you are answering is the one above it.]` };
+            liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${crossRoom.block}\n${crossRoomClose(m.authorName, allAddressed.includes(COMPANION_ID) ? calledAsName(COMPANION_ID as VoiceCompanionId, effectiveContent) : null)}` };
             placed = true;
             break;
           }
