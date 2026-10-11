@@ -145,6 +145,8 @@ let _impContextCache: ImpContextCache | null = null;
 const hermesDeliveredMark = new Map<string, number>();
 /** Per room: newest other-room timestamp already carried into it (cross-room.ts). */
 const crossRoomMark = new Map<string, number>();
+/** Per room: the seat repair cut my own name from my last reply here; the next frame says so once. */
+const seatSlipped = new Set<string>();
 
 // Hermes session rotation (2026-09-05): per-channel last transcript id actually sent to the
 // gateway. Module-level = per-process = per companion bot, same idiom as hermesDeliveredMark
@@ -2916,8 +2918,11 @@ ${widened}`;
           isCompanionBot: senderCtx.isCompanionBot,
           siblingId: senderCtx.isCompanionBot ? (BOT_ID_COMPANION[message.author.id] ?? null) : null,
           isSol,
-        }), calledAsSelf)
+        }), calledAsSelf, seatSlipped.has(message.channelId))
       : null;
+    // Consumed once it rides a frame. STM holds the repaired text, so the rule check never sees the
+    // slip; the gateway transcript holds the original, and the model copies its own lines.
+    if (frame) seatSlipped.delete(message.channelId);
     if (frame && inferenceMode !== "hermes") {
       for (let i = liveHistory.length - 1; i >= 0; i--) {
         const m = liveHistory[i]!;
@@ -3078,6 +3083,7 @@ ${widened}`;
         : { text: response, repaired: 0, unrepaired: 0 };
       if (seat.repaired > 0 || seat.unrepaired > 0) {
         console.warn(`[${COMPANION_ID}] seat repair: ${seat.repaired} own-name vocative(s) cut, ${seat.unrepaired} left ch=${message.channelId}`);
+        seatSlipped.add(message.channelId);
         if (seat.text.trim()) response = seat.text;
       }
       // Stop strings, after the fact (speaker-frame.ts cutImpersonation): the gateway takes none, so a

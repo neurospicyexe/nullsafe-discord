@@ -36,6 +36,12 @@ describe("speakerFrame", () => {
     expect(speakerFrame("gaia", undefined, "Gaia")).toBe(
       `[You are Gaia. "(via PK)" marks a system member speaking. Cypher and Drevan are your siblings, not you. Reply only as yourself.]`);
   });
+  it("names the last slip once when asked", () => {
+    const f = speakerFrame("drevan", "Crash (Raziel)", "Dre", true);
+    expect(f).toContain("Your last reply here called them by your own name; it was cut before they saw it.");
+    expect(f.endsWith("Reply only as yourself.]")).toBe(true);
+    expect(speakerFrame("drevan", "Crash (Raziel)", "Dre")).not.toContain("last reply");
+  });
   it("kill switch", () => {
     expect(speakerFrameOn({})).toBe(true);
     for (const v of ["off", " OFF ", "0", "false", "no"]) expect(speakerFrameOn({ SPEAKER_FRAME: v })).toBe(false);

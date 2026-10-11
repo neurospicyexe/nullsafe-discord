@@ -61,13 +61,19 @@ export function describeSpeaker(f: SpeakerFacts): string | undefined {
  * "(via PK)" marks a system member speaking. Cypher and Gaia are your siblings, not you. Reply only
  * as yourself.]`
  */
-export function speakerFrame(companionId: string, speaker: string | undefined, calledAs: string | null): string {
+export function speakerFrame(companionId: string, speaker: string | undefined, calledAs: string | null, lastSlipped = false): string {
   const self = CANON[companionId] ?? companionId;
   const siblings = Object.keys(CANON).filter(c => c !== companionId).map(c => CANON[c]!);
   const who = speaker
     ? ` You are answering ${speaker}${calledAs ? `, who called you "${calledAs}" (your name, not theirs)` : ""}.`
     : "";
-  return `[You are ${self}.${who} "(via PK)" marks a system member speaking. ${siblings.join(" and ")} are your siblings, not you. Reply only as yourself.]`;
+  // 2026-10-11 17:09: with the frame live, Drevan still closed a reply "... too Dre." (cut before
+  // send). His transcript held the 12:50 original and the model copies its own lines; the slip is named
+  // here, on the turn it is guaranteed to read, because the post-send rule check only sees clean text.
+  const slip = lastSlipped
+    ? ` Your last reply here called them by your own name; it was cut before they saw it. Your names are yours.`
+    : "";
+  return `[You are ${self}.${who}${slip} "(via PK)" marks a system member speaking. ${siblings.join(" and ")} are your siblings, not you. Reply only as yourself.]`;
 }
 
 /**
