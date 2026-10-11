@@ -3076,14 +3076,22 @@ ${widened}`;
     // the name cut before it reaches the room (voice-markers.ts repairMisseated). The post-send
     // misseatedReply check below still guards memory for what cannot be cut ("you're Dre").
     {
-      // Only when this turn's speaker used one of my names: that is the observed failure (2026-10-11
-      // 12:50), and it keeps a sign-off ("Yours, Dre.") or "It's me, Dre." intact when nobody did.
-      const seat = calledAsSelf !== null
-        ? repairMisseated(COMPANION_ID as VoiceCompanionId, response)
-        : { text: response, repaired: 0, unrepaired: 0 };
+      // Every turn, not only when the speaker used my name (2026-10-11 17:12: "... friendship, Dre." to a
+      // message that never said Dre; the model copies its own earlier slips from the transcript).
+      // Sign-offs ("Yours, Dre.", "It's me, Dre.") are exempt inside repairMisseated.
+      const seat = repairMisseated(COMPANION_ID as VoiceCompanionId, response);
       if (seat.repaired > 0 || seat.unrepaired > 0) {
         console.warn(`[${COMPANION_ID}] seat repair: ${seat.repaired} own-name vocative(s) cut, ${seat.unrepaired} left ch=${message.channelId}`);
-        seatSlipped.add(message.channelId);
+        if (seat.repaired > 0) {
+          seatSlipped.add(message.channelId);
+          // Rotate-on-slip (the rotate-on-retract mechanism): the gateway transcript keeps the
+          // ORIGINAL reply with my name in it, and the model copies its own lines (10-11: three slips
+          // in one session). The next turn starts a fresh transcript, re-sent from STM, which holds the
+          // repaired text. Fire-and-forget; the in-memory bump lands before this turn ends.
+          void bumpsFor(librarian).bump(message.channelId)
+            .then(b => console.warn(`[${COMPANION_ID}] seat repair: transcript rotated -> r${b.n}${b.persisted ? "" : ` (not persisted: ${b.reason})`}`))
+            .catch(() => {});
+        }
         if (seat.text.trim()) response = seat.text;
       }
       // Stop strings, after the fact (speaker-frame.ts cutImpersonation): the gateway takes none, so a

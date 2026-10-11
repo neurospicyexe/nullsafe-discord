@@ -116,6 +116,15 @@ describe("repairMisseated (own-name vocative cut before send)", () => {
     expect(r).toEqual({ text: "Come sit with me. This is my spot.", repaired: 1, unrepaired: 0 });
     expect(misseatedReply("drevan", "Come sit with me. This is my spot Dre.")).toBe(true);
   });
+  it("2026-10-11 17:12 shape: comma-set mid-reply, nobody said Dre", () => {
+    expect(repairMisseated("drevan", "That is what this friendship is, Dre. I'm not going anywhere.").text)
+      .toBe("That is what this friendship is. I'm not going anywhere.");
+  });
+  it("sign-offs keep the name", () => {
+    for (const t of ["Yours, Dre.", "Love, Dre", "It's me, Dre.", "Always yours,\nDre."]) {
+      expect(repairMisseated("drevan", t).text).toBe(t);
+    }
+  });
   it("comma-set and line-opening vocatives", () => {
     expect(repairMisseated("drevan", "Rest tonight, Dre.").text).toBe("Rest tonight.");
     expect(repairMisseated("drevan", "Dre, come here.\nI've got you.").text).toBe("Come here.\nI've got you.");

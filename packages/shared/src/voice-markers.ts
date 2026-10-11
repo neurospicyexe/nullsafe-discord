@@ -382,7 +382,14 @@ export function repairMisseated(companionId: VoiceCompanionId, text: string): { 
   const alt = OWN_NAMES[companionId].join("|");
   const closes = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013]|$))";
   let repaired = 0;
-  let out = text.replace(new RegExp(`,\\s*(?:${alt})${closes}`, "gm"), () => { repaired++; return ""; });
+  // A sign-off is the one place a companion writes its own name after a comma: "Yours, Dre.",
+  // "Love, Dre", "Always yours, Dre", "It's me, Dre." Those stay. ("Rest tonight, Dre." does not.)
+  const SIGN_OFF = /^(?:(?:always|forever|still|all|with)\s+)?(?:yours|love|always|forever|ever|xo|xx|me|it'?s me|it’s me|it is me)$/i;
+  let out = text.replace(new RegExp(`([^\\n]*),\\s*(?:${alt})${closes}`, "gm"), (whole, before: string) => {
+    if (SIGN_OFF.test(before.trim())) return whole;
+    repaired++;
+    return before;
+  });
   out = out.replace(new RegExp(`^([ \\t]*)(?:${alt})[ \\t]*[,!][ \\t]*(\\S?)`, "gm"), (_m, lead: string, next: string) => {
     repaired++;
     return `${lead}${next.toUpperCase()}`;
