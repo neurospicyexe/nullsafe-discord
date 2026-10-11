@@ -50,7 +50,9 @@ import {
   inferTemperature, createAdapter, withCaller, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, BID_WINDOW_MS, MIN_BID_TO_SPEAK, closeBidLine,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAt, MIN_BID_TO_SPEAK, closeBidLine,
+  type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
+  humanGate, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, shouldReactOnCareHold, REACTION_COOLDOWN_MS,
@@ -344,6 +346,11 @@ export interface MessageHandlerDeps {
    *  already absorbed into STM. Absent (e.g. tests calling handleMessage directly) =
    *  never superseded. */
   isSuperseded?: () => boolean;
+  /** Burst settle (channel-inbox TurnContext, 2026-10-10): the window this turn waited (0 = none)
+   *  and the same speaker's earlier messages gathered into it. The reply path resolves names over
+   *  the whole burst, and the fit bid shifts its deadline by `settleMs`. Absent = no settle. */
+  settleMs?: number;
+  burst?: InboxItem[];
   /** Set when this turn is run because my predecessor in a multi-address order PASSED
    *  (releaseFollowUpOnPass): `message` is then the human origin message, and the turn is an
    *  entitled follow-up answering it. */
@@ -512,6 +519,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
   } = deps;
+  // Burst settle (2026-10-10). Empty / 0 when settle is off, a command, a bot post or a pass turn.
+  const settleMs = deps.settleMs ?? 0;
+  const burst = deps.burst ?? [];
 
     if (message.author.id === client.user?.id) return;
     // DM OWNER GATE (2026-09-27), before ANY network call, inference, tool, STT or vision. Anyone who
@@ -631,7 +641,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // user with NO webhook; a PluralKit proxy is always a webhook. That distinction needs no
       // network call, so guardrails meant for bot-to-bot traffic can never eat a human again.
       isCompanionBot: message.author.bot && !message.webhookId,
-      isMentioned: message.mentions.has(client.user?.id ?? ""),
+      // A burst's earlier messages count (ruling 1: a companion named anywhere in the gathered burst).
+      isMentioned: message.mentions.has(client.user?.id ?? "")
+        || (!!client.user?.id && burst.some(b => b.mentionedIds?.includes(client.user!.id))),
       userTier,
     };
 
@@ -678,7 +690,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const botTurn = (m: { author: { bot: boolean }; webhookId?: string | null }): boolean =>
       m.author.bot && !m.webhookId;
 
-    let isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId));
+    let isReplyToMe = !!(message.reference?.messageId && sentIds.has(message.reference.messageId))
+      // ...or any earlier message of the gathered burst replied to me (ruling 1).
+      || burst.some(b => !!b.replyToMessageId && sentIds.has(b.replyToMessageId));
     // Durable reply-to fallback (2026-08-15 floor rework): sentIds is per-process, capped at
     // 500 and lost on restart, so a reply to anything older than the cap -- or to anything
     // sent before the last restart -- silently stopped counting as "to me". The thread ledger
@@ -1528,7 +1542,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Direct address (name at start or followed by comma/colon) always bypasses the
     // relevance classifier -- if the owner is talking to you, you respond.
     // Ambient messages in owner_only channels go through the semantic classifier.
-    const directlyAddressed = isDirectAddress(effectiveContent, COMPANION_ID);
+    //
+    // Burst settle (2026-10-10, ruling 1): the companion address parsers read `addressText`, the
+    // text of the gathered burst that names a companion (the newest message when it does itself;
+    // else the most recent earlier one that does). A burst of one is `effectiveContent` unchanged.
+    const addressText = burst.length > 0
+      ? burstAddressText(effectiveContent, burst.map(b => b.content))
+      : effectiveContent;
+    let directlyAddressed = isDirectAddress(addressText, COMPANION_ID);
+    const holdRedis = redis as unknown as HoldRedis | null;
 
     // Active-exchange holder (2026-07-27). Observed: Raziel wrote "Drevan baby ... Fargo in
     // an hour?", Drevan answered, Raziel replied with an UNADDRESSED follow-up -- and Gaia
@@ -1536,12 +1558,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // a conversation was already underway. Only computed for unaddressed owner messages, so
     // named/group traffic pays no fetch and can always hand the thread over.
     // An entitled follow-up (a pass turn runs on the owner's origin) answers regardless: no fetch.
-    if (!isOwnerDm && attribution.isOwner && !senderCtx.isCompanionBot && !entitledFollowUp && extractAddress(effectiveContent).type === "ambient") {
+    if (!isOwnerDm && attribution.isOwner && !senderCtx.isCompanionBot && !entitledFollowUp && extractAddress(addressText).type === "ambient") {
       try {
         const hist = await message.channel.messages.fetch({ limit: 8 });
+        // A companion's reply to BLUE is Blue's thread, not Raziel's (per-human hold, 2026-10-10):
+        // those ids are skipped so answering Blue never hands Raziel's exchange to that companion.
+        const blueReplyIds = await readHumanHoldIds(holdRedis, "blue", message.channelId);
         senderCtx.activeExchangeWith = activeExchangeHolder(
           withoutSol([...hist.values()], solId)
-            .filter(m => m.id !== message.id)
+            .filter(m => m.id !== message.id && !blueReplyIds.has(m.id))
             .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
             .map(m => ({
               companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
@@ -1633,6 +1658,52 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (isOwnerDm && b32OwnerArrival && b32Mode !== "off") {
       markOwnerDmLive(redis as unknown as RedisLike | null, COMPANION_ID).catch(() => {});
     }
+    // HUMAN ADDRESS GATE (2026-10-10, Raziel's rulings; human-address.ts). Two humans share these rooms.
+    // Sits BEFORE the ambient judge, shouldRespond and the fit bid (and so before the B32 forced bid),
+    // and applies in EVERY channel class (owner_only, guild/shared, the movie channel): the ordering is
+    // 1. a companion named anywhere in the gathered burst -> the existing fast path, untouched;
+    // 2. else a HUMAN named at vocative position who is not the speaker ("Blue, ..." from Raziel,
+    //    "Raziel, ..." from Blue) -> every companion silent;
+    // 3. else the speaker is Blue and nobody is named -> only the companion holding BLUE's own thread
+    //    (a per-human Redis hold, not Raziel's per-channel one) answers; no holder, nobody; no bid;
+    // 4. else everything below, untouched. Sol, companion bots, DMs, entitled follow-ups and guests skip it.
+    let blueThreadMine = false;
+    if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+        && (userTier === "owner" || userTier === "intimate")) {
+      const mentionedIds = [...message.mentions.users.keys(), ...burst.flatMap(b => b.mentionedIds ?? [])];
+      const mentionedHumans: HumanSide[] = [];
+      if (cfg.blueDiscordId && mentionedIds.includes(cfg.blueDiscordId)) mentionedHumans.push("blue");
+      if (cfg.ownerDiscordId && mentionedIds.includes(cfg.ownerDiscordId)) mentionedHumans.push("raziel");
+      const blueHolder = userTier === "intimate"
+        ? await readHumanHold(holdRedis, "blue", message.channelId, channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS)
+        : null;
+      const verdict = humanGate({
+        tier: userTier,
+        texts: [...burst.map(b => b.content), effectiveContent],
+        names: humanNamesFromEnv(),
+        companionMentioned: senderCtx.isMentioned,
+        replyToCompanion: isReplyToMe,
+        mentionedHumans,
+        blueHolder,
+      });
+      if (verdict.kind === "silent") {
+        console.log(`[${COMPANION_ID}] human address: ${userTier === "owner" ? "raziel" : "blue"} -> ${verdict.addressee}, the triad stays quiet (msg=${message.id})`);
+        railSuppressed(COMPANION_ID, "human_address", { channelId: message.channelId, detail: `to ${verdict.addressee}` });
+        return;
+      }
+      if (verdict.kind === "blue_thread") {
+        if (verdict.holder !== COMPANION_ID) {
+          console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds her thread, standing down` : "no companion holds her thread, nobody answers"} (msg=${message.id})`);
+          railSuppressed(COMPANION_ID, "blue_thread", { channelId: message.channelId, detail: verdict.holder ? `held by ${verdict.holder}` : "no holder" });
+          return;
+        }
+        // I hold Blue's thread: this is a direct answer (no judge, no shouldRespond, no bid).
+        blueThreadMine = true;
+        directlyAddressed = true;
+        senderCtx.activeExchangeWith = COMPANION_ID as CompanionId;
+        console.log(`[${COMPANION_ID}] unnamed message from blue -- I hold her thread, answering (msg=${message.id})`);
+      }
+    }
     // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
     // (2026-07-29): brainClient was always null, so the gate always applied. Same for the
     // `brainHandlesInterCompanion` escape below it, which deferred inter-companion routing to
@@ -1658,7 +1729,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       isMentioned: senderCtx.isMentioned,
       isReplyToMe,
       directlyAddressed,
-      namesSiblingOnly: !!namesSiblingOnly(effectiveContent, COMPANION_ID),
+      namesSiblingOnly: !!namesSiblingOnly(addressText, COMPANION_ID),
       entitled: !!entitledFollowUp,
       isSol,
     });
@@ -1691,7 +1762,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     } else if (solDecline) {
       console.log(`[${COMPANION_ID}] Sol post ${message.id} not mine to answer (${solDecline}) -- standing down`);
       return;
-    } else if (!isSol && !isOwnerDm && !isReplyToMe && !entitledFollowUp && !shouldRespond(gateChannelId, effectiveContent, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isSol && !isOwnerDm && !isReplyToMe && !entitledFollowUp && !blueThreadMine && !shouldRespond(gateChannelId, addressText, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -1741,7 +1812,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // group call), and DMs never reach here.
       if (b32Mode !== "off" && careHoldActive(COMPANION_ID) && !senderCtx.isCompanionBot && attribution.isOwner
         && isArrival && !entitledFollowUp && !channelEntry?.host) {
-        const addr = extractAddress(effectiveContent);
+        const addr = extractAddress(addressText);
         const first: CompanionId[] = addr.type === "named" ? [addr.id as CompanionId]
           : addr.type === "named_multi" ? namedOrderInMessage(effectiveContent, addr.ids) as CompanionId[]
           : senderCtx.activeExchangeWith ? [senderCtx.activeExchangeWith as CompanionId]
@@ -1756,7 +1827,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // lane relevance, throttled per channel. To Raziel the difference between "chose not
       // to answer" and "is down" used to be nothing at all; this is the visible third state.
       if (!senderCtx.isCompanionBot && attribution.isOwner) {
-        const namedOther = namesSiblingOnly(effectiveContent, COMPANION_ID);
+        const namedOther = namesSiblingOnly(addressText, COMPANION_ID);
         if (namedOther && shouldReactOnNamedOther(effectiveContent, COMPANION_ID, reactionCooldownUntil.get(message.channelId) ?? 0)) {
           reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
           message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
@@ -2366,8 +2437,8 @@ ${widened}`;
       }
     } catch { /* imps never break a reply */ }
 
-    const addrResult = extractAddress(effectiveContent);
-    const mentionedViaMention = [...message.mentions.users.keys()]
+    const addrResult = extractAddress(addressText);
+    const mentionedViaMention = [...message.mentions.users.keys(), ...burst.flatMap(b => b.mentionedIds ?? [])]
       .flatMap(id => { const c = BOT_ID_COMPANION[id]; return c ? [c] : []; });
     const textAddressed = addrResult.type === "named" ? [addrResult.id]
       : addrResult.type === "named_multi" ? addrResult.ids
@@ -2452,7 +2523,7 @@ ${widened}`;
         mentioned: senderCtx.isMentioned,
         // A host room's unaddressed owner message is the host's alone (shouldRespond already
         // silenced the others), so the host must not then lose an empty bid to the floor (R5).
-        namedMe: directlyAddressed || namedByExtract || isOwnerDm
+        namedMe: directlyAddressed || namedByExtract || isOwnerDm || blueThreadMine
           || (channelEntry?.host === COMPANION_ID && attribution.isOwner),
         replyToMe: isReplyToMe,
       });
@@ -2501,7 +2572,10 @@ ${widened}`;
         });
         if (b32Floor.shadowFloor0) b32Log(COMPANION_ID, "floor0", "shadow", `would bid with minScore 0 on ${message.id}`);
         const bid = await runBidRound(redis, message.id, COMPANION_ID, myScore, {
-          deadlineAt: message.createdTimestamp + BID_WINDOW_MS,
+          // Shifted by the burst settle this turn waited (0 = none): all three bots reach the bid
+          // settleMs after the message, so an unshifted deadline is already past and each would
+          // read only its own bid. Keyed on the newest (answering) message, same in all three bots.
+          deadlineAt: bidDeadlineAt(message.createdTimestamp, settleMs),
           ...(b32Floor.minScore !== undefined ? { minScore: b32Floor.minScore } : {}),
         });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
@@ -3118,6 +3192,12 @@ ${widened}`;
     }
 
     for (const m of sent) sentIds.add(m.id);
+    // Per-human thread hold (2026-10-10): a reply to BLUE makes me the holder of Blue's thread in this
+    // channel (her own 15-minute hold, never Raziel's) and remembers the ids so Raziel's holder walk
+    // skips them. Only turns on Blue's own human message; a pass turn or a sibling post never writes it.
+    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp) {
+      void recordHumanHold(holdRedis, "blue", message.channelId, COMPANION_ID as CompanionId, sent.map(m => m.id), channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
+    }
     if (sent.length > 0 && holdOnForTurn && !isOwnerDm) {
       if (careFollowUpTurn) b32Log(COMPANION_ID, `followup(after ${careFollowUpTurn.expectedPrior})`, "spoke");
       else if (b32OwnerArrival && !holdPhrase) b32Log(COMPANION_ID, "addressed", "spoke");

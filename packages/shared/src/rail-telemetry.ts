@@ -41,6 +41,8 @@ export type RailName =
   | "form_ratchet"   // form drift detected
   | "superseded"     // a newer human message arrived mid-inference
   | "verbatim"       // verbatim-copy rail: reply is a byte copy of a sibling's or my own recent message (09-26)
+  | "human_address"  // human-address gate: Raziel/Blue spoke to each other by name, the triad stays quiet (10-10)
+  | "blue_thread"    // human-address gate: unnamed Blue message belongs to another companion, or to nobody (10-10)
   | "cooldown";      // any timed hold
 
 export interface RailEvent {

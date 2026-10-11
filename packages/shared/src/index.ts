@@ -90,4 +90,5 @@ export * from "./med-reminder.js";
 export type { OwnerDmTarget, OwnerDmLane } from "./owner-dm.js";
 // B37 step 1: the address classifier (pure) and its shadow run (2026-09-29).
 export * from "./address-model.js";
+export * from "./human-address.js";
 export * from "./address-shadow.js";

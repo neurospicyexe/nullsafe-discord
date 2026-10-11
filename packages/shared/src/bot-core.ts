@@ -48,7 +48,7 @@ import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
 import type { FollowUpEntitlement } from "./sequential-floor.js";
 import { followUpPassEnabled } from "./pass-turn.js";
-import { ChannelInbox } from "./channel-inbox.js";
+import { ChannelInbox, burstSettleMs, type TurnContext } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
 import { mutedGuildIds, isMutedGuild } from "./guild-mute.js";
@@ -877,7 +877,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // supersede the reply of every turn ahead of it. Before this, every messageCreate ran
   // handleMessage fully concurrently -- with 30-120s hermes turns, replies landed answering
   // channel state from minutes ago, sometimes out of order (the "delayed catch-up" clunk).
+  // BURST_SETTLE_MS (default 4000, 0 = off): a human burst is gathered and answered as one turn.
+  const settleMs = burstSettleMs();
+  console.log(`[${companionId}] burst settle: ${settleMs > 0 ? `${settleMs}ms` : "off"}`);
   const inbox = new ChannelInbox({
+    settleMs,
     isCommandShaped: (content) => commandGuard?.test(content) ?? false,
     log: (m) => console.log(`[${companionId}] ${m}`),
   });
@@ -982,8 +986,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         // rare and superseding on them just regenerates with their post in view).
         authorIsHuman: (!message.author.bot || message.webhookId !== null) && !isSol,
         content: message.content,
+        // Burst bookkeeping: who spoke (a PK webhook shares one author id, so the name is part of it),
+        // and the mentions / reply target the reply path reads over the whole gathered burst.
+        authorKey: `${message.author.id}:${message.author.username}`,
+        mentionedIds: [...message.mentions.users.keys()],
+        replyToMessageId: message.reference?.messageId ?? null,
       },
-      (isSuperseded) => runTurn(message, pkSenderId, isSuperseded),
+      (isSuperseded, turnCtx) => runTurn(message, pkSenderId, isSuperseded, undefined, turnCtx),
     );
   });
 
@@ -1024,7 +1033,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
 
   // One turn. Every per-process dependency, wired once; the MessageCreate path and the
   // follow-up pass path above both come through here, so they cannot drift.
-  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: () => boolean, followUpPass?: FollowUpEntitlement): Promise<void> {
+  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: () => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext): Promise<void> {
     return handleMessage(message, {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
@@ -1060,6 +1069,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       DISTILLATION_PROMPT: distillationPrompt, DISTILLATION_INTERVAL: distillationInterval, PULSE_INTERVAL: pulseInterval,
       ...(auditConfig ? { AUDIT_TRIGGERS: auditConfig.auditTriggers, AUDIT_MODE_INJECTION: auditConfig.auditModeInjection } : {}),
       isSuperseded,
+      ...(turnCtx ? { settleMs: turnCtx.settleMs, burst: turnCtx.burst } : {}),
       ...(followUpPass ? { followUpPass } : {}),
     });
   }

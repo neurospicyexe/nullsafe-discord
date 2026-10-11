@@ -266,6 +266,15 @@ const shared = {
   // Listed per the standing rule above.
   ADDRESS_MODEL:               process.env.ADDRESS_MODEL ?? "shadow",
   ADDRESS_SHADOW_LOG:          process.env.ADDRESS_SHADOW_LOG,
+  // BURST_SETTLE_MS (2026-10-10, channel-inbox.ts burstSettleMs): the window a human burst is gathered
+  // for and answered as one turn. Code default 4000; `0` disables (exact old behavior). Same value in
+  // all three bots: the fit-bid deadline is shifted by it, so a bot on a different value splits the bid.
+  // RAZIEL_NAMES / BLUE_NAMES (human-address.ts humanNamesFromEnv): comma lists of the names that CALL
+  // each human at vocative position ("Blue, ..."); the triad stays quiet when one human calls the other.
+  // Code defaults "raziel,raz" and "blue". Listed per the standing rule above.
+  BURST_SETTLE_MS:             process.env.BURST_SETTLE_MS,
+  RAZIEL_NAMES:                process.env.RAZIEL_NAMES,
+  BLUE_NAMES:                  process.env.BLUE_NAMES,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

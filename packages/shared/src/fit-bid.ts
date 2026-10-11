@@ -52,6 +52,18 @@ export const MONOPOLY_TURNS = 2;
  * exactly like working (someone always answers).
  */
 export const BID_WINDOW_MS = 2500;
+
+/**
+ * The instant a bid round closes: `message.createdTimestamp + settleMs + BID_WINDOW_MS`, where settleMs
+ * is the burst-settle window the turn waited (channel-inbox TurnContext.settleMs; 0 when the turn did
+ * not settle, which gives the old `createdTimestamp + BID_WINDOW_MS`). Every bot must compute the SAME
+ * instant from the SAME message: with settle on, a bot reaches the bid ~settleMs after the message, so
+ * an unshifted createdTimestamp + 2500 deadline is already past, each bot would write-then-read at once,
+ * see only itself, and all three would speak. Keyed on the NEWEST (answering) message of the burst.
+ */
+export function bidDeadlineAt(createdTimestamp: number, settleMs = 0): number {
+  return createdTimestamp + Math.max(0, settleMs) + BID_WINDOW_MS;
+}
 /** Bid keys are transient scratch space; expire them well after the window so a slow process cannot
  *  read a half-populated round, but soon enough that Redis does not accumulate one key per message. */
 export const BID_TTL_MS = 30_000;
