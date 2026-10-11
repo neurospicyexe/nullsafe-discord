@@ -98,6 +98,20 @@ describe("per-bot overrides (P2-12: a generic HERMES_API_URL= in .env must not f
     for (const l of lines) expect(l).not.toContain("8642"); // names only, never values
   });
 
+  it("HALSETH_SECRET / ADMIN_SECRET are never folded: the prefixed token is the companion's own, the generic is the admin token", () => {
+    const env: NodeJS.ProcessEnv = { NULLSAFE_BOT: "drevan" };
+    const lines: string[] = [];
+    const r = loadEnvFile({
+      path: writeEnv(["HALSETH_SECRET=admin-token", "DREVAN_HALSETH_SECRET=drevan-token", "ADMIN_SECRET=admin2", "DREVAN_ADMIN_SECRET=nope"]),
+      env, log: l => lines.push(l),
+    });
+    expect(env["HALSETH_SECRET"]).toBe("admin-token");
+    expect(env["DREVAN_HALSETH_SECRET"]).toBe("drevan-token");
+    expect(env["ADMIN_SECRET"]).toBe("admin2");
+    expect(r.perBot).toEqual([]);
+    for (const l of lines) expect(l).not.toContain("HALSETH_SECRET taken");
+  });
+
   it("only the generic key -> the generic (file) value stands", () => {
     const env: NodeJS.ProcessEnv = { NULLSAFE_BOT: "drevan" };
     const r = loadEnvFile({ path: writeEnv(["HERMES_API_URL=http://127.0.0.1:9999/v1"]), env, log: quiet });

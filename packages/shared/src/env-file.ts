@@ -86,6 +86,14 @@ export function findEnvFile(cwd: string = process.cwd(), env: NodeJS.ProcessEnv 
  *  file has no generic line for them (a stale pm2 generic is then corrected too). */
 export const PER_BOT_OVERRIDE_KEYS = ["INFERENCE_MODE", "HERMES_API_URL"] as const;
 
+/** Keys whose `<BOT>_` variant is a DIFFERENT credential, never a per-bot copy of the generic.
+ *  `<C>_HALSETH_SECRET` is the companion's own Halseth token; the generic HALSETH_SECRET is the
+ *  ADMIN token the ledger clerk (clerkSecretFrom) and the jev gate need. From 10-08 to 10-10 the
+ *  override folded the companion token onto the generic key and every clerk ledger line was
+ *  refused 403 again (the B41 symptom, ~130 a day, STALE_HANDOFF on idle passes), plus
+ *  jev-gate 401s. Config reads the prefixed token directly, so nothing needs the fold. */
+export const NEVER_PER_BOT_KEYS: ReadonlySet<string> = new Set(["HALSETH_SECRET", "ADMIN_SECRET"]);
+
 /** The bot's env prefix: NULLSAFE_BOT=cypher -> "CYPHER"; else pm2's `name` ("cypher-bot" ->
  *  "CYPHER"). null when the process is not a bot. */
 export function botEnvPrefix(env: NodeJS.ProcessEnv = process.env): string | null {
@@ -109,6 +117,7 @@ export function applyPerBotOverrides(
   const candidates = new Set<string>([...keys, ...PER_BOT_OVERRIDE_KEYS]);
   for (const key of candidates) {
     if (key.startsWith(`${prefix}_`)) continue; // never fold a prefixed key onto itself
+    if (NEVER_PER_BOT_KEYS.has(key)) continue; // a different credential, not a per-bot variant
     const prefixed = `${prefix}_${key}`;
     const value = env[prefixed];
     if (value === undefined) continue;
