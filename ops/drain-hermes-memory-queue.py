@@ -98,7 +98,24 @@ def fetch_existing_facts(url, secret):
         print("WARN: cannot fetch existing facts (%s) -- user-class posting disabled this run" % str(e)[:80])
         return None
     rows = data.get("facts") or data.get("items") or (data if isinstance(data, list) else [])
-    return {normalize(r.get("fact")) for r in rows if isinstance(r, dict) and r.get("fact")}
+    # normalized text -> row id, so a 'replace' op can name the row it supersedes.
+    return {normalize(r.get("fact")): r.get("id") for r in rows if isinstance(r, dict) and r.get("fact")}
+
+
+def find_replaced_fact(existing_facts, old_text):
+    """The id of the ONE live fact a 'replace' op's old_text refers to, else None.
+
+    Exact normalized match first; otherwise a unique containment match in either direction
+    (Hermes quotes a USER.md line that may be a fragment of, or wrap, the stored fact). Two or
+    more candidates, or an id-less row, is None: retiring the wrong fact cannot be undone.
+    """
+    old = normalize(old_text)
+    if not old or not existing_facts:
+        return None
+    if old in existing_facts:
+        return existing_facts[old]
+    hits = [fid for text, fid in existing_facts.items() if fid and (old in text or text in old)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def post_json(url, secret, path, payload):
@@ -141,17 +158,26 @@ def route_operation(url, secret, companion, target, op, existing_facts, dry_run)
             return "transient", "fact list unavailable -- not posting blind: %s" % content[:60]
         if normalize(content) in existing_facts:
             return True, "already in architect_facts (dedup): %s" % content[:60]
-        desc = "architect_fact[%s]: %s" % (action, content[:80])
+        supersedes_id = find_replaced_fact(existing_facts, op.get("old_text")) if action == "replace" else None
+        desc = "architect_fact[%s%s]: %s" % (action, " supersedes " + str(supersedes_id)[:8] if supersedes_id else "", content[:80])
         if dry_run:
             return True, desc
-        status = post_json(url, secret, "/identity/architect-facts", {
+        body = {
             "fact": content,
             "companion_id": companion,
             "source": "hermes-queue",
             "status": "open",
-        })
+        }
+        if supersedes_id:
+            body["supersedes_id"] = supersedes_id
+        status = post_json(url, secret, "/identity/architect-facts", body)
         if 200 <= status < 300:
-            existing_facts.add(normalize(content))  # dedup within the run too
+            existing_facts[normalize(content)] = None  # dedup within the run too
+            if supersedes_id:
+                # The old row is retired server-side; drop it so a second replace of the same
+                # line in this run falls through to a plain add instead of a 4xx on a retired id.
+                for k in [k for k, v in existing_facts.items() if v == supersedes_id]:
+                    del existing_facts[k]
         return (True if 200 <= status < 300 else "transient"), desc
     if target == "memory":
         desc = "growth_journal[%s]: %s" % (action, content[:80])
