@@ -126,7 +126,7 @@ export function humanGate(input: HumanGateInput): HumanGateVerdict {
 // ------------------------------------------------------------------ per-human thread hold
 //
 // The 15-minute exchange hold (`activeExchangeHolder`) is per CHANNEL and keyed to Raziel: it takes
-// the last companion message in the room. Blue's thread must be her own: the companion that replied
+// the last companion message in the room. Blue's thread must be Blue's own: the companion that replied
 // TO BLUE in this channel inside the window. It lives in Redis (shared by all three bots, one key per
 // human per channel). The ids of replies sent to Blue are kept in a set so Raziel's history walk can
 // skip them: a companion answering Blue must not become the holder of Raziel's thread.
@@ -194,3 +194,80 @@ export async function readHumanHoldIds(redis: HoldRedis | null, human: HumanSide
     return new Set();
   }
 }
+
+
+// ── Learned names (2026-10-10, Raziel's ruling: "learn from the proxies") ───────────────────────
+// Blue's system has 393 PluralKit members; loading them all would add everyday words ("The", "Guy",
+// "Max") as addressees. Instead every PK proxy from Blue's system teaches the gate that front's
+// name, so anyone who has actually fronted is covered, new fronts included, with no upkeep and no
+// reload. Stored in one Redis set shared by all three bots (no expiry); read with a short cache.
+
+/** Words that must never become an addressee even if a front is named that way. */
+const NAME_STOP = new Set([
+  "the", "and", "but", "you", "your", "she", "her", "him", "his", "they", "them", "our", "not",
+  "yes", "no", "hey", "hi", "hello", "baby", "babe", "love", "dear", "guy", "man", "boy", "girl",
+  "kid", "sir", "mom", "dad", "mrs", "miss", "mr", "dr", "the-", "who", "what", "okay", "ok",
+]);
+
+/** Name tokens a front can be called by: its first name and any quoted nickname, lowercased.
+ *  "Rosalind ‘Birdy’ M. || 🍂" -> ["rosalind", "birdy"]; "Dave (the best one) || 🍂" -> ["dave"].
+ *  Tokens under 3 letters or in NAME_STOP are dropped. */
+export function nameTokensFromFront(front: string | null | undefined): string[] {
+  if (!front) return [];
+  let s = front.split("||")[0]!.replace(/\([^)]*\)/g, " ").trim();
+  const out = new Set<string>();
+  for (const m of s.matchAll(/[‘’'"“”]([^‘’'"“”]{2,30})[‘’'"“”]/g)) {
+    const nick = m[1]!.trim().split(/\s+/)[0]!.toLowerCase().replace(/[^a-z-]/g, "");
+    if (nick) out.add(nick);
+  }
+  s = s.replace(/[‘’'"“”][^‘’'"“”]*[‘’'"“”]/g, " ");
+  const first = (s.trim().split(/\s+/)[0] ?? "").toLowerCase().replace(/[^a-z-]/g, "");
+  if (first) out.add(first);
+  return [...out].filter(t => t.length >= 3 && !NAME_STOP.has(t));
+}
+
+export interface NameRedis {
+  sadd(key: string, ...members: string[]): Promise<unknown>;
+  smembers(key: string): Promise<string[]>;
+}
+
+const learnedKey = (side: HumanSide) => `ns:humannames:${side}`;
+const learnedCache = new Map<HumanSide, { at: number; names: string[] }>();
+const LEARNED_TTL_MS = 60_000;
+
+/** Record a proxied front's name tokens. Fire-and-forget; never throws. */
+export async function learnHumanName(redis: NameRedis | null, side: HumanSide, front: string | null | undefined): Promise<string[]> {
+  const tokens = nameTokensFromFront(front);
+  if (!redis || tokens.length === 0) return tokens;
+  try {
+    await redis.sadd(learnedKey(side), ...tokens);
+    const c = learnedCache.get(side);
+    if (c) c.names = [...new Set([...c.names, ...tokens])];
+  } catch { /* a lost learn only means one name is recognised a little later */ }
+  return tokens;
+}
+
+/** Learned names for a side, cached for a minute. Empty on no Redis or error. */
+export async function learnedHumanNames(redis: NameRedis | null, side: HumanSide, now: number = Date.now()): Promise<string[]> {
+  if (!redis) return [];
+  const c = learnedCache.get(side);
+  if (c && now - c.at < LEARNED_TTL_MS) return c.names;
+  try {
+    const names = (await redis.smembers(learnedKey(side))).filter(n => n.length >= 3 && !NAME_STOP.has(n));
+    learnedCache.set(side, { at: now, names });
+    return names;
+  } catch {
+    return c?.names ?? [];
+  }
+}
+
+/** Env names plus learned names (deduped). */
+export function mergeHumanNames(base: HumanNames, learned: Partial<HumanNames>): HumanNames {
+  return {
+    raziel: [...new Set([...base.raziel, ...(learned.raziel ?? [])])],
+    blue: [...new Set([...base.blue, ...(learned.blue ?? [])])],
+  };
+}
+
+/** Test hook: forget the in-memory cache. */
+export function resetLearnedNameCache(): void { learnedCache.clear(); }

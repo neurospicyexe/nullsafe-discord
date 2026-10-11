@@ -53,6 +53,7 @@ import {
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAt, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
   humanGate, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
+  learnHumanName, learnedHumanNames, mergeHumanNames, type NameRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
   pickReaction, shouldReactOnBidLoss, shouldReactOnNamedOther, shouldReactOnCareHold, REACTION_COOLDOWN_MS,
@@ -775,6 +776,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         ? (pkRoster?.identify(message.author?.username) ? "roster" : "pk-api")
         : (pkKnownSenderId !== undefined ? "dedup-pairing" : "webhook-only");
       console.log(`[${COMPANION_ID}] PK proxy: front="${pkMemberName ?? "?"}" tier=${userTier} via=${via} chars=${message.content.length}`);
+      // Learn the front's name so "<name>, ..." from the other human reads as addressed to them
+      // (human-address gate). Blue's system only: Raziel's 538-member roster stays out by design.
+      if (userTier === "intimate" && pkMemberName) {
+        void learnHumanName(redis as unknown as NameRedis | null, "blue", pkMemberName);
+      }
     }
 
     // Hard muzzle: companion bots, PluralKit proxies and Sol pass through; all other bots are dropped.
@@ -1680,7 +1686,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const verdict = humanGate({
         tier: userTier,
         texts: [...burst.map(b => b.content), effectiveContent],
-        names: humanNamesFromEnv(),
+        names: mergeHumanNames(humanNamesFromEnv(), {
+          blue: await learnedHumanNames(holdRedis as unknown as NameRedis | null, "blue"),
+        }),
         companionMentioned: senderCtx.isMentioned,
         replyToCompanion: isReplyToMe,
         mentionedHumans,
@@ -1693,7 +1701,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
       if (verdict.kind === "blue_thread") {
         if (verdict.holder !== COMPANION_ID) {
-          console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds her thread, standing down` : "no companion holds her thread, nobody answers"} (msg=${message.id})`);
+          console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds Blue's thread, standing down` : "no companion holds Blue's thread, nobody answers"} (msg=${message.id})`);
           railSuppressed(COMPANION_ID, "blue_thread", { channelId: message.channelId, detail: verdict.holder ? `held by ${verdict.holder}` : "no holder" });
           return;
         }
@@ -1701,7 +1709,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         blueThreadMine = true;
         directlyAddressed = true;
         senderCtx.activeExchangeWith = COMPANION_ID as CompanionId;
-        console.log(`[${COMPANION_ID}] unnamed message from blue -- I hold her thread, answering (msg=${message.id})`);
+        console.log(`[${COMPANION_ID}] unnamed message from blue -- I hold Blue's thread, answering (msg=${message.id})`);
       }
     }
     // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
