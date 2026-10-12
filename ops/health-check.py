@@ -1048,6 +1048,9 @@ def balance_owner_dm(tier, total, denv, rep):
 # How long the embed queue may sit before it stops being "a blip" and starts being lost continuity.
 EMBED_QUEUE_WARN = int(os.environ.get("SB_EMBED_QUEUE_WARN", "25"))
 EMBED_QUEUE_AGE_WARN_H = float(os.environ.get("SB_EMBED_QUEUE_AGE_WARN_H", "6"))
+# Vault writes parked in the obsidian-rest offline queue. K17 (2026-10-07..11): this sat at 195 for four days
+# while second_brain:reachable stayed green, because the adapter swallows the PUT error and queues.
+VAULT_QUEUE_WARN = int(os.environ.get("SB_VAULT_QUEUE_WARN", "5"))
 
 
 def check_second_brain(rep, env):
@@ -1074,6 +1077,29 @@ def check_second_brain(rep, env):
         return
     if body:
         check_embedder(rep, body)
+        check_vault_queue(rep, body)
+
+
+def check_vault_queue(rep, body):
+    """
+    Probe the QUEUE DEPTH, not the host. The obsidian-rest adapter returns normally when a vault PUT
+    fails and parks the write in SQLite, so a dead vault path is invisible to every reachability check.
+    K17: the obsidian. hostname died with the LM Studio tunnel on 10-07 and 195 writes piled up unseen.
+    The path is now a reverse SSH tunnel from the workstation (halseth/scripts/obsidian-tunnel.ps1), so a
+    sustained queue means: workstation off, Obsidian closed, or the tunnel supervisor not running.
+    """
+    try:
+        pending = (json.loads(body) or {}).get("vault_queue_pending")
+    except Exception:
+        return
+    if pending is None:
+        rep.add("second_brain:vault_queue", "notice",
+                "/health has no vault_queue_pending -- vault write path UNKNOWN, not fine")
+        return
+    if pending >= VAULT_QUEUE_WARN:
+        rep.add("second_brain:vault_queue", "warning",
+                "%s vault writes queued, not reaching Obsidian -- not lost, but the vault is stale. Check: "
+                "workstation on, Obsidian open, obsidian-tunnel.ps1 running (VPS: ss -ltn | grep 27124)" % pending)
 
 
 def check_embedder(rep, body):
