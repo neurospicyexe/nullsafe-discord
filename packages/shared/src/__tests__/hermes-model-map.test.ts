@@ -12,7 +12,7 @@
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readHermesModelKeys, selectableModels, diagnoseHermesMap } from "../hermes-model-map.js";
+import { readHermesModelKeys, selectableModels, diagnoseHermesMap, mapDiagnosticLines } from "../hermes-model-map.js";
 import { ALL_MODELS } from "../models.js";
 
 function writeMap(contents: unknown | string): string {
@@ -140,5 +140,35 @@ describe("keys, never model id strings", () => {
     // id-level comparison would report that as a conflict and invite someone to "fix" it.
     const offered = selectableModels(new Set(["mistral-large"]));
     expect(offered["mistral-large"].model).toBe("mistral-large-latest");
+  });
+});
+
+describe("mapDiagnosticLines", () => {
+  it("puts known deliberate gaps on info and keeps every key visible", () => {
+    const lines = mapDiagnosticLines("cypher", {
+      unofferedByBot: ["gemini", "gemini-3", "gemini-pro", "reasoner"],
+      unapplicableByWatcher: ["kimi-128k", "lfm-local", "llama-3.3-70b"],
+      selectableCount: 5,
+    });
+    expect(lines.every(l => l.level === "info")).toBe(true);
+    const all = lines.map(l => l.text).join(" | ");
+    for (const k of ["gemini-pro", "reasoner", "kimi-128k", "llama-3.3-70b"]) expect(all).toContain(k);
+  });
+
+  it("warns on a novel key in either direction", () => {
+    const lines = mapDiagnosticLines("cypher", {
+      unofferedByBot: ["gemini", "brand-new"],
+      unapplicableByWatcher: ["glm-5.3"],
+      selectableCount: 5,
+    });
+    const warns = lines.filter(l => l.level === "warn").map(l => l.text);
+    expect(warns).toHaveLength(2);
+    expect(warns.join(" | ")).toContain("brand-new");
+    expect(warns.join(" | ")).not.toContain("gemini,");
+    expect(warns.join(" | ")).toContain("glm-5.3");
+  });
+
+  it("emits nothing for a clean diagnostic", () => {
+    expect(mapDiagnosticLines("cypher", { unofferedByBot: [], unapplicableByWatcher: [], selectableCount: 3 })).toEqual([]);
   });
 });

@@ -50,7 +50,7 @@ export * from "./relative-time.js";
 export * from "./sb-live-ingest.js";
 export { ALL_MODELS, getAvailableModels, type InferenceProvider, type ModelEntry } from "./models.js";
 export {
-  readHermesModelKeys, selectableModels, diagnoseHermesMap,
+  readHermesModelKeys, selectableModels, diagnoseHermesMap, mapDiagnosticLines,
   DEFAULT_HERMES_MODEL_MAP_PATH, type HermesMapDiagnostic,
 } from "./hermes-model-map.js";
 export * from "./slash-commands.js";

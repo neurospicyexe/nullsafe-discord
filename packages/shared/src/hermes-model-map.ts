@@ -97,3 +97,35 @@ export function diagnoseHermesMap(hermesKeys: Set<string> | null): HermesMapDiag
     selectableCount: selectable.length,
   };
 }
+
+/**
+ * Keys the live map serves that this build deliberately does not register (2026-10-11): `reasoner`
+ * is a legacy alias of `pro`; the `gemini*` family has no bot-side provider and GEMINI_API_KEY is
+ * unset. They are known, so they go to stdout as info; a key NOT in this set is a real surprise
+ * and stays a warning in the error log.
+ */
+export const KNOWN_LIVE_ONLY_KEYS: ReadonlySet<string> = new Set(["reasoner", "gemini", "gemini-3", "gemini-pro"]);
+
+/** Keys the bot registers that the live map deliberately lacks (no groq/lmstudio-small/moonshot-v1 route). */
+export const KNOWN_WITHHELD_KEYS: ReadonlySet<string> = new Set(["kimi-128k", "lfm-local", "llama-3.3-70b"]);
+
+export interface MapDiagnosticLine { level: "info" | "warn"; text: string }
+
+/**
+ * Boot-time lines for a HermesMapDiagnostic. Known, deliberate gaps are one info line each;
+ * unknown gaps are warnings. Every key still appears in the output, so no information is dropped.
+ */
+export function mapDiagnosticLines(companionId: string, diag: HermesMapDiagnostic): MapDiagnosticLine[] {
+  const lines: MapDiagnosticLine[] = [];
+  const split = (keys: string[], known: ReadonlySet<string>) => ({
+    known: keys.filter(k => known.has(k)),
+    novel: keys.filter(k => !known.has(k)),
+  });
+  const w = split(diag.unapplicableByWatcher, KNOWN_WITHHELD_KEYS);
+  if (w.novel.length) lines.push({ level: "warn", text: `[${companionId}] models NOT applicable by the live watcher, withheld from the switch list: ${w.novel.join(", ")}` });
+  if (w.known.length) lines.push({ level: "info", text: `[${companionId}] known withheld (not in live map): ${w.known.join(", ")}` });
+  const u = split(diag.unofferedByBot, KNOWN_LIVE_ONLY_KEYS);
+  if (u.novel.length) lines.push({ level: "warn", text: `[${companionId}] live map serves keys this build doesn't know (add to ALL_MODELS to reach them): ${u.novel.join(", ")}` });
+  if (u.known.length) lines.push({ level: "info", text: `[${companionId}] known live-only keys (not registered here): ${u.known.join(", ")}` });
+  return lines;
+}

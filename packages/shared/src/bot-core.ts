@@ -23,7 +23,7 @@ import { ledgerClerkAdapterWarning } from "./ledger-clerk.js";
 import { createAdapter, withCaller, type InferenceAdapter, type AdapterKeys, type AdapterUrls } from "./inference.js";
 import { createDirectAdapter, directChainNames } from "./direct-inference.js";
 import { ALL_MODELS, type InferenceProvider, type ModelEntry } from "./models.js";
-import { readHermesModelKeys, selectableModels, diagnoseHermesMap, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
+import { readHermesModelKeys, selectableModels, diagnoseHermesMap, mapDiagnosticLines, DEFAULT_HERMES_MODEL_MAP_PATH } from "./hermes-model-map.js";
 import type { BotConfig, BootContext, CompanionId } from "./types.js";
 import { readFileSync } from "fs";
 import { join } from "path";
@@ -495,12 +495,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       console.warn(`[${companionId}] hermes model map unreadable (${env.hermesModelMapPath ?? process.env.HERMES_MODEL_MAP ?? DEFAULT_HERMES_MODEL_MAP_PATH}) -- offering the full registry; some keys may ack and not apply`);
     } else {
       console.log(`[${companionId}] hermes model map: ${diag.selectableCount} selectable`);
-      if (diag.unapplicableByWatcher.length) {
-        console.warn(`[${companionId}] models NOT applicable by the live watcher, withheld from the switch list: ${diag.unapplicableByWatcher.join(", ")}`);
-      }
-      if (diag.unofferedByBot.length) {
-        console.warn(`[${companionId}] live map serves keys this build doesn't know (add to ALL_MODELS to reach them): ${diag.unofferedByBot.join(", ")}`);
-      }
+      for (const l of mapDiagnosticLines(companionId, diag)) (l.level === "warn" ? console.warn : console.log)(l.text);
     }
   }
 
