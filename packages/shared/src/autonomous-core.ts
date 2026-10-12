@@ -24,7 +24,7 @@ import {
   readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, isDemandMove, filterProductionWhenCareHold, isMyHeartbeatWindow, HEARTBEAT_ORDER, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
-  liveIngest, reportVoiceScore, type VoiceCompanionId,
+  liveIngest, reportVoiceScore, misseatedReply, type VoiceCompanionId,
   ownEchoGated, relativeTime,
   INTER_SEED_HISTORY_N, stripSiblingVocative, seedThreadTtlMs,
   seedVocativeAllowed, countBotMsgsSinceHuman, assertWriteAck,
@@ -43,6 +43,7 @@ import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 import { isThreadsEnabled } from "./thread-spine.js";
 import { FRAGMENT_NOTE_TYPE } from "./day-distillation.js";
+import { roomTagForMessage } from "./room-tag.js";
 import { solWebhookId, withoutSol } from "./sol-sender.js";
 import {
   guildSeedMode, guildTriadChannelId, guildTriadSupplyChannels, guildSeedKeys, preClaimGate, supplyGate,
@@ -180,6 +181,26 @@ export function eventMatches(ctx: AutonomousContext, event: unknown): boolean {
   return ctx.interestKeywords.some(kw => str.includes(kw));
 }
 
+/** Journal a director-path reply like a handler reply, tagged `director`. Never throws, never blocks the send. */
+export function journalDirectorReply(
+  ctx: AutonomousContext,
+  channel: { guild?: unknown; name?: unknown; isThread?: () => boolean; parent?: unknown },
+  channelId: string,
+  content: string,
+  headId: string,
+  retryDelayMs = 2_000,
+): void {
+  let roomTag: string | null = null;
+  try { roomTag = roomTagForMessage({ guild: (channel.guild ?? null) as never, channel }); } catch { roomTag = null; }
+  const write = () => ctx.librarian.journalSpeech(content, channelId, headId, roomTag, ["director"]);
+  void (async () => {
+    try { await write(); return; } catch { /* transient: external_id makes a retry safe */ }
+    await new Promise((r) => setTimeout(r, retryDelayMs));
+    try { await write(); }
+    catch (e) { console.error(`[${ctx.companionId}/director] reply journaling failed twice (not journaled): ${String(e)}`); }
+  })();
+}
+
 /**
  * Returns whether the message was actually delivered (at least one chunk sent) -- false on
  * cooldown, a non-text channel, or a send that throws. Existing fire-and-forget callers ignore
@@ -214,8 +235,11 @@ export async function sendAutonomousMessage(
       //
       // Writing it as a discord_session fragment keeps it live and bridged for the rest of
       // the day, then day-distillation folds it into the first-person day note and demotes
-      // it. Nothing is lost: the full text is already in companion_journal via
-      // discord_speech (embedded + searchable) and in the channel the seed reads.
+      // it. The full text is in the channel the seed reads. It is NOT journaled by this write:
+      // companion_journal discord_speech rows come from the handler reply path and, since
+      // 2026-10-11, from the director trigger below. (This comment used to claim every
+      // autonomous post was already journaled via discord_speech; the 10-07 audit found that
+      // false, and director replies were the speech that went missing.)
       ctx.librarian
         .writeWmNote(`[metronome/${trigger}] ${content}`, channelId, FRAGMENT_NOTE_TYPE)
         .catch(onWriteError(ctx.companionId, "metronome continuity note (siblings/orient will not see this)"));
@@ -223,6 +247,10 @@ export async function sendAutonomousMessage(
       // live index and voice telemetry -- only handler-path replies got indexed.
       // Same fire-and-forget contract as the message handler.
       if (sent.length > 0) {
+        // Director replies are real speech and take the same journal path as handler replies
+        // (journalSpeech: source discord_speech, external_id discord:<head id>), distinguished by
+        // the extra `director` tag. Fail-open: one retry, then a loud log, never a thrown send.
+        if (trigger === "director" && !misseatedReply(ctx.companionId as VoiceCompanionId, content)) journalDirectorReply(ctx, channel as TextChannel, channelId, content, sent[0]!.id);
         liveIngest({
           companion: ctx.companionId,
           author: ctx.companionId,

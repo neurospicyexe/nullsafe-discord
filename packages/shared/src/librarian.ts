@@ -463,7 +463,7 @@ export class LibrarianClient {
    * WRITES AND RETRIES them, so without a key a transient Halseth 5xx would duplicate the
    * reply. The same key lets the 06-25 speech backfill be re-run safely.
    */
-  async journalSpeech(replyText: string, channelId: string, messageId: string, roomTag?: string | null): Promise<void> {
+  async journalSpeech(replyText: string, channelId: string, messageId: string, roomTag?: string | null, extraTags: readonly string[] = []): Promise<void> {
     const text = replyText.trim();
     if (!text) return;
     try {
@@ -477,7 +477,7 @@ export class LibrarianClient {
           agent: this.companionId,
           note_text: text.slice(0, 4000),   // endpoint hard-rejects >4000
           // `room:<server>/#<channel>` (2026-10-05): where it was said, readable at recall. Null for a DM.
-          tags: ["discord", "speech", `channel:${channelId}`, ...(roomTag ? [roomTag] : [])],
+          tags: ["discord", "speech", `channel:${channelId}`, ...(roomTag ? [roomTag] : []), ...extraTags],
           source: "discord_speech",
           external_id: `discord:${messageId}`,
         }),
