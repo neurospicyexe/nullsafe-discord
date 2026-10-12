@@ -351,14 +351,26 @@ export function calledAsName(companionId: VoiceCompanionId, content: string): st
 // ("Dre, ..."), or "you're Dre" is the break. "you called me Dre" and "Dre's" do not match.
 function countOwnNameVocative(text: string, companionId: VoiceCompanionId): number {
   const alt = OWN_NAMES[companionId].join("|");
-  const closes = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013]|$))";
   const patterns = [
-    new RegExp(`,\\s*(?:${alt})${closes}`, "gm"),
+    new RegExp(`,\\s*(?:${alt})${VOCATIVE_CLOSES}`, "gmu"),
     new RegExp(`^\\s*(?:${alt})\\s*[,!]`, "gm"),
     new RegExp(`\\byou(?:'re|\\u2019re| are)\\s+(?:${alt})\\b`, "gi"),
     trailingOwnName(alt),
+    interjectionOwnName(alt),
   ];
   return patterns.reduce((n, re) => n + (text.match(re)?.length ?? 0), 0);
+}
+
+// After the name: end punctuation, a dash, end of line, or an emoji (2026-10-12: ", Dre 🖤" slipped the
+// punctuation-only close). Never a word character or a possessive.
+const VOCATIVE_CLOSES = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013\\u2026]|\\p{Extended_Pictographic}|$))";
+
+// A short opener, then the name, at the start of a sentence (2026-10-12 17:17 #triad-hangout: "Hey Dre,
+// I'm here." went to Raziel; no comma before the name and not line-opening, so every other pattern
+// missed it). Group 1 is the lead-in, group 2 the opener; the repair keeps both and drops the name.
+const OPENERS = "Hey|Hi|Hello|Oh|Ohh|Ah|Aw|Aww|Mm|Mmm|Okay|Ok|OK|Well|Look|Listen|Yeah|Yes|No|Alright|All right|Love|Babe|Baby|Sweetheart|So|And";
+function interjectionOwnName(alt: string): RegExp {
+  return new RegExp(`(^[ \\t]*|[.!?\\u2026][ \\t]+)(${OPENERS})[ \\t]+(?:${alt})(?![\\w'\\u2019])(?=[ \\t]*(?:[,.!?\\u2026\\u2014\\u2013]|\\p{Extended_Pictographic}|$))`, "gmu");
 }
 
 // Own name closing a line with no comma (2026-10-11 12:50 #triad-hangout: "... my spot Dre." to Raziel,
@@ -380,12 +392,12 @@ function trailingOwnName(alt: string): RegExp {
  */
 export function repairMisseated(companionId: VoiceCompanionId, text: string): { text: string; repaired: number; unrepaired: number } {
   const alt = OWN_NAMES[companionId].join("|");
-  const closes = "(?![\\w'\\u2019])(?=\\s*(?:[.!?,;:)\\u2014\\u2013]|$))";
   let repaired = 0;
   // A sign-off is the one place a companion writes its own name after a comma: "Yours, Dre.",
   // "Love, Dre", "Always yours, Dre", "It's me, Dre." Those stay. ("Rest tonight, Dre." does not.)
   const SIGN_OFF = /^(?:(?:always|forever|still|all|with)\s+)?(?:yours|love|always|forever|ever|xo|xx|me|it'?s me|it’s me|it is me)$/i;
-  let out = text.replace(new RegExp(`([^\\n]*),\\s*(?:${alt})${closes}`, "gm"), (whole, before: string) => {
+  let out = text.replace(interjectionOwnName(alt), (_m, lead: string, opener: string) => { repaired++; return `${lead}${opener}`; });
+  out = out.replace(new RegExp(`([^\\n]*),\\s*(?:${alt})${VOCATIVE_CLOSES}`, "gmu"), (whole, before: string) => {
     if (SIGN_OFF.test(before.trim())) return whole;
     repaired++;
     return before;
@@ -433,8 +445,9 @@ export const RULE_CHECK_PRONOUNS =
 
 /** Names the companion's own names outright, so the corrective cannot be misread as about someone else. */
 export function ruleCheckOwnName(companionId: VoiceCompanionId): string {
-  const names = OWN_NAMES[companionId].map(n => `"${n}"`).join(", ");
-  return `\n\n[Voice check: names] Your last reply called someone else by your own name. ${names} ${OWN_NAMES[companionId].length > 1 ? "are YOUR names" : "is YOUR name"}. When a message opens with it, someone is calling you. Raziel is Raziel, or the name the front signs with (Crash on this account).`;
+  // Name-free (2026-10-12). Quoting the names here put "Dre" beside "you" on the very turn after a slip,
+  // and the slip rate on Dre turns went from 8% (09-26..10-08) to 22% (10-09..10-11) to 3 of 4 (10-12).
+  return `\n\n[Voice check: names] Your last reply called the person you were answering by a name that is not theirs. Raziel is Raziel, or the name the front signs with (Crash on this account).`;
 }
 
 /** Correctives for the hits in `r`, in a fixed order; empty when clean. */

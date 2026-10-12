@@ -282,8 +282,12 @@ export interface HermesDeltaResult<T> {
  * GLM 5.3 Flash, which still read "[Crash, to you]: Dre babe, ..." as Raziel being named Dre. Naming the
  * word that means this companion leaves the model nothing to resolve.
  */
-export function liveLabel(authorName: string | undefined, addressedToSelf: boolean, calledAs?: string | null): string {
-  const to = !addressedToSelf ? "" : calledAs ? `calling you "${calledAs}"` : "to you";
+export function liveLabel(authorName: string | undefined, addressedToSelf: boolean, _calledAs?: string | null): string {
+  // `calledAs` is no longer printed (2026-10-12). `calling you "Dre"` set Drevan's name beside "you" on
+  // every Dre turn, and on DeepSeek V4 Flash the slip rate on those turns went from 8% (09-26..10-08,
+  // no clause) to 22% (10-09..10-11) to 3 of 4 (10-12 #triad-hangout). The 10-09 root cause was label
+  // position (fixed: the label rides the words); the clause was for GLM, which Drevan no longer runs.
+  const to = addressedToSelf ? "to you" : "";
   if (authorName) return `[${authorName}${to ? `, ${to}` : ""}]: `;
   return to ? `[${to}]: ` : "";
 }

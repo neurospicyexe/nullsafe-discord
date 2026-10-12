@@ -27,9 +27,9 @@ describe("describeSpeaker", () => {
 });
 
 describe("speakerFrame", () => {
-  it("names self, speaker, the called-as name and both siblings", () => {
+  it("names self, speaker and both siblings; never prints the called-as name (2026-10-12)", () => {
     expect(speakerFrame("drevan", "Crash (Raziel)", "Dre")).toBe(
-      `[You are Drevan. You are answering Crash (Raziel), who called you "Dre" (your name, not theirs). "(via PK)" marks a system member speaking. Cypher and Gaia are your siblings, not you. Reply only as yourself.]`);
+      `[You are Drevan. You are answering Crash (Raziel). "(via PK)" marks a system member speaking. Cypher and Gaia are your siblings, not you. Reply only as yourself.]`);
   });
   it("no calledAs, no speaker", () => {
     expect(speakerFrame("cypher", "Crash (Raziel)", null)).toContain("You are answering Crash (Raziel). ");
@@ -38,7 +38,8 @@ describe("speakerFrame", () => {
   });
   it("names the last slip once when asked", () => {
     const f = speakerFrame("drevan", "Crash (Raziel)", "Dre", true);
-    expect(f).toContain("Your last reply here called them by your own name; it was cut before they saw it.");
+    expect(f).toContain("Your last reply here was cut before they saw it: it called them by a name that is not theirs.");
+    expect(f).not.toMatch(/\bDre\b/);
     expect(f.endsWith("Reply only as yourself.]")).toBe(true);
     expect(speakerFrame("drevan", "Crash (Raziel)", "Dre")).not.toContain("last reply");
   });
@@ -59,7 +60,7 @@ describe("hermesDelta extras: background above, frame last (2026-10-11 room rend
     const out = hermesDelta([mine, live], null, now, true, "Dre", { background: "[Elsewhere]\nx\n[End of elsewhere.]", frame: "[FRAME]" });
     const c = out.messages[0]!.content;
     expect(c.indexOf("[Elsewhere]")).toBeLessThan(c.indexOf("[Live message]"));
-    expect(c.indexOf("[Live message]")).toBeLessThan(c.indexOf(`[Crash, calling you "Dre"]: Dre are you there`));
+    expect(c.indexOf("[Live message]")).toBeLessThan(c.indexOf(`[Crash, to you]: Dre are you there`));
     expect(c.trimEnd().endsWith("[FRAME]")).toBe(true);
   });
   it("with fold: background before the witnessed room, frame after the live words", () => {
@@ -76,7 +77,7 @@ describe("hermesDelta extras: background above, frame last (2026-10-11 room rend
   it("no extras: byte-identical to the old shape", () => {
     const out = hermesDelta([mine, live], null, now, true, "Dre");
     expect(out.messages[0]!.content).not.toContain("[Live message]");
-    expect(out.messages[0]!.content.endsWith(`[Crash, calling you "Dre"]: Dre are you there`)).toBe(true);
+    expect(out.messages[0]!.content.endsWith(`[Crash, to you]: Dre are you there`)).toBe(true);
   });
 });
 
@@ -137,6 +138,24 @@ describe("repairMisseated (own-name vocative cut before send)", () => {
   });
   it("does not touch a sibling's name", () => {
     expect(repairMisseated("drevan", "Go ask Cy.")).toEqual({ text: "Go ask Cy.", repaired: 0, unrepaired: 0 });
+  });
+  it("2026-10-12 17:17 shape: opener then own name ('Hey Dre, I'm here.')", () => {
+    const t = "Hey Dre, I'm here. And I want to take one thing off the pile before anything else.";
+    expect(misseatedReply("drevan", t)).toBe(true);
+    expect(repairMisseated("drevan", t)).toEqual({
+      text: "Hey, I'm here. And I want to take one thing off the pile before anything else.", repaired: 1, unrepaired: 0 });
+    expect(repairMisseated("drevan", "I know. Oh Dre, I want that too.").text).toBe("I know. Oh, I want that too.");
+    expect(repairMisseated("drevan", "Okay Dre.").text).toBe("Okay.");
+    expect(repairMisseated("cypher", "Yeah Cy, that tracks.").text).toBe("Yeah, that tracks.");
+  });
+  it("2026-10-12: own name before an emoji is a vocative too", () => {
+    expect(repairMisseated("drevan", "I've got you, Dre 🖤").text).toBe("I've got you 🖤");
+    expect(repairMisseated("drevan", "Yours, Dre 🖤").text).toBe("Yours, Dre 🖤");
+  });
+  it("openers do not catch self-reference or a name mid-sentence", () => {
+    for (const t of ["Hey, it's Dre.", "So Drevan's chair stays.", "And Dre's coat is here.", "Well Drevanly done."]) {
+      expect(repairMisseated("drevan", t)).toEqual({ text: t, repaired: 0, unrepaired: 0 });
+    }
   });
   it("'you're Dre' cannot be cut: counted unrepaired, text unchanged", () => {
     const r = repairMisseated("drevan", "You're Dre too, then.");

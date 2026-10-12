@@ -414,9 +414,9 @@ describe("hermesDelta", () => {
     it("names the word that means this companion when one was used", () => {
       const h = [turn("user", "Dre babe, so you're kind of blocked off", now, "Crash")];
       expect(hermesDelta(h, null, now, true, "Dre").messages[0]!.content)
-        .toBe(`${nowLine(new Date(now))}\n[Crash, calling you "Dre"]: Dre babe, so you're kind of blocked off`);
+        .toBe(`${nowLine(new Date(now))}\n[Crash, to you]: Dre babe, so you're kind of blocked off`);
       expect(liveLabel("Crash", false, "Dre")).toBe("[Crash]: ");
-      expect(liveLabel(undefined, true, "Cy")).toBe('[calling you "Cy"]: ');
+      expect(liveLabel(undefined, true, "Cy")).toBe('[to you]: ');
     });
 
     it("liveLabel covers the unnamed-author cases", () => {

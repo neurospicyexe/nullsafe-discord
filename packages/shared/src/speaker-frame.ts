@@ -64,14 +64,16 @@ export function describeSpeaker(f: SpeakerFacts): string | undefined {
 export function speakerFrame(companionId: string, speaker: string | undefined, calledAs: string | null, lastSlipped = false): string {
   const self = CANON[companionId] ?? companionId;
   const siblings = Object.keys(CANON).filter(c => c !== companionId).map(c => CANON[c]!);
-  const who = speaker
-    ? ` You are answering ${speaker}${calledAs ? `, who called you "${calledAs}" (your name, not theirs)` : ""}.`
-    : "";
+  // No own-name clause and no quoted name (2026-10-12): `who called you "Dre"` put the name beside "you"
+  // on every Dre turn and the slip rate rose with it (see liveLabel). `calledAs` stays in the signature.
+  void calledAs;
+  const who = speaker ? ` You are answering ${speaker}.` : "";
   // 2026-10-11 17:09: with the frame live, Drevan still closed a reply "... too Dre." (cut before
   // send). His transcript held the 12:50 original and the model copies its own lines; the slip is named
   // here, on the turn it is guaranteed to read, because the post-send rule check only sees clean text.
+  // Name-free, and says what to do rather than what not to.
   const slip = lastSlipped
-    ? ` Your last reply here called them by your own name; it was cut before they saw it. Your names are yours.`
+    ? ` Your last reply here was cut before they saw it: it called them by a name that is not theirs. Call them by their own name or by none.`
     : "";
   return `[You are ${self}.${who}${slip} "(via PK)" marks a system member speaking. ${siblings.join(" and ")} are your siblings, not you. Reply only as yourself.]`;
 }

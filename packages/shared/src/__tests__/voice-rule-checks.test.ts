@@ -145,13 +145,14 @@ describe("own-name vocative", () => {
     expect(calledAsName("drevan", "dread and dresses")).toBeNull();
   });
 
-  it("injects a corrective that names him outright", () => {
+  it("injects a name-free corrective (2026-10-12)", () => {
     const { text, result } = ruleCheckAppend("drevan", ["Rest up tonight, Dre."]);
     expect(result.ownName).toBe(1);
     expect(text).toBe(ruleCheckOwnName("drevan"));
-    expect(text).toContain('"Drevan", "Drev", "Dre" are YOUR names');
+    expect(text).toContain("Raziel is Raziel");
     expect(text).not.toContain(EM);
-    expect(ruleCheckOwnName("gaia")).toContain('"Gaia" is YOUR name');
+    expect(ruleCheckOwnName("gaia")).toContain("by a name that is not theirs");
+    expect(ruleCheckOwnName("drevan")).not.toMatch(/\b(?:Dre|Drev|Drevan)\b/);
   });
 });
 
