@@ -364,12 +364,61 @@ describe("hermesDelta", () => {
 [Raziel]: next`);
     });
 
-    it("no gap line when nothing before the live message has a timestamp", () => {
+    it("earlier turns exist but none has a timestamp: says the gap is unavailable (no gap line, no guess)", () => {
       const now = at("2026-10-07T01:32:00Z");
       const h = [{ role: "assistant", content: "restored" }, turn("user", "next", now, "Raziel")];
       const content = hermesDelta(h, null, now).messages[0]!.content;
-      expect(content).toBe(`${nowLine(new Date(now))}
-[Raziel]: next`);
+      expect(content).toBe(
+        `${nowLine(new Date(now))}\n` +
+        "[Time since the last message in this conversation is unavailable; do not assume how long ago it was.]\n" +
+        "[Raziel]: next",
+      );
+      expect(content).not.toContain("[Last message");
+    });
+
+    it("the very first turn (nothing before it) says nothing about time beyond Now", () => {
+      const now = at("2026-10-07T01:32:00Z");
+      const content = hermesDelta([turn("user", "first", now, "Raziel")], null, now).messages[0]!.content;
+      expect(content).toBe(`${nowLine(new Date(now))}\n[Raziel]: first`);
+      expect(content).not.toContain("unavailable");
+    });
+
+    describe("new-day flag (P14): the Chicago calendar date crossed, whatever the gap", () => {
+      it("23:30 -> 00:20 is under the 2h threshold and still flags the new day (previous = newest of any role: 23:31)", () => {
+        const prev = at("2026-10-13T04:30:00Z"); // Mon Oct 12, 11:30 PM CDT
+        const now = at("2026-10-13T05:20:00Z");  // Tue Oct 13, 12:20 AM CDT
+        const h = [turn("user", "still up", prev, "Raziel"), turn("assistant", "here", prev + 60_000), turn("user", "hey", now, "Raziel")];
+        const content = hermesDelta(h, h[1]!.timestamp, now).messages[0]!.content;
+        expect(content).toContain("[New day since the last message: it was Monday 23:31, now Tuesday 00:20.]");
+        expect(content).not.toContain("[Last message"); // 49 minutes: no gap line
+      });
+
+      it("no flag on the same Chicago date, even when UTC rolled over (8:10 PM -> 8:32 PM CDT)", () => {
+        const prev = at("2026-10-07T01:10:00Z"); // Oct 6 8:10 PM CDT (UTC is already Oct 7)
+        const now = at("2026-10-07T01:32:00Z");
+        const content = hermesDelta([turn("assistant", "a", prev), turn("user", "b", now, "Raziel")], prev, now).messages[0]!.content;
+        expect(content).not.toContain("[New day");
+      });
+
+      it("a flag with a long gap rides beside the gap line, in order, on the witness path too", () => {
+        const now = at("2026-10-07T01:32:00Z");
+        const prev = at("2026-10-06T13:10:00Z");
+        const h = [turn("assistant", "r", prev), turn("user", "peer", prev + 60_000, "Cypher"), turn("user", "current", now, "Raziel")];
+        const content = hermesDelta(h, null, now).messages[0]!.content;
+        expect(content).not.toContain("[New day"); // same Chicago day: 8:10 AM -> 8:32 PM
+        const next = at("2026-10-08T14:00:00Z"); // Oct 8 9:00 AM CDT, a day on
+        const c2 = hermesDelta([turn("assistant", "r", now), turn("user", "peer", now + 60_000, "Cypher"), turn("user", "current", next, "Raziel")], null, next).messages[0]!.content;
+        expect(c2.indexOf("[Last message")).toBeGreaterThan(-1);
+        expect(c2.indexOf("[New day since the last message: it was Tuesday 20:33, now Thursday 09:00.]")).toBeGreaterThan(c2.indexOf("[Last message"));
+        expect(c2.indexOf("[New day")).toBeLessThan(c2.indexOf("[Witnessed since"));
+      });
+
+      it("DST-correct: the boundary is Chicago midnight in CST as well (winter)", () => {
+        const prev = at("2026-12-10T05:30:00Z"); // Dec 9, 11:30 PM CST
+        const now = at("2026-12-10T06:20:00Z");  // Dec 10, 12:20 AM CST
+        const content = hermesDelta([turn("assistant", "a", prev), turn("user", "b", now, "Raziel")], prev, now).messages[0]!.content;
+        expect(content).toContain("[New day since the last message: it was Wednesday 23:30, now Thursday 00:20.]");
+      });
     });
 
     it("leaves an assistant-final history untouched", () => {

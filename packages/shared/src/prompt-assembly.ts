@@ -239,15 +239,47 @@ function clockAt(ms: number): string {
   }).format(new Date(ms));
 }
 
-/** `[Now: ...]`, plus the gap line when the previous message is older than the threshold. */
-function timeLines(prevTs: number | null, now: number): string {
+const CHICAGO = "America/Chicago";
+
+/** The Chicago calendar date of `ms` as `YYYY-MM-DD` (en-CA formats that way), DST-correct. */
+function chicagoDate(ms: number): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: CHICAGO, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+}
+
+/** `Monday 23:30` on his clock (24h: the new-day line is about the date boundary, not AM/PM). */
+function weekdayClock(ms: number): string {
+  const d = new Date(ms);
+  const day = new Intl.DateTimeFormat("en-US", { timeZone: CHICAGO, weekday: "long" }).format(d);
+  const hm = new Intl.DateTimeFormat("en-GB", { timeZone: CHICAGO, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
+  return `${day} ${hm}`;
+}
+
+/**
+ * `[Now: ...]`, plus the gap line when the previous message is older than the threshold, plus (P14,
+ * 2026-10-13) a new-day line whenever the America/Chicago calendar date differs from the previous
+ * message's, whatever the gap: 23:30 -> 00:20 is fifty minutes, under the threshold, and "today" /
+ * "yesterday" flips across it (a 2am conversation is exactly where that goes wrong). When earlier turns
+ * exist but none carries a timestamp (STM rows restored without one), the line says the gap is
+ * unavailable rather than leaving the model to assume it was seconds. `hadEarlier` false (the first
+ * turn) says nothing: there is no previous message to be unavailable.
+ */
+function timeLines(prevTs: number | null, now: number, hadEarlier = false): string {
   const lines = [nowLine(new Date(now))];
-  if (prevTs !== null && now - prevTs >= HERMES_GAP_THRESHOLD_MS) {
+  if (prevTs === null) {
+    if (hadEarlier) {
+      lines.push("[Time since the last message in this conversation is unavailable; do not assume how long ago it was.]");
+    }
+    return lines.join("\n");
+  }
+  if (now - prevTs >= HERMES_GAP_THRESHOLD_MS) {
     const ago = relativeTime(new Date(prevTs).toISOString(), now);
     lines.push(
       `[Last message in this conversation was ${ago} (${clockAt(prevTs)}). ` +
       `Time has passed; do not continue as if it is still then.]`,
     );
+  }
+  if (chicagoDate(prevTs) !== chicagoDate(now)) {
+    lines.push(`[New day since the last message: it was ${weekdayClock(prevTs)}, now ${weekdayClock(now)}.]`);
   }
   return lines.join("\n");
 }
@@ -332,7 +364,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // is "when did this conversation last move"), and timestamp-less restored turns are skipped.
   const prevTs = history.slice(0, -1).map(tsOf).filter((t): t is number => t !== null)
     .reduce<number | null>((a, b) => (a === null || b > a ? b : a), null);
-  const clock = timeLines(prevTs, now);
+  const clock = timeLines(prevTs, now, history.length > 1);
 
   // The speaker label rides ON the live words, not in front of the clock (2026-10-09). The adapter's
   // `[author]: ` prefix used to land on the first line of content, which is the clock, so the model
