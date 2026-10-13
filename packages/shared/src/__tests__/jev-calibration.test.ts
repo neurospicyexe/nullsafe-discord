@@ -53,6 +53,20 @@ describe("analyseCompanion", () => {
     const few = cal.analyseCompanion("drevan", [row({ jev_ok: false, reason: "x", worth: undefined })], 0.7, 2, null, null, OPTS, NOW);
     expect(few.warnings).toEqual([]);
   });
+
+  it("a 7-day outage that has recovered in the last 24h is a notice, not a warning", () => {
+    const old = (o: Record<string, unknown>) => row({ ts: new Date(NOW - 3 * 86_400_000).toISOString(), ...o });
+    const rows = [
+      ...Array(20).fill(0).map(() => old({ jev_ok: false, reason: "http_401", worth: undefined })),
+      ...Array(20).fill(0).map(() => old({})),
+      ...Array(10).fill(0).map(() => row()),
+    ];
+    const r = cal.analyseCompanion("drevan", rows, 0.7, 2, null, null, OPTS, NOW);
+    const er = r.warnings.find((w: { name: string }) => w.name === "error_rate");
+    expect(er?.severity).toBe("notice");
+    expect(er?.detail).toMatch(/recovered: 0% in the last 10 rows/);
+    expect(r.warnings.some((w: { severity: string }) => w.severity === "warning")).toBe(false);
+  });
   it("drift vs baseline: write-rate shift and KS warn; same distribution does not", () => {
     const mk = (w: number) => Array(40).fill(0).map(() => row({ worth: w }));
     const baseRep = cal.buildReport({ rows: mk(0.9), thetas: { cypher: 0.7, drevan: 0.7, gaia: 0.6 }, notable: 2, baseline: null, labels: null, days: 7, opts: OPTS, now: NOW });

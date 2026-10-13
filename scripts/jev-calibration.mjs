@@ -208,10 +208,15 @@ export function analyseCompanion(c, rows, theta, notable, baseline, labels, opts
   if (recent.length >= 10 && out.error_rate_24h > opts.warnFallback / 100) {
     w("error_rate_24h", "warning", `${(100 * out.error_rate_24h).toFixed(0)}% of the last ${recent.length} rows (24h) had Jev unavailable (limit ${opts.warnFallback}%)`);
   }
+  // A 7-day rate keeps a FIXED outage loud for a week (the 10-08..10-11 401s on the first run): when the
+  // last 24h has enough rows and is under the limit, the 7-day breach is history, logged as a notice.
+  const recovered = recent.length >= 5 && out.error_rate_24h != null && out.error_rate_24h <= opts.warnFallback / 100;
+  const sev7d = recovered ? "notice" : "warning";
+  const tail7d = recovered ? `; recovered: ${(100 * out.error_rate_24h).toFixed(0)}% in the last ${recent.length} rows (24h)` : "";
   if (n >= opts.minRows && out.fallback_rate > opts.warnFallback / 100) {
-    w("fallback_rate", "warning", `${(100 * out.fallback_rate).toFixed(1)}% of ${n} rows fell back or errored (limit ${opts.warnFallback}%); reasons ${JSON.stringify(out.reasons)}`);
+    w("fallback_rate", sev7d, `${(100 * out.fallback_rate).toFixed(1)}% of ${n} rows fell back or errored (limit ${opts.warnFallback}%); reasons ${JSON.stringify(out.reasons)}${tail7d}`);
   } else if (n >= opts.minRows && out.error_rate > opts.warnFallback / 100) {
-    w("error_rate", "warning", `${(100 * out.error_rate).toFixed(1)}% of ${n} rows had Jev unavailable (limit ${opts.warnFallback}%); reasons ${JSON.stringify(out.reasons)}`);
+    w("error_rate", sev7d, `${(100 * out.error_rate).toFixed(1)}% of ${n} rows had Jev unavailable (limit ${opts.warnFallback}%); reasons ${JSON.stringify(out.reasons)}${tail7d}`);
   }
   if (out.drift && ok.length >= opts.minRows) {
     if (Math.abs(out.drift.write_rate_shift_pts) > opts.warnWriteShift) {
