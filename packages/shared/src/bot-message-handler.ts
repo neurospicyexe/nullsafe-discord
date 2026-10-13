@@ -51,7 +51,7 @@ import {
   countBotMsgsSinceHuman, botMsgsSinceHumanMax, isTriadCommons, FLOOR_HANDBACK_WINDOW, floorHandbackDirective,
   inferTemperature, createAdapter, withCaller, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
-  setLastActivity, type Redis,
+  setLastActivity, noteOwnerArrival, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAt, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
   humanGate, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
@@ -656,6 +656,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // need, so the drive-driven reach-out only fires on genuine silence. Fire-and-forget
     // (shedDriveContact swallows its own errors) -- never blocks the message path.
     if (attribution.isOwner && isArrival) {
+      // P13b: any owner arrival settles the open reach-out rows `replied`; a bare "not now" in the
+      // very DM the reach-out went to settles it `dismissed`. Detached, ids only, never throws; all
+      // three bots run it and the ledger's HSETNX claim makes the first one win.
+      noteOwnerArrival(redis, { channelId: message.channelId, isDm: isOwnerDm, content: message.content }).catch(() => {});
       // Was he talking to ME, or did I just watch him talk (2026-07-30)?
       //
       // Every bot runs this hook on every owner message, and in a shared channel all three see every

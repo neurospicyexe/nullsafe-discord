@@ -243,6 +243,16 @@ const shared = {
   // palette and never fall back to Sol's channel; med_reminder, replies and owner DMs are untouched.
   // Flip to `on` only once the triad has approved the move prompts. Listed per the standing rule above.
   REACH_DM:                    process.env.REACH_DM,
+  // REACH_BACKOFF / REACH_UNANSWERED_WINDOW_MS / REACH_BACKOFF_BASE_MS / REACH_BACKOFF_MAX_MS (2026-10-13, P13b,
+  // reach-ledger.ts): the reach-out outcome ledger's back-off. Default ON; off/0/false/no stops the
+  // back-off (the ledger still records and logs outcomes). A send with no owner message or reaction inside
+  // the window (default 6h) is `unanswered`; consecutive ignored sends widen the minimum gap before the
+  // next DM move: base (3h) * 2^(streak-1), capped (72h). A gap, never a clock window. Rows in Redis, 14d TTL,
+  // fails open. Listed per the standing rule above.
+  REACH_BACKOFF:               process.env.REACH_BACKOFF,
+  REACH_UNANSWERED_WINDOW_MS:  process.env.REACH_UNANSWERED_WINDOW_MS,
+  REACH_BACKOFF_BASE_MS:       process.env.REACH_BACKOFF_BASE_MS,
+  REACH_BACKOFF_MAX_MS:        process.env.REACH_BACKOFF_MAX_MS,
   // BAD_NIGHT_PRESENCE (2026-10-04, B32, bad-night.ts badNightMode): bad-night presence. Default OFF;
   // only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // REACH_DM). Shadow logs every decision as `[b32] <companion> eligible=<why> -> shadow` and changes

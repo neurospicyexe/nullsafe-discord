@@ -124,6 +124,7 @@ export type HeartbeatOutcome =
   | "held_dm"                 // B7 2+2c: a DM move was chosen and did not go out (cap race, a failed check, no DM); never re-sent
   | "suppressed_reach_dm_off" // REACH_DM is off and every eligible move was a DM move; NOT the same event as a closed lane
   | "suppressed_sibling_dm"   // B32 D4: under hold, a sibling's DM with Raziel is live, so this companion opens no DM
+  | "suppressed_reach_backoff" // P13b: recent reach-outs went unanswered/dismissed, so the DM moves wait (reach-ledger.ts)
   | "decision_unparsed"       // B23: no decision could be read, even after the one re-ask; a DEFECT (was `parse_failed`)
   | "chose_unoffered"         // B23: a well-formed pick of a move not offered right now, after the re-ask; never run
   | "converged_hold"          // T5: N declines on an unchanged state fingerprint; the decision call is withheld until state moves

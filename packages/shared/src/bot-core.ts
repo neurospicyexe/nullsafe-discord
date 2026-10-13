@@ -44,6 +44,7 @@ import { SessionWindowManager } from "./session-window.js";
 import { StmStore } from "./stm.js";
 import { WriteQueue } from "./write-queue.js";
 import { createRedisClient } from "./floor.js";
+import { noteOwnerReaction } from "./reach-ledger.js";
 import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js";
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
 import type { FollowUpEntitlement } from "./sequential-floor.js";
@@ -903,6 +904,9 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       const msg = r.message.partial ? await r.message.fetch() : r.message;
       if (msg.author?.id !== client.user?.id) return; // only reactions to MY messages
       const emoji = r.emoji.name ?? "☑";
+      // P13b: his reaction settles that send's outcome row, if it was a reach-out (dismissal emoji =
+      // dismissed, anything else = replied). Ids only; a message that is not in the ledger is a no-op.
+      if (user.id === env.ownerDiscordId) noteOwnerReaction(redis, { messageId: msg.id, emoji }).catch(() => {});
       const key = `${msg.id}:${user.id}:${emoji}`;
       if (seenReactions.has(key)) return; // add/remove/add churn is one fact, not three
       seenReactions.add(key);

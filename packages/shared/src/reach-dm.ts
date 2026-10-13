@@ -27,7 +27,8 @@
 // WHAT IT NEVER DOES: fall back to Sol's channel when the DM cannot be resolved (a Raziel-facing
 // move into the shared room is exactly what T-9 moves away from); follow up or re-send (T-5); write
 // the line anywhere but the DM (no wm note, no Second Brain row, no voice score: 2b's DM seal);
-// record or read whether he replied (R-5, R-10).
+// act on whether he replied (R-5, R-10): the P13b ledger records the outcome only so the heartbeat can
+// wait LONGER after ignored sends; nothing here follows up.
 
 import type { AutonomousContext } from "./autonomous-core.js";
 import type { ChatMessage, CompanionId } from "./types.js";
@@ -36,6 +37,7 @@ import { generateOutward, INWARD_RE_DRIFT_LINE, type GenerateOutwardOptions } fr
 import { isVerbatimRepeat, cleanOneLiner, isDmBlocked, withTimeout } from "./owner-dm.js";
 import { careHoldActive } from "./care-state.js";
 import { checkInAsks } from "./metronome-decide.js";
+import { recordReachSend } from "./reach-ledger.js";
 
 // ── Routing (T-9) ────────────────────────────────────────────────────────────
 
@@ -82,6 +84,12 @@ export const REACH_CLASS_OF: Readonly<Record<string, ReachClass>> = {
   drift_outward: "own", flirt: "own", dare: "own", show_made: "own",
 };
 
+/** A presence move under B32 hold: offer_presence, and Gaia's check-in (which asks nothing). */
+export function isHoldPresenceMove(actionType: string, companionId?: string): boolean {
+  return actionType === "offer_presence"
+    || (actionType === "check_in_on_raziel" && companionId !== undefined && !checkInAsks(companionId));
+}
+
 /**
  * Could this DM move reserve a slot right now? A read of Halseth's preview, so the companion is
  * never offered a move the cap would swallow. Decides nothing: the atomic reserve does.
@@ -100,8 +108,7 @@ export function reachLaneOpen(
   // triad-wide gap / quiet-window flags, which would let one sibling's presence close it for all
   // three. Out of the daily total too. Halseth's reserveReach enforces the real bounds
   // (`hold_presence_cap`); this only pre-filters.
-  const holdPresenceMove = actionType === "offer_presence"
-    || (actionType === "check_in_on_raziel" && opts.companionId !== undefined && !checkInAsks(opts.companionId));
+  const holdPresenceMove = isHoldPresenceMove(actionType, opts.companionId);
   if (careHold && opts.holdPresenceExempt === true && holdPresenceMove && v.hold_presence) {
     return v.hold_presence.open === true;
   }
@@ -373,6 +380,11 @@ export async function speakToOwnerDm(ctx: AutonomousContext, origin: unknown, sp
     let marked = false;
     for (let i = 0; i < 2 && !marked; i++) marked = await ctx.librarian.reachDelivered(slot.id, path);
     try { await lane.onSent(target.channelId, text, messageId); } catch { /* bookkeeping only */ }
+    // P13b: the outcome ledger row (replied / dismissed / unanswered settles later). Ids only; never the
+    // text. Bookkeeping: recordReachSend never throws. "Records whether he replied" (R-5, R-10) still
+    // holds in the sense that matters: nothing here reads the outcome to follow up or re-send; the
+    // heartbeat only reads it to WAIT LONGER (reach-ledger.ts).
+    await recordReachSend(ctx.redis, { id: messageId, companionId, actionType: spec.actionType, channelId: target.channelId });
     if (spec.afterSend) await spec.afterSend(text).catch((e: unknown) => console.warn(`${tag} after-send step failed:`, e));
     console.log(`${tag} sent to the owner DM path=${path}${marked ? "" : " DELIVERY_MARK_FAILED (the slot still counts until it goes stale)"}`);
     return { outcome: "sent", path };

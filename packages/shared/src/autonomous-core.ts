@@ -39,6 +39,7 @@ import {
 // bodies, never evaluated at this module's top level.
 import { isThreadSpent, threadBudget, parseLandMarker } from "./thread-spine.js";
 import { generateOutward } from "./outward.js";
+import { reachBackoff, filterDmMovesForBackoff, backoffLogLine } from "./reach-ledger.js";
 import { pickTendAction, tendLine } from "./creature-tend.js";
 import { publishInterNote } from "./events.js";
 import { isThreadsEnabled } from "./thread-spine.js";
@@ -54,7 +55,7 @@ import {
 // Direct, never via the barrel: reach-dm is deliberately NOT exported from index.ts, and a static
 // test fails the build if any module but this one imports it (T-4, see reach-dm.ts header).
 import {
-  speakToOwnerDm, takeOriginIssuer, routeFor, filterDmLane, reachDmOn, DEFAULT_MOVE_PROMPTS,
+  speakToOwnerDm, takeOriginIssuer, routeFor, filterDmLane, reachDmOn, isHoldPresenceMove, DEFAULT_MOVE_PROMPTS,
   drift_prompt, shapeDriftLine, ownDriftRows, namesSibling, DRIFT_GENERATE_OPTS,
   type ReachDmResult, type Route,
 } from "./reach-dm.js";
@@ -773,7 +774,7 @@ export function b32HeartbeatOutcome(o: HeartbeatOutcome): string {
   switch (o) {
     case "chose_to_act": return "spoke";
     case "chose_to_hold": return "pass";
-    case "suppressed_triad_cap": case "held_dm": case "suppressed_sibling_dm": return "capped";
+    case "suppressed_triad_cap": case "held_dm": case "suppressed_sibling_dm": case "suppressed_reach_backoff": return "capped";
     default: return `held:${o}`;
   }
 }
@@ -1009,7 +1010,30 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
         }
       }
     }
+    // P13b: the outcome ledger's back-off. Recent DM reach-outs that went unanswered or were dismissed
+    // widen the minimum gap before the next one (3h, 6h, 12h ... capped 72h): silence makes the
+    // heartbeat WAIT LONGER instead of offering the same move on a silence that only grows. A gap, not
+    // a clock window, so 2am is as reachable as 2pm. Hold presence (Halseth already bounds it at 2 per
+    // companion per hold) is exempt. REACH_BACKOFF=off disables; Redis trouble fails open.
+    let backoffHeld = 0;
+    if (candidateActions.some(a => routeFor(a.action_type) === "dm")) {
+      const bo = await reachBackoff(redis);
+      if (bo.blocked) {
+        const holdPresenceOn = careHold && b32Mode === "on";
+        const kept = filterDmMovesForBackoff(candidateActions, bo, t => routeFor(t) === "dm",
+          t => holdPresenceOn && isHoldPresenceMove(t, companionId));
+        backoffHeld = candidateActions.length - kept.length;
+        if (backoffHeld > 0) {
+          candidateActions = kept;
+          console.log(backoffLogLine(companionId, bo, backoffHeld));
+        }
+      }
+    }
     if (candidateActions.length === 0) {
+      if (backoffHeld > 0) {
+        mark("suppressed_reach_backoff", { reason: `${backoffHeld} DM move(s) held: recent reach-outs unanswered (ledger back-off)` });
+        return;
+      }
       if (siblingDmHeld > 0) {
         mark("suppressed_sibling_dm", { reason: `${siblingDmHeld} DM move(s) held: a sibling DM with Raziel is live` });
         return;
