@@ -183,6 +183,43 @@ if (!jevRows.length && !jevFailed.length) {
   out.push(`- Jev failures: ${jevFailed.length}${Object.keys(jr).length ? ` (${Object.entries(jr).map(([k, v]) => `${k}=${v}`).join(", ")})` : ""}`);
 }
 out.push(``);
+
+// ---------------------------------------------------------------------------
+// Relevance voice (PLAN-jev §7 #9, 2026-10-13): has_something_for_<id> beside fit-bid
+// ---------------------------------------------------------------------------
+const COMP = ["cypher", "drevan", "gaia"];
+const fitRows = jevRows.filter((r) => r.jev.fit && COMP.every((c) => typeof r.jev.fit[c] === "number"));
+out.push(`## Relevance voice (#9: who has something to add)`);
+out.push(``);
+if (!fitRows.length) {
+  out.push(`No rows carry has_something_for_<id> yet (asked from 2026-10-13 evening; backfill re-asks old rows).`);
+} else {
+  const top = (r) => COMP.reduce((a, c) => (r.jev.fit[c] > r.jev.fit[a] ? c : a), COMP[0]);
+  // Fit-bid is the path relevance would feed: rows where nobody was named and the auction ran.
+  const auction = fitRows.filter((r) => r.spoke_bid);
+  const agreeBid = auction.filter((r) => top(r) === r.spoke_bid).length;
+  out.push(`- rows with all three scores: ${fitRows.length}; auction rows (fit-bid picked a speaker): ${auction.length}`);
+  out.push(`- Jev's top "has something" = the fit-bid winner: ${agreeBid}/${auction.length} (${pct(agreeBid, auction.length)})`);
+  const withBids = auction.filter((r) => r.bids && COMP.some((c) => typeof r.bids[c] === "number"));
+  const bidTop = (r) => COMP.filter((c) => typeof r.bids[c] === "number").reduce((a, c) => (a === null || r.bids[c] > r.bids[a] ? c : a), null);
+  out.push(`- Jev's top = the highest bid (where bids were read): ${withBids.filter((r) => top(r) === bidTop(r)).length}/${withBids.length}`);
+  const none = fitRows.filter((r) => COMP.every((c) => r.jev.fit[c] < 0.3));
+  out.push(`- no companion above 0.3 (a line Jev thinks is nobody's): ${none.length}; a companion spoke anyway on ${none.filter((r) => spoke(r).length > 0).length}`);
+  // FlowX caveat: graded judgments from one call are not independent. If these move together the
+  // blend must use separate calls.
+  const pearson = (a, b) => {
+    const n = a.length; if (n < 3) return null;
+    const ma = a.reduce((s, x) => s + x, 0) / n, mb = b.reduce((s, x) => s + x, 0) / n;
+    let num = 0, da = 0, db = 0;
+    for (let i = 0; i < n; i++) { num += (a[i] - ma) * (b[i] - mb); da += (a[i] - ma) ** 2; db += (b[i] - mb) ** 2; }
+    return da && db ? num / Math.sqrt(da * db) : null;
+  };
+  const col = (c) => fitRows.map((r) => r.jev.fit[c]);
+  const cors = [["cypher", "drevan"], ["cypher", "gaia"], ["drevan", "gaia"]].map(([a, b]) => `${a}~${b} ${pearson(col(a), col(b))?.toFixed(2) ?? "n/a"}`);
+  out.push(`- pairwise correlation (FlowX caveat; above ~0.6 means one call is not giving three independent reads, split the calls before blending): ${cors.join(", ")}`);
+  out.push(`- means: ${COMP.map((c) => `${c} ${(col(c).reduce((s, x) => s + x, 0) / fitRows.length).toFixed(2)}`).join(", ")}`);
+}
+out.push(``);
 const jevLabel = jevRows.filter((r) => r.jev_agree_today === false || r.jev_agree_flash === false || (r.speaker_side ?? "raziel") === "blue");
 
 out.push(`## Disagreements (ids only; text is in the --out labelling files)`);

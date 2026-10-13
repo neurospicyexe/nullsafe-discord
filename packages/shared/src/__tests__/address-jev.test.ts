@@ -61,7 +61,7 @@ describe("parseJevAddress", () => {
       addressee: "drevan", confidence: 0.83,
       probabilities: { drevan: 0.83, cypher: 0.1, room: 0.07 },
       spokenTo: { cypher: 0.12, drevan: 0.91, gaia: 0.04 },
-      invitesReply: 0.77, mentionsWithoutAddressing: 0.2, moreComing: 0.05,
+      invitesReply: 0.77, mentionsWithoutAddressing: 0.2, moreComing: 0.05, fit: {},
       to: ["drevan"],
     });
   });
@@ -167,5 +167,22 @@ describe("PluralKit turn labels (2026-10-13)", () => {
     const s = renderJevAddressState({ speakerSide: "blue", speakerLabel: "Rogue || 🍂 (via PK)", text: "hi Magpie", turns: [{ speaker: "Magpie M. (Raziel)", text: "hey" }], holder: null });
     expect(s).toContain(`"<member> (Blue's system)" is Blue`);
     expect(s).toContain("Magpie M. (Raziel): hey");
+  });
+});
+
+describe("relevance voice (PLAN-jev §7 #9, 2026-10-13)", () => {
+  it("asks has_something_for_<id> per companion in the same call, with the lane", () => {
+    const q = buildJevAddressQuestions();
+    for (const id of ["cypher", "drevan", "gaia"]) expect(q[`has_something_for_${id}`]).toBeDefined();
+    expect(JSON.stringify(q.has_something_for_gaia)).toContain("grounding");
+  });
+  it("parses into fit; rows without the questions get an empty fit", () => {
+    const v = parseJevAddress(answers({
+      has_something_for_cypher: { type: "noul", noul: 0.1 },
+      has_something_for_drevan: { type: "noul", noul: 0.8 },
+      has_something_for_gaia: { type: "noul", noul: 0.4 },
+    }))!;
+    expect(v.fit).toEqual({ cypher: 0.1, drevan: 0.8, gaia: 0.4 });
+    expect(parseJevAddress(answers())!.fit).toEqual({});
   });
 });

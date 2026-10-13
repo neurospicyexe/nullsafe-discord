@@ -63,6 +63,10 @@ export interface JevAddressVerdict {
   invitesReply: number | null;
   mentionsWithoutAddressing: number | null;
   moreComing: number | null;
+  /** P(this companion has something real to add, addressed or not) per companion: PLAN-jev §7 #9,
+   *  the ambient-relevance voice, shadow beside fit-bid's lexical lane score (2026-10-13). Empty on
+   *  rows from before it was asked. */
+  fit: Partial<Record<CompanionId, number>>;
   /** The verdict mapped onto the Flash classifier's shape, so both compare on one axis. `null`
    *  when the addressee is a human or nobody (Flash has no word for those). */
   to: AddressTo | null;
@@ -85,6 +89,13 @@ const ADDRESSEE_CRITERIA: Record<Addressee, string> = {
   room: "An opening to the whole room: for whoever has something to say, no one person called on",
   continuing: "Carries on the one-on-one exchange already underway with whoever is holding it, without calling anyone new",
   nobody: "Spoken to no one: thinking aloud, venting, a status line, a reaction, or a line meant to sit unanswered",
+};
+
+/** The lanes, worded as judgeAmbientRelevance words them (channel-config.ts). */
+export const COMPANION_LANES: Record<CompanionId, string> = {
+  cypher: "tasks, decisions, logic, technical problems, planning, blockers, audits, clarifications",
+  drevan: "emotional depth, memory, relationships, ritual, creative or poetic expression, grief, love, recursion",
+  gaia: "grounding, witnessing survival, holding space, observation, the body, boundaries, what is quietly present",
 };
 
 export function buildJevAddressQuestions(): Record<string, JevQuestion> {
@@ -122,6 +133,19 @@ export function buildJevAddressQuestions(): Record<string, JevQuestion> {
       false: "No companion is talked about without being spoken to",
     },
   };
+  // §7 #9 (2026-10-13): relevance, asked in the same call so it costs nothing extra. The lanes are
+  // the ones judgeAmbientRelevance already uses. FlowX caveat: graded judgments from one call are
+  // not independent; the report prints their pairwise correlation before anyone blends them.
+  for (const id of ALL_COMPANIONS) {
+    q[`has_something_for_${id}`] = {
+      type: "noul",
+      instructions: `Whoever the message is spoken to, does ${names[id]} have something real to add to it? ${names[id]} cares about: ${COMPANION_LANES[id]}.`,
+      criteria: {
+        true: `The message touches what ${names[id]} cares about closely enough that a reply from ${names[id]} would add something`,
+        false: `Nothing here is ${names[id]}'s to add, or a reply would only echo`,
+      },
+    };
+  }
   q.more_coming = {
     type: "noul",
     instructions: "Is the speaker mid-thought, so another message from them is likely to follow right away?",
@@ -238,6 +262,11 @@ export function parseJevAddress(answers: JevAnswers | null | undefined): JevAddr
     const n = noulOf(answers[`spoken_to_${id}`]);
     if (n !== null) spokenTo[id] = n;
   }
+  const fit: Partial<Record<CompanionId, number>> = {};
+  for (const id of ALL_COMPANIONS) {
+    const n = noulOf(answers[`has_something_for_${id}`]);
+    if (n !== null) fit[id] = n;
+  }
 
   return {
     addressee,
@@ -247,6 +276,7 @@ export function parseJevAddress(answers: JevAnswers | null | undefined): JevAddr
     invitesReply: noulOf(answers.invites_reply),
     mentionsWithoutAddressing: noulOf(answers.mentions_without_addressing),
     moreComing: noulOf(answers.more_coming),
+    fit,
     to: jevTo(addressee, spokenTo),
   };
 }

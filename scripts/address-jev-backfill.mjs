@@ -28,6 +28,9 @@ const FILE = flag("--file", process.env.ADDRESS_SHADOW_LOG ?? "/app/logs/address
 const OUT = flag("--out", "/tmp/address-shadow-jev.jsonl");
 const LIMIT = Number(flag("--limit", "0"));
 const CONC = Math.max(1, Number(flag("--concurrency", "4")));
+// --refit (2026-10-13): re-ask rows that already carry Jev but predate a newly added question
+// (the #9 relevance nouls), so a new question gets day-zero numbers too.
+const REFIT = process.argv.includes("--refit");
 
 try { createRequire(import.meta.url)("dotenv").config(); } catch { /* env may already be set */ }
 
@@ -42,7 +45,7 @@ if (!process.env.HALSETH_URL || !(process.env.HALSETH_SECRET ?? process.env.ADMI
 
 const lines = readFileSync(FILE, "utf8").split(/\r?\n/).filter((l) => l.trim());
 const rows = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } });
-const todo = rows.map((r, i) => ({ r, i })).filter(({ r }) => r && r.kind === "shadow" && !("jev" in r));
+const todo = rows.map((r, i) => ({ r, i })).filter(({ r }) => r && r.kind === "shadow" && (!("jev" in r) || (REFIT && !(r.jev && r.jev.fit && Object.keys(r.jev.fit).length))));
 const work = LIMIT > 0 ? todo.slice(0, LIMIT) : todo;
 console.log(`[jev-backfill] ${rows.length} lines, ${todo.length} shadow rows without Jev, running ${work.length} at concurrency ${CONC}`);
 

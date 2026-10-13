@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import cron from "node-cron";
 import {
   createSubscriberClient, onCommonsMessage, onDirectorResult, publishDirectorInvite,
+  directorJevEnabled, directorJevEval, renderDirectorJevState, jevAgreesDirector, appendDirectorJevLine,
   type Redis, type CommonsMessagePayload, type DirectorResultPayload, type DirectorSupplyItem,
 } from "@nullsafe/shared";
 import { getDirectorSupply, getDirectorNeighborhood, recordInvitation, resolveInvitation, consumeForageFind } from "../halseth-client.js";
@@ -51,6 +52,34 @@ function tableFor(kind: DirectorSupplyItem["kind"]): string {
 }
 
 /**
+ * Jev as a shadow voice beside select() (2026-10-13, shared/director-jev.ts). Detached: never
+ * awaited by decide(), never feeds back into the selection, never throws. One call per decide on a
+ * commons message (event-triggered, never the floor timer), so cost tracks real conversation.
+ */
+export function fireDirectorJev(s: ConversationState, sel: Selection, paced: boolean, rt: Pick<DirectorRuntime, "cfg">, deps: { evalFn?: typeof directorJevEval; log?: typeof appendDirectorJevLine } = {}): Promise<void> {
+  if (!directorJevEnabled()) return Promise.resolve();
+  const evalFn = deps.evalFn ?? directorJevEval;
+  const log = deps.log ?? appendDirectorJevLine;
+  const state = renderDirectorJevState({ turns: s.turns, topic: s.topic, openMoves: s.openMoves, botTurns: s.botTurns, turnBudget: rt.cfg.turnBudget });
+  const last = s.turns[s.turns.length - 1];
+  const director = sel.kind === "invite"
+    ? { kind: "invite" as const, companion: sel.companionId, reason: sel.reason, paced }
+    : { kind: "silence" as const, reason: sel.reason };
+  return evalFn(state).then((res) => {
+    log({
+      kind: "decide", channel_id: s.channelId, after_msg_id: last?.messageId ?? null,
+      after_author: last ? (last.companionId ?? last.author) : null, bot_turns: s.botTurns,
+      director,
+      jev: res.ok ? res.verdict : null, jev_failure: res.ok ? null : res.reason,
+      jev_latency_ms: res.ok ? res.latency_ms : null, jev_wall_ms: res.wall_ms,
+      // A paced invite was not issued, so the room saw silence.
+      agree: res.ok ? jevAgreesDirector(res.verdict, paced || sel.kind === "silence" ? { kind: "silence" } : sel) : null,
+    });
+    if (res.ok) console.log(`[director-jev] ${s.channelId} director=${director.kind === "invite" && !paced ? director.companion : `silence:${director.kind === "invite" ? "pacing" : director.reason}`} jev=${res.verdict.nextSpeaker}@${res.verdict.confidence.toFixed(2)} more=${res.verdict.threadHasMore?.toFixed(2) ?? "?"} echo=${res.verdict.echoing?.toFixed(2) ?? "?"}`);
+  }).catch((e) => { console.warn(`[director-jev] shadow failed: ${String(e).slice(0, 200)}`); });
+}
+
+/**
  * Serialize async calls keyed by `key` on a shared chain map, so two events for the SAME key
  * (e.g. the same channel) never run concurrently while events for different keys still run in
  * parallel (2026-09-03 review, I1). A failure in one call is logged and does not break the chain
@@ -78,6 +107,7 @@ async function issue(sel: Extract<Selection, { kind: "invite" }>, s: Conversatio
     return;
   }
   console.log(`[director] ${rt.mode}: ${sel.reason} -> ${sel.companionId} in ${s.channelId} (offer=${sel.offer.map((o) => o.id).join(",") || "none"})`);
+  appendDirectorJevLine({ kind: "invite", invite_id: inviteId, channel_id: s.channelId, companion: sel.companionId, reason: sel.reason, mode: rt.mode });
   const lastInviteAt = new Date(nowMs).toISOString();
   // I3: both modes record the pacing clock -- shadow saves state (nothing else changes for it)
   // so the shadow pacing gate in decide() mirrors what live would have done, even though only
@@ -90,10 +120,12 @@ async function issue(sel: Extract<Selection, { kind: "invite" }>, s: Conversatio
   await publishDirectorInvite(rt.redis, invite);
 }
 
-export async function decide(channelId: string, rt: DirectorRuntime): Promise<void> {
+export async function decide(channelId: string, rt: DirectorRuntime, fromMessage = false): Promise<void> {
   const s = await rt.store.load(channelId);
   if (!s) return;
   const sel = select({ state: s, supply: rt.pool.items(), nowMs: rt.now(), turnBudget: rt.cfg.turnBudget, noUptakeMs: rt.cfg.noUptakeMs, humanFloorMs: HUMAN_FLOOR_MS, order: rt.cfg.order });
+  const paced = sel.kind === "invite" && !!s.lastInviteAt && rt.now() - Date.parse(s.lastInviteAt) < rt.cfg.minGapMs;
+  if (fromMessage) void fireDirectorJev(s, sel, paced, rt);
   if (sel.kind === "invite") {
     // I3: pacing. A selection that WOULD invite is still throttled if the last invite in this
     // channel landed within minGapMs -- no record, no publish, just a log line. Prevents a burst
@@ -130,11 +162,14 @@ export async function handleMessage(p: CommonsMessagePayload, rt: DirectorRuntim
   // conversation_threads rows. writeLedger gates that inside ingest().
   const s = await ingest(p, { store: rt.store, ledger: rt.ledger, now: () => new Date(rt.now()).toISOString(), writeLedger: rt.mode === "live" });
   if (!s) return;
-  await decide(p.channelId, rt);
+  const t = s.turns[s.turns.length - 1];
+  if (t && directorJevEnabled()) appendDirectorJevLine({ kind: "turn", channel_id: p.channelId, msg_id: p.messageId, author: t.companionId ?? t.author, is_human: t.isHuman, said_at: t.saidAt });
+  await decide(p.channelId, rt, true);
 }
 
 export async function handleResult(r: DirectorResultPayload, rt: DirectorRuntime): Promise<void> {
   await resolveInvitation(r.inviteId, r.outcome, r.messageId, r.usedOfferIds);
+  appendDirectorJevLine({ kind: "result", invite_id: r.inviteId, channel_id: r.channelId, companion: r.companionId, outcome: r.outcome, msg_id: r.messageId ?? null });
   const s = await rt.store.load(r.channelId);
   if (!s) return;
   const offered = s.offered.map((o) => (o.inviteId === r.inviteId && r.usedOfferIds.includes(o.id) ? { ...o, usedBy: r.companionId } : o));
