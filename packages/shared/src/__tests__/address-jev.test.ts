@@ -4,7 +4,7 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import {
   ADDRESSEES, addressJevEnabled, buildJevAddressQuestions, jevAddressEval, jevAgreesFlash, jevAgreesToday,
-  jevTo, parseJevAddress, renderJevAddressState, todayRoute, type JevAddressVerdict,
+  jevTo, ownerTurnLabel, parseJevAddress, proxyTurnLabel, renderJevAddressState, todayRoute, type JevAddressVerdict,
 } from "../address-jev.js";
 import { extractAddress } from "../channel-config.js";
 import type { JevAnswers } from "../jev-gate.js";
@@ -145,5 +145,27 @@ describe("jevAddressEval", () => {
     const bad = jest.fn(async () => new Response("nope", { status: 502 })) as unknown as typeof fetch;
     expect(await jevAddressEval("S", { env, fetchImpl: bad })).toMatchObject({ ok: false, reason: "http_502" });
     expect(await jevAddressEval("S", { env: {} as NodeJS.ProcessEnv })).toMatchObject({ ok: false, reason: "no_halseth_env" });
+  });
+});
+
+describe("PluralKit turn labels (2026-10-13)", () => {
+  const BLUE = "222";
+  it("a roster match says whose system the member is", () => {
+    expect(proxyTurnLabel("Magpie M.", { isOwner: true, discordUserId: "111" }, BLUE)).toBe("Magpie M. (Raziel)");
+    expect(proxyTurnLabel("Rogue || 🍂", { isOwner: false, discordUserId: BLUE }, BLUE)).toBe("Rogue || 🍂 (Blue's system)");
+  });
+  it("an unmatched proxy, or a third system, keeps the generic mark", () => {
+    expect(proxyTurnLabel("Stranger", null, BLUE)).toBe("Stranger (via PK)");
+    expect(proxyTurnLabel("Friend", { isOwner: false, discordUserId: "333" }, BLUE)).toBe("Friend (via PK)");
+    expect(proxyTurnLabel("Rogue", { isOwner: false, discordUserId: BLUE }, undefined)).toBe("Rogue (via PK)");
+  });
+  it("Raziel unproxied under a display name reads as Raziel", () => {
+    expect(ownerTurnLabel("Crash")).toBe("Crash (Raziel)");
+    expect(ownerTurnLabel("Raziel")).toBe("Raziel");
+  });
+  it("the state tells Jev how to read the marks", () => {
+    const s = renderJevAddressState({ speakerSide: "blue", speakerLabel: "Rogue || 🍂 (via PK)", text: "hi Magpie", turns: [{ speaker: "Magpie M. (Raziel)", text: "hey" }], holder: null });
+    expect(s).toContain(`"<member> (Blue's system)" is Blue`);
+    expect(s).toContain("Magpie M. (Raziel): hey");
   });
 });

@@ -147,6 +147,27 @@ function trimTurn(text: string, max: number): string {
 }
 
 /**
+ * Room label for a PluralKit proxy turn in the history (2026-10-13). The webhook username alone
+ * ("Magpie M.", "Rogue || 🍂") does not say whose system the member belongs to, so the classifiers
+ * could not tell Raziel's fronts from Blue's members. The roster match settles it; an unmatched
+ * proxy keeps the generic "(via PK)" mark.
+ */
+export function proxyTurnLabel(
+  username: string,
+  member: { isOwner: boolean; discordUserId: string } | null,
+  blueDiscordId?: string | null,
+): string {
+  if (member?.isOwner) return `${username} (Raziel)`;
+  if (member && blueDiscordId && member.discordUserId === blueDiscordId) return `${username} (Blue's system)`;
+  return `${username} (via PK)`;
+}
+
+/** Raziel unproxied: the room display name ("Crash") carries "(Raziel)" so it is not read as a guest. */
+export function ownerTurnLabel(displayName: string): string {
+  return /^raziel$/i.test(displayName.trim()) ? displayName : `${displayName} (Raziel)`;
+}
+
+/**
  * The room, the people in it, recent turns, and the message. Blue is defined here as a named
  * person, never a guest; the speaker line says which human sent the message. Turn labels are the
  * caller's ("Raziel" or a PK front, "Blue" or "<member> (Blue's system)", the companions, Sol).
@@ -172,6 +193,7 @@ export function renderJevAddressState(opts: {
     `- Cypher ("Cy"), Drevan ("Dre", "Drev"), Gaia: three AI companions, the triad.`,
     `- Sol: the triad's crow, not a person and not a companion.`,
     `- Anyone else is a friend or guest.`,
+    `A turn named "<name> (Raziel)" is Raziel, unproxied or speaking as a front; "<member> (Blue's system)" is Blue. Speaking to a member is speaking to that person.`,
     ``,
     holder,
     ``,

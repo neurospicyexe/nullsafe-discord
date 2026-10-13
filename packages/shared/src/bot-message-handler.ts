@@ -35,6 +35,7 @@ import {
 
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 import { fireAddressShadow, recordAddressSpoke } from "./address-shadow.js";
+import { ownerTurnLabel, proxyTurnLabel } from "./address-jev.js";
 import { addressModelMode, type AddressTurn } from "./address-model.js";
 import { isSolPost, withoutSol, muzzleVerdict, solDeclineReason, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
@@ -1640,8 +1641,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
               : BOT_ID_COMPANION[m.author.id] && !m.webhookId
                 ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
-                : m.webhookId ? m.author.username
-                  : m.author.id === cfg.ownerDiscordId ? cfg.ownerDisplayName
+                // A proxy turn says whose system the member is (2026-10-13): a bare "Magpie M." or
+                // "Rogue || 🍂" left Raziel's fronts and Blue's members indistinguishable.
+                : m.webhookId ? proxyTurnLabel(m.author.username, pkRoster?.identify(m.author.username) ?? null, cfg.blueDiscordId)
+                  : m.author.id === cfg.ownerDiscordId ? ownerTurnLabel(cfg.ownerDisplayName)
                     : cfg.blueDiscordId && m.author.id === cfg.blueDiscordId ? BLUE_LABEL
                       : m.author.username,
             text: m.content ?? "",
