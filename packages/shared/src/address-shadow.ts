@@ -26,6 +26,11 @@
  *
  * DMs never reach here (the handler gates on !isOwnerDm), and this module asserts it again: a DM
  * flag or a sealed DM channel id returns before any Redis, model or file touch.
+ *
+ * STEP 2 (2026-10-13): Jev (address-jev.ts) is a second voice on the same row, run in parallel
+ * with Flash by the same claim winner. Blue's messages now reach the shadow too (Jev only; Flash's
+ * prompt is the frozen baseline and knows one human). Jev also runs on cold nameless lines Flash's
+ * gate skips; those rows log Flash as failure "skipped_gate". ADDRESS_JEV=off removes the voice.
  */
 
 import type { CompanionId } from "./types.js";
@@ -38,6 +43,10 @@ import {
   mentionMisreads, parseAddressVerdict, regexRoute, regexVerdictOf, shouldRunAddressModel,
   type AddressModelMode, type AddressTurn, type AddressVerdict,
 } from "./address-model.js";
+import {
+  addressJevEnabled, jevAddressEval, jevAgreesFlash, jevAgreesToday, renderJevAddressState, todayRoute,
+  type Addressee, type JevAddressCaller, type JevAddressVerdict, type SpeakerSide,
+} from "./address-jev.js";
 
 export const ADDRESS_CLAIM_PREFIX = "ns:addr:claim:";
 export const ADDRESS_CLAIM_TTL_MS = 120_000;
@@ -65,8 +74,13 @@ export interface AddressShadowCtx {
   channelId: string;
   createdTimestamp: number;
   content: string;
-  /** "Raziel" or the PK front name. */
+  /** "Raziel" or the PK front name; "Blue" or "<member> (Blue's system)". */
   speaker: string;
+  /** Which human sent it. Defaults to "raziel" (the step-1 call sites only ever fired for him).
+   *  Flash runs on Raziel's messages only (its prompt is the frozen baseline); Jev runs on both. */
+  speakerSide?: SpeakerSide;
+  /** The human address gate's vocative read of the message ("Blue, ..." -> "blue"), or null. */
+  humanAddressee?: SpeakerSide | null;
   /** An @mention of any companion bot (sync, from message.mentions). */
   mentionedCompanion: boolean;
   /** A reply to THIS bot's message (sync). A reply to a sibling is resolved lazily below. */
@@ -81,6 +95,9 @@ export interface AddressShadowCtx {
   adapter: InferenceAdapter | null;
   /** Recent turns oldest-first (excluding this message), plus the holder recomputed from them. */
   fetchRecent: () => Promise<{ turns: AddressTurn[]; holder: CompanionId | null }>;
+  /** The Jev voice. Undefined = the real call (jevAddressEval) when ADDRESS_JEV is not off;
+   *  null = never run Jev. Tests inject a fake. */
+  jev?: JevAddressCaller | null;
   // Seams
   timeoutMs?: number;
   now?: () => number;
@@ -105,6 +122,19 @@ export interface AddressShadowRow {
   agree: boolean | null;
   misread: CompanionId[];
   latency_ms: number | null;
+  /** Step 2 (2026-10-13). Rows written before then lack these fields. */
+  speaker_side: SpeakerSide;
+  human_addressee: SpeakerSide | null;
+  /** Today's routing in Jev's vocabulary (address-jev.ts todayRoute). */
+  today_route: Addressee[];
+  jev: JevAddressVerdict | null;
+  jev_failure: string | null;
+  /** Jev's own model time, as Halseth reports it. */
+  jev_latency_ms: number | null;
+  /** Wall time from the bot, Halseth hop included (what a live flip has to fit in the bid window). */
+  jev_wall_ms: number | null;
+  jev_agree_flash: boolean | null;
+  jev_agree_today: boolean | null;
   text: string;
   turns: AddressTurn[];
 }
@@ -186,10 +216,19 @@ export async function runAddressShadow(ctx: AddressShadowCtx): Promise<AddressSh
     // The DM seal, asserted here as well as at the call site.
     if (ctx.isDm || isSealedRecallSource(ctx.channelId)) return null;
 
+    const speakerSide: SpeakerSide = ctx.speakerSide ?? "raziel";
     const syncFast = addressFastPathDecided({
       content: ctx.content, mentionedCompanion: ctx.mentionedCompanion, replyToCompanion: ctx.replyToMe,
     });
-    if (!shouldRunAddressModel({ content: ctx.content, fastPath: syncFast, holder: ctx.holder })) return null;
+    // Flash keeps its step-1 gate, on Raziel's messages only (frozen baseline). Jev runs on every
+    // message the fast path did not decide, cold nameless ones included: "nobody" / "room" /
+    // invites_reply on exactly those lines is the spec-D question (let a line sit).
+    const runFlash = speakerSide === "raziel"
+      && shouldRunAddressModel({ content: ctx.content, fastPath: syncFast, holder: ctx.holder });
+    const jevCaller: JevAddressCaller | null = ctx.jev === null ? null
+      : ctx.jev ?? (addressJevEnabled() ? (state: string) => jevAddressEval(state) : null);
+    const runJev = !syncFast && !!jevCaller;
+    if (!runFlash && !runJev) return null;
     if (!ctx.redis) return null;
 
     const claimed = await ctx.redis.set(ADDRESS_CLAIM_PREFIX + ctx.messageId, ctx.companionId, "PX", ADDRESS_CLAIM_TTL_MS, "NX")
@@ -215,9 +254,9 @@ export async function runAddressShadow(ctx: AddressShadowCtx): Promise<AddressSh
     let model: AddressVerdict | null = null;
     let failure: string | null = null;
     let latency: number | null = null;
-    if (!ctx.adapter) {
-      failure = "no_direct_adapter";
-    } else {
+    const runFlashCall = async (): Promise<void> => {
+      if (!runFlash) { failure = "skipped_gate"; return; }
+      if (!ctx.adapter) { failure = "no_direct_adapter"; return; }
       const prompt = buildAddressPrompt({ speaker: ctx.speaker, text: ctx.content }, turns);
       const started = now();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -242,7 +281,28 @@ export async function runAddressShadow(ctx: AddressShadowCtx): Promise<AddressSh
       } finally {
         if (timer) clearTimeout(timer);
       }
-    }
+    };
+
+    let jev: JevAddressVerdict | null = null;
+    let jevFailure: string | null = null;
+    let jevLatency: number | null = null;
+    let jevWall: number | null = null;
+    const runJevCall = async (): Promise<void> => {
+      if (!runJev || !jevCaller) { jevFailure = syncFast ? "fast_path" : "off"; return; }
+      try {
+        const res = await jevCaller(renderJevAddressState({
+          speakerSide, speakerLabel: ctx.speaker, text: ctx.content, turns, holder,
+        }));
+        jevWall = res.wall_ms;
+        if (res.ok) { jev = res.verdict; jevLatency = res.latency_ms; }
+        else jevFailure = res.reason;
+      } catch (e) {
+        jevFailure = `error: ${String(e).slice(0, 120)}`;
+      }
+    };
+
+    // Both voices at once; neither waits on the other.
+    await Promise.all([runFlashCall(), runJevCall()]);
 
     // The bid outcome, read once the window has closed. Only the bid path writes these keys.
     let spokeBid: string | null = null;
@@ -258,6 +318,10 @@ export async function runAddressShadow(ctx: AddressShadowCtx): Promise<AddressSh
       }
     } catch { /* unknown stays null */ }
 
+    const humanAddressee = ctx.humanAddressee ?? null;
+    const route = todayRoute({ regex: ctx.regex, holder, speakerSide, humanAddressee });
+    const jevV = jev as JevAddressVerdict | null;
+    const flashV = model as AddressVerdict | null;
     const row: AddressShadowRow = {
       kind: "shadow",
       at: new Date(now()).toISOString(),
@@ -269,11 +333,20 @@ export async function runAddressShadow(ctx: AddressShadowCtx): Promise<AddressSh
       regex_route: regexRoute(ctx.regex, holder),
       spoke_bid: spokeBid,
       bids,
-      model,
+      model: flashV,
       failure,
-      agree: model ? addressAgrees(ctx.regex, holder, model) : null,
-      misread: model ? mentionMisreads(ctx.regex, model) : [],
+      agree: flashV ? addressAgrees(ctx.regex, holder, flashV) : null,
+      misread: flashV ? mentionMisreads(ctx.regex, flashV) : [],
       latency_ms: latency,
+      speaker_side: speakerSide,
+      human_addressee: humanAddressee,
+      today_route: route,
+      jev: jevV,
+      jev_failure: jevFailure,
+      jev_latency_ms: jevLatency,
+      jev_wall_ms: jevWall,
+      jev_agree_flash: jevV ? jevAgreesFlash(jevV, flashV, holder) : null,
+      jev_agree_today: jevV ? jevAgreesToday(jevV, route, holder) : null,
       text: ctx.content.slice(0, LABEL_TEXT_CHARS),
       turns,
     };

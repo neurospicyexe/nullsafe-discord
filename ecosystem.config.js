@@ -266,6 +266,10 @@ const shared = {
   // Listed per the standing rule above.
   ADDRESS_MODEL:               process.env.ADDRESS_MODEL ?? "shadow",
   ADDRESS_SHADOW_LOG:          process.env.ADDRESS_SHADOW_LOG,
+  // ADDRESS_JEV (2026-10-13, B37 step 2, address-jev.ts): Jev as the second shadow voice, on Raziel's
+  // AND Blue's messages, same row as Flash. Runs whenever ADDRESS_MODEL=shadow; `off` is the kill
+  // switch (needs a reload with --update-env). Listed per the standing rule above.
+  ADDRESS_JEV:                 process.env.ADDRESS_JEV,
   // BURST_SETTLE_MS (2026-10-10, channel-inbox.ts burstSettleMs): the window a human burst is gathered
   // for and answered as one turn. Code default 4000; `0` disables (exact old behavior). Same value in
   // all three bots: the fit-bid deadline is shifted by it, so a bot on a different value splits the bid.

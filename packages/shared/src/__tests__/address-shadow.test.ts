@@ -10,6 +10,7 @@ import {
 import { extractAddress } from "../channel-config.js";
 import { sealDmChannel, resetSealedDmChannels } from "../recall-context.js";
 import type { InferenceAdapter } from "../inference.js";
+import type { JevAddressVerdict } from "../address-jev.js";
 
 function fakeRedis(opts: { claimed?: Set<string>; spoke?: string | null; bids?: Record<string, string>; throwOnSet?: boolean } = {}) {
   const claimed = opts.claimed ?? new Set<string>();
@@ -53,9 +54,18 @@ function ctx(over: Partial<AddressShadowCtx> = {}): AddressShadowCtx {
     sleep: async () => {},
     log: () => {},
     append: () => {},
+    // Step-1 tests exercise Flash alone; the Jev voice has its own block below. Never the real call.
+    jev: null,
     ...over,
   };
 }
+
+const jevVerdict = (over: Partial<JevAddressVerdict> = {}): JevAddressVerdict => ({
+  addressee: "room", confidence: 0.8, probabilities: { room: 0.8 }, spokenTo: {},
+  invitesReply: 0.7, mentionsWithoutAddressing: 0.9, moreComing: 0.1, to: "room", ...over,
+});
+const jevReturning = (verdict: JevAddressVerdict) =>
+  jest.fn(async (_state: string) => ({ ok: true as const, verdict, latency_ms: 210, wall_ms: 480 }));
 
 beforeEach(() => resetSealedDmChannels());
 afterEach(() => resetSealedDmChannels());
@@ -112,9 +122,13 @@ describe("fireAddressShadow never touches the reply path", () => {
     expect(call).toMatch(/!isOwnerDm/);
     expect(call).toMatch(/!isSol/);
     expect(call).toMatch(/!senderCtx\.isCompanionBot/);
-    expect(call).toMatch(/attribution\.isOwner/);
+    // Raziel and Blue (step 2); never a guest.
+    expect(call).toMatch(/userTier === "owner" \|\| userTier === "intimate"/);
+    expect(call).not.toMatch(/guest/);
     expect(src).toMatch(/withCaller\(directAdapter, "address_model"\)/);
     expect(src.indexOf("recordAddressSpoke({")).toBeGreaterThan(src.indexOf("for (const m of sent) sentIds.add(m.id);"));
+    const spoke = src.slice(src.lastIndexOf("if (sent.length > 0", src.indexOf("recordAddressSpoke({")), src.indexOf("recordAddressSpoke({"));
+    expect(spoke).toMatch(/userTier === "owner" \|\| userTier === "intimate"/);
   });
 });
 
@@ -225,6 +239,81 @@ describe("runAddressShadow", () => {
     expect(slept).toHaveLength(1);
     expect(slept[0]).toBeGreaterThan(2_500);
     expect(row).toMatchObject({ spoke_bid: "gaia", bids: { gaia: 0.61, drevan: 0.2 } });
+  });
+});
+
+describe("runAddressShadow: the Jev voice (step 2)", () => {
+  it("runs beside Flash on the same row; state names Blue as family; agreement on both axes", async () => {
+    const jev = jevReturning(jevVerdict());
+    const row = await runAddressShadow(ctx({ jev }));
+    expect(jev).toHaveBeenCalledTimes(1);
+    const state = jev.mock.calls[0]![0];
+    expect(state).toContain("Blue: Raziel's husband, family");
+    expect(state).toContain("Drevan: the fence is down");
+    expect(state).toContain("Cy said the fence needs wire");
+    expect(row).toMatchObject({
+      speaker_side: "raziel", model: { to: "room" }, jev: { addressee: "room" },
+      jev_failure: null, jev_latency_ms: 210, jev_wall_ms: 480,
+      jev_agree_flash: true, today_route: ["cypher"], jev_agree_today: false,
+    });
+  });
+
+  it("a cold nameless message runs Jev only; Flash is logged as skipped_gate", async () => {
+    const a = adapterReturning("{}");
+    const jev = jevReturning(jevVerdict({ addressee: "nobody", to: null, invitesReply: 0.1 }));
+    const row = await runAddressShadow(ctx({
+      content: "the fence", regex: extractAddress("the fence"), holder: null,
+      fetchRecent: async () => ({ turns: [], holder: null }), adapter: a, jev,
+    }));
+    expect(a.generate).not.toHaveBeenCalled();
+    expect(row).toMatchObject({ failure: "skipped_gate", model: null, jev: { addressee: "nobody" }, today_route: ["room"], jev_agree_today: false, jev_agree_flash: null });
+  });
+
+  it("the fast path still skips everything, Jev included", async () => {
+    const r = fakeRedis();
+    const jev = jevReturning(jevVerdict());
+    expect(await runAddressShadow(ctx({ redis: r.redis, jev, content: "Cy, what do you think", regex: extractAddress("Cy, what do you think") }))).toBeNull();
+    expect(jev).not.toHaveBeenCalled();
+    expect(r.calls).toEqual([]);
+  });
+
+  it("Blue's message: Jev runs, Flash never does, the holder is Blue's own and the state says Blue sent it", async () => {
+    const a = adapterReturning('{"to":"room","mentioned":[],"confidence":0.9}');
+    const jev = jevReturning(jevVerdict({ addressee: "raziel", to: null }));
+    const row = await runAddressShadow(ctx({
+      speaker: "Blue", speakerSide: "blue", humanAddressee: "raziel",
+      content: "Raziel, are you eating tonight?", regex: extractAddress("Raziel, are you eating tonight?"),
+      fetchRecent: async () => ({ turns: [{ speaker: "Raziel", text: "home in 10" }], holder: "gaia" }),
+      adapter: a, jev,
+    }));
+    expect(a.generate).not.toHaveBeenCalled();
+    expect(jev.mock.calls[0]![0]).toContain(`The last message, from Blue (shown as "Blue")`);
+    expect(jev.mock.calls[0]![0]).toContain("Gaia is holding the current one-on-one exchange");
+    expect(row).toMatchObject({
+      speaker_side: "blue", human_addressee: "raziel", holder: "gaia", failure: "skipped_gate",
+      jev: { addressee: "raziel" }, today_route: ["raziel"], jev_agree_today: true,
+    });
+  });
+
+  it("a Jev failure is a logged reason, never a throw, and Flash still lands", async () => {
+    const down = jest.fn(async () => ({ ok: false as const, reason: "http_502", wall_ms: 90 }));
+    const throws = jest.fn(async () => { throw new Error("socket"); });
+    const r1 = await runAddressShadow(ctx({ jev: down }));
+    expect(r1).toMatchObject({ jev: null, jev_failure: "http_502", jev_wall_ms: 90, model: { to: "room" }, jev_agree_flash: null });
+    const r2 = await runAddressShadow(ctx({ messageId: "m9", jev: throws }));
+    expect(r2?.jev_failure).toMatch(/^error: /);
+    expect(r2?.model).not.toBeNull();
+  });
+
+  it("only the claim winner calls Jev", async () => {
+    const shared = fakeRedis();
+    const jD = jevReturning(jevVerdict());
+    const jG = jevReturning(jevVerdict());
+    await Promise.all([
+      runAddressShadow(ctx({ companionId: "drevan", redis: shared.redis, jev: jD })),
+      runAddressShadow(ctx({ companionId: "gaia", redis: shared.redis, jev: jG })),
+    ]);
+    expect(jD.mock.calls.length + jG.mock.calls.length).toBe(1);
   });
 });
 

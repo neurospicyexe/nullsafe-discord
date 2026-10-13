@@ -53,7 +53,7 @@ import {
   setLastActivity, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAt, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
-  humanGate, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
+  humanGate, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
   learnHumanName, learnedHumanNames, mergeHumanNames, type NameRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
@@ -1598,11 +1598,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // has to see the messages this bot will NOT answer ("Cy said..." silences Drevan and Gaia at
     // shouldRespond just below). NEVER awaited: it returns void, runs detached, claims the message
     // in Redis so only one bot calls the model, and changes nothing about who speaks.
-    // Human owner messages only (Raziel or his PK front); never a sibling, never Sol, never a DM,
-    // never a replayed pass turn.
+    // Human messages from Raziel (or his PK front) and, since step 2 (2026-10-13), Blue (or a member
+    // of Blue's system): Blue is family and a defined addressee, never a guest. Guests never; never a
+    // sibling, never Sol, never a DM, never a replayed pass turn. Blue's holder is Blue's own thread
+    // hold (per-human, 2026-10-10), never Raziel's.
     if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
-      && attribution.isOwner && addressModelMode() === "shadow") {
+      && (userTier === "owner" || userTier === "intimate") && addressModelMode() === "shadow") {
       const shadowRefId = message.reference?.messageId ?? null;
+      const shadowSide = userTier === "owner" ? "raziel" as const : "blue" as const;
       fireAddressShadow({
         isDm: isOwnerDm,
         companionId: COMPANION_ID,
@@ -1611,6 +1614,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         createdTimestamp: message.createdTimestamp,
         content: effectiveContent,
         speaker: author,
+        speakerSide: shadowSide,
+        humanAddressee: humanAddressee(effectiveContent, humanNamesFromEnv()),
         mentionedCompanion: senderCtx.isMentioned
           || [...BOT_IDS].some(id => id !== client.user?.id && message.mentions.users?.has?.(id)),
         replyToMe: isReplyToMe,
@@ -1621,7 +1626,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           }
           : undefined,
         regex: extractAddress(effectiveContent),
-        holder: senderCtx.activeExchangeWith,
+        // Blue's holder is read in fetchRecent (Blue's own hold); Raziel's is the one settled above.
+        holder: shadowSide === "raziel" ? senderCtx.activeExchangeWith : undefined,
         redis,
         adapter: withCaller(directAdapter, "address_model") ?? null,
         fetchRecent: async () => {
@@ -1629,16 +1635,25 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           const older = [...hist.values()]
             .filter(m => m.id !== message.id && m.createdTimestamp <= message.createdTimestamp)
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+          // One stable name per person (2026-10-11 room rendering): Blue unproxied reads "Blue".
           const turns: AddressTurn[] = older.map(m => ({
             speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
               : BOT_ID_COMPANION[m.author.id] && !m.webhookId
                 ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
                 : m.webhookId ? m.author.username
-                  : m.author.id === cfg.ownerDiscordId ? cfg.ownerDisplayName : m.author.username,
+                  : m.author.id === cfg.ownerDiscordId ? cfg.ownerDisplayName
+                    : cfg.blueDiscordId && m.author.id === cfg.blueDiscordId ? BLUE_LABEL
+                      : m.author.username,
             text: m.content ?? "",
           }));
+          if (shadowSide === "blue") {
+            const blueHolder = await readHumanHold(holdRedis, "blue", message.channelId, channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
+            return { turns, holder: blueHolder };
+          }
+          // Raziel's holder walk skips companion replies to Blue (per-human hold), same as the reply path.
+          const blueReplyIds = await readHumanHoldIds(holdRedis, "blue", message.channelId);
           const holder = activeExchangeHolder(
-            withoutSol(older, solId).reverse().map(m => ({
+            withoutSol(older, solId).filter(m => !blueReplyIds.has(m.id)).reverse().map(m => ({
               companionId: BOT_ID_COMPANION[m.author.id] as CompanionId | undefined,
               authorIsBot: botTurn(m),
               createdTimestamp: m.createdTimestamp,
@@ -3286,7 +3301,9 @@ ${widened}`;
     }
     // B37 shadow: the OBSERVED speaker, joined to the address shadow row by origin id in the report.
     // Fire-and-forget file append, no-op unless ADDRESS_MODEL=shadow; never for a DM or Sol.
-    if (sent.length > 0 && !isOwnerDm && !isSol && (entitledFollowUp || (!senderCtx.isCompanionBot && attribution.isOwner))) {
+    // Raziel's and Blue's messages both (step 2): the shadow fires for both, so both need the join.
+    if (sent.length > 0 && !isOwnerDm && !isSol
+      && (entitledFollowUp || (!senderCtx.isCompanionBot && (userTier === "owner" || userTier === "intimate")))) {
       recordAddressSpoke({
         isDm: isOwnerDm,
         msgId: entitledFollowUp?.originMessageId ?? message.id,

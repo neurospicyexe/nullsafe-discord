@@ -59,7 +59,9 @@ const spoke = (r) => spokeBy.get(r.msg_id) ?? (r.spoke_bid ? [r.spoke_bid] : [])
 
 const judged = shadow.filter((r) => r.model && (r.model.confidence ?? 0) >= MIN_CONF);
 const lowConf = shadow.filter((r) => r.model && (r.model.confidence ?? 0) < MIN_CONF);
-const failed = shadow.filter((r) => !r.model);
+// Step 2: a Jev-only row (Blue's messages, cold nameless lines) logs Flash as "skipped_gate". That
+// is a gate, not a Flash failure.
+const failed = shadow.filter((r) => !r.model && r.failure !== "skipped_gate");
 const agree = judged.filter((r) => r.agree === true);
 const disagree = judged.filter((r) => r.agree === false);
 
@@ -125,6 +127,64 @@ for (const r of failed) reasons[r.failure ?? "?"] = (reasons[r.failure ?? "?"] ?
 out.push(`failures: ${failed.length}${Object.keys(reasons).length ? ` (${Object.entries(reasons).map(([k, v]) => `${k}=${v}`).join(", ")})` : ""}`);
 out.push(``);
 
+// ---------------------------------------------------------------------------
+// Jev, the second voice (step 2, 2026-10-13; address-jev.ts)
+// ---------------------------------------------------------------------------
+const jevRows = shadow.filter((r) => r.jev);
+const jevFailed = shadow.filter((r) => "jev_failure" in r && !r.jev && r.jev_failure && r.jev_failure !== "off" && r.jev_failure !== "fast_path");
+const jevToStr = (r) => r.jev.addressee === "continuing" || r.jev.addressee === "room" || !Array.isArray(r.jev.to) ? r.jev.addressee : r.jev.to.join("+");
+// more_coming ground truth, no labels needed: did the same human post again in the same channel
+// within MORE_WINDOW_S? Rows are per settled burst, so "again" means the next burst.
+const MORE_WINDOW_S = Number(flag("--more-window", "60"));
+const nextSame = (r) => shadow.find((o) => o !== r && o.channel_id === r.channel_id && (o.speaker_side ?? "raziel") === (r.speaker_side ?? "raziel")
+  && Date.parse(o.at) > Date.parse(r.at) && Date.parse(o.at) - Date.parse(r.at) <= MORE_WINDOW_S * 1000);
+
+out.push(`## Jev (second voice)`);
+out.push(``);
+if (!jevRows.length && !jevFailed.length) {
+  out.push(`No Jev rows in this window (rows before 2026-10-13 have no Jev field; run scripts/address-jev-backfill.mjs for those).`);
+} else {
+  const sides = ["raziel", "blue"];
+  out.push(`| speaker | rows with Jev | agrees with today's routing | agrees with Flash (where both judged) |`);
+  out.push(`|---|---|---|---|`);
+  for (const s of sides) {
+    const g = jevRows.filter((r) => (r.speaker_side ?? "raziel") === s);
+    const t = g.filter((r) => r.jev_agree_today === true).length;
+    const fl = g.filter((r) => r.jev_agree_flash !== null && r.jev_agree_flash !== undefined);
+    out.push(`| ${s} | ${g.length} | ${t} (${pct(t, g.length)}) | ${fl.filter((r) => r.jev_agree_flash).length}/${fl.length} (${pct(fl.filter((r) => r.jev_agree_flash).length, fl.length)}) |`);
+  }
+  out.push(``);
+  const dist = {};
+  for (const r of jevRows) dist[r.jev.addressee] = (dist[r.jev.addressee] ?? 0) + 1;
+  out.push(`Jev addressee distribution: ${Object.entries(dist).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", ")}`);
+  out.push(``);
+  out.push(`Confidence bins (agreement with today's routing per bin; Jev's useful trait is being wrong at LOW confidence):`);
+  for (const [lo, hi] of [[0, 0.5], [0.5, 0.7], [0.7, 0.9], [0.9, 1.01]]) {
+    const g = jevRows.filter((r) => r.jev.confidence >= lo && r.jev.confidence < hi);
+    out.push(`- [${lo}, ${Math.min(hi, 1)}): ${g.length} rows, agree ${g.filter((r) => r.jev_agree_today).length} (${pct(g.filter((r) => r.jev_agree_today).length, g.length)})`);
+  }
+  const mwa = jevRows.filter((r) => (r.jev.mentionsWithoutAddressing ?? 0) >= 0.5);
+  out.push(`- mentions_without_addressing >= 0.5: ${mwa.length}; of those, Jev disagrees with today's routing (the "Cy said" candidates): ${mwa.filter((r) => r.jev_agree_today === false).length}`);
+  const ir = jevRows.filter((r) => r.jev.invitesReply !== null && r.jev.invitesReply !== undefined);
+  const sit = ir.filter((r) => r.jev.invitesReply < 0.3);
+  out.push(`- invites_reply < 0.3 (a line Jev would let sit): ${sit.length} of ${ir.length}; of those, a companion spoke anyway: ${sit.filter((r) => spoke(r).length > 0).length}`);
+  const mc = jevRows.filter((r) => typeof r.jev.moreComing === "number");
+  if (mc.length) {
+    const tp = mc.filter((r) => r.jev.moreComing >= 0.5 && nextSame(r)).length;
+    const pp = mc.filter((r) => r.jev.moreComing >= 0.5).length;
+    const ap = mc.filter((r) => nextSame(r)).length;
+    out.push(`- more_coming (truth: same human posts again in this channel within ${MORE_WINDOW_S}s): predicted ${pp}, actual ${ap}, both ${tp}; precision ${pct(tp, pp)}, recall ${pct(tp, ap)}. Caveat: a follow-up that names a companion is fast path and never becomes a row, so "actual" undercounts and precision reads low.`);
+  }
+  const jl = jevRows.map((r) => r.jev_latency_ms).filter((x) => Number.isFinite(x));
+  const jw = shadow.map((r) => r.jev_wall_ms).filter((x) => Number.isFinite(x));
+  out.push(`- latency: Jev p50 ${q(jl, 0.5) ?? "n/a"}ms; wall (bot -> Halseth -> Jev) p50 ${q(jw, 0.5) ?? "n/a"}ms, p95 ${q(jw, 0.95) ?? "n/a"}ms; over the 2500ms bid window: ${jw.filter((x) => x > 2500).length} of ${jw.length}`);
+  const jr = {};
+  for (const r of jevFailed) jr[r.jev_failure] = (jr[r.jev_failure] ?? 0) + 1;
+  out.push(`- Jev failures: ${jevFailed.length}${Object.keys(jr).length ? ` (${Object.entries(jr).map(([k, v]) => `${k}=${v}`).join(", ")})` : ""}`);
+}
+out.push(``);
+const jevLabel = jevRows.filter((r) => r.jev_agree_today === false || r.jev_agree_flash === false || (r.speaker_side ?? "raziel") === "blue");
+
 out.push(`## Disagreements (ids only; text is in the --out labelling files)`);
 out.push(``);
 out.push(`| # | at | msg | regex | holder | model to | model mentioned | conf | spoke |`);
@@ -167,5 +227,34 @@ if (OUT) {
   });
   writeFileSync(join(OUT, "label-disagreements.md"), md.join("\n") + "\n");
   writeFileSync(join(OUT, "label-disagreements.csv"), csv.join("\n") + "\n");
-  console.error(`[address-report] wrote ${join(OUT, "report.md")}, label-disagreements.md and .csv (${disagree.length} rows; these files contain message text)`);
+
+  // Step 2: every row where Jev disagrees with today's routing or with Flash, plus every message
+  // Blue sent. One answer per row: who was it really spoken to.
+  const jm = [
+    `# Who was it spoken to? (Jev vs Flash vs today's code)`,
+    ``,
+    `Mark who each message was really spoken TO. Options: cypher, drevan, gaia (any combination),`,
+    `raziel, blue, someone_else, room (anyone), continuing (the exchange underway), nobody (meant to sit).`,
+    ``,
+  ];
+  const jcsv = [["n", "at", "msg_id", "channel_id", "speaker", "text", "holder", "today", "flash", "jev", "jev_conf", "invites_reply", "spoke", "really to"].join(",")];
+  jevLabel.forEach((r, i) => {
+    jm.push(`## ${i + 1}. ${r.at} (msg ${r.msg_id}, from ${r.speaker_side ?? "raziel"})`);
+    jm.push(``);
+    for (const t of r.turns ?? []) jm.push(`> **${t.speaker}:** ${oneLine(t.text)}`);
+    jm.push(`>`);
+    jm.push(`> **THIS MESSAGE:** ${oneLine(r.text)}`);
+    jm.push(``);
+    jm.push(`- today's code: \`${(r.today_route ?? []).join("+")}\`${r.holder ? ` (holder ${r.holder})` : ""}`);
+    jm.push(`- Flash: ${r.model ? `\`${fmtTo(r.model.to)}\`` : `(${r.failure ?? "none"})`}`);
+    jm.push(`- Jev: \`${jevToStr(r)}\` at ${Number(r.jev.confidence).toFixed(2)}; invites reply ${r.jev.invitesReply ?? "?"}, talked-about-not-to ${r.jev.mentionsWithoutAddressing ?? "?"}`);
+    jm.push(`- who actually spoke: ${spoke(r).join(" > ") || "nobody / unknown"}`);
+    jm.push(``);
+    jm.push(`- really to: ____`);
+    jm.push(``);
+    jcsv.push([i + 1, r.at, r.msg_id, r.channel_id, r.speaker_side ?? "raziel", cell(r.text), r.holder ?? "", (r.today_route ?? []).join("+"), r.model ? fmtTo(r.model.to) : (r.failure ?? ""), jevToStr(r), Number(r.jev.confidence).toFixed(2), r.jev.invitesReply ?? "", spoke(r).join(">"), ""].join(","));
+  });
+  writeFileSync(join(OUT, "label-jev.md"), jm.join("\n") + "\n");
+  writeFileSync(join(OUT, "label-jev.csv"), jcsv.join("\n") + "\n");
+  console.error(`[address-report] wrote ${join(OUT, "report.md")}, label-disagreements.md/.csv (${disagree.length} rows) and label-jev.md/.csv (${jevLabel.length} rows); these files contain message text`);
 }

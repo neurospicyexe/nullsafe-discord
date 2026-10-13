@@ -92,3 +92,4 @@ export type { OwnerDmTarget, OwnerDmLane } from "./owner-dm.js";
 export * from "./address-model.js";
 export * from "./human-address.js";
 export * from "./address-shadow.js";
+export * from "./address-jev.js";

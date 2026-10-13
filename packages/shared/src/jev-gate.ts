@@ -260,7 +260,45 @@ const DEFAULT_TIMEOUT_MS = 4_000;
 let warnedNoEnv = false;
 
 export async function jevWritebackEval(input: JevEvalInput): Promise<JevEvalResult> {
-  const env = input.env ?? process.env;
+  const started = Date.now();
+  const res = await postJev({
+    purpose: `writeback gate for ${input.companionId}`,
+    state: renderJevState(input.companionId, input.speaker, input.userMessage, input.assistantResponse),
+    questions: buildJevWritebackQuestions(input.companionId, input.speaker),
+  }, { env: input.env, fetchImpl: input.fetchImpl, timeoutMs: input.timeoutMs });
+  if (!res.ok) return res;
+  // A 200 whose answers lack the one question the gate decides on is a partial answer, not a
+  // verdict. Reporting ok would read as worth = 0, a silent skip that never falls open to the
+  // legacy judge (seen 2026-09-21: 667 live rows came back 200 with answers: {}).
+  if (!res.answers.worth_remembering || typeof (res.answers.worth_remembering as { noul?: unknown }).noul !== "number") {
+    console.warn(`[jev-gate] 200 without worth_remembering; answered=${Object.keys(res.answers).join(",") || "(none)"}`);
+    return { ok: false, reason: "no_worth_answer", status: 200, wall_ms: Date.now() - started };
+  }
+  return res;
+}
+
+export interface JevRequest {
+  purpose: string;
+  state: string;
+  questions: Record<string, JevQuestion>;
+}
+
+export interface JevPostOpts {
+  fetchImpl?: typeof fetch;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  /** Log prefix. The writeback gate keeps "[jev-gate]"; other callers name themselves. */
+  tag?: string;
+}
+
+/**
+ * One call to Jev through Halseth `POST /admin/jev`, for any caller (writeback gate, address
+ * shadow). Never throws. `ok: true` means a 200 with an `answers` object; whether the answers
+ * carry the question a caller decides on is the caller's check, not this one's.
+ */
+export async function postJev(req: JevRequest, opts: JevPostOpts = {}): Promise<JevEvalResult> {
+  const env = opts.env ?? process.env;
+  const tag = opts.tag ?? "[jev-gate]";
   const started = Date.now();
   const url = env.HALSETH_URL;
   const secret = env.HALSETH_SECRET ?? env.ADMIN_SECRET;
@@ -268,18 +306,14 @@ export async function jevWritebackEval(input: JevEvalInput): Promise<JevEvalResu
   if (!url || !secret) {
     if (!warnedNoEnv) {
       warnedNoEnv = true;
-      console.warn("[jev-gate] no HALSETH_URL or HALSETH_SECRET/ADMIN_SECRET; jev gate cannot run");
+      console.warn(`${tag} no HALSETH_URL or HALSETH_SECRET/ADMIN_SECRET; jev gate cannot run`);
     }
     return { ok: false, reason: "no_halseth_env", wall_ms: Date.now() - started };
   }
 
-  const doFetch = input.fetchImpl ?? fetch;
-  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const body = JSON.stringify({
-    purpose: `writeback gate for ${input.companionId}`,
-    state: renderJevState(input.companionId, input.speaker, input.userMessage, input.assistantResponse),
-    questions: buildJevWritebackQuestions(input.companionId, input.speaker),
-  });
+  const doFetch = opts.fetchImpl ?? fetch;
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const body = JSON.stringify(req);
 
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -305,7 +339,7 @@ export async function jevWritebackEval(input: JevEvalInput): Promise<JevEvalResu
 
     if (raced === TIMED_OUT) {
       try { controller.abort(); } catch { /* abort is best-effort */ }
-      console.warn(`[jev-gate] timeout after ${timeoutMs}ms`);
+      console.warn(`${tag} timeout after ${timeoutMs}ms`);
       return { ok: false, reason: `timeout after ${timeoutMs}ms`, wall_ms: Date.now() - started };
     }
 
@@ -314,24 +348,17 @@ export async function jevWritebackEval(input: JevEvalInput): Promise<JevEvalResu
       let text = "";
       try { text = (await res.text()).slice(0, 200); } catch { /* body may be unreadable */ }
       if (res.status === 400) {
-        console.error(`[jev-gate] 400 (our bug) ${text}`);
+        console.error(`${tag} 400 (our bug) ${text}`);
       } else {
-        console.warn(`[jev-gate] ${res.status} ${text}`);
+        console.warn(`${tag} ${res.status} ${text}`);
       }
       return { ok: false, reason: `http_${res.status}`, status: res.status, wall_ms: Date.now() - started };
     }
 
     const json = await res.json() as { answers?: JevAnswers; latency_ms?: number };
     if (!json || typeof json !== "object" || !json.answers) {
-      console.warn("[jev-gate] 200 with no answers in body");
+      console.warn(`${tag} 200 with no answers in body`);
       return { ok: false, reason: "no_answers", status: 200, wall_ms: Date.now() - started };
-    }
-    // A 200 whose answers lack the one question the gate decides on is a partial answer, not a
-    // verdict. Reporting ok would read as worth = 0, a silent skip that never falls open to the
-    // legacy judge (seen 2026-09-21: 667 live rows came back 200 with answers: {}).
-    if (!json.answers.worth_remembering || typeof (json.answers.worth_remembering as { noul?: unknown }).noul !== "number") {
-      console.warn(`[jev-gate] 200 without worth_remembering; answered=${Object.keys(json.answers).join(",") || "(none)"}`);
-      return { ok: false, reason: "no_worth_answer", status: 200, wall_ms: Date.now() - started };
     }
     return {
       ok: true,
@@ -341,7 +368,7 @@ export async function jevWritebackEval(input: JevEvalInput): Promise<JevEvalResu
     };
   } catch (e) {
     // Never logs the secret: only the error text, which carries the URL at most.
-    console.warn(`[jev-gate] call failed: ${String(e).slice(0, 200)}`);
+    console.warn(`${tag} call failed: ${String(e).slice(0, 200)}`);
     return { ok: false, reason: `error: ${String(e).slice(0, 200)}`, wall_ms: Date.now() - started };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
