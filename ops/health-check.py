@@ -41,6 +41,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1445,6 +1446,36 @@ def _ledger_scan(lines, horizon):
     return activity, wins, reasons
 
 
+JEV_CAL_JSON = os.environ.get("JEV_CAL_JSON", "/app/logs/jev-calibration.json")
+JEV_CAL_STALE_HOURS = float(os.environ.get("JEV_CAL_STALE_HOURS", "36"))
+
+
+def check_jev_calibration(rep, path=None, now=None):
+    """Standing Jev calibration (T5/P5). ops/jev-calibration-cron.sh runs scripts/jev-calibration.mjs
+    daily and leaves a JSON report whose `warnings` (write-rate shift, worth-distribution drift, Jev
+    unreachable/fallback rate) are surfaced here, through the same Telegram path as every other probe.
+    A missing or stale report is itself a warning: a calibration cron that quietly died reads as
+    "no drift". `notice` rows from the script (baseline_created) stay notices."""
+    path = path or JEV_CAL_JSON
+    now = now if now is not None else time.time()
+    try:
+        age_h = (now - os.path.getmtime(path)) / 3600.0
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        rep.add("jev:calibration", "warning", "no readable report at %s (%s) -- the calibration cron is not running" % (path, type(e).__name__))
+        return
+    if age_h > JEV_CAL_STALE_HOURS:
+        rep.add("jev:calibration", "warning", "report is %.0fh old (limit %.0fh) -- the calibration cron stopped" % (age_h, JEV_CAL_STALE_HOURS))
+        return
+    warns = [w for w in (data.get("warnings") or []) if isinstance(w, dict)]
+    for w in warns:
+        sev = w.get("severity") if w.get("severity") in ("notice", "warning", "red") else "warning"
+        rep.add("jev:calibration:%s:%s" % (w.get("companion", "all"), w.get("name", "unknown")), sev, str(w.get("detail", ""))[:300])
+    if not warns:
+        rep.add("jev:calibration", "ok", "%d rows / %sd, no drift, no elevated fallback" % (data.get("rows", 0), data.get("window_days", "?")))
+
+
 def check_ledger_handoffs(rep, logs=None, now=None):
     """Ledger lane (2026-09-26 review, L2b): a companion that had Discord activity in the last 24h
     but got ZERO accepted distiller ledger lines has a silently stale Claude.ai handoff -- under
@@ -1512,6 +1543,7 @@ def main():
         check_inference_balance(rep, denv)
         check_deepinfra_spend(rep)
         check_direct_inference(rep)
+        check_jev_calibration(rep)
         if not ledger_distill_off(denv):
             check_ledger_handoffs(rep)
     except Exception as e:
