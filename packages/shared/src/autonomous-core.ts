@@ -20,7 +20,7 @@ import { generateCleanLetter } from "./metronome-letter-guard.js";
 import { Client, TextChannel } from "discord.js";
 import {
   ALL_COMPANIONS, claimFloor, releaseFloor, getLastActivityMs,
-  SessionWindowManager, CycleGuard, buildDecisionPrompt, buildSignalExtractionPrompt,
+  SessionWindowManager, CycleGuard, ConvergedJudgmentCap, stateFingerprint, buildDecisionPrompt, buildSignalExtractionPrompt,
   readDecision, buildDecisionCorrection, parseSignals, summarizeRazielState, readDemandReasons, filterDemandByReason, isDemandMove, filterProductionWhenCareHold, isMyHeartbeatWindow, HEARTBEAT_ORDER, onWriteError, somaToTemperature, sendLong,
   careHoldActive, railSuppressed, heartbeatTick, type HeartbeatOutcome, type HeartbeatTickInfo,
   HEARTBEAT_DECISION_MAX_TOKENS,
@@ -756,6 +756,15 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
   }
 }
 
+/**
+ * T5 converged-judgment cap on the heartbeat DECISION call: N consecutive "nothing" answers over an
+ * unchanged state (palette, soma floats, signals, demand reasons, recent notes, silence bucket) stop
+ * the call until the state moves. HEARTBEAT_CONVERGED_CAP=<N> (default 3), 0 turns it off.
+ */
+const heartbeatDeclineCap = new ConvergedJudgmentCap({ maxDeclines: Number(process.env["HEARTBEAT_CONVERGED_CAP"] ?? "3") });
+/** Test seam. */
+export function __resetHeartbeatDeclineCap(): void { heartbeatDeclineCap.reset(); }
+
 /** B32: set when this tick ran under the hold (BAD_NIGHT_PRESENCE=on), read once by the wrapper. */
 interface B32Tick { eligible: string | null }
 
@@ -1046,6 +1055,24 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     // ("decision parse failed" with valid-looking-but-cut JSON in the raw log, gaia 06-30/07-01).
     // A ceiling never forces length -- the model stops when the thought is done.
     const decisionMessages: ChatMessage[] = [{ role: "user", content: decisionPrompt }];
+    // T5: the fingerprint is the INPUT state, not the prompt text (the prompt carries clock lines
+    // that move every tick). The moment any of it changes, the call is asked again.
+    const capKey = `heartbeat-decision:${companionId}`;
+    const capFp = stateFingerprint({
+      actions: candidateActions.map(a => a.id).sort(),
+      floats: [state["soma_float_1"], state["soma_float_2"], state["soma_float_3"]].map(v => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 20) / 20 : String(v ?? ""); }),
+      signals: [...detectedSignals].sort(),
+      notes: recentNotes.map(n => `${n.agent_id}:${n.content.slice(0, 80)}`),
+      raziel: razielStateSummary ?? null,
+      silence: silenceHours == null ? null : Math.floor(silenceHours / 6),
+      demand: decisionCtx.demand ? [decisionCtx.demand.open, decisionCtx.demand.held] : null,
+      hold: careHold,
+    });
+    if (heartbeatDeclineCap.isCapped(capKey, capFp)) {
+      console.log(`[${companionId}/heartbeat] converged: ${heartbeatDeclineCap.maxDeclines} declines on unchanged state, decision call withheld`);
+      mark("converged_hold", { reason: `${heartbeatDeclineCap.maxDeclines} consecutive holds, state unchanged` });
+      return;
+    }
     const rawDecision = await inference.generate(
       bootCtx.systemPrompt,
       decisionMessages,
@@ -1090,6 +1117,8 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       read = reread;
     }
     const decision = read.decision;
+    if (decision.action.action_type === "nothing") heartbeatDeclineCap.recordDecline(capKey, capFp);
+    else heartbeatDeclineCap.recordAccept(capKey);
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
     // A chosen silence is a SUCCESS and is recorded as one; it is the outcome Cadence's design
     // calls first-class and ours could not previously distinguish from a crash.

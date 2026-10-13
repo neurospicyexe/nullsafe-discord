@@ -25,6 +25,7 @@ export * from "./stm.js";
 export * from "./heartbeat.js";
 export * from "./write-queue.js";
 export * from "./cycleGuard.js";
+export * from "./convergedCap.js";
 export {
   VoiceClient, type VoiceClientConfig,
   VoiceRealtimeSession,

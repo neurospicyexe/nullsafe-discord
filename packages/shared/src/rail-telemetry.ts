@@ -126,6 +126,7 @@ export type HeartbeatOutcome =
   | "suppressed_sibling_dm"   // B32 D4: under hold, a sibling's DM with Raziel is live, so this companion opens no DM
   | "decision_unparsed"       // B23: no decision could be read, even after the one re-ask; a DEFECT (was `parse_failed`)
   | "chose_unoffered"         // B23: a well-formed pick of a move not offered right now, after the re-ask; never run
+  | "converged_hold"          // T5: N declines on an unchanged state fingerprint; the decision call is withheld until state moves
   | "no_reply"                // B23: the decision call got no text at all (every provider failed); not re-asked
   | "error";                  // the action threw
 
