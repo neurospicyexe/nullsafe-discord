@@ -224,6 +224,32 @@ function firstPersonRules(cName: string): string {
   return `Write CONTENT in FIRST PERSON, as yourself -- "I". Never refer to yourself in the third person and never write your own name (${cName}). Never write "user" or "assistant". Name other people directly.`;
 }
 
+/** Marks material the system attached to a message (an image description, a track analysis). */
+export const ATTACHED_LABEL =
+  "[Attached to the message by the system -- a description or analysis of what was shared, NOT the speaker's words; never record it as something they said:]";
+
+/**
+ * What the writeback judge reads as "the speaker said" (P16, 2026-10-13). `effective` is the inference-side
+ * string: the speaker's words (typed, or the STT transcript) PLUS blocks the bot appended ([IMAGE]/[SEEN]
+ * vision text, [HEARD] track analysis). `exchangeBlock` puts the whole string after "<Name>: ", so a vision
+ * model's description of a picture reached the judge as something Raziel SAID. A moved system block was
+ * written to memory as user content in another project (WrenWen pitfall 6); this is the same hole. `words`
+ * is the speaker's own text captured BEFORE any append. When something was appended, the blocks follow
+ * under ATTACHED_LABEL instead of riding as his speech. Unchanged when nothing was appended or `words`
+ * is not a prefix (never guess a split).
+ */
+export function withAttachedLabel(effective: string, words: string): string {
+  const e = effective.trim();
+  const w = words.trim();
+  if (e === w || (w && !e.startsWith(w))) return effective;
+  const rest = e.slice(w.length).trim();
+  if (!rest) return effective;
+  return `${w || "(no words)"}
+
+${ATTACHED_LABEL}
+${rest}`;
+}
+
 /** The exchange itself, labeled with the ACTUAL speaker (never a default). */
 function exchangeBlock(cName: string, speakerName: string, userMessage: string, assistantResponse: string): string {
   return `${speakerName}: ${userMessage}\n${cName}: ${assistantResponse}`;

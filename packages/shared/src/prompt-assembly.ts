@@ -318,7 +318,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
     .filter((m, idx) => m.role === "user" && undelivered(m, idx))
     .slice(-HERMES_WITNESS_CAP);
 
-  const folded: string[] = pool.map(m => `[${m.authorName ?? "user"}]: ${m.content.slice(0, HERMES_WITNESS_ITEM_CAP)}`);
+  const folded: string[] = pool.map(m => `[${m.authorName ?? "unattributed"}]: ${m.content.slice(0, HERMES_WITNESS_ITEM_CAP)}`);
   // Drop oldest whole turns while over budget -- never tail-slice mid-line (that ate
   // the attribution prefixes and the front of every long peer message).
   while (folded.length > 0 && folded.join("\n").length > HERMES_WITNESS_CHAR_CAP) folded.shift();

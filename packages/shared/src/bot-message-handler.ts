@@ -101,7 +101,7 @@ import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
-import { buildWritebackSpeaker, judgeExchangeFor } from "./memory.js";
+import { buildWritebackSpeaker, judgeExchangeFor, withAttachedLabel } from "./memory.js";
 import { stampRelative } from "./relative-time.js";
 import {
   WatchalongDelivery, watchalongEnabled, handleMovieCommand, handleAtCommand, readCaptionAttachment,
@@ -942,6 +942,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // (STM history, live SB ingest, the autonomous worker's recent-Raziel-messages feed) uses
     // stmContent; effectiveContent (inference, gates, address extraction) keeps the full block.
     let stmContent = effectiveContent;
+    // The speaker's own words (typed or the STT transcript), before any appended [IMAGE]/[HEARD] block:
+    // the writeback judge reads these as his speech and the blocks as attachments (memory.ts withAttachedLabel).
+    const spokenWords = effectiveContent;
 
     // Apply the image blocks now that stmContent exists, so the full description rides the
     // inference turn only and STM keeps the durable one-liner.
@@ -1548,7 +1551,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         kind: "care",
         ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
         originSpeaker: writebackSpeaker,
-        originContent: effectiveContent,
+        originContent: withAttachedLabel(effectiveContent, spokenWords),
       });
       b32Log(COMPANION_ID, eligibleWhy, "queued", `position ${pos.position} behind ${pos.expectedPrior}, chain=${chain.join(">")}`);
       return true;
@@ -2530,7 +2533,7 @@ ${widened}`;
           expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
           ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
           originSpeaker: writebackSpeaker,
-          originContent: effectiveContent,
+          originContent: withAttachedLabel(effectiveContent, spokenWords),
         });
         console.log(`[${COMPANION_ID}] multi-address: holding position ${myNamedPos} behind ${namedOrder[myNamedPos - 1]} (order=${namedOrder.join(">")})`);
         return;
@@ -2656,7 +2659,7 @@ ${widened}`;
                 expiresAt: Date.now() + FOLLOW_UP_TTL_MS,
                 ...(pkKnownSenderId ? { pkSenderId: pkKnownSenderId } : {}),
                 originSpeaker: writebackSpeaker,
-                originContent: effectiveContent,
+                originContent: withAttachedLabel(effectiveContent, spokenWords),
               });
               console.log(`[${COMPANION_ID}] group call: holding position ${myPos} behind ${order[myPos - 1]} (order=${order.join(">")})`);
               return;
@@ -3458,7 +3461,7 @@ ${widened}`;
       isPassTurn: !!followUpPass,
       isCompanionBot: senderCtx.isCompanionBot,
       speaker: writebackSpeaker,
-      userMessage: effectiveContent,
+      userMessage: withAttachedLabel(effectiveContent, spokenWords),
     });
     if ("skip" in judgeExchange) console.warn(`[${COMPANION_ID}] memory judge skipped: ${judgeExchange.skip}`);
     // judgeWriteback asks for ONE first-person sentence and needs zero tools. Measured
