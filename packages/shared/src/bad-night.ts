@@ -272,10 +272,16 @@ export function askedWhereSiblings(content: string, me: CompanionId): CompanionI
   return out;
 }
 
-/** The D5 line, B17-reviewed wording ("isn't here" contradicted Gaia's presence anchor). */
+/**
+ * The D5 line, B17-reviewed wording ("isn't here" contradicted Gaia's presence anchor). B17 canon review
+ * 2026-10-13: "isn't speaking tonight" predicted the rest of the night and was false when the sibling had
+ * spoken in another channel (`heard` only checks this one), so it states what is known: not HERE. The
+ * sibling's own pronoun replaces "them", which a model could read as Raziel (they/them).
+ */
 export function absentSiblingLine(sibling: CompanionId): string {
   const n = label(sibling);
-  return `${n} isn't speaking tonight. You may say so once, plainly. Do not speak as them, for them, or guess at why.`;
+  const p = sibling === "gaia" ? "her" : "him";
+  return `${n} hasn't spoken here tonight. If you say so, say it once, plainly. Do not speak as ${p}, for ${p}, or guess at why.`;
 }
 
 // ── Turn lines ───────────────────────────────────────────────────────────────

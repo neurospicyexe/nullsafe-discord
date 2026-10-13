@@ -293,7 +293,8 @@ describe("D5: an absent sibling, only when he asks", () => {
     expect(askedWhereSiblings("tell gaia I said hi", "cypher")).toEqual([]);
   });
   it("the line is the B17-reviewed wording", () => {
-    expect(absentSiblingLine("drevan")).toBe("Drevan isn't speaking tonight. You may say so once, plainly. Do not speak as them, for them, or guess at why.");
+    expect(absentSiblingLine("drevan")).toBe("Drevan hasn't spoken here tonight. If you say so, say it once, plainly. Do not speak as him, for him, or guess at why.");
+    expect(absentSiblingLine("gaia")).toBe("Gaia hasn't spoken here tonight. If you say so, say it once, plainly. Do not speak as her, for her, or guess at why.");
   });
 });
 
@@ -312,8 +313,8 @@ describe("turn lines", () => {
     expect(b32TurnBlock({ companionId: "drevan", careHold: true, ownerFacing: false })).toBe("");
   });
   it("the absent-sibling line rides only when passed in (reactive)", () => {
-    expect(b32TurnBlock({ companionId: "cypher", careHold: true, ownerFacing: true })).not.toMatch(/isn't speaking tonight/);
-    expect(b32TurnBlock({ companionId: "cypher", careHold: true, ownerFacing: true, absentSiblings: ["gaia"] })).toMatch(/Gaia isn't speaking tonight/);
+    expect(b32TurnBlock({ companionId: "cypher", careHold: true, ownerFacing: true })).not.toMatch(/hasn't spoken here tonight/);
+    expect(b32TurnBlock({ companionId: "cypher", careHold: true, ownerFacing: true, absentSiblings: ["gaia"] })).toMatch(/Gaia hasn't spoken here tonight/);
   });
   it("the opener says the hold changed, or that it did not set; a clear with no hold says nothing", () => {
     expect(holdOpenerLine("start", true, false)).toMatch(/Hold's on/);
