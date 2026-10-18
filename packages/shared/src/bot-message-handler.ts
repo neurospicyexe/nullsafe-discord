@@ -73,7 +73,8 @@ import {
   consumeTripwires, tripwireBlock,
   runDistillation,
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
-  visionEnabled, pickImageAttachments, describeImages, seenBlock, seenStmMarker, type SeenImage,
+  visionEnabled, pickImageAttachments, seenBlock, seenStmMarker, type SeenImage,
+  resolveSeenImages, sharedVisionCache, visionTurnBudgetMs, visionPrefetchEnabled, type VisionRedis,
   commandUsage, COMMAND_PREFIX, listenCommandTarget,
   handleClubCommand,
   handleLogCommand,
@@ -910,11 +911,17 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           console.warn(`[${COMPANION_ID}] image attached but DEEPINFRA_API_KEY is absent -- not looked at`);
           seenImages = picked.map((a) => ({ name: a.name ?? "image", description: null }));
         } else {
-          // A VL pass is tens of seconds on top of a ~10s orient; show the channel something.
-          await (message.channel as TextChannel).sendTyping().catch(() => {});
-          seenImages = await describeImages(picked, {
-            apiKey,
-            model: (process.env["VISION_MODEL"] ?? "").trim() || undefined,
+          // The describe was started at ARRIVAL (bot-core prefetchVisionAtArrival) and is shared by all
+          // three bots through the Redis cache; here the turn waits at most VISION_TURN_BUDGET_MS, and
+          // not at all when it is already superseded (2026-10-18 incident, vision-cache.ts). A late
+          // description still lands in the cache for the next turn.
+          seenImages = await resolveSeenImages({
+            messageId: message.id,
+            picked,
+            cache: sharedVisionCache(COMPANION_ID, redis as unknown as VisionRedis | null),
+            budgetMs: visionPrefetchEnabled() ? visionTurnBudgetMs() : 0,
+            isSuperseded,
+            onWait: () => { void (message.channel as TextChannel).sendTyping().catch(() => {}); },
           });
         }
         // Never log the CDN url -- the `hm=` signature is bearer-ish while it lives.

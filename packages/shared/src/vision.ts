@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 // vision.ts -- shared-experience: Eyes.
 //
 // Raziel sent Drevan a picture on Discord and nothing happened. The cause was structural, not a
@@ -66,6 +68,8 @@ export function visionEnabled(): boolean {
 
 /** The subset of a discord.js Attachment this module needs. Structural, so tests need no client. */
 export interface ImageLike {
+  /** Discord attachment id (snowflake). Optional so tests and older callers need not supply it. */
+  id?: string | null;
   url: string;
   name?: string | null;
   contentType?: string | null;
@@ -123,11 +127,17 @@ export interface DescribeOpts {
  * already holds a valid link at the moment the message arrives; fetching here makes the describe
  * pass depend only on our own egress. It also keeps the `hm=` signature out of a third party's logs.
  */
-async function fetchAsDataUrl(
+export interface PreparedImage {
+  dataUrl: string;
+  /** sha256 hex of the downloaded bytes: the content key that survives a PluralKit re-upload. */
+  sha256: string;
+}
+
+export async function prepareImage(
   url: string,
   doFetch: typeof fetch,
   contentTypeHint?: string | null,
-): Promise<string | null> {
+): Promise<PreparedImage | null> {
   const res = await doFetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) {
     console.warn(`[vision] attachment fetch non-2xx: ${res.status}`);
@@ -150,7 +160,7 @@ async function fetchAsDataUrl(
     console.warn(`[vision] unsupported image type: "${raw || "unknown"}"`);
     return null;
   }
-  return `data:${mime};base64,${buf.toString("base64")}`;
+  return { dataUrl: `data:${mime};base64,${buf.toString("base64")}`, sha256: createHash("sha256").update(buf).digest("hex") };
 }
 
 const SUPPORTED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
@@ -161,11 +171,22 @@ const SUPPORTED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/
  * companion that invents the picture is the 2026-06-12 fake-listen class of bug.
  */
 export async function describeImage(url: string, opts: DescribeOpts): Promise<string | null> {
+  const doFetch = opts.fetchFn ?? globalThis.fetch;
+  try {
+    const prepared = await prepareImage(url, doFetch, opts.contentType);
+    if (!prepared) return null;
+    return await describeDataUrl(prepared.dataUrl, opts);
+  } catch (e: unknown) {
+    console.warn(`[vision] describe failed: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
+
+/** The VL call alone, for bytes the caller already downloaded (vision-cache.ts). Null on any failure. */
+export async function describeDataUrl(dataUrl: string, opts: DescribeOpts): Promise<string | null> {
   const model = opts.model ?? VISION_MODEL;
   const doFetch = opts.fetchFn ?? globalThis.fetch;
   try {
-    const dataUrl = await fetchAsDataUrl(url, doFetch, opts.contentType);
-    if (!dataUrl) return null;
     const res = await doFetch("https://api.deepinfra.com/v1/openai/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${opts.apiKey}` },
@@ -225,7 +246,7 @@ export async function describeImages(images: ImageLike[], opts: DescribeOpts): P
 }
 
 /** Filenames reach the model and the log; keep them short and free of newlines. */
-function safeName(name: string | null | undefined): string {
+export function safeName(name: string | null | undefined): string {
   const n = (name ?? "image").replace(/[\r\n]+/g, " ").trim();
   return (n.length > 80 ? `${n.slice(0, 80)}...` : n) || "image";
 }

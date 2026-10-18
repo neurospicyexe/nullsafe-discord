@@ -176,6 +176,15 @@ const shared = {
   YTDLP_EXTRA_ARGS:      process.env.YTDLP_EXTRA_ARGS,
   HEAR_MUSIC_PATH:       process.env.HEAR_MUSIC_PATH,
   MEDIA_CACHE_DIR:       process.env.MEDIA_CACHE_DIR,
+  // Vision cache + prefetch (2026-10-18, vision-cache.ts, Hand-off/DESIGN-rapid-fire-bursts P1+P2). One VL
+  // call per image shared by all three bots through Redis; the describe starts at message arrival and the
+  // turn waits at most VISION_TURN_BUDGET_MS. Same value on all three bots. Allowlisted per this file's
+  // standing rule (a knob absent here is dead under a pm2 reload from the repo).
+  VISION_CACHE:          process.env.VISION_CACHE,
+  VISION_CACHE_TTL_S:    process.env.VISION_CACHE_TTL_S,
+  VISION_NEG_TTL_S:      process.env.VISION_NEG_TTL_S,
+  VISION_PREFETCH:       process.env.VISION_PREFETCH,
+  VISION_TURN_BUDGET_MS: process.env.VISION_TURN_BUDGET_MS,
   // Watchalong (2026-10-02, docs/SPEC-watchalong-2026-10-02.md). OPENSUBTITLES_API_KEY enables the
   // OpenSubtitles caption source for `<p>: movie start <title>` (without it, attach an .srt);
   // USERNAME/PASSWORD are optional and only raise the daily download quota. WATCHALONG_ENABLED is the

@@ -44,6 +44,8 @@ import { SessionWindowManager } from "./session-window.js";
 import { StmStore } from "./stm.js";
 import { WriteQueue } from "./write-queue.js";
 import { createRedisClient } from "./floor.js";
+import { visionEnabled, pickImageAttachments } from "./vision.js";
+import { visionPrefetch, sharedVisionCache, visionPrefetchEnabled, visionCacheEnabled, type VisionRedis } from "./vision-cache.js";
 import { noteOwnerReaction } from "./reach-ledger.js";
 import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js";
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
@@ -946,6 +948,22 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     }
   });
 
+  // Event-time describe start. Fire and forget: the promise never rejects and the turn picks it up by
+  // message id (resolveSeenImages), waiting at most VISION_TURN_BUDGET_MS.
+  const prefetchVisionAtArrival = (message: Message, isSol: boolean): void => {
+    try {
+      if (!visionEnabled() || !visionPrefetchEnabled() || !visionCacheEnabled()) return;
+      if (message.attachments.size === 0 || isSol || message.author.id === client.user?.id) return;
+      if (message.author.bot && message.webhookId === null) return; // a companion's or other bot's own post
+      if (!(process.env["DEEPINFRA_API_KEY"] ?? "").trim()) return;
+      const picked = pickImageAttachments(message.attachments.values());
+      if (picked.length === 0) return;
+      visionPrefetch().start(message.id, picked, sharedVisionCache(companionId, redis as unknown as VisionRedis | null));
+    } catch (e) {
+      console.warn(`[${companionId}] vision prefetch failed to start:`, e instanceof Error ? e.message : String(e));
+    }
+  };
+
   client.on(Events.MessageCreate, (message: Message) => {
     // MUTED SERVER, first line: nothing from it is read, paired, queued, answered or recorded.
     if (isMutedGuild(message.guildId, mutedGuilds)) return;
@@ -977,6 +995,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       },
       pkDedup,
     );
+    // Vision prefetch (P2, 2026-10-18): start the describe NOW, at event time, like the PK pairing
+    // above, so it runs through the settle window, the PK hold and the queue wait instead of inside
+    // the turn. The three bots share one VL call through the Redis cache (vision-cache.ts). Never
+    // inside a turn, and never for this bot's own posts or Sol's.
+    prefetchVisionAtArrival(message, isSol);
     inbox.enqueue(
       {
         id: message.id,

@@ -69,6 +69,7 @@ export * from "./reach-ledger.js";
 export * from "./bad-night.js";
 export * from "./media.js";
 export * from "./vision.js";
+export * from "./vision-cache.js";
 export * from "./club-command.js";
 export * from "./log-command.js";
 export * from "./into-command.js";
