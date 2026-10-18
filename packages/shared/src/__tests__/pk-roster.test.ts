@@ -243,7 +243,7 @@ describe("PkRoster -- pronouns (2026-10-07)", () => {
       [OWNER_SYS]: [{ name: "Magpie", display_name: "Magpie M.", pronouns: "they/them" } as never],
     }), cache);
     await first.ensureLoaded();
-    expect([...store.keys()]).toEqual(["ns:pk:roster:v2"]);
+    expect([...store.keys()]).toEqual(["ns:pk:roster:v3", "ns:pk:profiles:v1"]);
     const second = new PkRoster(SYSTEMS, jest.fn() as unknown as typeof fetch, cache);
     await second.ensureLoaded();
     expect(second.identify("Magpie M.")?.pronouns).toBe("they/them");

@@ -2,7 +2,7 @@ import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
-import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
+import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkProfileBlock, pkProfileOn, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -2948,15 +2948,28 @@ ${widened}`;
           isSol,
         }), calledAsSelf, seatSlipped.has(message.channelId))
       : null;
+    // PK profile (speaker-frame.ts pkProfileBlock, 2026-10-18): the current PluralKit speaker's public
+    // profile, in their own words, directly above the frame (the frame stays LAST). Guild turns only,
+    // never a DM, never a roster: one member, from the offline roster. Counts-only log.
+    let pkProfile: string | null = null;
+    if (pkProfileOn() && pkMemberName && message.guildId && !isOwnerDm && !isSol && !senderCtx.isCompanionBot) {
+      const pm = pkRoster?.identify(message.author?.username) ?? null;
+      if (pm) {
+        const system = pm.isOwner ? "raziel" : "blue";
+        pkProfile = pkProfileBlock({ member: pm.memberName, system, pronouns: pm.pronouns, description: pm.description });
+        console.log(`[pk-profile] ${COMPANION_ID} member_chars=${pm.description?.length ?? 0} system=${system}`);
+      }
+    }
+    const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;
     // Consumed once it rides a frame. STM holds the repaired text, so the rule check never sees the
     // slip; the gateway transcript holds the original, and the model copies its own lines.
     if (frame) seatSlipped.delete(message.channelId);
-    if (frame && inferenceMode !== "hermes") {
+    if (frameTail && inferenceMode !== "hermes") {
       for (let i = liveHistory.length - 1; i >= 0; i--) {
         const m = liveHistory[i]!;
         if (m.role === "user" && m.content.includes(effectiveContent)) {
           if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
-          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${frame}` };
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}\n\n${frameTail}` };
           break;
         }
       }
@@ -2964,7 +2977,7 @@ ${widened}`;
 
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
-          calledAsSelf, { background: crossRoomBackground ?? undefined, frame: frame ?? undefined })
+          calledAsSelf, { background: crossRoomBackground ?? undefined, frame: frameTail ?? undefined })
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 

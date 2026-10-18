@@ -299,6 +299,9 @@ const shared = {
   // switches, both default ON; off/0/false/no turns each off. CROSS_ROOM was never listed, so its
   // switch could not reach the bots until now. Listed per the standing rule above.
   SPEAKER_FRAME:               process.env.SPEAKER_FRAME,
+  // PK_PROFILE (2026-10-18, speaker-frame.ts pkProfileOn): the current PluralKit speaker's public profile
+  // rides above the frame in guild turns. Default ON; off/0/false/no removes it. Listed per the standing rule above.
+  PK_PROFILE:                  process.env.PK_PROFILE,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like

@@ -25,6 +25,12 @@ export interface PkRosterMember {
    *  Carried so the memory judge states a front's pronouns instead of guessing (2026-10-07:
    *  Magpie, they/them on PK, was written as "she" in 8 of Drevan's judge notes). */
   pronouns?: string | null;
+  /** PK member display_name (what the webhook shows), when set. */
+  displayName?: string | null;
+  /** PK member public `description`, cleaned and capped (cleanDescription); null when empty or private
+   *  (PK returns null for private fields, so privacy settings carry through). Persisted under a
+   *  SEPARATE Redis key, never in the name index. */
+  description?: string | null;
 }
 
 export interface PkSystemSpec {
@@ -37,6 +43,7 @@ interface PkApiMember {
   name?: string | null;
   display_name?: string | null;
   pronouns?: string | null;
+  description?: string | null;
 }
 
 /** Redis-ish surface (the same client bot-core already holds); optional. */
@@ -46,9 +53,15 @@ export interface RosterCache {
 }
 
 const REFRESH_MS = 60 * 60 * 1000; // hourly; member lists change rarely
-// v2 (2026-10-07): rows carry `pronouns`. A new key, not a reuse of v1, so a deploy does not keep
-// serving pronoun-less cached rows for up to CACHE_TTL_S.
-const CACHE_KEY = "ns:pk:roster:v2";
+// v3 (2026-10-18): the name-index rows now carry `displayName`. v2 (2026-10-07) added `pronouns`. A new
+// key each time, not a reuse, so a deploy does not keep serving stale cached rows for up to CACHE_TTL_S.
+const CACHE_KEY = "ns:pk:roster:v3";
+// Descriptions live under their OWN key (2026-10-18), not in the name index. The index holds one row per
+// label (display_name AND name), 1,400+ rows across both systems, and is parsed on every bot boot; a
+// 500-char description on each row would roughly double it and bloat the hot path for a value read only
+// for the one current speaker. The profile map is one entry per MEMBER (keyed system|normalized name),
+// loaded at the same moment, and a missing or corrupt profile key degrades to names with no profile.
+const PROFILE_CACHE_KEY = "ns:pk:profiles:v1";
 const CACHE_TTL_S = 6 * 60 * 60;
 
 /**
@@ -60,6 +73,27 @@ const CACHE_TTL_S = 6 * 60 * 60;
 function norm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, " ").trim();
 }
+
+/** Strip Discord/markdown noise from a PK description, collapse whitespace, cap at DESCRIPTION_CAP. */
+const DESCRIPTION_CAP = 500;
+export function cleanDescription(d: unknown): string | null {
+  if (typeof d !== "string") return null;
+  const t = d
+    .replace(/<a?:\w+:\d+>/g, " ")            // custom emoji
+    .replace(/<(?:@[!&]?|#)\d+>/g, " ")        // user/role/channel mentions
+    .replace(/@(?:everyone|here)\b/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")  // [text](url) -> text
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/^[ 	]*(?:#{1,6}|>{1,3})[ 	]+/gm, "")
+    .replace(/\*\*|__|~~|\|\||`+/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/ ([.,;:!?])/g, "$1")
+    .trim();
+  if (!t) return null;
+  return t.length > DESCRIPTION_CAP ? `${t.slice(0, DESCRIPTION_CAP - 1).trimEnd()}…` : t;
+}
+
+const profileKey = (systemId: string, memberName: string): string => `${systemId}|${norm(memberName)}`;
 
 export class PkRoster {
   private byName = new Map<string, PkRosterMember>();
@@ -119,7 +153,13 @@ export class PkRoster {
         if (raw) {
           const rows = JSON.parse(raw) as PkRosterMember[];
           if (Array.isArray(rows) && rows.length) {
-            this.ingest(rows);
+            let profiles: Record<string, string> = {};
+            try {
+              const praw = await this.cache.get(PROFILE_CACHE_KEY);
+              const parsed = praw ? JSON.parse(praw) : null;
+              if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) profiles = parsed as Record<string, string>;
+            } catch { /* profiles are optional */ }
+            this.ingest(rows, profiles);
             this.loadedAt = Date.now();
             this.log(`[pk-roster] ${this.byName.size} member names from cache`);
             return;
@@ -129,6 +169,7 @@ export class PkRoster {
     }
 
     const rows: Array<PkRosterMember & { _key?: string }> = [];
+    const profiles: Record<string, string> = {};
     for (const sys of this.systems) {
       try {
         const res = await this.fetchFn(
@@ -146,6 +187,8 @@ export class PkRoster {
           // without a display name, or one renamed since, still resolves.
           const shown = m.display_name ?? m.name;
           if (!shown) continue;
+          const desc = cleanDescription(m.description);
+          if (desc) profiles[profileKey(sys.systemId, shown)] = desc;
           for (const label of new Set([m.display_name, m.name].filter(Boolean) as string[])) {
             rows.push({
               memberName: shown,
@@ -153,6 +196,7 @@ export class PkRoster {
               discordUserId: sys.discordUserId,
               isOwner: sys.isOwner,
               pronouns: cleanPronouns(m.pronouns),
+              displayName: m.display_name?.trim() || null,
               _key: norm(label),
             });
           }
@@ -163,22 +207,23 @@ export class PkRoster {
     }
 
     if (!rows.length) return; // keep whatever we already had rather than blanking it
-    this.ingest(rows);
+    this.ingest(rows, profiles);
     this.loadedAt = Date.now();
-    this.log(`[pk-roster] ${this.byName.size} member names across ${this.systems.length} system(s)`);
+    this.log(`[pk-roster] ${this.byName.size} member names (${Object.keys(profiles).length} with a profile) across ${this.systems.length} system(s)`);
     if (this.cache) {
       try { await this.cache.set(CACHE_KEY, JSON.stringify(rows), "EX", CACHE_TTL_S); } catch { /* cache is best-effort */ }
+      try { await this.cache.set(PROFILE_CACHE_KEY, JSON.stringify(profiles), "EX", CACHE_TTL_S); } catch { /* cache is best-effort */ }
     }
   }
 
-  private ingest(rows: Array<PkRosterMember & { _key?: string }>): void {
+  private ingest(rows: Array<PkRosterMember & { _key?: string }>, profiles: Record<string, string> = {}): void {
     const next = new Map<string, PkRosterMember>();
     for (const r of rows) {
       const key = r._key ?? norm(r.memberName);
       const prior = next.get(key);
       // Cross-system name collision: neither side wins (identify() must not guess a tier).
       if (prior && prior.systemId !== r.systemId) { next.delete(key); continue; }
-      next.set(key, { memberName: r.memberName, systemId: r.systemId, discordUserId: r.discordUserId, isOwner: r.isOwner, pronouns: cleanPronouns(r.pronouns) });
+      next.set(key, { memberName: r.memberName, systemId: r.systemId, discordUserId: r.discordUserId, isOwner: r.isOwner, pronouns: cleanPronouns(r.pronouns), displayName: r.displayName ?? null, description: profiles[profileKey(r.systemId, r.memberName)] ?? null });
     }
     this.byName = next;
   }
