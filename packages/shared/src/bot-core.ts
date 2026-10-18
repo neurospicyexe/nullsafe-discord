@@ -51,7 +51,10 @@ import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
 import type { FollowUpEntitlement } from "./sequential-floor.js";
 import { followUpPassEnabled } from "./pass-turn.js";
-import { ChannelInbox, burstSettleMs, type TurnContext } from "./channel-inbox.js";
+import {
+  ChannelInbox, burstSettleMs, burstSettleMaxMs, burstSettleScope, resolveInboxSide, supersedeBOn, supersedeSideAwareOn,
+  type SupersedePhase, type TurnContext,
+} from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
 import { mutedGuildIds, isMutedGuild } from "./guild-mute.js";
@@ -878,8 +881,19 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   // BURST_SETTLE_MS (default 4000, 0 = off): a human burst is gathered and answered as one turn.
   const settleMs = burstSettleMs();
   console.log(`[${companionId}] burst settle: ${settleMs > 0 ? `${settleMs}ms` : "off"}`);
+  // P3/P4 (2026-10-18): supersede by human side, no mid-inference drop by default (finish, post, one
+  // catch-up turn), settle + gather by side with a hold cap. Same values on all three bots.
+  const supersedeSideAware = supersedeSideAwareOn();
+  const supersedeB = supersedeBOn();
+  const settleScope = burstSettleScope();
+  const settleMaxMs = burstSettleMaxMs();
+  console.log(`[${companionId}] inbox: supersede side_aware=${supersedeSideAware ? "on" : "off"} check_b=${supersedeB ? "on" : "off"} settle_scope=${settleScope} settle_max=${settleMaxMs > 0 ? `${settleMaxMs}ms` : "off"}`);
   const inbox = new ChannelInbox({
     settleMs,
+    supersedeSideAware,
+    supersedeB,
+    settleScope,
+    settleMaxMs,
     isCommandShaped: (content) => commandGuard?.test(content) ?? false,
     log: (m) => console.log(`[${companionId}] ${m}`),
   });
@@ -1013,6 +1027,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         authorKey: `${message.author.id}:${message.author.username}`,
         mentionedIds: [...message.mentions.users.keys()],
         replyToMessageId: message.reference?.messageId ?? null,
+        // Which human (P3/P4): Raziel's system or Blue's, from the author id or the in-memory PK roster.
+        side: isSol ? null : resolveInboxSide(
+          { authorId: message.author.id, isWebhook: message.webhookId !== null, username: message.author.username },
+          { ownerDiscordId: env.ownerDiscordId, blueDiscordId: env.blueDiscordId },
+          pkRoster,
+        ),
       },
       (isSuperseded, turnCtx) => runTurn(message, pkSenderId, isSuperseded, undefined, turnCtx),
     );
@@ -1055,7 +1075,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
 
   // One turn. Every per-process dependency, wired once; the MessageCreate path and the
   // follow-up pass path above both come through here, so they cannot drift.
-  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: () => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext): Promise<void> {
+  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: (phase?: SupersedePhase) => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext): Promise<void> {
     return handleMessage(message, {
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },

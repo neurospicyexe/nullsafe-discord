@@ -304,6 +304,17 @@ const shared = {
   BURST_SETTLE_MS:             process.env.BURST_SETTLE_MS,
   RAZIEL_NAMES:                process.env.RAZIEL_NAMES,
   BLUE_NAMES:                  process.env.BLUE_NAMES,
+  // P3/P4 + ruling 4 (2026-10-18, Hand-off/DESIGN-rapid-fire-bursts-2026-10-18.md). Same value on all
+  // three bots (the fit-bid deadline and the one-speaker claims assume it). Listed per the standing rule above.
+  // SUPERSEDE_SIDE_AWARE: default on; off = any human message supersedes (old rule).
+  // SUPERSEDE_B: default OFF; `on` restores the mid-inference drop of a finished reply (check B).
+  // BURST_SETTLE_SCOPE: `side` (default) or `speaker` (old). BURST_SETTLE_MAX_MS: default 20000, 0 = no cap.
+  // BLUE_COLD_PICK: `shadow` (default; logs the Jev pick, nobody speaks), `on`, `off`.
+  SUPERSEDE_SIDE_AWARE:        process.env.SUPERSEDE_SIDE_AWARE,
+  SUPERSEDE_B:                 process.env.SUPERSEDE_B,
+  BURST_SETTLE_SCOPE:          process.env.BURST_SETTLE_SCOPE,
+  BURST_SETTLE_MAX_MS:         process.env.BURST_SETTLE_MAX_MS,
+  BLUE_COLD_PICK:              process.env.BLUE_COLD_PICK,
   // SPEAKER_FRAME (2026-10-11, speaker-frame.ts) and CROSS_ROOM (2026-10-09, cross-room.ts): kill
   // switches, both default ON; off/0/false/no turns each off. CROSS_ROOM was never listed, so its
   // switch could not reach the bots until now. Listed per the standing rule above.

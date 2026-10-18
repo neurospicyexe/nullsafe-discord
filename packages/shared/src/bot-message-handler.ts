@@ -36,6 +36,7 @@ import {
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 import { fireAddressShadow, recordAddressSpoke } from "./address-shadow.js";
 import { ownerTurnLabel, proxyTurnLabel } from "./address-jev.js";
+import { blueColdPickMode, runBlueColdPick, type BlueColdRedis } from "./blue-cold-pick.js";
 import { addressModelMode, type AddressTurn } from "./address-model.js";
 import { isSolPost, withoutSol, muzzleVerdict, solDeclineReason, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
@@ -351,7 +352,7 @@ export interface MessageHandlerDeps {
    *  and again after inference (drop) -- the superseding turn answers with this message
    *  already absorbed into STM. Absent (e.g. tests calling handleMessage directly) =
    *  never superseded. */
-  isSuperseded?: () => boolean;
+  isSuperseded?: (phase?: "pre" | "post") => boolean;
   /** Burst settle (channel-inbox TurnContext, 2026-10-10): the window this turn waited (0 = none)
    *  and the same speaker's earlier messages gathered into it. The reply path resolves names over
    *  the whole burst, and the fit bid shifts its deadline by `settleMs`. Absent = no settle. */
@@ -1609,6 +1610,22 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       } catch { /* history unavailable -- leave null, ambient stays open to everyone */ }
     }
 
+    // The room's recent turns in the address classifiers' vocabulary (shared by the address shadow and
+    // the cold Blue pick, so both read one rendering).
+    // One stable name per person (2026-10-11 room rendering): Blue unproxied reads "Blue".
+  const addressTurnsFrom = (older: Message[]): AddressTurn[] => older.map(m => ({
+    speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
+      : BOT_ID_COMPANION[m.author.id] && !m.webhookId
+        ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
+        // A proxy turn says whose system the member is (2026-10-13): a bare "Magpie M." or
+        // "Rogue || 🍂" left Raziel's fronts and Blue's members indistinguishable.
+        : m.webhookId ? proxyTurnLabel(m.author.username, pkRoster?.identify(m.author.username) ?? null, cfg.blueDiscordId)
+          : m.author.id === cfg.ownerDiscordId ? ownerTurnLabel(cfg.ownerDisplayName)
+            : cfg.blueDiscordId && m.author.id === cfg.blueDiscordId ? BLUE_LABEL
+              : m.author.username,
+    text: m.content ?? "",
+  }));
+
     // B37 step 1, address model SHADOW (address-shadow.ts, 2026-09-29). Fired HERE -- after the regex
     // verdict and the exchange holder are settled, before this bot's own gates return -- because it
     // has to see the messages this bot will NOT answer ("Cy said..." silences Drevan and Gaia at
@@ -1652,18 +1669,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             .filter(m => m.id !== message.id && m.createdTimestamp <= message.createdTimestamp)
             .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
           // One stable name per person (2026-10-11 room rendering): Blue unproxied reads "Blue".
-          const turns: AddressTurn[] = older.map(m => ({
-            speaker: isSolPost(m, solId) ? SOL_AUTHOR_LABEL
-              : BOT_ID_COMPANION[m.author.id] && !m.webhookId
-                ? BOT_ID_COMPANION[m.author.id]!.charAt(0).toUpperCase() + BOT_ID_COMPANION[m.author.id]!.slice(1)
-                // A proxy turn says whose system the member is (2026-10-13): a bare "Magpie M." or
-                // "Rogue || 🍂" left Raziel's fronts and Blue's members indistinguishable.
-                : m.webhookId ? proxyTurnLabel(m.author.username, pkRoster?.identify(m.author.username) ?? null, cfg.blueDiscordId)
-                  : m.author.id === cfg.ownerDiscordId ? ownerTurnLabel(cfg.ownerDisplayName)
-                    : cfg.blueDiscordId && m.author.id === cfg.blueDiscordId ? BLUE_LABEL
-                      : m.author.username,
-            text: m.content ?? "",
-          }));
+          const turns = addressTurnsFrom(older);
           if (shadowSide === "blue") {
             const blueHolder = await readHumanHold(holdRedis, "blue", message.channelId, channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
             return { turns, holder: blueHolder };
@@ -1738,16 +1744,46 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         return;
       }
       if (verdict.kind === "blue_thread") {
+        let coldPicked = false;
         if (verdict.holder !== COMPANION_ID) {
-          console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds Blue's thread, standing down` : "no companion holds Blue's thread, nobody answers"} (msg=${message.id})`);
-          railSuppressed(COMPANION_ID, "blue_thread", { channelId: message.channelId, detail: verdict.holder ? `held by ${verdict.holder}` : "no holder" });
-          return;
+          // Ruling 4 (2026-10-18, blue-cold-pick.ts): a COLD unnamed Blue message (no holder) may get ONE
+          // companion, picked by Jev. BLUE_COLD_PICK=shadow (default) only logs the pick, detached, and the
+          // silence below stands; `on` lets the picked companion (one, by Redis claim) answer as if it held
+          // the thread (the normal holder takes over once it has spoken); `off` never calls Jev.
+          if (verdict.holder === null) {
+            const coldMode = blueColdPickMode();
+            if (coldMode !== "off") {
+              const coldRun = runBlueColdPick({
+                mode: coldMode,
+                companionId: COMPANION_ID as CompanionId,
+                messageId: message.id,
+                channelId: message.channelId,
+                speaker: author,
+                content: effectiveContent,
+                redis: redis as unknown as BlueColdRedis | null,
+                fetchRecent: async () => {
+                  const hist = await message.channel.messages.fetch({ limit: 8 });
+                  return addressTurnsFrom([...hist.values()]
+                    .filter(m => m.id !== message.id && m.createdTimestamp <= message.createdTimestamp)
+                    .sort((a, b) => a.createdTimestamp - b.createdTimestamp));
+                },
+              });
+              if (coldMode === "on") coldPicked = (await coldRun).speak;
+              else void coldRun;
+            }
+          }
+          if (!coldPicked) {
+            console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds Blue's thread, standing down` : "no companion holds Blue's thread, nobody answers"} (msg=${message.id})`);
+            railSuppressed(COMPANION_ID, "blue_thread", { channelId: message.channelId, detail: verdict.holder ? `held by ${verdict.holder}` : "no holder" });
+            return;
+          }
         }
-        // I hold Blue's thread: this is a direct answer (no judge, no shouldRespond, no bid).
+        // I hold Blue's thread (or Jev picked me for a cold message): this is a direct answer (no judge,
+        // no shouldRespond, no bid).
         blueThreadMine = true;
         directlyAddressed = true;
         senderCtx.activeExchangeWith = COMPANION_ID as CompanionId;
-        console.log(`[${COMPANION_ID}] unnamed message from blue -- I hold Blue's thread, answering (msg=${message.id})`);
+        console.log(`[${COMPANION_ID}] unnamed message from blue -- ${coldPicked ? "Jev picked me for a cold message" : "I hold Blue's thread"}, answering (msg=${message.id})`);
       }
     }
     // The `!brainClient &&` guard that used to lead this condition is gone with brain mode
@@ -3052,7 +3088,10 @@ ${widened}`;
     // visibly moved past -- drop it; the superseding turn regenerates with everything in
     // STM. The hermes delivered mark above stays advanced (the gateway DID receive the
     // delta); the reply is not appended to STM and not sent.
-    if (isSuperseded?.()) {
+    // 2026-10-18 (ruling 3 revised): with SUPERSEDE_B off (default) the "post" probe answers false, so
+    // the finished reply posts and the messages that arrived meanwhile get ONE catch-up turn; `on`
+    // restores this drop. A newer message of the OTHER human side never reaches here at all.
+    if (isSuperseded?.("post")) {
       console.log(`[${COMPANION_ID}] reply superseded mid-inference (newer human message queued) -- dropping reply to ${message.id}`);
       railSuppressed(COMPANION_ID, "superseded", { channelId: message.channelId });
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
