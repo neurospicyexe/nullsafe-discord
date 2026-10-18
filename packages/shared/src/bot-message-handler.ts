@@ -2,6 +2,7 @@ import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
+import { claimPkProfile } from "./pk-profile-seen.js";
 import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkProfileBlock, pkProfileOn, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
@@ -2999,8 +3000,14 @@ ${widened}`;
       const pm = pkRoster?.identify(message.author?.username) ?? null;
       if (pm) {
         const system = pm.isOwner ? "raziel" : "blue";
-        pkProfile = pkProfileBlock({ member: pm.memberName, system, pronouns: pm.pronouns, description: pm.description });
-        console.log(`[pk-profile] ${COMPANION_ID} member_chars=${pm.description?.length ?? 0} system=${system}`);
+        // Once per member per companion+channel per window (PK_PROFILE_REPEAT_S): the block lands in the
+        // gateway transcript for good, so repeating it every turn floods history. The transcript id is in
+        // the key, so a rotation or retract bump re-injects. Fails open to inject.
+        const repeat = await claimPkProfile(redis as unknown as Parameters<typeof claimPkProfile>[0], {
+          companion: COMPANION_ID, channelId: message.channelId, systemId: system, member: pm.memberName, sessionId: inferenceSessionId,
+        });
+        if (repeat === "inject") pkProfile = pkProfileBlock({ member: pm.memberName, system, pronouns: pm.pronouns, description: pm.description });
+        console.log(`[pk-profile] ${COMPANION_ID} member_chars=${pm.description?.length ?? 0} system=${system} repeat=${repeat}`);
       }
     }
     const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;

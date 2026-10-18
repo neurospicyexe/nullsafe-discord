@@ -322,6 +322,9 @@ const shared = {
   // PK_PROFILE (2026-10-18, speaker-frame.ts pkProfileOn): the current PluralKit speaker's public profile
   // rides above the frame in guild turns. Default ON; off/0/false/no removes it. Listed per the standing rule above.
   PK_PROFILE:                  process.env.PK_PROFILE,
+  // PK_PROFILE_REPEAT_S (pk-profile-seen.ts): seconds before the same member's profile is injected again in the same
+  // channel (default 21600 = 6h). A rotated/retracted transcript re-injects regardless.
+  PK_PROFILE_REPEAT_S:         process.env.PK_PROFILE_REPEAT_S,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
