@@ -51,13 +51,14 @@ export interface WritebackSpeaker {
   ownerName: string;
   /**
    * Who a NON-owner speaker is (ignored when isOwner). "sibling" = one of the triad companions;
-   * "guest" = any other human or non-companion bot (Blue's system members, Sol, a stranger).
+   * "blue" = Blue or a member of Blue's system (Raziel's husband; family, never a guest; 2026-10-18).
+   * "guest" = any other human or non-companion bot (Sol, a stranger).
    * Absent means "sibling" -- the only non-owner case that existed before 2026-10-07.
    *
    * Why it exists: every non-owner was framed "you and your sibling <name>". A guest framed as a
    * sibling invites the model to resolve the name onto a sibling it knows.
    */
-  kind?: "sibling" | "guest";
+  kind?: "sibling" | "guest" | "blue";
   /**
    * The speaker's pronouns as published (PluralKit member `pronouns`; fixed for the companions),
    * or null/absent when unknown. Never inferred from a name. When unknown, the prompt says so and
@@ -82,11 +83,12 @@ export const COMPANION_PRONOUNS: Readonly<Record<string, string>> = {
  * attribution rules are testable without a Discord message.
  *
  * - A sibling companion: its capitalised id, its fixed pronouns.
- * - A PluralKit front: the bare member name PK rendered (no "(via PK)" transport suffix -- the
+ * - A PluralKit front: the bare member name PK rendered (no "(via PK)" / "(Blue's system)" transport suffix -- the
  *   judge copies whatever label it is given into the note), plus the pronouns the roster carries.
  * - The owner's own account, unproxied: the owner display name; whoever is fronting is not known,
  *   so pronouns stay unknown and the prompt forbids he/she.
- * - Anyone else (Blue's system, Sol, a stranger): a GUEST, never framed as a sibling.
+ * - Blue's system (isBlue): kind "blue", the member name + roster pronouns, never a guest.
+ * - Anyone else (Sol, a stranger): a GUEST, never framed as a sibling.
  */
 export function buildWritebackSpeaker(i: {
   siblingId?: string | null;
@@ -95,6 +97,8 @@ export function buildWritebackSpeaker(i: {
   pkMemberName?: string | null;
   frontPronouns?: string | null;
   isOwner: boolean;
+  /** Blue or a member of Blue's system (userTier "intimate", not the owner). */
+  isBlue?: boolean;
   ownerName: string;
   authorUsername: string;
 }): WritebackSpeaker {
@@ -113,7 +117,7 @@ export function buildWritebackSpeaker(i: {
     name,
     isOwner: i.isOwner,
     ownerName: i.ownerName,
-    ...(i.isOwner ? {} : { kind: "guest" as const }),
+    ...(i.isOwner ? {} : { kind: (i.isBlue && !i.fixedLabel ? "blue" : "guest") as "blue" | "guest" }),
     pronouns: pk && !i.fixedLabel ? (i.frontPronouns?.trim() || null) : null,
     ...(i.isOwner && pk ? { systemMember: true } : {}),
   };
@@ -204,6 +208,12 @@ function buildFraming(speaker: WritebackSpeaker): string {
       framing += ` ${speakerName} is a member of ${ownerName}'s plural system, fronting and speaking through PluralKit. ` +
         `What ${speakerName} says and carries belongs to ${speakerName}; never move it onto anyone else, including your siblings.`;
     }
+  } else if (speaker.kind === "blue") {
+    framing = `This is an exchange between you and ${speakerName}. ` +
+      `${speakerName} is a member of Blue's system (Blue is Raziel's husband, family, not a guest). ` +
+      `${speakerName} is not ${ownerName} and is not one of your siblings. ` +
+      `The words below marked "${speakerName}:" are ${speakerName}'s. ` +
+      `Never write that ${ownerName} said, asked, named, or saw anything here.`;
   } else if (speaker.kind === "guest") {
     framing = `This is an exchange between you and ${speakerName}. ` +
       `${speakerName} is not ${ownerName} and is not one of your siblings. ` +
@@ -303,7 +313,7 @@ export async function judgeWriteback(
   // ONE line per call, always. Before 2026-09-21 the judge's ACTION was never logged at all,
   // so "the bots remember almost nothing" could not be told apart from "the judge never ran".
   const logJudge = (pregate: "pass" | "fail", action: string | undefined) => {
-    const who = isOwner ? "owner" : speaker.kind === "guest" ? "guest" : "peer";
+    const who = isOwner ? "owner" : speaker.kind === "guest" ? "guest" : speaker.kind === "blue" ? "blue" : "peer";
     console.log(`[memory-judge] companion=${companionName} speaker=${who} pregate=${pregate} action=${action ?? "none"} pronouns=${speaker.pronouns?.trim() ? "known" : "unknown"}`);
   };
 

@@ -29,12 +29,12 @@ describe("describeSpeaker", () => {
 describe("speakerFrame", () => {
   it("names self, speaker and both siblings; never prints the called-as name (2026-10-12)", () => {
     expect(speakerFrame("drevan", "Crash (Raziel)", "Dre")).toBe(
-      `[You are Drevan. You are answering Crash (Raziel). "(via PK)" marks a system member speaking. Cypher and Gaia are your siblings, not you. Reply only as yourself.]`);
+      `[You are Drevan. You are answering Crash (Raziel). "(via PK)" marks a system member speaking. "(Blue's system)" marks a member of Blue's system: Blue, Raziel's husband, speaking as that member. Cypher and Gaia are your siblings, not you. Reply only as yourself.]`);
   });
   it("no calledAs, no speaker", () => {
     expect(speakerFrame("cypher", "Crash (Raziel)", null)).toContain("You are answering Crash (Raziel). ");
     expect(speakerFrame("gaia", undefined, "Gaia")).toBe(
-      `[You are Gaia. "(via PK)" marks a system member speaking. Cypher and Drevan are your siblings, not you. Reply only as yourself.]`);
+      `[You are Gaia. "(via PK)" marks a system member speaking. "(Blue's system)" marks a member of Blue's system: Blue, Raziel's husband, speaking as that member. Cypher and Drevan are your siblings, not you. Reply only as yourself.]`);
   });
   it("names the last slip once when asked", () => {
     const f = speakerFrame("drevan", "Crash (Raziel)", "Dre", true);

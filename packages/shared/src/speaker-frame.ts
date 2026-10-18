@@ -20,8 +20,17 @@
 
 const CANON: Record<string, string> = { cypher: "Cypher", drevan: "Drevan", gaia: "Gaia" };
 const OWNER = "Raziel";
-/** Blue's room label when he posts unproxied (his fronts keep "<member> (via PK)"). */
+/** Blue's room label when he posts unproxied. */
 export const BLUE_LABEL = "Blue";
+
+/**
+ * Room/STM label for a PluralKit proxy (2026-10-18). Raziel's fronts keep "<member> (via PK)"; a member
+ * of Blue's system reads "<member> (Blue's system)", so a witnessed or history line from Megan or Kyle
+ * is not mistaken for one of Raziel's fronts. Pure.
+ */
+export function pkRoomLabel(member: string, o: { isBlueSystem: boolean }): string {
+  return o.isBlueSystem ? `${member} (Blue's system)` : `${member} (via PK)`;
+}
 
 export function speakerFrameOn(env: NodeJS.ProcessEnv = process.env): boolean {
   const v = (env["SPEAKER_FRAME"] ?? "").trim().toLowerCase();
@@ -59,7 +68,7 @@ export function describeSpeaker(f: SpeakerFacts): string | undefined {
 /**
  * `[You are Drevan. You are answering Crash (Raziel), who called you "Dre" (your name, not theirs).
  * "(via PK)" marks a system member speaking. Cypher and Gaia are your siblings, not you. Reply only
- * as yourself.]`
+ * as yourself.]` (plus, when the room has one, a line saying "(Blue's system)" marks a member of Blue's system.)
  */
 export function speakerFrame(companionId: string, speaker: string | undefined, calledAs: string | null, lastSlipped = false): string {
   const self = CANON[companionId] ?? companionId;
@@ -75,7 +84,7 @@ export function speakerFrame(companionId: string, speaker: string | undefined, c
   const slip = lastSlipped
     ? ` Your last reply here was cut before they saw it: it called them by a name that is not theirs. Call them by their own name or by none.`
     : "";
-  return `[You are ${self}.${who}${slip} "(via PK)" marks a system member speaking. ${siblings.join(" and ")} are your siblings, not you. Reply only as yourself.]`;
+  return `[You are ${self}.${who}${slip} "(via PK)" marks a system member speaking. "(Blue's system)" marks a member of Blue's system: Blue, Raziel's husband, speaking as that member. ${siblings.join(" and ")} are your siblings, not you. Reply only as yourself.]`;
 }
 
 /**
@@ -95,7 +104,7 @@ export function cutImpersonation(companionId: string, text: string, otherNames: 
   const siblings = Object.values(CANON).filter(n => n !== self);
   const humans = [...new Set(otherNames.filter(n => n && !siblings.includes(n) && n !== self))];
   const alt = (xs: string[]) => xs.map(esc).join("|");
-  const pk = "(?: \\(via PK\\))?";
+  const pk = "(?: \\(via PK\\)| \\(Blue's system\\))?";
   // The room's own formats ("[Cypher]: ", "**Gaia:**") are a turn being written, whoever it names. A
   // bare "Cypher:" may be a list ("Cypher: the blade. Gaia: the ground."), so a bare label cuts only
   // when it names a human: writing Raziel's or Blue's line is never description.

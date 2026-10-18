@@ -230,6 +230,8 @@ export function renderJevState(
   // A guest (Blue's system, Sol, a stranger) is no longer framed as a sibling (2026-10-07).
   const framing = speaker.isOwner
     ? `Exchange between ${cName} and ${speaker.name}, the owner.`
+    : speaker.kind === "blue"
+      ? `Exchange between ${cName} and ${speaker.name}, a member of Blue's system (Blue is Raziel's husband, family, not a guest).`
     : speaker.kind === "guest"
       ? `Exchange between ${cName} and ${speaker.name}, who is neither the owner nor a sibling.`
       : `Triad space: ${cName} and sibling ${speaker.name}, peer to peer. ${speaker.ownerName} is not in this room.`;

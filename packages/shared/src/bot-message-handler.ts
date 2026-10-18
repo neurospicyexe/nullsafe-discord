@@ -2,7 +2,7 @@ import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
-import { BLUE_LABEL, cutImpersonation, describeSpeaker, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
+import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
 import { renderMedStateBlock } from "./med-context.js";
@@ -770,6 +770,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       pkMemberName: isPKProxy ? pkMemberName : null,
       frontPronouns: attribution.frontPronouns ?? null,
       isOwner: attribution.isOwner,
+      isBlue: userTier === "intimate" && !attribution.isOwner,
       ownerName: cfg.ownerDisplayName,
       authorUsername: message.author.username,
     });
@@ -999,7 +1000,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         content: stmContent,
         authorName: isSol ? SOL_AUTHOR_LABEL
           : pkMemberName
-          ? `${pkMemberName} (via PK)`
+          ? pkRoomLabel(pkMemberName, { isBlueSystem: userTier === "intimate" && !attribution.isOwner })
           : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username),
         timestamp: message.createdTimestamp,
       });
@@ -1967,10 +1968,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       : Promise.resolve(null);
 
     // Blue unproxied reads "Blue", not his raw Discord username (2026-10-11 room rendering: one stable
-    // name per person; the spine already says "blue"). His fronts keep "<member> (via PK)".
+    // name per person; the spine already says "blue"). Raziel's fronts keep "<member> (via PK)"; Blue's members read "<member> (Blue's system)".
     const memberLabel = isSol ? SOL_AUTHOR_LABEL
       : pkMemberName
-      ? `${pkMemberName} (via PK)`
+      ? pkRoomLabel(pkMemberName, { isBlueSystem: userTier === "intimate" && !attribution.isOwner })
       : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username);
     // No-op when the early record-on-arrival above already stored this message. Kept as a second call
     // rather than deleted so the command branches (search, listen) that reach this point by their own
