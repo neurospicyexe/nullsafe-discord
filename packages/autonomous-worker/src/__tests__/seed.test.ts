@@ -287,3 +287,28 @@ describe("runSeed -- forage rotation (Level 2.5)", () => {
     expect(ctx.seedDecisionReason).toContain("dry queue");
   });
 });
+
+describe("runSeed -- standing refusals in the pick (2026-10-19)", () => {
+  it("the A/B decision prompt carries the companion's own nos", async () => {
+    const { prompt } = await import("../deepseek.js");
+    vi.mocked(prompt).mockClear();
+    vi.mocked(getOpenProjects).mockReset().mockResolvedValue([]);
+    vi.mocked(getForageFindsFor).mockReset().mockResolvedValue([]);
+    vi.mocked(getAvailableSeeds).mockReset().mockResolvedValue([{
+      id: "s1", companion_id: "cypher", seed_type: "topic", content: "constraint solvers",
+      priority: 5, used_at: null, created_at: "2026-10-01T00:00:00Z", claim_source: null, justification: null,
+    } as unknown as Seed]);
+    const ctx = {
+      companionId: "cypher", runId: "run1", activeThreads: [], unexaminedDreamIds: [], pressureFlags: [],
+      openLoops: [{ id: "l1", loop_text: "Blue is away on the truck" }],
+      standingRefusals: [{ subject_text: "web-searching Blue, or anyone else in Raziel's life, as research material", reason: null }],
+      seed: null, runType: null, seedDecisionReason: null, project: null, identityText: "identity", tokensUsed: 0,
+      recentSessionNotes: [], recentFeelings: [], recentConclusions: [], activePatterns: [],
+    } as unknown as PipelineContext;
+    // Day 293 (odd) is a forage-rotation day with an empty pool, so the run reaches Level 3.
+    await runSeed(ctx, new Date("2026-10-20T09:00:00Z"));
+    const decision = vi.mocked(prompt).mock.calls.map(c => c[0] as string).find(m => m.includes("Next queued seed"));
+    expect(decision).toBeDefined();
+    expect(decision).toContain("web-searching Blue, or anyone else in Raziel's life, as research material");
+  });
+});

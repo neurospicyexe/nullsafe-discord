@@ -1,5 +1,6 @@
 import { writeJournalEntry, writePattern, writeMarker, writeWmNote, examineDream, appendLog, logProjectWork } from "../halseth-client.js";
 import { SECOND_BRAIN_URL, SECOND_BRAIN_SECRET } from "../config.js";
+import { PIECE_MARK } from "../steering.js";
 import type { PipelineContext } from "../types.js";
 
 /**
@@ -88,7 +89,9 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
       await logProjectWork(
         ctx.project.id,
         ctx.companionId,
-        `[worker run ${ctx.runId}]${ctx.journalEntryId ? ` journal ${ctx.journalEntryId}:` : ""} ${ctx.journalEntry.content.slice(0, 1200)}`,
+        // The `[piece: ...]` stamp is how the next project run knows what was worked (steering.ts).
+        `[worker run ${ctx.runId}]${ctx.projectPiece ? ` ${PIECE_MARK} ${ctx.projectPiece}]` : ""}` +
+        `${ctx.journalEntryId ? ` journal ${ctx.journalEntryId}:` : ""} ${ctx.journalEntry.content.slice(0, 1200)}`,
       );
       await appendLog(ctx.runId, "write:project-log-ok", `project ${ctx.project.id} "${ctx.project.title.slice(0, 60)}"`);
     } catch (e) {

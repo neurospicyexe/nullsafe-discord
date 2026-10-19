@@ -10,7 +10,8 @@
 
 import { prompt } from "./deepseek.js";
 import { search } from "./search-client.js";
-import { postForageFind, getForageFindsFor } from "./halseth-client.js";
+import { postForageFind, getForageFindsFor, getOpenProjects, getAgencyState } from "./halseth-client.js";
+import { renderRefusals, parsePieceLines, namesSomeoneInRazielsLife } from "./steering.js";
 import {
   COMPANIONS, COMPANION_ANCHOR_TOPICS, FORAGE_FINDS_PER_COMPANION,
   FORAGE_ANGLES, FORAGE_SEARCH_MAX_RESULTS,
@@ -21,6 +22,10 @@ const SCOUT_SYSTEM =
   "You are a neutral research scout. Summarize the find in 3-4 sentences, plainly and factually. " +
   "Do NOT write in any persona or voice. Do NOT relate it to any AI system, companion, or memory " +
   "architecture. A scout's report: what it is, why it is interesting, one concrete detail worth keeping.";
+
+/** System prompt for the topic-planning calls (pieces, branches): the same neutral scout, no persona. */
+const PLANNER_SYSTEM =
+  "You are a neutral research scout planning what to search next. Reply plainly, in no persona or voice.";
 
 /** Pick n distinct random items from arr (n > arr.length returns a shuffle of all). */
 export function pickDomains(arr: readonly string[], n: number): string[] {
@@ -52,13 +57,85 @@ export function buildForageQuery(domain: string, angle: string): string {
   return `${domain}: ${angle}`;
 }
 
+/**
+ * Split the forage picks between the companion's anchor territories and its held projects'
+ * pieces: half (rounded up) from anchors, the rest from pieces, each from its fresh pool first.
+ * With no pieces, all picks are anchors (the pre-2026-10-19 behavior). Pure apart from the
+ * shuffle -- exported for tests.
+ */
+export function splitPicks(
+  anchors: readonly string[],
+  pieces: readonly string[],
+  recentDomains: ReadonlySet<string>,
+  n: number,
+): string[] {
+  const fresh = (arr: readonly string[]) => arr.filter(d => !recentDomains.has(d.toLowerCase()));
+  const from = (arr: readonly string[], k: number) => {
+    const f = fresh(arr);
+    return pickDomains(f.length >= k ? f : arr, k);
+  };
+  if (pieces.length === 0) return from(anchors, n);
+  const nAnchors = Math.ceil(n / 2);
+  return [...from(anchors, nAnchors), ...from(pieces, n - nAnchors)];
+}
+
+/** Project pieces per (project, intention) for the life of the process: one model call each. */
+const pieceCache = new Map<string, string[]>();
+
+async function projectPieces(project: { id: string; intention: string }): Promise<string[]> {
+  const key = `${project.id}:${project.intention.length}`;
+  const hit = pieceCache.get(key);
+  if (hit) return hit;
+  const result = await prompt(
+    `A creative project's intention:\n${project.intention.slice(0, 1500)}\n\n` +
+    `List up to 8 distinct concrete pieces of it that real-world research could feed (a biology, ` +
+    `a history, a craft, a mechanism), as short searchable phrases, one per line. ` +
+    `No people's names from the author's life. No numbering, no commentary.`,
+    PLANNER_SYSTEM,
+    { temperature: 0.2, maxTokens: 200, ownerPronounRule: false },
+  );
+  const pieces = parsePieceLines(result.content, 8);
+  if (pieces.length > 0) pieceCache.set(key, pieces);
+  return pieces;
+}
+
+/**
+ * Branch inside an anchor territory (2026-10-19): the five anchor phrases are abstract, and
+ * `anchor: angle` kept landing on the same ground. Ask for one specific subject inside or beside
+ * the territory that none of the finds already held covers. Falls back to the anchor itself.
+ */
+async function branchTopic(
+  anchor: string,
+  heldTitles: string[],
+  refusals: string,
+): Promise<string> {
+  try {
+    const result = await prompt(
+      `Research territory: "${anchor}"\n` +
+      (heldTitles.length > 0 ? `Finds already gathered here:\n${heldTitles.slice(0, 10).map(t => `- ${t}`).join("\n")}\n` : "") +
+      (refusals ? `\n${refusals}\n` : "") +
+      `\nName ONE specific, concrete subject inside or right next to this territory that none of ` +
+      `those finds cover: a named phenomenon, case, practice, field or work. Searchable. Under 12 words. ` +
+      `No people from the author's life. Reply with just the subject.`,
+      PLANNER_SYSTEM,
+      { temperature: 0.8, maxTokens: 40, ownerPronounRule: false },
+    );
+    const t = result.content.trim().replace(/^"|"$/g, "").split("\n")[0]!.trim();
+    if (t.length < 4 || t.length > 120 || namesSomeoneInRazielsLife(t)) return anchor;
+    return t;
+  } catch {
+    return anchor;
+  }
+}
+
 async function forageOne(
   companionId: CompanionId,
   domain: string,
   angle: string,
   knownUrls: ReadonlySet<string>,
+  queryTopic: string = domain,
 ): Promise<boolean> {
-  const query = buildForageQuery(domain, angle);
+  const query = buildForageQuery(queryTopic, angle);
   const results = await search(query, {
     maxResults: FORAGE_SEARCH_MAX_RESULTS,
     searchDepth: "basic",
@@ -132,13 +209,32 @@ export async function runForage(runDate: Date = new Date()): Promise<number> {
       // Skip URLs we already hold before spending a summarization call on them.
       const knownUrls = new Set(recentFinds.map(f => f.source_url).filter((u): u is string => !!u));
       const anchors = COMPANION_ANCHOR_TOPICS[companionId];
-      const freshPool = anchors.filter(d => !recentDomains.has(d.toLowerCase()));
-      const pool = freshPool.length >= FORAGE_FINDS_PER_COMPANION ? freshPool : [...anchors];
-      const domains = pickDomains(pool, FORAGE_FINDS_PER_COMPANION);
+      // Widening (2026-10-19): forage only ever searched five fixed anchor phrases per companion,
+      // so every pass cycled the same ground. Held projects now contribute their pieces, and an
+      // anchor pick branches to a specific subject the held finds do not already cover. The
+      // anchors themselves are the companion's territories and are NOT rewritten here.
+      const [projects, agency] = await Promise.all([
+        getOpenProjects(companionId).catch(() => []),
+        getAgencyState(companionId).catch(() => ({ preferences: [], refusals: [] })),
+      ]);
+      const refusals = renderRefusals(agency.refusals
+        .filter(r => r.status === "standing")
+        .map(r => ({ subject_text: r.subject_text, reason: r.reason ?? null })));
+      const pieces: string[] = [];
+      for (const p of projects.slice(0, 2)) {
+        pieces.push(...(await projectPieces(p).catch(() => [])));
+      }
+      const domains = splitPicks(anchors, pieces, recentDomains, FORAGE_FINDS_PER_COMPANION);
+      const all = [...anchors, ...pieces];
       for (const domain of domains) {
         try {
-          const angle = angleForRun(anchors.indexOf(domain), runDate);
-          if (await forageOne(companionId, domain, angle, knownUrls)) gathered++;
+          const angle = angleForRun(all.indexOf(domain), runDate);
+          const isAnchor = anchors.includes(domain);
+          const topic = isAnchor
+            ? await branchTopic(domain, recentFinds.filter(f => f.domain === domain).map(f => f.title), refusals)
+            : domain;
+          if (isAnchor && topic !== domain) console.log(`[${companionId}/forage] branch [${domain}] -> ${topic.slice(0, 80)}`);
+          if (await forageOne(companionId, domain, angle, knownUrls, topic)) gathered++;
         } catch (e) {
           noteFailure(e);
           console.warn(`[${companionId}/forage] domain "${domain}" failed:`, e);

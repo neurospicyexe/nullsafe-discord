@@ -2,7 +2,7 @@ import { LibrarianClient, formatRecentContext } from "@nullsafe/shared";
 import { loadIdentityRemote } from "../identity-loader.js";
 import {
   appendLog, getActiveThreads, getPeerActivity, getRecentWmNotes,
-  getRecentSessionNotes, getRecentFeelings, getRecentConclusions, getOpenLoops,
+  getRecentSessionNotes, getRecentFeelings, getRecentConclusions, getOpenLoops, getAgencyState,
 } from "../halseth-client.js";
 import { HALSETH_URL, HALSETH_SECRET } from "../config.js";
 import type { PipelineContext } from "../types.js";
@@ -30,7 +30,7 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
   // journal entries, 3 patterns, 3 markers. Synthesize/reflect prompts
   // inject peer_summary so each companion is prehending the others'
   // becomings -- not exploring in isolation.
-  const [orient, activeThreads, peerActivity, recentWmNotes, recentSessionNotes, recentFeelings, recentConclusions, openLoops] = await Promise.all([
+  const [orient, activeThreads, peerActivity, recentWmNotes, recentSessionNotes, recentFeelings, recentConclusions, openLoops, agency] = await Promise.all([
     librarian.botOrient().catch(() => null),
     getActiveThreads(ctx.companionId),
     getPeerActivity(ctx.companionId, { journal: 5, patterns: 3, markers: 3 }),
@@ -39,7 +39,13 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     getRecentFeelings(ctx.companionId, 8),
     getRecentConclusions(ctx.companionId),
     getOpenLoops(ctx.companionId).catch(() => []),
+    // Standing refusals load HERE (2026-10-19), not only in reflect: they must be in the room when
+    // the seed, the queries and the entry are chosen. Reflect reads ctx.standingRefusals too.
+    getAgencyState(ctx.companionId).catch(() => ({ preferences: [], refusals: [] })),
   ]);
+  ctx.standingRefusals = agency.refusals
+    .filter(r => r.status === "standing")
+    .map(r => ({ subject_text: r.subject_text, reason: r.reason ?? null }));
 
   ctx.activeThreads = activeThreads;
   ctx.peerActivity = peerActivity;
@@ -81,6 +87,7 @@ export async function runOrient(ctx: PipelineContext): Promise<void> {
     `growth=${ctx.recentGrowth.length} dreams=${ctx.unexaminedDreamIds.length} ` +
     `loops=${ctx.openLoops.length} pressure=${ctx.pressureFlags.length} threads=${ctx.activeThreads.length} ` +
     `peer_summary=${peerSummaryLen}chars wm_notes=${ctx.recentWmNotes.length} ` +
-    `session_notes=${ctx.recentSessionNotes.length} feelings=${ctx.recentFeelings.length} conclusions=${ctx.recentConclusions.length}`,
+    `session_notes=${ctx.recentSessionNotes.length} feelings=${ctx.recentFeelings.length} conclusions=${ctx.recentConclusions.length} ` +
+    `refusals=${ctx.standingRefusals.length}`,
   );
 }

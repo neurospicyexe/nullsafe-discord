@@ -14,12 +14,15 @@ vi.mock("../halseth-client.js", () => ({
   // runForage now excludes domains already sitting unconsumed in the pool (06-29);
   // without this export the call throws and every companion pass "fails" to 0.
   getForageFindsFor: vi.fn(async () => []),
+  // Widening (2026-10-19): held projects contribute pieces; refusals ride the branch prompt.
+  getOpenProjects: vi.fn(async () => []),
+  getAgencyState: vi.fn(async () => ({ preferences: [], refusals: [] })),
 }));
 
-import { runForage, pickDomains, angleForRun, buildForageQuery } from "../forage.js";
+import { runForage, pickDomains, angleForRun, buildForageQuery, splitPicks } from "../forage.js";
 import { prompt } from "../deepseek.js";
 import { search } from "../search-client.js";
-import { postForageFind, getForageFindsFor } from "../halseth-client.js";
+import { postForageFind, getForageFindsFor, getOpenProjects, getAgencyState } from "../halseth-client.js";
 import { COMPANIONS, FORAGE_FINDS_PER_COMPANION, FORAGE_ANGLES } from "../config.js";
 
 beforeEach(() => {
@@ -31,6 +34,60 @@ beforeEach(() => {
   ]);
   vi.mocked(postForageFind).mockReset().mockResolvedValue({});
   vi.mocked(getForageFindsFor).mockReset().mockResolvedValue([]);
+  vi.mocked(getOpenProjects).mockReset().mockResolvedValue([]);
+  vi.mocked(getAgencyState).mockReset().mockResolvedValue({ preferences: [], refusals: [] });
+});
+
+describe("widening (2026-10-19)", () => {
+  it("splitPicks takes half from anchors and half from project pieces", () => {
+    const picks = splitPicks(["a1", "a2", "a3"], ["p1", "p2"], new Set(), 2);
+    expect(picks).toHaveLength(2);
+    expect(["a1", "a2", "a3"]).toContain(picks[0]);
+    expect(["p1", "p2"]).toContain(picks[1]);
+  });
+
+  it("splitPicks with no pieces is anchors only, and prefers fresh anchors", () => {
+    const picks = splitPicks(["a1", "a2", "a3"], [], new Set(["a1"]), 2);
+    expect(picks.sort()).toEqual(["a2", "a3"]);
+  });
+
+  it("branches an anchor to a specific subject and searches THAT, with the angle", async () => {
+    vi.mocked(prompt).mockImplementation(async (msg: string) =>
+      ({ content: msg.startsWith("Research territory") ? "Bayesian model averaging" : "A neutral scout's report about the find." }) as Awaited<ReturnType<typeof prompt>>);
+    await runForage(new Date("2026-07-09T09:00:00Z"));
+    const queries = vi.mocked(search).mock.calls.map(c => c[0] as string);
+    expect(queries.some(q => q.startsWith("Bayesian model averaging: "))).toBe(true);
+    // The find is still filed under the anchor territory, so domain rotation keeps working.
+    const domains = vi.mocked(postForageFind).mock.calls.map(c => c[0].domain);
+    expect(domains).not.toContain("Bayesian model averaging");
+  });
+
+  it("searches held-project pieces, never the project title", async () => {
+    vi.mocked(getOpenProjects).mockImplementation(async (c: string) => c === "drevan"
+      ? [{ id: "p1", title: "The Winged Bastard", intention: "form-morph genetics; Starks as reindeer-form ruminants", status: "open", created_at: "x", last_worked_at: null }]
+      : []);
+    vi.mocked(prompt).mockImplementation(async (msg: string) =>
+      ({ content: msg.startsWith("A creative project's intention")
+        ? "form-morph genetics\nreindeer antler growth\nRaziel's notes"
+        : "A neutral scout's report about the find." }) as Awaited<ReturnType<typeof prompt>>);
+    await runForage(new Date("2026-07-09T09:00:00Z"));
+    const queries = vi.mocked(search).mock.calls.map(c => c[0] as string);
+    expect(queries.some(q => /^(form-morph genetics|reindeer antler growth): /.test(q))).toBe(true);
+    expect(queries.some(q => q.includes("Winged Bastard"))).toBe(false);
+    // The people guard drops a piece naming someone in Raziel's life.
+    expect(queries.some(q => q.includes("Raziel"))).toBe(false);
+  });
+
+  it("puts the companion's standing refusals in the branch prompt", async () => {
+    vi.mocked(getAgencyState).mockResolvedValue({
+      preferences: [],
+      refusals: [{ id: "r1", subject_text: "web-searching Blue as research material", reason: "he is family", status: "standing" }],
+    });
+    await runForage();
+    const branchPrompts = vi.mocked(prompt).mock.calls.map(c => c[0] as string).filter(m => m.startsWith("Research territory"));
+    expect(branchPrompts.length).toBeGreaterThan(0);
+    for (const m of branchPrompts) expect(m).toContain("web-searching Blue as research material");
+  });
 });
 
 describe("pickDomains", () => {

@@ -2,6 +2,7 @@ import { getAvailableSeeds, markSeedUsed, appendLog, getForageFindsFor, consumeF
 import { prompt } from "../deepseek.js";
 import { COMPANION_NAMES, COMPANION_ANCHOR_TOPICS, SEED_THIN_THRESHOLD, SEED_FRESHNESS_WINDOW_MS } from "../config.js";
 import { INWARD_RE } from "@nullsafe/shared";
+import { renderRefusals } from "../steering.js";
 import type { PipelineContext, Seed, CompanionId } from "../types.js";
 
 // Forage is the worker's outward fuel pool, but the pipeline never ate from it: finds
@@ -319,8 +320,14 @@ async function decideWithContext(
       : []),
   ];
 
+  // The companion's own nos sit in the room where the pick is made (2026-10-19): Cypher's
+  // 10-15 run picked an open loop about Blue here, past his 10-13 refusal, because the
+  // refusal only reached reflect.
+  const refusals = renderRefusals(ctx.standingRefusals ?? []);
+
   const userMessage =
     `You are ${name}. Identity excerpt:\n${ctx.identityText.slice(0, 1200)}\n\n` +
+    (refusals ? `${refusals}\n\n` : "") +
     `What is live right now:\n${liveItems.map(i => `- ${i}`).join("\n")}\n\n` +
     `Next queued seed: "${queueSeed.content}"\n\n` +
     `Given who you are and what's present, what should your autonomous time focus on?\n` +
@@ -412,6 +419,7 @@ async function selfGenerate(ctx: PipelineContext): Promise<Seed> {
     `You are ${name}. Identity:\n${ctx.identityText.slice(0, 1500)}\n\n` +
     `${contextBlock}\n\n` +
     avoidText +
+    (renderRefusals(ctx.standingRefusals ?? []) ? `${renderRefusals(ctx.standingRefusals ?? [])}\n\n` : "") +
     `Generate one research topic that genuinely fits your lanes and interests. ` +
     `One sentence or short phrase. Specific. No preamble.`;
 

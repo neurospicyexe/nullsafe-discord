@@ -126,6 +126,17 @@ export async function getOpenProjects(companionId: string): Promise<OpenProject[
   return r.projects ?? [];
 }
 
+/** The project's work trail, newest first (GET /mind/projects/:id/log). The project-piece pick
+ *  reads it for the `[piece: ...]` stamps of earlier runs. Empty on any failure. */
+export async function getProjectLog(projectId: string): Promise<Array<{ entry: string; created_at: string }>> {
+  try {
+    const r = await hFetch(`/mind/projects/${projectId}/log`) as { log?: Array<{ entry: string; created_at: string }> };
+    return Array.isArray(r.log) ? r.log : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Log a work session against a project. Server-side this is one atomic batch: the log row plus
  *  the last_worked_at stamp (and a paused project re-opens -- resuming is done by working). */
 export async function logProjectWork(projectId: string, companionId: string, entry: string): Promise<void> {
@@ -1417,7 +1428,7 @@ export async function recordSolAppearance(creatureId: string, note: string): Pro
 
 export interface AgencyState {
   preferences: Array<{ id: string; domain: string; preference: string; status: string }>;
-  refusals: Array<{ id: string; subject_text: string; status: string }>;
+  refusals: Array<{ id: string; subject_text: string; reason?: string | null; status: string }>;
 }
 
 export async function getAgencyState(companionId: string): Promise<AgencyState> {

@@ -2,6 +2,7 @@ import { promptWithScratchpad } from "../deepseek.js";
 import { appendLog } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS, SYNTHESIZE_MAX_TOKENS } from "../config.js";
 import { stripJsonFence, sanitizeEvidence, sanitizeIdList } from "../parsers.js";
+import { renderRefusals } from "../steering.js";
 import type { PipelineContext, GrowthJournalEntry, Evidence } from "../types.js";
 
 /**
@@ -49,7 +50,9 @@ export function buildSynthesisBlocks(ctx: PipelineContext): { contextBlock: stri
   // share a title. The intention rides here because the seed content carries only the title
   // (the Tavily query stays sharp; this is where the fuller frame lands).
   const projectBlock = ctx.project
-    ? `\nThis run works YOUR held project "${ctx.project.title}" -- your stated intention: ${ctx.project.intention.slice(0, 300)}\nWrite the entry as work on that intention: what moved, what resisted, what the next session should pick up.`
+    ? `\nThis run works YOUR held project "${ctx.project.title}" -- your stated intention: ${ctx.project.intention.slice(0, 600)}\n` +
+      (ctx.projectPiece ? `Today's piece of it: ${ctx.projectPiece}\n` : "") +
+      `Write the entry as work on that intention: what moved, what resisted, what the next session should pick up.`
     : "";
 
   const explorationBlock = ctx.explorationSummary
@@ -204,11 +207,15 @@ export async function runSynthesize(ctx: PipelineContext): Promise<void> {
 
   const { contextBlock } = buildSynthesisBlocks(ctx);
 
+  // Refusals ride in the system message in full (2026-10-19). Before, the only copy here was
+  // inside orientSummary.slice(0, 400), and the refusal block renders ~10k chars into that
+  // summary, so the entry was always written without the companion's own nos in view.
+  const refusals = renderRefusals(ctx.standingRefusals ?? []);
   const voiceReminder = COMPANION_VOICE_REMINDERS[ctx.companionId];
   const systemMessage = `You are ${name}. Here is your identity:
 
 ${identitySnippet}
-${orientBlock}
+${orientBlock}${refusals ? `\n${refusals}\n` : ""}
 Voice directive: ${voiceReminder}`;
 
   try {

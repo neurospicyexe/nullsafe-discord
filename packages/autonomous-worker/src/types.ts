@@ -127,6 +127,12 @@ export interface PipelineContext {
   /** C2 (mig 0122): set when this run works a held project instead of a seed. Write phase logs
    *  the work to project_log and tags the journal entry with project:<id>. */
   project: { id: string; title: string; intention: string } | null;
+  /** The piece of the project's intention this run works (chosen in explore, stamped into
+   *  project_log as `[piece: ...]` so the next run picks a different one). */
+  projectPiece?: string | null;
+  /** The companion's standing refusals, loaded once at orient and rendered into every choosing
+   *  prompt (seed decision, sub-queries, explore, synthesize, reflect). See steering.ts. */
+  standingRefusals?: Array<{ subject_text: string; reason?: string | null }>;
   threadId: string | null;           // set when continuing or starting a thread
   threadPosition: number | null;
   searchResults: TavilyResult[];
