@@ -97,3 +97,4 @@ export * from "./human-address.js";
 export * from "./address-shadow.js";
 export * from "./address-jev.js";
 export * from "./director-jev.js";
+export * from "./facts-pick.js";

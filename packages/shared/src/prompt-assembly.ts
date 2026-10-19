@@ -287,6 +287,8 @@ function timeLines(prevTs: number | null, now: number, hadEarlier = false): stri
 /** Blocks hermesDelta places around the live words (2026-10-11): `background` above the room, `frame` last. */
 export interface HermesDeltaExtras {
   background?: string;
+  /** Architect facts picked for this message (B3): after the live words, before `frame`. */
+  facts?: string;
   frame?: string;
 }
 
@@ -380,7 +382,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // what this room said since the last turn, then the live words, then the seat frame LAST. Nothing
   // that someone else said may sit between the live words and the reply.
   const bg = extras.background ? `${extras.background}\n\n` : "";
-  const frame = extras.frame ? `\n\n${extras.frame}` : "";
+  const frame = (extras.facts ? `\n\n${extras.facts}` : "") + (extras.frame ? `\n\n${extras.frame}` : "");
   if (folded.length === 0) {
     const liveBlock = bg ? `${bg}[Live message]\n${live}` : live;
     return { messages: [{ ...labelled, content: `${clock}\n${liveBlock}${frame}` }], deliveredThroughTs: outMark };
