@@ -26,6 +26,8 @@
 // READ-ONLY BY CONSTRUCTION. Nothing here changes whether a companion speaks. This tranche is
 // measurement; the loosening is a later, separate decision with numbers attached.
 
+import { traceRailOutcome } from "./turn-telemetry.js";
+
 /** Every damping rail that can end a turn, named once so the report can enumerate them. */
 export type RailName =
   | "echo"           // echo-guard: reply too similar to recent channel content
@@ -65,6 +67,7 @@ export interface RailEvent {
  * prefix pm2 adds.
  */
 export function railSuppressed(companionId: string, rail: RailName, e: RailEvent = {}): void {
+  traceRailOutcome(rail); // P6: names the ambient turn's outcome (no-op outside a turn; never throws)
   try {
     const payload = {
       c: companionId,

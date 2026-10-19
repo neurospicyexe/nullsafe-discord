@@ -3,6 +3,7 @@ import type { TaskCheckRow } from "./task-check.js";
 import { relativeTime } from "./relative-time.js";
 import { sealedRecallSources } from "./recall-context.js";
 import { nowLine } from "./now-line.js";
+import { timeHalseth } from "./turn-telemetry.js";
 
 /**
  * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
@@ -247,7 +248,9 @@ export class LibrarianClient {
     this.secret = opts.secret;
     this.clerkSecret = clerkSecretFrom(process.env, opts.clerkSecret, opts.secret);
     this.companionId = opts.companionId;
-    this._fetch = opts.fetch ?? globalThis.fetch;
+    // P6: every Halseth/Librarian round trip inside a turn adds its duration to that turn's `halseth_ms`.
+    const rawFetch = opts.fetch ?? globalThis.fetch;
+    this._fetch = ((...a: Parameters<typeof fetch>) => timeHalseth(() => rawFetch(...a))) as typeof fetch;
   }
 
   async ask(

@@ -130,7 +130,7 @@ describe("ChannelInbox burst settle", () => {
     add(item("1"));
     await flush();
     expect(started.map(s => s.id)).toEqual(["1"]);
-    expect(started[0]!.ctx).toEqual({ settleMs: 0, burst: [] });
+    expect(started[0]!.ctx).toMatchObject({ settleMs: 0, burst: [] });
     add(item("2"));
     await flush();
     expect(started[1]!.ctx.burst).toEqual([]);

@@ -23,6 +23,7 @@
 // bearer-ish) and never description text.
 
 import { createHash } from "node:crypto";
+import { currentTurn, type VisionKind } from "./turn-telemetry.js";
 import {
   VISION_MODEL, VISION_TIMEOUT_MS, prepareImage, describeDataUrl, safeName,
   type ImageLike, type SeenImage,
@@ -84,7 +85,14 @@ interface L0Entry {
   settled: boolean;
   value: string | null;
   expiresAt: number;
+  /** What the run that produced this entry logged (hit | miss | lock-wait | neg); P6 telemetry reads it. */
+  kind: string | null;
 }
+
+/** Who is asking, for the log line only (P6): src = the arrival prefetch or the turn's own start, msg = the
+ *  Discord message id. Two lines for one image mean two MESSAGES (a PluralKit repost), never a double call. */
+export interface DescribeCtx { source?: "prefetch" | "turn"; msg?: string }
+interface KindSink { kind: string | null }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -111,29 +119,36 @@ export class VisionCache {
     return `url:${createHash("sha256").update(img.url).digest("hex").slice(0, 16)}`;
   }
 
-  private log(kind: string, startedAt: number, key: string): void {
-    console.log(`[vision-cache] ${this.o.companionId} ${kind} ms=${this.now() - startedAt} key=${key}`);
+  private log(kind: string, startedAt: number, key: string, ctx?: DescribeCtx, sink?: KindSink): void {
+    if (sink) sink.kind = kind;
+    const who = ctx ? `${ctx.source ? ` src=${ctx.source}` : ""}${ctx.msg ? ` msg=${ctx.msg}` : ""}` : "";
+    console.log(`[vision-cache] ${this.o.companionId} ${kind} ms=${this.now() - startedAt} key=${key}${who}`);
   }
+
+  /** The kind the L0 entry for this image settled with (undefined = unknown / not in this process). */
+  kindFor(img: ImageLike): string | undefined { return this.l0.get(this.l0Key(img))?.kind ?? undefined; }
 
   /**
    * One image -> a description or null (null means "not seen"; the caller words it). Never throws.
    * Concurrent callers in this process share one promise; the work is detached from any turn.
    */
-  describe(img: ImageLike): Promise<string | null> {
+  describe(img: ImageLike, ctx?: DescribeCtx): Promise<string | null> {
     const startedAt = this.now();
-    if (!visionCacheEnabled()) return this.direct(img, startedAt);
+    if (!visionCacheEnabled()) return this.direct(img, startedAt, ctx);
     const key = this.l0Key(img);
     const existing = this.l0.get(key);
     if (existing && existing.expiresAt > this.now()) {
       const wasSettled = existing.settled;
       return existing.promise.then((v) => {
-        this.log(wasSettled ? (v ? "hit" : "neg") : "wait", startedAt, key.replace(/^att:/, ""));
+        this.log(wasSettled ? (v ? "hit" : "neg") : "wait", startedAt, key.replace(/^att:/, ""), ctx);
         return v;
       });
     }
-    const entry: L0Entry = { promise: Promise.resolve(null), settled: false, value: null, expiresAt: Number.POSITIVE_INFINITY };
-    entry.promise = this.run(img, startedAt).catch(() => null).then((v) => {
+    const entry: L0Entry = { promise: Promise.resolve(null), settled: false, value: null, expiresAt: Number.POSITIVE_INFINITY, kind: null };
+    const sink: KindSink = { kind: null };
+    entry.promise = this.run(img, startedAt, ctx, sink).catch(() => null).then((v) => {
       entry.settled = true;
+      entry.kind = sink.kind;
       entry.value = v;
       entry.expiresAt = this.now() + (v ? visionCacheTtlS() : visionNegTtlS()) * 1000;
       return v;
@@ -160,7 +175,7 @@ export class VisionCache {
   private contentKey(sha: string): string { return `ns:vision:v1:${this.model()}:${sha}`; }
 
   /** VISION_CACHE=off path and the no-Redis path with no L0 benefit: download, describe, done. */
-  private async direct(img: ImageLike, startedAt: number): Promise<string | null> {
+  private async direct(img: ImageLike, startedAt: number, ctx?: DescribeCtx): Promise<string | null> {
     const apiKey = this.apiKey();
     if (!apiKey) return null;
     const doFetch = this.o.fetchFn ?? globalThis.fetch;
@@ -169,7 +184,7 @@ export class VisionCache {
       if (!prepared) return null;
       return await this.callModel(prepared.dataUrl);
     } finally {
-      this.log("miss", startedAt, img.id ?? "noid");
+      this.log("miss", startedAt, img.id ?? "noid", ctx);
     }
   }
 
@@ -182,7 +197,7 @@ export class VisionCache {
     });
   }
 
-  private async run(img: ImageLike, startedAt: number): Promise<string | null> {
+  private async run(img: ImageLike, startedAt: number, ctx: DescribeCtx | undefined, sink: KindSink): Promise<string | null> {
     const apiKey = this.apiKey();
     if (!apiKey) return null;
     const doFetch = this.o.fetchFn ?? globalThis.fetch;
@@ -204,17 +219,17 @@ export class VisionCache {
 
     if (idKey) {
       const hit = await r((rd) => rd.get(idKey));
-      if (hit) { this.log("hit", startedAt, img.id!); return hit; }
+      if (hit) { this.log("hit", startedAt, img.id!, ctx, sink); return hit; }
     }
     if (idNeg) {
       const neg = await r((rd) => rd.get(idNeg));
-      if (neg) { this.log("neg", startedAt, img.id!); return null; }
+      if (neg) { this.log("neg", startedAt, img.id!, ctx, sink); return null; }
     }
 
     const prepared = await prepareImage(img.url, doFetch, img.contentType ?? null);
     if (!prepared) {
       if (idNeg) await r((rd) => rd.set(idNeg, "1", "EX", negTtl));
-      this.log("neg", startedAt, img.id ?? "noid");
+      this.log("neg", startedAt, img.id ?? "noid", ctx, sink);
       return null;
     }
     const sha8 = prepared.sha256.slice(0, 8);
@@ -225,7 +240,7 @@ export class VisionCache {
 
     const finishHit = async (text: string, kind: string): Promise<string> => {
       if (idKey) await r((rd) => rd.set(idKey, text, "EX", ttl));
-      this.log(kind, startedAt, sha8);
+      this.log(kind, startedAt, sha8, ctx, sink);
       return text;
     };
     const checkResult = async (): Promise<{ text?: string; neg?: boolean }> => {
@@ -237,7 +252,7 @@ export class VisionCache {
 
     const first = await checkResult();
     if (first.text) return finishHit(first.text, "hit");
-    if (first.neg) { this.log("neg", startedAt, sha8); return null; }
+    if (first.neg) { this.log("neg", startedAt, sha8, ctx, sink); return null; }
 
     const deadline = this.now() + lockMs * 2;
     let waited = false;
@@ -249,8 +264,8 @@ export class VisionCache {
         // Re-check under the lock: the previous owner writes its result before releasing.
         const again = await checkResult();
         if (again.text) { await r((rd) => rd.del(lockKey)); return finishHit(again.text, waited ? "lock-wait" : "hit"); }
-        if (again.neg) { await r((rd) => rd.del(lockKey)); this.log("neg", startedAt, sha8); return null; }
-        return this.describeAndStore(prepared.dataUrl, { idKey, idNeg, cKey, nKey, lockKey, ttl, negTtl }, r, startedAt, sha8);
+        if (again.neg) { await r((rd) => rd.del(lockKey)); this.log("neg", startedAt, sha8, ctx, sink); return null; }
+        return this.describeAndStore(prepared.dataUrl, { idKey, idNeg, cKey, nKey, lockKey, ttl, negTtl }, r, startedAt, sha8, ctx, sink);
       }
       // Another bot holds the lock. Poll its result; if the lock vanishes without one, the next
       // iteration's SET NX lets exactly one waiter take over.
@@ -258,12 +273,12 @@ export class VisionCache {
       await this.sleep(this.pollMs);
       const res = await checkResult();
       if (res.text) return finishHit(res.text, "lock-wait");
-      if (res.neg) { this.log("neg", startedAt, sha8); return null; }
-      if (this.now() > deadline) { this.log("neg", startedAt, sha8); return null; }
+      if (res.neg) { this.log("neg", startedAt, sha8, ctx, sink); return null; }
+      if (this.now() > deadline) { this.log("neg", startedAt, sha8, ctx, sink); return null; }
     }
     // Direct call (Redis unavailable): still one L0 promise per process.
     const text = await this.callModel(prepared.dataUrl);
-    this.log("miss", startedAt, sha8);
+    this.log("miss", startedAt, sha8, ctx, sink);
     return text;
   }
 
@@ -273,6 +288,8 @@ export class VisionCache {
     r: <T>(fn: (rd: VisionRedis) => Promise<T>) => Promise<T | undefined>,
     startedAt: number,
     sha8: string,
+    ctx: DescribeCtx | undefined,
+    sink: KindSink,
   ): Promise<string | null> {
     let text: string | null = null;
     try {
@@ -287,16 +304,16 @@ export class VisionCache {
         if (k.idNeg) await r((rd) => rd.set(k.idNeg!, "1", "EX", k.negTtl));
       }
       await r((rd) => rd.del(k.lockKey));
-      this.log("miss", startedAt, sha8);
+      this.log("miss", startedAt, sha8, ctx, sink);
     }
     return text;
   }
 }
 
 /** Describe every picked image, serially (cap is 2), through the cache. */
-export async function describeImagesCached(images: ImageLike[], cache: VisionCache): Promise<SeenImage[]> {
+export async function describeImagesCached(images: ImageLike[], cache: VisionCache, ctx?: DescribeCtx): Promise<SeenImage[]> {
   const out: SeenImage[] = [];
-  for (const img of images) out.push({ name: safeName(img.name), description: await cache.describe(img) });
+  for (const img of images) out.push({ name: safeName(img.name), description: await cache.describe(img, ctx) });
   return out;
 }
 
@@ -316,21 +333,28 @@ export function resetSharedVisionCache(): void { shared = null; resetSharedPrefe
 /** messageId -> the in-flight describe started at event time. Capped, per process. */
 export class VisionPrefetch {
   private byId = new Map<string, Promise<SeenImage[]>>();
+  private settledIds = new Set<string>();
   constructor(private cap = L0_CAP) {}
 
   /** Start (or return) the describe for a message. Never throws; the promise never rejects. */
-  start(messageId: string, images: ImageLike[], cache: VisionCache): Promise<SeenImage[]> {
+  start(messageId: string, images: ImageLike[], cache: VisionCache, source: "prefetch" | "turn" = "prefetch"): Promise<SeenImage[]> {
     const have = this.byId.get(messageId);
     if (have) return have;
-    const p = describeImagesCached(images, cache).catch(() => images.map((i) => ({ name: safeName(i.name), description: null })));
+    const p = describeImagesCached(images, cache, { source, msg: messageId })
+      .catch(() => images.map((i) => ({ name: safeName(i.name), description: null })))
+      .then((r) => { this.settledIds.add(messageId); return r; });
     this.byId.set(messageId, p);
     while (this.byId.size > this.cap) {
       const oldest = this.byId.keys().next().value;
       if (oldest === undefined) break;
       this.byId.delete(oldest);
+      this.settledIds.delete(oldest);
     }
     return p;
   }
+
+  /** The describe for this message already finished (the prefetch beat the turn). */
+  isSettled(messageId: string): boolean { return this.settledIds.has(messageId); }
 
   get(messageId: string): Promise<SeenImage[]> | undefined { return this.byId.get(messageId); }
   get size(): number { return this.byId.size; }
@@ -356,6 +380,16 @@ export interface ResolveSeenOpts {
   onWait?: () => void;
 }
 
+/** What the turn experienced, from the kinds the cache logged for its images: waiting on another bot's call
+ *  (lock-wait) beats this process's own call (miss) beats waiting on an in-flight prefetch (wait); a plain
+ *  cache hit is hit unless a prefetch was still running when the turn arrived. */
+function visionKindOf(picked: ImageLike[], cache: VisionCache, hadPrefetch: boolean): VisionKind {
+  const kinds = picked.map((i) => cache.kindFor(i));
+  if (kinds.includes("lock-wait")) return "lock-wait";
+  if (kinds.includes("miss") || kinds.includes("neg")) return "miss";
+  return hadPrefetch ? "wait" : "hit";
+}
+
 async function fromCacheOnly(picked: ImageLike[], cache: VisionCache): Promise<SeenImage[]> {
   const out: SeenImage[] = [];
   for (const img of picked) out.push({ name: safeName(img.name), description: await cache.peek(img) });
@@ -375,13 +409,17 @@ export async function resolveSeenImages(o: ResolveSeenOpts): Promise<SeenImage[]
   const sleep = o.sleep ?? realSleep;
   const t0 = now();
   const tag = `[vision-cache] ${o.cache.companionId}`;
+  const trace = currentTurn();
   if (o.isSuperseded?.()) {
     const out = await fromCacheOnly(o.picked, o.cache);
     console.log(`${tag} superseded-skip ms=${now() - t0} seen=${out.filter((s) => s.description).length}/${out.length}`);
+    trace?.setVision(now() - t0, "none");
     return out;
   }
   const prefetch = o.prefetch ?? visionPrefetch();
-  const p = prefetch.get(o.messageId) ?? prefetch.start(o.messageId, o.picked, o.cache);
+  const hadPrefetch = prefetch.get(o.messageId) !== undefined;
+  const settledAtStart = hadPrefetch && prefetch.isSettled(o.messageId);
+  const p = prefetch.get(o.messageId) ?? prefetch.start(o.messageId, o.picked, o.cache, "turn");
   o.onWait?.();
   const budget = o.budgetMs;
   const tick = o.superseedCheckMs ?? 250;
@@ -391,14 +429,19 @@ export async function resolveSeenImages(o: ResolveSeenOpts): Promise<SeenImage[]
     if (remaining <= 0) {
       const out = await fromCacheOnly(o.picked, o.cache);
       console.log(`${tag} budget ms=${now() - t0} seen=${out.filter((s) => s.description).length}/${out.length}`);
+      trace?.setVision(now() - t0, "budget");
       return out;
     }
     const slice = Math.min(tick, remaining);
     const winner = await Promise.race([p, sleep(slice).then(() => TIMED_OUT)]);
-    if (winner !== TIMED_OUT) return winner as SeenImage[];
+    if (winner !== TIMED_OUT) {
+      if (trace) trace.setVision(now() - t0, settledAtStart ? "hit" : visionKindOf(o.picked, o.cache, hadPrefetch));
+      return winner as SeenImage[];
+    }
     if (o.isSuperseded?.()) {
       const out = await fromCacheOnly(o.picked, o.cache);
       console.log(`${tag} superseded-skip ms=${now() - t0} seen=${out.filter((s) => s.description).length}/${out.length}`);
+      trace?.setVision(now() - t0, "none");
       return out;
     }
   }

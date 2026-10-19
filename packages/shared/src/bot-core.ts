@@ -47,6 +47,7 @@ import { createRedisClient } from "./floor.js";
 import { visionEnabled, pickImageAttachments } from "./vision.js";
 import { visionPrefetch, sharedVisionCache, visionPrefetchEnabled, visionCacheEnabled, type VisionRedis } from "./vision-cache.js";
 import { noteOwnerReaction } from "./reach-ledger.js";
+import { TurnTrace, runWithTurn, emitDroppedTurn } from "./turn-telemetry.js";
 import { wireEventSubscriptions, setPresence, onFollowUpPass } from "./events.js";
 import { handleMessage, releaseFollowUpOnPass } from "./bot-message-handler.js";
 import type { FollowUpEntitlement } from "./sequential-floor.js";
@@ -896,7 +897,30 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     settleMaxMs,
     isCommandShaped: (content) => commandGuard?.test(content) ?? false,
     log: (m) => console.log(`[${companionId}] ${m}`),
+    // P6: a turn the queue backstop drops never runs; it still gets its one [turn] line.
+    onDrop: (it) => emitDroppedTurn({ companionId, channelId: it.channelId, messageId: it.id, side: it.side ?? null, createdAt: null, enqueuedAt: Date.now() }, "queue_overflow"),
   });
+
+  // P6 (turn-telemetry.ts): wrap a turn so the seams (vision resolve, Librarian calls, the Hermes call, the
+  // send, rails) can name their stage on the ambient trace, and exactly ONE `[turn]` line is written when the
+  // turn returns. Ids, counts and timings only. Never throws into the turn.
+  const tracedTurn = (message: Message, side: string | null, isSuperseded: (phase?: SupersedePhase) => boolean, ctx: TurnContext | undefined, run: () => Promise<void>): Promise<void> => {
+    const startedAt = Date.now();
+    const trace = new TurnTrace({
+      companionId, channelId: message.channelId, messageId: message.id, side,
+      createdAt: message.createdTimestamp ?? null,
+      enqueuedAt: ctx?.enqueuedAt ?? startedAt,
+      startedAt,
+      queueMs: ctx?.queueWaitedMs ?? 0,
+      settleMs: ctx?.settleWaitedMs ?? 0,
+      gathered: ctx?.burst.length ?? 0,
+      catchup: ctx?.catchUp ?? false,
+    });
+    return runWithTurn(trace, async () => {
+      let threw = false;
+      try { await run(); } catch (e) { threw = true; throw e; } finally { trace.finish({ superseded: isSuperseded(), threw }); }
+    });
+  };
 
   // Reaction READING (2026-08-16, the floor rework's named next cut). The reaction tier made
   // an emoji the third output; this is the matching INPUT: when someone reacts to THIS
@@ -1014,6 +1038,11 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     // the turn. The three bots share one VL call through the Redis cache (vision-cache.ts). Never
     // inside a turn, and never for this bot's own posts or Sol's.
     prefetchVisionAtArrival(message, isSol);
+    const inboxSide = isSol ? null : resolveInboxSide(
+      { authorId: message.author.id, isWebhook: message.webhookId !== null, username: message.author.username },
+      { ownerDiscordId: env.ownerDiscordId, blueDiscordId: env.blueDiscordId },
+      pkRoster,
+    );
     inbox.enqueue(
       {
         id: message.id,
@@ -1028,13 +1057,9 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         mentionedIds: [...message.mentions.users.keys()],
         replyToMessageId: message.reference?.messageId ?? null,
         // Which human (P3/P4): Raziel's system or Blue's, from the author id or the in-memory PK roster.
-        side: isSol ? null : resolveInboxSide(
-          { authorId: message.author.id, isWebhook: message.webhookId !== null, username: message.author.username },
-          { ownerDiscordId: env.ownerDiscordId, blueDiscordId: env.blueDiscordId },
-          pkRoster,
-        ),
+        side: inboxSide,
       },
-      (isSuperseded, turnCtx) => runTurn(message, pkSenderId, isSuperseded, undefined, turnCtx),
+      (isSuperseded, turnCtx) => tracedTurn(message, inboxSide, isSuperseded, turnCtx, () => runTurn(message, pkSenderId, isSuperseded, undefined, turnCtx)),
     );
   });
 
@@ -1063,7 +1088,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
           if (!origin) return;
           inbox.enqueue(
             { id: `${origin.id}:pass`, channelId: origin.channelId, authorIsHuman: false, content: origin.content },
-            (isSuperseded) => runTurn(origin, entitlement.pkSenderId, isSuperseded, entitlement),
+            (isSuperseded, passCtx) => tracedTurn(origin, null, isSuperseded, passCtx, () => runTurn(origin, entitlement.pkSenderId, isSuperseded, entitlement)),
           );
         } catch (e) {
           console.warn(`[${companionId}] follow-up pass: could not load the origin message:`, e instanceof Error ? e.message : String(e));

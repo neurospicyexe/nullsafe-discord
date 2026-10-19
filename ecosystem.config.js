@@ -315,6 +315,8 @@ const shared = {
   BURST_SETTLE_SCOPE:          process.env.BURST_SETTLE_SCOPE,
   BURST_SETTLE_MAX_MS:         process.env.BURST_SETTLE_MAX_MS,
   BLUE_COLD_PICK:              process.env.BLUE_COLD_PICK,
+  // TURN_TELEMETRY (P6, turn-telemetry.ts): one `[turn]` JSON line per reply turn. Default ON; off/0/false/no disables.
+  TURN_TELEMETRY:              process.env.TURN_TELEMETRY,
   // SPEAKER_FRAME (2026-10-11, speaker-frame.ts) and CROSS_ROOM (2026-10-09, cross-room.ts): kill
   // switches, both default ON; off/0/false/no turns each off. CROSS_ROOM was never listed, so its
   // switch could not reach the bots until now. Listed per the standing rule above.

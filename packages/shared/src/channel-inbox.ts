@@ -72,6 +72,13 @@ export interface TurnContext {
   /** Earlier messages of the SAME speaker gathered into this turn, oldest first. Their own turns
    *  were superseded (absorbed, never answered). Empty when settle is off. */
   burst: InboxItem[];
+  /** P6 telemetry: when this turn entered the inbox, how long it was actually held in settle, how long it
+   *  waited behind other turns (excluding the hold), and whether it arrived while another turn ran in the
+   *  channel (it is then the catch-up). */
+  enqueuedAt: number;
+  settleWaitedMs: number;
+  queueWaitedMs: number;
+  catchUp: boolean;
 }
 
 export const DEFAULT_BURST_SETTLE_MS = 4000;
@@ -162,17 +169,23 @@ export interface ChannelInboxOpts {
    *  handler never runs). Backstop against a wedged handler starving memory. */
   maxQueue?: number;
   log?: (msg: string) => void;
+  /** P6: called with the OLDEST queued item when the maxQueue backstop drops it (its run never happens). */
+  onDrop?: (item: InboxItem) => void;
 }
 
 interface QueueEntry {
   item: InboxItem;
   run: (isSuperseded: (phase?: SupersedePhase) => boolean, ctx: TurnContext) => Promise<void>;
   arrivedAt: number;
+  /** Another turn was running in this channel when this one arrived (P6 catch-up flag). */
+  arrivedWhileRunning: boolean;
 }
 
 interface ChannelQueue {
   entries: QueueEntry[];
   running: boolean;
+  /** A turn's run callback is executing right now (not merely the worker waiting in settle). */
+  inTurn: boolean;
   /** Superseded same-burst items awaiting the turn that answers them. */
   burst: Array<{ item: InboxItem; arrivedAt: number }>;
   /** Wakes a settle sleep when something new is queued, so the window is re-evaluated. */
@@ -186,6 +199,7 @@ export class ChannelInbox {
   private readonly isCommandShaped: (content: string) => boolean;
   private readonly maxQueue: number;
   private readonly log: (msg: string) => void;
+  private readonly onDrop: ((item: InboxItem) => void) | undefined;
   private readonly settleMs: number;
   private readonly supersedeSideAware: boolean;
   private readonly supersedeB: boolean;
@@ -198,6 +212,7 @@ export class ChannelInbox {
     this.isCommandShaped = opts.isCommandShaped ?? (() => false);
     this.maxQueue = opts.maxQueue ?? DEFAULT_MAX_QUEUE;
     this.log = opts.log ?? ((m) => console.log(m));
+    this.onDrop = opts.onDrop;
     this.settleMs = Math.max(0, opts.settleMs ?? 0);
     this.supersedeSideAware = opts.supersedeSideAware ?? true;
     this.supersedeB = opts.supersedeB ?? false;
@@ -215,14 +230,15 @@ export class ChannelInbox {
   enqueue(item: InboxItem, run: (isSuperseded: (phase?: SupersedePhase) => boolean, ctx: TurnContext) => Promise<void>): void {
     let q = this.queues.get(item.channelId);
     if (!q) {
-      q = { entries: [], running: false, burst: [], wake: null };
+      q = { entries: [], running: false, inTurn: false, burst: [], wake: null };
       this.queues.set(item.channelId, q);
     }
-    q.entries.push({ item, run, arrivedAt: this.now() });
+    q.entries.push({ item, run, arrivedAt: this.now(), arrivedWhileRunning: q.inTurn });
     q.wake?.();
     if (q.entries.length > this.maxQueue) {
       const dropped = q.entries.shift();
       this.log(`[inbox] channel ${item.channelId} queue over ${this.maxQueue}, dropped turn ${dropped?.item.id}`);
+      if (dropped) { try { this.onDrop?.(dropped.item); } catch { /* telemetry only */ } }
     }
     if (!q.running) void this.drain(item.channelId, q);
   }
@@ -303,7 +319,9 @@ export class ChannelInbox {
     q.running = true;
     try {
       while (q.entries.length > 0) {
+        const settleStart = this.now();
         const settleApplied = await this.settle(q);
+        const settleWaitedMs = settleApplied > 0 ? Math.max(0, this.now() - settleStart) : 0;
         const entry = q.entries.shift();
         if (!entry) continue; // the maxQueue backstop dropped the head while it was settling
         const speaks = this.isHumanConversation(entry.item);
@@ -311,7 +329,14 @@ export class ChannelInbox {
         const burst = settleApplied > 0 && speaks
           ? q.burst.filter(b => this.sameSpeaker(b.item, entry.item) && b.arrivedAt >= cutoff).map(b => b.item)
           : [];
-        const ctx: TurnContext = { settleMs: speaks ? settleApplied : 0, burst };
+        const settleHeld = speaks ? settleWaitedMs : 0;
+        const ctx: TurnContext = {
+          settleMs: speaks ? settleApplied : 0, burst,
+          enqueuedAt: entry.arrivedAt,
+          settleWaitedMs: settleHeld,
+          queueWaitedMs: Math.max(0, this.now() - entry.arrivedAt - settleHeld),
+          catchUp: entry.arrivedWhileRunning,
+        };
         // Superseded iff a newer human conversational message is already queued behind us.
         // Evaluated live at each probe call -- a message arriving MID-inference flips it.
         //
@@ -330,10 +355,13 @@ export class ChannelInbox {
           }
           return live;
         };
+        q.inTurn = true;
         try {
           await entry.run(isSuperseded, ctx);
         } catch (err) {
           this.log(`[inbox] turn ${entry.item.id} in ${channelId} threw: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          q.inTurn = false;
         }
         // Burst bookkeeping (settle on only): a conversational turn that a newer human message
         // superseded joins the burst its successor carries; one that answered closes the burst.

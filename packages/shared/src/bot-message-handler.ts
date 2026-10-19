@@ -1,5 +1,6 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
+import { currentTurn } from "./turn-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { claimPkProfile } from "./pk-profile-seen.js";
@@ -2103,6 +2104,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // actually surfaces it.
     if (isSuperseded?.()) {
       console.log(`[${COMPANION_ID}] turn superseded pre-reply (newer human message queued) -- absorbing ${message.id}`);
+      currentTurn()?.setOutcome("superseded_a");
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
       return;
     }
@@ -3044,7 +3046,9 @@ ${widened}`;
     // Gone with it: the swarm slot/priority_order stagger, Brain's suppression path (which could
     // `return` without replying), and the buildThoughtPacket/isSwarmReply call sites.
     // `let`, not `const`: the coherence retry and the imp/scramble passes downstream reassign it.
+    const inferenceT0 = Date.now();
     let response: string | null = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), inferenceSessionId, inferenceSessionKey));
+    currentTurn()?.setInference(Date.now() - inferenceT0);
 
     if (!response) {
       // The in-character fallback exists so a HUMAN who is waiting hears something. When the
@@ -3066,7 +3070,7 @@ ${widened}`;
         console.log(`[${COMPANION_ID}] inference returned nothing AND the turn was superseded -- skipping the fallback line`);
         return;
       }
-      await sendLong(ch, IN_CHARACTER_FALLBACK);
+      { const fbT0 = Date.now(); await sendLong(ch, IN_CHARACTER_FALLBACK); const tr = currentTurn(); if (tr) { tr.setPost(Date.now() - fbT0); tr.setOutcome("posted"); } }
       return;
     }
 
@@ -3111,6 +3115,7 @@ ${widened}`;
     // the companion decide with the predecessor's reply in front of it.
     if (careFollowUpTurn && response && isPass(response)) {
       b32Log(COMPANION_ID, `followup(after ${careFollowUpTurn.expectedPrior})`, "pass");
+      currentTurn()?.setOutcome("held");
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
       const pass = followUpPassEnabled() && followUpPassFor({
         isCompanionBot: senderCtx.isCompanionBot,
@@ -3310,6 +3315,7 @@ ${widened}`;
 
     const MAX_TTS = 2000;
     let sent: Message[];
+    const postT0 = Date.now();
 
     // Companion-to-companion replies carry a Discord reply reference. The sibling's
     // reply-to-me detector (isReplyToMe) keys on message.reference, and shouldRespond
@@ -3366,6 +3372,7 @@ ${widened}`;
     }
 
     for (const m of sent) sentIds.add(m.id);
+    { const tr = currentTurn(); if (tr) { tr.setPost(Date.now() - postT0); if (sent.length > 0) tr.setOutcome("posted"); } }
     // Per-human thread hold (2026-10-10): a reply to BLUE makes me the holder of Blue's thread in this
     // channel (her own 15-minute hold, never Raziel's) and remembers the ids so Raziel's holder walk
     // skips them. Only turns on Blue's own human message; a pass turn or a sibling post never writes it.
