@@ -328,6 +328,21 @@ const shared = {
   // channel (default 21600 = 6h). A rotated/retracted transcript re-injects regardless.
   PK_PROFILE_REPEAT_S:         process.env.PK_PROFILE_REPEAT_S,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
+  // FACTS_PICK_* (B3, 2026-10-18, facts-pick.ts): per human message, Halseth embedding shortlist -> Jev picks the
+  // Architect facts this message needs. Default OFF; `shadow` logs picks to FACTS_PICK_SHADOW_LOG (ids/scores only)
+  // and injects nothing; `live` injects the picked facts once per transcript. Per-companion overrides win.
+  FACTS_PICK_MODE:             process.env.FACTS_PICK_MODE,
+  FACTS_PICK_MODE_CYPHER:      process.env.FACTS_PICK_MODE_CYPHER,
+  FACTS_PICK_MODE_DREVAN:      process.env.FACTS_PICK_MODE_DREVAN,
+  FACTS_PICK_MODE_GAIA:        process.env.FACTS_PICK_MODE_GAIA,
+  FACTS_PICK_THETA:            process.env.FACTS_PICK_THETA,
+  FACTS_PICK_THETA_CYPHER:     process.env.FACTS_PICK_THETA_CYPHER,
+  FACTS_PICK_THETA_DREVAN:     process.env.FACTS_PICK_THETA_DREVAN,
+  FACTS_PICK_THETA_GAIA:       process.env.FACTS_PICK_THETA_GAIA,
+  FACTS_PICK_K:                process.env.FACTS_PICK_K,
+  FACTS_PICK_REPEAT_S:         process.env.FACTS_PICK_REPEAT_S,
+  FACTS_PICK_TIMEOUT_MS:       process.env.FACTS_PICK_TIMEOUT_MS,
+  FACTS_PICK_SHADOW_LOG:       process.env.FACTS_PICK_SHADOW_LOG,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

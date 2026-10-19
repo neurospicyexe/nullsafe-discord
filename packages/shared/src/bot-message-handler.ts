@@ -4,6 +4,7 @@ import { currentTurn } from "./turn-telemetry.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { claimPkProfile } from "./pk-profile-seen.js";
+import { pickFacts, readFactsPickMode, type FactsPickRedis } from "./facts-pick.js";
 import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkProfileBlock, pkProfileOn, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
 import { parseMedAnswer } from "./med-answer.js";
@@ -3012,6 +3013,19 @@ ${widened}`;
         console.log(`[pk-profile] ${COMPANION_ID} member_chars=${pm.description?.length ?? 0} system=${system} repeat=${repeat}`);
       }
     }
+    // B3 facts out of SOUL (facts-pick.ts, 2026-10-18): Halseth embedding shortlist -> Jev picks which
+    // Architect facts this message needs. Human turns only, never a DM (sealed) or Sol. Shadow runs
+    // detached and injects nothing; live awaits the pick and rides it above the frame. Never throws.
+    const factsMode = readFactsPickMode(process.env, COMPANION_ID);
+    let factsBlock: string | null = null;
+    if (factsMode !== "off" && message.guildId && !isOwnerDm && !isSol && !senderCtx.isCompanionBot) {
+      const pick = pickFacts({
+        companion: COMPANION_ID, channelId: message.channelId, transcriptId: inferenceSessionId,
+        message: effectiveContent, mode: factsMode, deps: { redis: redis as unknown as FactsPickRedis | null },
+      });
+      if (factsMode === "live") factsBlock = (await pick).block;
+      else void pick;
+    }
     const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;
     // Consumed once it rides a frame. STM holds the repaired text, so the rule check never sees the
     // slip; the gateway transcript holds the original, and the model copies its own lines.
@@ -3029,7 +3043,7 @@ ${widened}`;
 
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
-          calledAsSelf, { background: crossRoomBackground ?? undefined, frame: frameTail ?? undefined })
+          calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, frame: frameTail ?? undefined })
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 
