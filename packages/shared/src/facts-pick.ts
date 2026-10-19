@@ -90,7 +90,9 @@ export interface FactsPickLog {
   mode?: FactsPickMode;
   msg_len?: number;
   msg_hash?: string;
-  shortlist?: Array<{ id: string; category: string; score: number }>;
+  // `p` = Jev's score for every shortlisted fact (absent when Jev never answered), so theta can be
+  // calibrated from shadow data instead of only seeing what cleared the current threshold.
+  shortlist?: Array<{ id: string; category: string; score: number; p?: number }>;
   picks?: Array<{ id: string; category: string; p: number }>;
   would_inject?: string[];
   theta?: number;
@@ -204,6 +206,7 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
     const p = a && a.type === "noul" && typeof a.noul === "number" && Number.isFinite(a.noul) ? a.noul : 0;
     return { f, p };
   });
+  log.shortlist = scored.map(({ f, p }) => ({ id: f.id, category: f.category, score: f.score, p }));
   const picked = scored.filter(s => s.p >= theta).sort((a, b) => b.p - a.p).slice(0, FACTS_PICK_CAP);
   log.picks = picked.map(s => ({ id: s.f.id, category: s.f.category, p: s.p }));
   if (picked.length === 0) return null;

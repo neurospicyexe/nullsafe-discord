@@ -149,7 +149,8 @@ describe("pickFacts", () => {
     expect(row.msg_hash).toBe(createHash("sha256").update(base.message).digest("hex").slice(0, 12));
     expect(row).toMatchObject({ companion: "drevan", channel: "c1", mode: "shadow", msg_len: base.message.length, theta: 0.6, k: 12 });
     expect(typeof row.ms).toBe("number");
-    expect(row.shortlist[0]).toEqual({ id: "fact0", category: "home", score: 0.9 });
+    // Every shortlisted fact carries Jev's p, so theta can be calibrated from shadow rows.
+    expect(row.shortlist[0]).toEqual({ id: "fact0", category: "home", score: 0.9, p: 0.9 });
   });
 
   it("live: claims, injects only claimed, second turn dedups", async () => {
