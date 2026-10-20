@@ -14,7 +14,9 @@ import { randomUUID } from "node:crypto";
 import cron from "node-cron";
 import {
   createSubscriberClient, onCommonsMessage, onDirectorResult, publishDirectorInvite,
-  directorJevEnabled, directorJevEval, renderDirectorJevState, jevAgreesDirector, appendDirectorJevLine,
+  directorJevEnabled, directorEchoEval, directorVetoEval, renderDirectorJevState, appendDirectorJevLine,
+  readEchoBrakeConfig, readVetoTheta, echoBrakeStep, LOOP_BREAK_STEER,
+  type DirectorNoulResult, type EchoBrakeConfig, type EchoAction,
   type Redis, type CommonsMessagePayload, type DirectorResultPayload, type DirectorSupplyItem,
 } from "@nullsafe/shared";
 import { getDirectorSupply, getDirectorNeighborhood, recordInvitation, resolveInvitation, consumeForageFind } from "../halseth-client.js";
@@ -52,31 +54,55 @@ function tableFor(kind: DirectorSupplyItem["kind"]): string {
 }
 
 /**
- * Jev as a shadow voice beside select() (2026-10-13, shared/director-jev.ts). Detached: never
- * awaited by decide(), never feeds back into the selection, never throws. One call per decide on a
- * commons message (event-triggered, never the floor timer), so cost tracks real conversation.
+ * Jev beside select() (2026-10-20 redesign, shared/director-jev.ts). Two SEPARATE calls per decide on a
+ * commons message (event-triggered, never the floor timer): the echo read (feeds the live brake) and,
+ * when the director picks someone, a shadow-only veto check on that companion. Never throws; a failed
+ * call is a logged reason. Returns the echo promise so decide() can act on it before inviting.
  */
-export function fireDirectorJev(s: ConversationState, sel: Selection, paced: boolean, rt: Pick<DirectorRuntime, "cfg">, deps: { evalFn?: typeof directorJevEval; log?: typeof appendDirectorJevLine } = {}): Promise<void> {
-  if (!directorJevEnabled()) return Promise.resolve();
-  const evalFn = deps.evalFn ?? directorJevEval;
+export type EchoRead = DirectorNoulResult | null;
+const COMPANION_IDS: readonly string[] = ["cypher", "drevan", "gaia"];
+
+/** One echo read -> the director's action. A HUMAN summons is steered but never braked; non-"on" modes act on nothing. */
+export function resolveEcho(s: ConversationState, sel: Selection, read: EchoRead, cfg: EchoBrakeConfig): { echoing: boolean; streak: number; raw: EchoAction; effective: EchoAction } {
+  const step = echoBrakeStep({ p: read && read.ok ? read.p : null, botTurns: s.botTurns, streak: s.echoStreak ?? 0, cfg });
+  const humanSummons = sel.kind === "invite" && sel.reason === "addressed" && !!sel.addressedBy && !COMPANION_IDS.includes(sel.addressedBy);
+  const raw: EchoAction = humanSummons && step.action === "brake" ? "steer" : step.action;
+  return { echoing: step.echoing, streak: step.streak, raw, effective: cfg.mode === "on" ? raw : "none" };
+}
+
+export interface DirectorJevDeps {
+  echoFn?: typeof directorEchoEval; vetoFn?: typeof directorVetoEval; log?: typeof appendDirectorJevLine;
+  brakeCfg?: EchoBrakeConfig; vetoTheta?: number;
+}
+
+export function fireDirectorJev(s: ConversationState, sel: Selection, paced: boolean, rt: Pick<DirectorRuntime, "cfg">, deps: DirectorJevDeps = {}): { echo: Promise<EchoRead>; done: Promise<void> } {
+  if (!directorJevEnabled()) return { echo: Promise.resolve(null), done: Promise.resolve() };
+  const echoFn = deps.echoFn ?? directorEchoEval;
+  const vetoFn = deps.vetoFn ?? directorVetoEval;
   const log = deps.log ?? appendDirectorJevLine;
+  const cfg = deps.brakeCfg ?? readEchoBrakeConfig();
+  const vetoTheta = deps.vetoTheta ?? readVetoTheta();
   const state = renderDirectorJevState({ turns: s.turns, topic: s.topic, openMoves: s.openMoves, botTurns: s.botTurns, turnBudget: rt.cfg.turnBudget });
   const last = s.turns[s.turns.length - 1];
   const director = sel.kind === "invite"
     ? { kind: "invite" as const, companion: sel.companionId, reason: sel.reason, paced }
     : { kind: "silence" as const, reason: sel.reason };
-  return evalFn(state).then((res) => {
+  const safe = (p: Promise<DirectorNoulResult>): Promise<DirectorNoulResult> => p.catch((e) => ({ ok: false as const, reason: `throw:${String(e).slice(0, 80)}`, wall_ms: 0 }));
+  const echo = safe(echoFn(state));
+  // A paced invite is never issued, so there is nothing to veto.
+  const veto = sel.kind === "invite" && !paced ? safe(vetoFn(state, sel.companionId)) : null;
+  const done = Promise.all([echo, veto]).then(([e, v]) => {
+    const r = resolveEcho(s, sel, e, cfg);
     log({
       kind: "decide", channel_id: s.channelId, after_msg_id: last?.messageId ?? null,
       after_author: last ? (last.companionId ?? last.author) : null, bot_turns: s.botTurns,
       director,
-      jev: res.ok ? res.verdict : null, jev_failure: res.ok ? null : res.reason,
-      jev_latency_ms: res.ok ? res.latency_ms : null, jev_wall_ms: res.wall_ms,
-      // A paced invite was not issued, so the room saw silence.
-      agree: res.ok ? jevAgreesDirector(res.verdict, paced || sel.kind === "silence" ? { kind: "silence" } : sel) : null,
+      echo: { p: e.ok ? e.p : null, failure: e.ok ? null : e.reason, wall_ms: e.wall_ms, mode: cfg.mode, streak: r.streak, echoing: r.echoing, action: r.raw, effective: r.effective },
+      veto: sel.kind === "invite" && v ? { companion: sel.companionId, p: v.ok ? v.p : null, failure: v.ok ? null : v.reason, wall_ms: v.wall_ms, theta: vetoTheta, would_veto: v.ok ? v.p < vetoTheta : null } : null,
     });
-    if (res.ok) console.log(`[director-jev] ${s.channelId} director=${director.kind === "invite" && !paced ? director.companion : `silence:${director.kind === "invite" ? "pacing" : director.reason}`} jev=${res.verdict.nextSpeaker}@${res.verdict.confidence.toFixed(2)} more=${res.verdict.threadHasMore?.toFixed(2) ?? "?"} echo=${res.verdict.echoing?.toFixed(2) ?? "?"}`);
+    console.log(`[director-jev] ${s.channelId} director=${director.kind === "invite" && !paced ? director.companion : `silence:${director.kind === "invite" ? "pacing" : director.reason}`} echo=${e.ok ? e.p.toFixed(2) : "?"}/${r.effective}${v && v.ok ? ` veto_p=${v.p.toFixed(2)}${v.p < vetoTheta ? " WOULD_VETO" : ""}` : ""}`);
   }).catch((e) => { console.warn(`[director-jev] shadow failed: ${String(e).slice(0, 200)}`); });
+  return { echo, done };
 }
 
 /**
@@ -93,7 +119,7 @@ export function serializeByKey(chains: Map<string, Promise<void>>, key: string, 
   return chained;
 }
 
-async function issue(sel: Extract<Selection, { kind: "invite" }>, s: ConversationState, rt: DirectorRuntime): Promise<void> {
+async function issue(sel: Extract<Selection, { kind: "invite" }>, s: ConversationState, rt: DirectorRuntime, steer = false): Promise<void> {
   const inviteId = randomUUID();
   const nowMs = rt.now();
   try {
@@ -107,14 +133,16 @@ async function issue(sel: Extract<Selection, { kind: "invite" }>, s: Conversatio
     return;
   }
   console.log(`[director] ${rt.mode}: ${sel.reason} -> ${sel.companionId} in ${s.channelId} (offer=${sel.offer.map((o) => o.id).join(",") || "none"})`);
-  appendDirectorJevLine({ kind: "invite", invite_id: inviteId, channel_id: s.channelId, companion: sel.companionId, reason: sel.reason, mode: rt.mode });
+  appendDirectorJevLine({ kind: "invite", invite_id: inviteId, channel_id: s.channelId, companion: sel.companionId, reason: sel.reason, mode: rt.mode, ...(steer ? { steer: "loop_break" } : {}) });
   const lastInviteAt = new Date(nowMs).toISOString();
   // I3: both modes record the pacing clock -- shadow saves state (nothing else changes for it)
   // so the shadow pacing gate in decide() mirrors what live would have done, even though only
   // live actually publishes.
   if (rt.mode === "shadow") { await rt.store.save({ ...s, lastInviteAt }); return; }
   const hood = await getDirectorNeighborhood(sel.companionId, seedsFor(s, sel.companionId, rt.pool.items()));
-  const invite = buildInvite(sel, s, { neighborhoodBlock: hood.lines.length ? hood.lines.join("\n") : undefined }, rt.cfg, { inviteId, nowMs });
+  const built = buildInvite(sel, s, { neighborhoodBlock: hood.lines.length ? hood.lines.join("\n") : undefined }, rt.cfg, { inviteId, nowMs });
+  // Echo steer: the room is restating itself; the invitee is told so in the state block it already reads.
+  const invite = steer ? { ...built, stateBlock: `${built.stateBlock}\n${LOOP_BREAK_STEER}` } : built;
   const next: ConversationState = { ...s, offered: [...s.offered, ...sel.offer.map((o) => ({ id: o.id, kind: o.kind, toCompanion: sel.companionId, inviteId, usedBy: null }))], lastInviteAt };
   await rt.store.save(next);
   await publishDirectorInvite(rt.redis, invite);
@@ -125,7 +153,22 @@ export async function decide(channelId: string, rt: DirectorRuntime, fromMessage
   if (!s) return;
   const sel = select({ state: s, supply: rt.pool.items(), nowMs: rt.now(), turnBudget: rt.cfg.turnBudget, noUptakeMs: rt.cfg.noUptakeMs, humanFloorMs: HUMAN_FLOOR_MS, order: rt.cfg.order });
   const paced = sel.kind === "invite" && !!s.lastInviteAt && rt.now() - Date.parse(s.lastInviteAt) < rt.cfg.minGapMs;
-  if (fromMessage) void fireDirectorJev(s, sel, paced, rt);
+  const jev = fromMessage ? fireDirectorJev(s, sel, paced, rt) : null;
+  let steer = false;
+  let cur = s;
+  const brakeCfg = readEchoBrakeConfig();
+  if (sel.kind === "invite" && !paced && jev && brakeCfg.mode !== "off") {
+    // The brake decides BEFORE the invite, bounded by DIRECTOR_JEV_TIMEOUT_MS inside the call; a failure
+    // or timeout reads as p=null and fails open (no steer, no brake, streak untouched).
+    const r = resolveEcho(s, sel, await jev.echo, brakeCfg);
+    cur = r.streak !== (s.echoStreak ?? 0) ? { ...s, echoStreak: r.streak } : s;
+    if (r.effective === "brake") {
+      console.log(`[director] silence: echo_brake (streak ${r.streak}) in ${channelId}`);
+      await rt.store.save(cur);
+      return;
+    }
+    steer = r.effective === "steer";
+  }
   if (sel.kind === "invite") {
     // I3: pacing. A selection that WOULD invite is still throttled if the last invite in this
     // channel landed within minGapMs -- no record, no publish, just a log line. Prevents a burst
@@ -134,7 +177,7 @@ export async function decide(channelId: string, rt: DirectorRuntime, fromMessage
       console.log(`[director] silence: pacing (last invite ${s.lastInviteAt}) in ${channelId}`);
       return;
     }
-    await issue(sel, s, rt); return;
+    await issue(sel, cur, rt, steer); return;
   }
   if (rt.mode === "live" && (sel.reason === "budget" || sel.reason === "no_uptake")) {
     const reasonCode = sel.reason === "budget" ? "turn_budget" : "no_uptake";

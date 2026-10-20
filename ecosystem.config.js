@@ -289,12 +289,21 @@ const shared = {
   // AND Blue's messages, same row as Flash. Runs whenever ADDRESS_MODEL=shadow; `off` is the kill
   // switch (needs a reload with --update-env). Listed per the standing rule above.
   ADDRESS_JEV:                 process.env.ADDRESS_JEV,
-  // DIRECTOR_JEV / DIRECTOR_JEV_LOG (2026-10-13, shared/director-jev.ts): Jev as a shadow voice beside
-  // the director (next_speaker, thread_has_more, echoing), one call per commons message, never steers
-  // select(). Worker-only in effect; `off` is the kill switch (reload with --update-env). Log default
-  // /app/logs/director-jev.jsonl; read it with scripts/director-jev-report.mjs. Listed per the standing rule above.
+  // DIRECTOR_JEV / DIRECTOR_JEV_LOG (2026-10-13, redesigned 2026-10-20, shared/director-jev.ts): Jev beside the
+  // director. Echo brake LIVE (graduated: first echo read steers the invite, second in a row lets the thread
+  // rest) and a shadow-only veto check on the director pick. `off` is the kill switch (reload with
+  // --update-env). Worker-only in effect. EVERY default below lives in CODE (director-jev.ts); this file only
+  // passes an override through, because a default held only here is silently absent when the process is
+  // started outside ecosystem.config.js (ADDRESS_MODEL, 2026-10-20). Log default /app/logs/director-jev.jsonl;
+  // read it with scripts/director-jev-report.mjs. Listed per the standing rule above.
   DIRECTOR_JEV:                process.env.DIRECTOR_JEV,
   DIRECTOR_JEV_LOG:            process.env.DIRECTOR_JEV_LOG,
+  DIRECTOR_JEV_TIMEOUT_MS:     process.env.DIRECTOR_JEV_TIMEOUT_MS,
+  DIRECTOR_ECHO_BRAKE:         process.env.DIRECTOR_ECHO_BRAKE,
+  DIRECTOR_ECHO_BRAKE_THETA:   process.env.DIRECTOR_ECHO_BRAKE_THETA,
+  DIRECTOR_ECHO_BRAKE_MIN_TURNS: process.env.DIRECTOR_ECHO_BRAKE_MIN_TURNS,
+  DIRECTOR_ECHO_BRAKE_STREAK:  process.env.DIRECTOR_ECHO_BRAKE_STREAK,
+  DIRECTOR_VETO_THETA:         process.env.DIRECTOR_VETO_THETA,
   // BURST_SETTLE_MS (2026-10-10, channel-inbox.ts burstSettleMs): the window a human burst is gathered
   // for and answered as one turn. Code default 4000; `0` disables (exact old behavior). Same value in
   // all three bots: the fit-bid deadline is shifted by it, so a bot on a different value splits the bid.

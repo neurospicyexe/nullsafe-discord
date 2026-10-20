@@ -2,25 +2,29 @@
 
 import { describe, it, expect, jest } from "@jest/globals";
 import {
-  NEXT_SPEAKERS, buildDirectorJevQuestions, directorJevEnabled, directorJevEval, jevAgreesDirector,
-  parseDirectorJev, renderDirectorJevState,
+  LANES, buildEchoQuestions, buildVetoQuestions, directorEchoEval, directorJevEnabled, directorJevTimeoutMs,
+  directorVetoEval, echoBrakeStep, readEchoBrakeConfig, readVetoTheta, renderDirectorJevState,
 } from "../director-jev.js";
 import type { JevAnswers } from "../jev-gate.js";
 
-const answers = (over: Partial<JevAnswers> = {}): JevAnswers => ({
-  next_speaker: { type: "choice", choice: "gaia", confidence: 0.71, probabilities: { gaia: 0.71, drevan: 0.2, nobody: 0.09 } },
-  thread_has_more: { type: "noul", noul: 0.64 },
-  echoing: { type: "noul", noul: 0.18 },
-  ...over,
-});
+const cfg = readEchoBrakeConfig({} as NodeJS.ProcessEnv);
 
 describe("questions", () => {
-  it("next_speaker covers the triad, the human, and nobody; two nouls ride along", () => {
-    const q = buildDirectorJevQuestions();
-    expect(Object.keys(q).sort()).toEqual(["echoing", "next_speaker", "thread_has_more"]);
-    const ns = q.next_speaker as { type: string; criteria: Record<string, string> };
-    expect(ns.type).toBe("choice");
-    expect(Object.keys(ns.criteria)).toEqual([...NEXT_SPEAKERS]);
+  it("echo is its own single noul call; thread_has_more and next_speaker are gone", () => {
+    expect(Object.keys(buildEchoQuestions())).toEqual(["echoing"]);
+    expect((buildEchoQuestions().echoing as { type: string }).type).toBe("noul");
+  });
+  it("the veto asks about ONE companion, in that companion's lane, never bundled", () => {
+    for (const c of ["cypher", "drevan", "gaia"] as const) {
+      const q = buildVetoQuestions(c);
+      expect(Object.keys(q)).toEqual(["has_something_to_add"]);
+      const ins = (q.has_something_to_add as { instructions: string }).instructions;
+      expect(ins).toContain(`Does ${LANES[c].name} have something to add here that the other two have not already said?`);
+      expect(ins).toContain(LANES[c].lane);
+    }
+    expect(LANES.gaia.lane).toMatch(/monastic/);
+    expect(LANES.drevan.lane).toMatch(/emotional mirror/);
+    expect(LANES.cypher.lane).toMatch(/structural/);
   });
 });
 
@@ -47,40 +51,68 @@ describe("state", () => {
   });
 });
 
-describe("parse and compare", () => {
-  it("parses the pick, distribution and nouls; rejects junk", () => {
-    expect(parseDirectorJev(answers())).toEqual({ nextSpeaker: "gaia", confidence: 0.71, probabilities: { gaia: 0.71, drevan: 0.2, nobody: 0.09 }, threadHasMore: 0.64, echoing: 0.18 });
-    expect(parseDirectorJev(answers({ next_speaker: { type: "choice", choice: "sol", confidence: 0.9, probabilities: {} } }))).toBeNull();
-    expect(parseDirectorJev({})).toBeNull();
-    expect(parseDirectorJev(null)).toBeNull();
+describe("knobs (defaults live in code)", () => {
+  it("brake defaults: on, theta 0.5, min turns 4, streak 2; garbage and blanks fall back", () => {
+    expect(cfg).toEqual({ mode: "on", theta: 0.5, minTurns: 4, streak: 2 });
+    expect(readEchoBrakeConfig({ DIRECTOR_ECHO_BRAKE: " SHADOW ", DIRECTOR_ECHO_BRAKE_THETA: "0.7", DIRECTOR_ECHO_BRAKE_MIN_TURNS: "6", DIRECTOR_ECHO_BRAKE_STREAK: "3" } as NodeJS.ProcessEnv))
+      .toEqual({ mode: "shadow", theta: 0.7, minTurns: 6, streak: 3 });
+    expect(readEchoBrakeConfig({ DIRECTOR_ECHO_BRAKE: "off" } as NodeJS.ProcessEnv).mode).toBe("off");
+    expect(readEchoBrakeConfig({ DIRECTOR_ECHO_BRAKE: "wat", DIRECTOR_ECHO_BRAKE_THETA: "", DIRECTOR_ECHO_BRAKE_STREAK: "0" } as NodeJS.ProcessEnv)).toEqual({ mode: "on", theta: 0.5, minTurns: 4, streak: 2 });
   });
-  it("an invite agrees on the same companion; a silence agrees with nobody or human", () => {
-    const v = parseDirectorJev(answers())!;
-    expect(jevAgreesDirector(v, { kind: "invite", companionId: "gaia" })).toBe(true);
-    expect(jevAgreesDirector(v, { kind: "invite", companionId: "drevan" })).toBe(false);
-    expect(jevAgreesDirector(v, { kind: "silence" })).toBe(false);
-    expect(jevAgreesDirector({ ...v, nextSpeaker: "human" }, { kind: "silence" })).toBe(true);
-    expect(jevAgreesDirector({ ...v, nextSpeaker: "nobody" }, { kind: "silence" })).toBe(true);
+  it("veto theta 0.3 and timeout 6000 by default", () => {
+    expect(readVetoTheta({} as NodeJS.ProcessEnv)).toBe(0.3);
+    expect(readVetoTheta({ DIRECTOR_VETO_THETA: "0.4" } as NodeJS.ProcessEnv)).toBe(0.4);
+    expect(directorJevTimeoutMs({} as NodeJS.ProcessEnv)).toBe(6000);
+    expect(directorJevTimeoutMs({ DIRECTOR_JEV_TIMEOUT_MS: "2500" } as NodeJS.ProcessEnv)).toBe(2500);
+    expect(directorJevTimeoutMs({ DIRECTOR_JEV_TIMEOUT_MS: "-1" } as NodeJS.ProcessEnv)).toBe(6000);
   });
-  it("the knob: on unless DIRECTOR_JEV=off", () => {
+  it("DIRECTOR_JEV: on unless off", () => {
     expect(directorJevEnabled({} as NodeJS.ProcessEnv)).toBe(true);
     expect(directorJevEnabled({ DIRECTOR_JEV: " OFF " } as NodeJS.ProcessEnv)).toBe(false);
   });
 });
 
-describe("directorJevEval", () => {
+describe("echoBrakeStep", () => {
+  it("first echo read steers, the second in a row brakes, a clean read resets", () => {
+    const first = echoBrakeStep({ p: 0.8, botTurns: 5, streak: 0, cfg });
+    expect(first).toEqual({ echoing: true, streak: 1, action: "steer" });
+    expect(echoBrakeStep({ p: 0.8, botTurns: 6, streak: first.streak, cfg })).toEqual({ echoing: true, streak: 2, action: "brake" });
+    expect(echoBrakeStep({ p: 0.2, botTurns: 7, streak: 1, cfg })).toEqual({ echoing: false, streak: 0, action: "none" });
+  });
+  it("under min turns or under theta never fires; exactly theta fires", () => {
+    expect(echoBrakeStep({ p: 0.99, botTurns: 3, streak: 1, cfg }).action).toBe("none");
+    expect(echoBrakeStep({ p: 0.49, botTurns: 9, streak: 0, cfg }).action).toBe("none");
+    expect(echoBrakeStep({ p: 0.5, botTurns: 4, streak: 0, cfg }).action).toBe("steer");
+  });
+  it("fails OPEN: no read means no steer, no brake, streak untouched", () => {
+    expect(echoBrakeStep({ p: null, botTurns: 9, streak: 1, cfg })).toEqual({ echoing: false, streak: 1, action: "none" });
+  });
+  it("a streak knob of 1 brakes on the first read", () => {
+    expect(echoBrakeStep({ p: 0.9, botTurns: 9, streak: 0, cfg: { ...cfg, streak: 1 } }).action).toBe("brake");
+  });
+});
+
+describe("the calls", () => {
   const env = { HALSETH_URL: "https://halseth.example/", HALSETH_SECRET: "s" } as NodeJS.ProcessEnv;
-  it("posts to /admin/jev and parses", async () => {
-    const fetchImpl = jest.fn(async (_u: string, _i: RequestInit) => new Response(JSON.stringify({ answers: answers(), latency_ms: 180 }), { status: 200 })) as unknown as typeof fetch;
-    const r = await directorJevEval("STATE", { env, fetchImpl });
-    expect(r).toMatchObject({ ok: true, latency_ms: 180, verdict: { nextSpeaker: "gaia" } });
+  const reply = (answers: JevAnswers) => jest.fn(async (_u: string, _i: RequestInit) => new Response(JSON.stringify({ answers, latency_ms: 180 }), { status: 200 })) as unknown as typeof fetch;
+  it("echo: posts to /admin/jev with ONLY the echo question and returns p", async () => {
+    const fetchImpl = reply({ echoing: { type: "noul", noul: 0.64 } });
+    expect(await directorEchoEval("STATE", { env, fetchImpl })).toMatchObject({ ok: true, p: 0.64, latency_ms: 180 });
     const [url, init] = (fetchImpl as unknown as jest.Mock).mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://halseth.example/admin/jev");
-    expect(JSON.parse(init.body as string).purpose).toMatch(/director shadow/);
+    expect(Object.keys(JSON.parse(init.body as string).questions)).toEqual(["echoing"]);
+  });
+  it("veto: ONE companion per call", async () => {
+    const fetchImpl = reply({ has_something_to_add: { type: "noul", noul: 0.12 } });
+    expect(await directorVetoEval("STATE", "gaia", { env, fetchImpl })).toMatchObject({ ok: true, p: 0.12 });
+    const body = JSON.parse(((fetchImpl as unknown as jest.Mock).mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(Object.keys(body.questions)).toEqual(["has_something_to_add"]);
+    expect(body.questions.has_something_to_add.instructions).toContain("Gaia");
   });
   it("failures are reasons, never throws", async () => {
-    const partial = jest.fn(async () => new Response(JSON.stringify({ answers: { echoing: { type: "noul", noul: 0.5 } } }), { status: 200 })) as unknown as typeof fetch;
-    expect(await directorJevEval("S", { env, fetchImpl: partial })).toMatchObject({ ok: false, reason: "no_next_speaker" });
-    expect(await directorJevEval("S", { env: {} as NodeJS.ProcessEnv })).toMatchObject({ ok: false, reason: "no_halseth_env" });
+    expect(await directorEchoEval("S", { env, fetchImpl: reply({}) })).toMatchObject({ ok: false, reason: "no_echoing" });
+    expect(await directorEchoEval("S", { env: {} as NodeJS.ProcessEnv })).toMatchObject({ ok: false, reason: "no_halseth_env" });
+    const boom = jest.fn(async () => { throw new Error("net"); }) as unknown as typeof fetch;
+    expect((await directorVetoEval("S", "cypher", { env, fetchImpl: boom })).ok).toBe(false);
   });
 });

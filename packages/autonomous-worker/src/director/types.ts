@@ -11,6 +11,8 @@ export interface ConversationState {
   /** ISO timestamp of the last invite issued for this channel (both shadow and live save it, so
    *  shadow pacing mirrors live) -- read by the pacing gate (DIRECTOR_MIN_GAP_MS) in decide(). */
   lastInviteAt: string | null;
+  /** Consecutive echo reads (Jev) at invite time in this thread; two in a row lets the thread rest. Absent = 0. */
+  echoStreak?: number;
 }
 export const TURN_WINDOW = 24;
 export function emptyState(channelId: string, now: string): ConversationState {
