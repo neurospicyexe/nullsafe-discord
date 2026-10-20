@@ -5,6 +5,7 @@ import {
   __resetFactsPickWarnings, type FactsPickRedis,
 } from "../facts-pick.js";
 import { hermesDelta } from "../prompt-assembly.js";
+import { TurnTrace, runWithTurn } from "../turn-telemetry.js";
 
 const env = (o: Record<string, string> = {}) =>
   ({ HALSETH_URL: "https://h.test", HALSETH_SECRET: "s3cret", ...o }) as unknown as NodeJS.ProcessEnv;
@@ -233,5 +234,22 @@ describe("hermesDelta extras.facts", () => {
       expect(empty).toBe(without);
       expect(without.endsWith("Dre are you there\n\n[FRAME]")).toBe(true);
     }
+  });
+});
+
+describe("turn trace accounting (P6)", () => {
+  it("shortlist + Jev time land in the ambient turn's halseth_ms", async () => {
+    const lines: string[] = [];
+    const trace = new TurnTrace({
+      companionId: "drevan", channelId: "c1", messageId: "m1", side: "blue",
+      createdAt: Date.now(), enqueuedAt: Date.now(), startedAt: Date.now(),
+      queueMs: 0, settleMs: 0, gathered: 1, catchup: false, log: (l: string) => lines.push(l), enabled: true,
+    });
+    const inner = fakeFetch({ jevAnswers: { f0: 0.9 } }).fn;
+    const slow = (async (...a: Parameters<typeof fetch>) => { await new Promise(r => setTimeout(r, 40)); return inner(...a); }) as typeof fetch;
+    await runWithTurn(trace, () => pickFacts({ ...base, mode: "shadow", deps: { env: env(), fetch: slow, logWriter } }));
+    trace.finish({ superseded: false });
+    const payload = JSON.parse(lines[0]!.replace(/^\[turn\] /, ""));
+    expect(payload.halseth_ms).toBeGreaterThanOrEqual(70); // two sequential 40ms calls
   });
 });

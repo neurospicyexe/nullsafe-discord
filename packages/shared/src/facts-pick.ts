@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { postJev, type JevQuestion } from "./jev-gate.js";
+import { timeHalseth } from "./turn-telemetry.js";
 
 export type FactsPickMode = "off" | "shadow" | "live";
 const VALID_MODES: readonly FactsPickMode[] = ["off", "shadow", "live"];
@@ -175,7 +176,10 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
   const deps = input.deps ?? {};
   const env = deps.env ?? process.env;
   const now = deps.now ?? Date.now;
-  const doFetch = deps.fetch ?? fetch;
+  // Shortlist and Jev are Halseth round trips on the reply path: count them into the ambient [turn]
+  // line's halseth_ms like every other Halseth call (librarian.ts wraps its _fetch the same way).
+  const rawFetch = deps.fetch ?? fetch;
+  const doFetch = ((...a: Parameters<typeof fetch>) => timeHalseth(() => rawFetch(...a))) as typeof fetch;
   const { companion, channelId, transcriptId, mode } = input;
   const theta = readFactsPickTheta(env, companion);
   const k = readFactsPickK(env);
@@ -197,7 +201,7 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
     purpose: `facts pick for ${companion}`,
     state: `Message to ${cName} from Raziel (or their household):\n\n${msg}`,
     questions: buildFactsQuestions(sl),
-  }, { env, fetchImpl: deps.fetch, timeoutMs: Math.min(4_000, remaining), tag: "[facts-pick]" });
+  }, { env, fetchImpl: doFetch, timeoutMs: Math.min(4_000, remaining), tag: "[facts-pick]" });
   if (!jev.ok) { log.error = `jev_${jev.reason}`; return null; }
 
   // Missing or malformed answers count as 0 (a partial 200 must not read as a verdict).
