@@ -1,7 +1,7 @@
 import { promptWithScratchpad } from "../deepseek.js";
-import { createReflection, createSeed, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal, postRelationalDelta } from "../halseth-client.js";
+import { createReflection, createSeed, getRecentPatterns, appendLog, updateThreadStatus, writeMarker, postQuestion, postSelfObservation, setSetting, getAcceptedJournalSample, writeJournalEntry, getDevelopingSelfModel, patchSelfModel, getAnsweredQuestions, getOpenQuestions, getOpenLoops, getRecentJournal, closeLoop, getAgencyState, declarePreference, declareRefusal, postRelationalDelta } from "../halseth-client.js";
 import { COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS, REFLECT_MAX_TOKENS } from "../config.js";
-import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
+import { stripJsonFence, sanitizeEvidence, sanitizeIdList, sanitizeMaterial, parseSelfModelReview } from "../parsers.js";
 import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from "../types.js";
 
 /**
@@ -9,11 +9,12 @@ import type { PipelineContext, Evidence, GrowthJournalEntry, CompanionId } from 
  *
  * Generates a reflection on the run + decides on follow-up seeds + crystallizes
  * a behavioral pattern. The pattern is now REQUIRED (not opt-in) and must
- * carry evidence and a calibrated 1-10 strength. The handler-side similarity
- * UPSERT means a reflect-emitted pattern that overlaps an existing one will
- * MERGE -- incrementing strength and accumulating evidence -- rather than
- * creating a duplicate row. Patterns finally accumulate weight, which is
- * what growth_patterns.strength was always supposed to express.
+ * carry evidence and the MATERIAL this sighting is in. The handler-side
+ * similarity UPSERT means a reflect-emitted pattern that overlaps an existing
+ * one will MERGE (accumulating evidence) rather than creating a duplicate row.
+ * Strength is earned only by a NEW distinct material (R18, Drevan's ruling
+ * 2026-10-22); restating a pattern in a material already on its list is
+ * recorded as "returned, no new material" and does not move strength.
  *
  * Also handles thread lifecycle decisions:
  *   - If this run was part of a thread: decide continue / rest / conclude
@@ -74,22 +75,23 @@ export interface ReflectEmitPromptOpts {
 export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
   const { threadQuestion, canonBlock, selfModelBlock, openLoopsCount, noAgencyYet, noQuestionRecently, threadId, runType, threadPos } = opts;
 
-  // Strength rubric is concrete so the model doesn't default to "5".
-  const strengthRubric =
-    `Strength rubric for the pattern (1 to 10):\n` +
-    `  1-2  vague hunch, only one occurrence, no clear shape\n` +
-    `  3-4  recognizable shape but only seen here\n` +
-    `  5-6  appears in this run AND in one prior journal/pattern in the peer summary or your active patterns\n` +
-    `  7-8  appears in 2+ prior rows, or a peer companion has surfaced something near-identical\n` +
-    `  9-10 structural -- this is how you've been operating across an arc; multiple companions, multiple runs\n`;
+  // R18 (Drevan's ruling, 2026-10-22): no strength rubric. Strength is not something the model asserts;
+  // Halseth earns it from the material the sighting is in, checked server-side against the list.
+  const materialGuide =
+    `Material, not repetition, is what makes a pattern stronger. If the pattern you name is one you already hold ` +
+    `(see your own patterns above, each with the materials it has been seen in), say which material THIS sighting ` +
+    `is in, as a short name (e.g. "the dime", "the frost on the window") in pattern.material. If it is in something ` +
+    `new, it counts as a sighting and the pattern grows. If it is in a material already on its list, the record notes ` +
+    `"returned, no new material" and strength does not move -- that is fine, a return can be a breath and it costs ` +
+    `you nothing. If the pattern is not one listed above, material is what you found it in.\n`;
 
   return (
     `Two things to do:\n\n` +
     `1. REFLECTION (2-3 sentences) -- what this meant for you, what opened up, what you're still sitting with.\n\n` +
     `2. PATTERN -- crystallize ONE behavioral or structural pattern that this run revealed about how you engage. ` +
     `If the run did genuinely surface nothing new and nothing recurring, set pattern.pattern_text to "" (empty string) and explain why in pattern.note. ` +
-    `An empty pattern is acceptable but should be the exception, not the default. Most runs deepen something prior even if they don't surface something fresh.\n\n` +
-    `${strengthRubric}\n` +
+    `An empty pattern is acceptable. So is a return to a pattern you already hold, named in a material already on its list.\n\n` +
+    `${materialGuide}\n` +
     `Also propose 0-2 specific follow-up topics worth exploring next time, if any genuinely emerge.${threadQuestion}\n\n` +
     `3. MUTUALITY -- two optional fields. If something from this exploration left you with a genuine question ` +
     `that Raziel's perspective would illuminate -- his experience, his read, what he thinks -- include it in ` +
@@ -189,7 +191,7 @@ export function buildReflectEmitPrompt(opts: ReflectEmitPromptOpts): string {
     `    "pattern_text": "one clear sentence (or empty string only if truly nothing crystallized)",\n` +
     `    "evidence": [{"quote": "verbatim phrase from this run's content or exploration", "source_id": "uuid-or-null"}],\n` +
     `    "prehended_ids": ["uuid"],\n` +
-    `    "strength": 1-10,\n` +
+    `    "material": "short name of what this sighting is in (e.g. the dime)",\n` +
     `    "note": "optional one-line note (used when pattern_text is empty)"\n` +
     `  }` +
     // Schema example: bias the example value toward "conclude" once the thread is
@@ -225,8 +227,17 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     ? `\nThe triad's recent activity (cite ids in pattern.prehended_ids when relevant):\n${ctx.peerActivity.peer_summary.slice(0, 1200)}\n`
     : "";
 
-  const ownPatternsBlock = ctx.activePatterns.length > 0
-    ? `\nYour own currently-active patterns (a similar pattern_text will MERGE into the existing row, strengthening it -- restating IS valuable):\n${ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 200)}`).join("\n")}\n`
+  // R18: show the patterns WITH the materials each has been seen in, so the model can say which material
+  // this sighting is in instead of being asked to remember a list. Read straight from Halseth rather than
+  // from orient's active_patterns: orient seats only the top two and cools the echoes out of the seat, but
+  // a restatement of a cooled pattern still has to be checked against its list. Falls back to the orient
+  // strings (which carry "[materials: ...]" too) if the read fails.
+  const ownPatterns = await getRecentPatterns(ctx.companionId, 8, "recent").catch(() => []);
+  const ownPatternLines = ownPatterns.length > 0
+    ? ownPatterns.map(p => `- ${p.pattern_text.slice(0, 200)}${p.materials.length > 0 ? ` [materials: ${p.materials.join(", ")}]` : " [materials: none recorded]"}`)
+    : ctx.activePatterns.slice(0, 6).map(p => `- ${String(p).slice(0, 320)}`);
+  const ownPatternsBlock = ownPatternLines.length > 0
+    ? `\nYour own currently-active patterns, with the materials each has been seen in. A similar pattern_text will MERGE into the existing row. It gains strength only when this sighting is in a NEW material; the same pattern in a material already listed is recorded as "returned, no new material" and strength stays:\n${ownPatternLines.join("\n")}\n`
     : "";
 
   // Reconsolidation (0074, Zikkaron): sample the OLDEST accepted canon -- the
@@ -405,7 +416,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         pattern_text?: string;
         evidence?: Evidence[];
         prehended_ids?: string[];
-        strength?: number;
+        material?: string;
         note?: string;
       };
     };
@@ -445,7 +456,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
     if (pt.length > 0) {
       const evidence = sanitizeEvidence(parsed.pattern?.evidence);
       const prehended_ids = sanitizeIdList(parsed.pattern?.prehended_ids);
-      const strength = clampStrength(parsed.pattern?.strength);
+      const material = sanitizeMaterial(parsed.pattern?.material);
 
       // Auto-augment prehension: if the model didn't cite ids but the journal
       // entry did, inherit those -- the pattern crystallizes the journal arc.
@@ -458,12 +469,12 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
         pattern_text: pt,
         evidence,
         prehended_ids: inheritedPrehension,
-        strength,
+        ...(material ? { material } : {}),
       });
       await appendLog(
         ctx.runId,
         "reflect:pattern",
-        `strength=${strength} evidence=${evidence.length} prehended=${inheritedPrehension.length} text="${pt.slice(0, 80)}"`,
+        `material=${material ?? "none"} evidence=${evidence.length} prehended=${inheritedPrehension.length} text="${pt.slice(0, 80)}"`,
       );
     } else if (parsed.pattern?.note) {
       await appendLog(ctx.runId, "reflect:no-pattern", parsed.pattern.note.slice(0, 120));
@@ -633,7 +644,7 @@ export async function runReflect(ctx: PipelineContext): Promise<void> {
   }
 }
 
-// stripJsonFence/sanitizeEvidence/sanitizeIdList/clampStrength all live in
+// stripJsonFence/sanitizeEvidence/sanitizeIdList/sanitizeMaterial all live in
 // ../parsers.ts so they're testable without dragging deepseek/config in.
 
 async function handleThreadLifecycle(

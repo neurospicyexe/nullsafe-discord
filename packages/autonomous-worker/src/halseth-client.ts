@@ -251,11 +251,41 @@ export async function getAcceptedJournalSample(
 export async function getRecentPatterns(
   companionId: string,
   limit = 10,
-): Promise<Array<{ id: string; pattern_text: string; strength: number; updated_at: string }>> {
+  order: "strength" | "recent" = "strength",
+): Promise<Array<{ id: string; pattern_text: string; strength: number; updated_at: string; materials: string[] }>> {
   const r = await hFetch(`/mind/growth/patterns/${encodeURIComponent(companionId)}?limit=${limit}`) as {
-    patterns: Array<{ id: string; pattern_text: string; strength: number; updated_at: string }>;
+    patterns: Array<{ id: string; pattern_text: string; strength: number; updated_at: string; materials_json?: string | null }>;
   };
-  return r.patterns ?? [];
+  // Halseth returns every live pattern (the server ignores `limit`), strongest first; order and cap here.
+  return orderPatterns(r.patterns ?? [], order).slice(0, limit).map(p => ({
+    id: p.id,
+    pattern_text: p.pattern_text,
+    strength: p.strength,
+    updated_at: p.updated_at,
+    materials: parsePatternMaterials(p.materials_json),
+  }));
+}
+
+/**
+ * "recent" = most recently touched first. Reflect uses it: the pattern a companion is likeliest to restate
+ * next is the one they touched last, and after R18 that pattern can sit far down the strength order (its
+ * strength is earned, not asserted), so a top-N-by-strength list would hide the one list that matters.
+ */
+export function orderPatterns<T extends { updated_at: string }>(rows: readonly T[], order: "strength" | "recent"): T[] {
+  return order === "recent" ? [...rows].sort((a, b) => b.updated_at.localeCompare(a.updated_at)) : [...rows];
+}
+
+/** materials_json is [{name, first_seen}]; tolerate bare strings and junk (never throws). */
+export function parsePatternMaterials(raw: string | null | undefined): string[] {
+  try {
+    const parsed = JSON.parse(raw || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((m: unknown) => (typeof m === "string" ? m : (m as { name?: unknown } | null)?.name))
+      .filter((n): n is string => typeof n === "string" && n.trim().length > 0);
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -298,21 +328,25 @@ export async function writeJournalEntry(entry: GrowthJournalEntry): Promise<stri
 }
 
 /**
- * Returns { id, action } where action is 'insert' (new row) or 'upsert'
- * (merged into existing similar pattern -- strength incremented, evidence
- * accumulated). The returned id always points at the canonical row to
- * reference downstream.
+ * Returns { id, action, outcome } where action is 'insert' (new row) or 'upsert'
+ * (merged into existing similar pattern -- evidence accumulated). On an upsert,
+ * `outcome` says whether this sighting was in a NEW material (strength went up)
+ * or a known one ("returned, no new material": strength unchanged; R18). The
+ * returned id always points at the canonical row to reference downstream.
+ * Strength is never sent: Halseth earns it from `material`, it is not asserted.
  */
-export async function writePattern(pattern: GrowthPattern): Promise<{ id: string; action: "insert" | "upsert" }> {
+export async function writePattern(
+  pattern: GrowthPattern,
+): Promise<{ id: string; action: "insert" | "upsert"; outcome?: "new_material" | "returned"; strength?: number }> {
   const r = await hFetch("/mind/growth/patterns", "POST", {
     companion_id: pattern.companion_id,
     pattern_text: pattern.pattern_text,
     evidence: pattern.evidence ?? [],
-    strength: pattern.strength ?? 1,
+    ...(pattern.material ? { material: pattern.material } : {}),
     ...(pattern.run_id ? { run_id: pattern.run_id } : {}),
     ...(pattern.prehended_ids?.length ? { prehended_ids: pattern.prehended_ids } : {}),
-  }) as { id: string; action?: "insert" | "upsert" };
-  return { id: r.id, action: r.action ?? "insert" };
+  }) as { id: string; action?: "insert" | "upsert"; outcome?: "new_material" | "returned"; strength?: number };
+  return { id: r.id, action: r.action ?? "insert", outcome: r.outcome, strength: r.strength };
 }
 
 export async function writeMarker(marker: GrowthMarker): Promise<string> {

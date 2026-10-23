@@ -80,6 +80,19 @@ export function clampStrength(n: unknown): number {
   return Math.max(1, Math.min(10, Math.round(n)));
 }
 
+/**
+ * R18: the material a pattern sighting is in, as the model named it. Short plain text or null -- Halseth
+ * normalises and compares it server-side, so this only has to keep junk (objects, essays, placeholders) out.
+ */
+export function sanitizeMaterial(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const t = raw.replace(/\s+/g, " ").trim().slice(0, 60);
+  if (t.length < 2) return null;
+  // the schema placeholder, echoed back verbatim
+  if (/^short name of what this sighting is in/i.test(t)) return null;
+  return t;
+}
+
 export interface SelfModelVerdict {
   id: string;
   action: "confirm" | "revise" | "retire";

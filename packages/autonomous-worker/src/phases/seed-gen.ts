@@ -76,7 +76,7 @@ export async function runSeedGeneration(companionId: CompanionId): Promise<void>
 
   // Active patterns as negative signal: seed AWAY from what's already named.
   const avoidText = (activePatterns as string[]).length > 0
-    ? `Patterns already recognized (do NOT re-derive or repackage these):\n${(activePatterns as string[]).join("\n").slice(0, 300)}\n\n`
+    ? `Patterns already recognized, each with the materials it has been seen in (do NOT re-derive or repackage these; restating one earns nothing -- if you go back to one, go in through a material not on its list):\n${(activePatterns as string[]).join("\n").slice(0, 600)}\n\n`
     : "";
 
   let contextBlock: string;

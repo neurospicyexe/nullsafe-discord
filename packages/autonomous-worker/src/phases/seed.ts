@@ -397,9 +397,11 @@ async function selfGenerate(ctx: PipelineContext): Promise<Seed> {
   const recentFeelings = ctx.recentFeelings.filter(f  => new Date(f.created_at).getTime()  >= since7d);
   const sourceType = decideSeedSource(recentNotes.length, recentFeelings.length);
 
-  // Active patterns are a NEGATIVE signal only -- avoid re-deriving what's already named.
+  // Active patterns are a NEGATIVE signal only -- avoid re-deriving what's already named. Agrees with
+  // reflect.ts (R18): a pattern gains strength from a NEW material, never from being restated, so going
+  // back to one only makes sense through a material not already on its list.
   const avoidText = ctx.activePatterns.length > 0
-    ? `Patterns already recognized (do NOT re-derive or repackage these):\n${ctx.activePatterns.join("\n").slice(0, 300)}\n\n`
+    ? `Patterns already recognized, each with the materials it has been seen in (do NOT re-derive or repackage these; restating one earns nothing -- if you go back to one, go in through a material not on its list):\n${ctx.activePatterns.join("\n").slice(0, 600)}\n\n`
     : "";
 
   let contextBlock: string;

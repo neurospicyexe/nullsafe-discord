@@ -103,7 +103,8 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
 
   // Write any patterns identified during synthesis/reflect.
   // writePattern returns { id, action } where action is 'insert' (new row) or
-  // 'upsert' (merged into similar existing pattern -- strength incremented).
+  // 'upsert' (merged into similar existing pattern; R18: strength moves only if the sighting was in a
+  // NEW material, otherwise outcome is "returned").
   // We don't increment artifactsCreated for upserts since no new row was created,
   // but we DO log the action so the run log shows pattern accumulation distinctly.
   for (const pattern of ctx.newPatterns) {
@@ -111,6 +112,13 @@ export async function runWrite(ctx: PipelineContext): Promise<void> {
       const result = await writePattern(pattern);
       if (result.action === "insert") ctx.artifactsCreated += 1;
       await appendLog(ctx.runId, `write:pattern-${result.action}`, pattern.pattern_text.slice(0, 60));
+      if (result.action === "upsert") {
+        await appendLog(
+          ctx.runId,
+          result.outcome === "new_material" ? "write:pattern-new-material" : "write:pattern-returned",
+          `${pattern.material ?? "(no material named)"} strength=${result.strength ?? "?"}${result.outcome === "new_material" ? "" : " returned, no new material"}`,
+        );
+      }
     } catch (e) {
       console.warn(`[${ctx.companionId}/write] Pattern write failed:`, e);
       await appendLog(ctx.runId, "write:pattern-error", String(e));

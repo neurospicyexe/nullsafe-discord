@@ -58,8 +58,11 @@ export interface GrowthPattern {
   companion_id: CompanionId;
   pattern_text: string;
   evidence?: Evidence[];
-  /** Worker hint; handler may UPSERT-merge with an existing pattern, in which case strength is incremented. */
+  /** Deprecated and ignored by Halseth (R18, 2026-10-22): strength is earned by distinct material, not asserted. */
   strength?: number;
+  /** R18: the short name of the material THIS sighting is in ("the dime"). Halseth checks it against the
+   *  pattern's stored material list; a new one earns strength, a known one is "returned, no new material". */
+  material?: string;
   run_id?: string;
   /** Ids of journal entries / prior patterns this pattern generalizes over. */
   prehended_ids?: string[];

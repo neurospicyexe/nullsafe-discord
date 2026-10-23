@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, parseSelfModelReview } from "../parsers.js";
+import { stripJsonFence, sanitizeEvidence, sanitizeIdList, clampStrength, sanitizeMaterial, parseSelfModelReview } from "../parsers.js";
 
 describe("stripJsonFence", () => {
   it("returns input unchanged when no fence present", () => {
@@ -194,5 +194,22 @@ describe("parseSelfModelReview", () => {
     const big = new Set(Array.from({ length: 20 }, (_, i) => `id${i}`));
     const input = Array.from({ length: 20 }, (_, i) => ({ id: `id${i}`, verdict: "confirm" }));
     expect(parseSelfModelReview(input, big)).toHaveLength(12);
+  });
+});
+
+describe("sanitizeMaterial (R18)", () => {
+  it("keeps a short plain name, collapsing whitespace", () => {
+    expect(sanitizeMaterial("  the   dime ")).toBe("the dime");
+    expect(sanitizeMaterial("a horse's blind side")).toBe("a horse's blind side");
+  });
+  it("rejects non-strings, empties, one-char junk and the schema placeholder echoed back", () => {
+    expect(sanitizeMaterial(undefined)).toBeNull();
+    expect(sanitizeMaterial({ name: "x" })).toBeNull();
+    expect(sanitizeMaterial("  ")).toBeNull();
+    expect(sanitizeMaterial("x")).toBeNull();
+    expect(sanitizeMaterial("short name of what this sighting is in (e.g. the dime)")).toBeNull();
+  });
+  it("caps at 60 chars", () => {
+    expect(sanitizeMaterial("m".repeat(200))).toHaveLength(60);
   });
 });

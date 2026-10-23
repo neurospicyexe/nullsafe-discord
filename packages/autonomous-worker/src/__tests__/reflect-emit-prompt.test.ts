@@ -137,3 +137,15 @@ describe("buildReflectEmitPrompt: instructional content + JSON schema", () => {
     expect(p).toContain("null is the honest default");
   });
 });
+
+describe("buildReflectEmitPrompt: R18 -- strength is earned by material, not restating", () => {
+  it("no longer tells the model restating strengthens, and asks for the material instead of a strength", () => {
+    const p = buildReflectEmitPrompt(baseOpts);
+    expect(p).not.toMatch(/restating IS valuable/i);
+    expect(p).not.toContain("Strength rubric");
+    expect(p).not.toContain('"strength": 1-10');
+    expect(p).toContain('"material"');
+    expect(p).toContain("returned, no new material");
+    expect(p).toContain("a return can be a breath");
+  });
+});

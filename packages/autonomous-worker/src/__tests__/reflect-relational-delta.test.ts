@@ -34,6 +34,7 @@ vi.mock("../halseth-client.js", () => ({
   getOpenQuestions: vi.fn(async () => []),
   getOpenLoops: vi.fn(async () => []),
   getRecentJournal: vi.fn(async () => []),
+  getRecentPatterns: vi.fn(async () => []),
   closeLoop: vi.fn(async () => true),
   getAgencyState: vi.fn(async () => ({ preferences: [], refusals: [] })),
   declarePreference: vi.fn(async () => ({ id: "p1" })),
