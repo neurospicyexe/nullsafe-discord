@@ -6,8 +6,8 @@
 // glued INSIDE an English word -- a weights-level defect Z.ai has acknowledged (zai-org/GLM-5
 // issues #142, #163; reproduces on Z.ai direct, so no provider fixes it) that read to Raziel as
 // "nonsense words". Measured from Drevan's Hermes state.db: 5 of 69 GLM replies over the 10-10/11
-// trial and both of 10-23's; 4 of 140 replays at the sampling Hermes was actually sending
-// (provider default, top_p 1.0), 0 of 220 at Z.ai's published 1.0/0.95. Sampling is fixed in the
+// trial and both of 10-23's; 4 of 80 replays at the sampling Hermes was actually sending
+// (none at all, so DeepInfra's own default; not Z.ai's), 0 of 220 at Z.ai's published 1.0/0.95. Sampling is fixed in the
 // Hermes profile (`providers.<x>.extra_body`); this module is the second half: the floor for what
 // the sampler still lets through.
 //
@@ -24,7 +24,12 @@
 // wrong word, and a rewrite layer on a companion's own text is the thing the sampling spec
 // rejected (docs/specs/hermes-sampling-penalties.md). No silence: a human waiting hears the second
 // attempt even if it also bleeds. Scripts the inbound message itself contains are exempt, so a
-// quoted title or a name in another alphabet is never flagged.
+// quoted title or a name in another alphabet is never flagged. The exemption reads the INBOUND text
+// only: a foreign-script title pasted a few turns earlier and echoed now costs one regenerate (and,
+// on the reply path, one transcript bump) per echoing reply; a `second_bleed=1` line is read as
+// "quoted script in the window" before it is read as the model. In direct (non-Hermes) mode the
+// handler's regenerate carries no sessionId, so the wrapper may regenerate once more on top of it
+// (three calls on one bleed at most); direct mode is dormant for all three bots.
 //
 // Kill switch: SCRIPT_BLEED_GUARD (default on; `off`/`0`/`false`/`no`). pm2-allowlisted.
 
