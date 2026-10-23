@@ -856,6 +856,8 @@ export interface AdapterKeys {
 // clobber the relay. Dormant when false.
 export interface AdapterUrls { lmstudio?: string; hermes?: string; forceHermes?: boolean }
 
+import { guardScriptBleed } from "./script-bleed.js";
+
 // Build a single-provider adapter, or null when its credential / URL is absent.
 function buildAdapter(
   provider: InferenceProvider,
@@ -902,7 +904,23 @@ const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   { provider: "lmstudio", model: "qwen/qwen3.5-9b" },
 ];
 
+// Script bleed guard (2026-10-22, script-bleed.ts): every adapter a bot builds here is wrapped, so
+// the fresh-session surfaces (heartbeat, med reminder, notes poll, seeds) regenerate once when a
+// reply carries letters of a script the room did not put there (GLM 5.3 Flash's glued Chinese
+// characters). Session-pinned reply turns pass through: bot-message-handler.ts rotates the
+// transcript first, then regenerates. `cacheKey` is the companion id at every bot call site.
 export function createAdapter(
+  provider: InferenceProvider,
+  model: string,
+  keys: AdapterKeys,
+  urls: AdapterUrls,
+  fetchFn?: typeof fetch,
+  cacheKey?: string,
+): InferenceAdapter {
+  return guardScriptBleed(createAdapterUnguarded(provider, model, keys, urls, fetchFn, cacheKey), cacheKey ?? "bot");
+}
+
+export function createAdapterUnguarded(
   provider: InferenceProvider,
   model: string,
   keys: AdapterKeys,

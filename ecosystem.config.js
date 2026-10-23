@@ -330,6 +330,10 @@ const shared = {
   // switches, both default ON; off/0/false/no turns each off. CROSS_ROOM was never listed, so its
   // switch could not reach the bots until now. Listed per the standing rule above.
   SPEAKER_FRAME:               process.env.SPEAKER_FRAME,
+  // SCRIPT_BLEED_GUARD (2026-10-22, script-bleed.ts): a reply carrying letters of a script the room did
+  // not put there (GLM 5.3 Flash's glued Chinese characters) is regenerated once; the reply path rotates
+  // the transcript first. Default ON; off/0/false/no turns it off. Listed per the standing rule above.
+  SCRIPT_BLEED_GUARD:          process.env.SCRIPT_BLEED_GUARD,
   // PK_PROFILE (2026-10-18, speaker-frame.ts pkProfileOn): the current PluralKit speaker's public profile
   // rides above the frame in guild turns. Default ON; off/0/false/no removes it. Listed per the standing rule above.
   PK_PROFILE:                  process.env.PK_PROFILE,

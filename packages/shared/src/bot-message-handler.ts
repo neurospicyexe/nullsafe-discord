@@ -104,6 +104,7 @@ import { ledgerDistillEnabled, preflightLedgerBody, companionDisplayName } from 
 import type { LedgerEntryInput } from "./librarian.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
+import { detectScriptBleed, regenerateAfterBleed, scriptBleedGuardOn } from "./script-bleed.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate } from "./writeback-gate.js";
 import { buildWritebackSpeaker, judgeExchangeFor, withAttachedLabel } from "./memory.js";
@@ -3184,6 +3185,39 @@ ${widened}`;
     // marker syntax instead of the real content.
     const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
     response = spineCleanedResponse;
+
+    // Script bleed (2026-10-22, script-bleed.ts): GLM 5.3 Flash glues a Chinese character or two
+    // inside an English word now and then (a weights defect, zai-org/GLM-5 #142; sampling fixed in
+    // the Hermes profile, this is the floor). A bleeding reply self-primes the gateway transcript
+    // (the model copies its own slip), so: rotate the transcript FIRST (the rotate-on-retract bump),
+    // regenerate once on the fresh id with the whole window re-sent, post the result either way.
+    // Before seat repair so the repaired text is the final one. Scripts the inbound message carries
+    // are exempt (a quoted title is not a bleed). Kill switch SCRIPT_BLEED_GUARD.
+    if (scriptBleedGuardOn()) {
+      const bleed = detectScriptBleed(response, effectiveContent);
+      if (bleed.bleed) {
+        const regen = await regenerateAfterBleed({
+          companionId: COMPANION_ID, channelId: message.channelId, first: response, bleed, allow: effectiveContent,
+          bump: () => bumpsFor(librarian).bump(message.channelId),
+          regenerate: async (bumpN) => {
+            if (inferenceMode !== "hermes") {
+              return adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+            }
+            const fresh = hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), bumpN);
+            // Fresh transcript: nothing delivered yet, so the delta re-sends the whole window (mark 0).
+            const full = hermesDelta(liveHistory, 0, Date.now(), allAddressed.includes(COMPANION_ID),
+              calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, frame: frameTail ?? undefined });
+            const out = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, full.messages, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), fresh.sessionId, fresh.sessionKey));
+            if (out !== null) {
+              hermesLastSessionId.set(message.channelId, fresh.sessionId);
+              if (full.deliveredThroughTs !== null) hermesDeliveredMark.set(message.channelId, full.deliveredThroughTs);
+            }
+            return out;
+          },
+        });
+        response = regen.text;
+      }
+    }
 
     // Pre-send seat repair (2026-10-11): a reply that calls someone by this companion's own name has
     // the name cut before it reaches the room (voice-markers.ts repairMisseated). The post-send
