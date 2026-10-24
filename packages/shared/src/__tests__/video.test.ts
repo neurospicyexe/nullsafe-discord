@@ -179,6 +179,17 @@ describe("sampleTranscript -- fit the budget without losing the arc", () => {
     expect(r.kept_ratio).toBeLessThan(1);
   });
 
+  it("keeps as much as the budget allows, not every k-th (1.6x over keeps ~60%, not 50%)", () => {
+    // 40 equal paragraphs of ~250 chars = ~10k; budget 6.6k -> rate ~0.6 after the marker reserve.
+    const src = Array.from({ length: 40 }, (_, i) => `[${formatTimestamp(i * 40)}] ${"word ".repeat(49).trim()} p${i}.`).join("\n");
+    const r = sampleTranscript(src, 6_600);
+    expect(r.text.length).toBeLessThanOrEqual(6_600);
+    expect(r.kept_ratio).toBeGreaterThanOrEqual(0.55);
+    // First and last paragraphs both present: the arc, not the head.
+    expect(r.text).toContain(" p0.");
+    expect(r.text).toMatch(/ p3[5-9]\./);
+  });
+
   it("is honest about a hard cut when a single paragraph is bigger than the budget", () => {
     const src = `[0:00] ${"a".repeat(5000)}\n[0:40] ${"b".repeat(5000)}`;
     const r = sampleTranscript(src, 3000);

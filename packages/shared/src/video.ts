@@ -259,7 +259,13 @@ export function sampleTranscript(transcript: string, maxChars: number): SampledT
   const bodyChars = body.reduce((n, l) => n + l.length + 1, 0);
   // ~30 chars per gap marker; reserve for one marker per kept paragraph (worst case).
   const budget = Math.max(maxChars - headerChars - 400, Math.floor(maxChars * 0.5));
-  const stride = Math.max(2, Math.ceil(bodyChars / Math.max(budget, 1)));
+  // A fractional keep RATE, not an integer stride: an 18-minute video at 1.6x the budget keeps ~60%, where
+  // "every 2nd paragraph" threw away half (VPS probe 2026-10-24: kept_ratio 0.52 with room for 0.60).
+  // An accumulator (Bresenham) starting at 1 keeps the opening paragraph and then one every 1/rate, which
+  // spreads the kept ones evenly across the runtime. Capped at 0.97 so the gap markers fit; the trim below
+  // guarantees the cap.
+  const rate = Math.min(0.97, budget / Math.max(bodyChars, 1));
+  let acc = 1;
 
   const out: string[] = [];
   let bodyIdx = 0;
@@ -276,7 +282,9 @@ export function sampleTranscript(transcript: string, maxChars: number): SampledT
   };
   for (const line of lines) {
     if (isHeader(line)) { closeGap(); out.push(line); continue; }
-    const keep = bodyIdx % stride === 0;
+    const keep = acc >= 1;
+    if (keep) acc -= 1;
+    acc += rate;
     bodyIdx++;
     if (keep) {
       closeGap();
@@ -299,6 +307,11 @@ export function sampleTranscript(transcript: string, maxChars: number): SampledT
       if (n + l.length + 1 > maxChars - 60) break;
       kept.push(l);
       n += l.length + 1;
+    }
+    if (kept.length === 0) {
+      // Even the first paragraph is bigger than the budget: hand over its head rather than nothing.
+      const first = out.find(l => !isHeader(l)) ?? out[0] ?? "";
+      kept.push(first.slice(0, Math.max(0, maxChars - 60)).trimEnd() + "…");
     }
     const lastStamp = [...kept].reverse().map(stampOf).find(Boolean) ?? null;
     kept.push(lastStamp ? `[… transcript cut after ${lastStamp} …]` : "[… transcript cut …]");
