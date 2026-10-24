@@ -1337,7 +1337,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // turn as a [WATCHED] block (the [HEARD] pattern), the row lands in media_experiences as a video, and the
     // reply is saved as the reaction. Checked BEFORE the watchalong block: its "watch <title>" alias would
     // otherwise open a playhead session on a URL (the live co-watch path is `movie start <url>`, still).
+    // `pendingMediaId` is the Halseth row for the reaction PATCH at the end. `mediaPipelineRan` is the
+    // gate every later block reads: the two are NOT the same thing. postExperience returns null on a
+    // Halseth hiccup and both pipelines treat that as non-fatal, so a watch that read the whole video
+    // could otherwise fall through to the movie alias, the usage guard and the [NOT WATCHED] backstop.
     let pendingMediaId: string | null = null;
+    let mediaPipelineRan = false;
     if (attribution.isOwner) {
       const videoMatch = effectiveContent.match(VIDEO_TRIGGER);
       if (videoMatch) {
@@ -1361,6 +1366,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             transcribe: voiceClient ? (audio, name, timeoutMs) => voiceClient.transcribe(audio, name, timeoutMs) : null,
           });
           pendingMediaId = watched.experienceId;
+          mediaPipelineRan = true;
           console.log(`[${COMPANION_ID}] watched ${watched.meta.video_id ?? videoUrl} source=${watched.source} chars=${watched.transcript_chars} sampled=${watched.sampled ? 1 : 0} experience=${watched.experienceId ?? "none"}`);
           effectiveContent = `${effectiveContent.trim()}\n\n[WATCHED -- the video's transcript and description were fetched; you have read the whole thing. Respond to what it actually says.]\n${watched.watchedBlock}`;
           // STM gets a one-line past-tense marker instead of the transcript -- see the stmContent
@@ -1383,7 +1389,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // gate: these blocks sit above all of them, and the STT/vision passes above ignore text files, so
     // an .srt reaches this point untouched. Owner `movie start` messages only -- no other message ever
     // has its text attachments fetched.
-    if (attribution.isOwner && MOVIE_TRIGGER && pendingMediaId === null) {
+    if (attribution.isOwner && MOVIE_TRIGGER && !mediaPipelineRan) {
       const m = effectiveContent.match(MOVIE_TRIGGER);
       if (m) {
         // Group 4 is the "watch <title>" alias (command-triggers.ts): a start with that title.
@@ -1464,7 +1470,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // full context assembly (direct inference; see the pendingMediaId branch at
     // the inference step -- a listen is answered solo by the bot that heard it).
     // (The sibling-silence check for listen AND watch sits above the watch block.)
-    if (attribution.isOwner && pendingMediaId === null) {
+    if (attribution.isOwner && !mediaPipelineRan) {
       const listenMatch = effectiveContent.match(LISTEN_TRIGGER);
       if (listenMatch) {
         if (!isListenEnabled()) {
@@ -1485,6 +1491,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
             halsethSecret: cfg.halsethSecret,
           });
           pendingMediaId = listen.experienceId;
+          mediaPipelineRan = true;
           effectiveContent = `${effectiveContent.trim()}\n\n[HEARD -- the track was downloaded and analyzed; you actually listened to it. Respond to the music itself.]\n${listen.heardBlock}`;
           // STM gets a short past-tense marker instead of the full block above -- see the
           // stmContent divergence note near the top of this handler.
@@ -1502,10 +1509,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
 
     // Malformed-command guard: command-shaped owner message that none of the
     // deterministic triggers above matched (valid model/club returned, valid
-    // listen set pendingMediaId). It must get a literal usage reply, NEVER fall
+    // listen/watch set mediaPipelineRan). It must get a literal usage reply, NEVER fall
     // through to inference -- the model narrates fake success (2026-06-11
     // club-vote incident; 2026-06-12 "dre: listen" miss).
-    if (attribution.isOwner && pendingMediaId === null && COMMAND_GUARD?.test(effectiveContent)) {
+    if (attribution.isOwner && !mediaPipelineRan && COMMAND_GUARD?.test(effectiveContent)) {
       console.error(`[${COMPANION_ID}] malformed command, sent usage: ${effectiveContent.slice(0, 120)}`);
       await (message.channel as TextChannel).send(commandUsage(COMPANION_ID));
       return;
@@ -1516,7 +1523,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // fake listen (2026-06-12: "Dre listen: <url>" missed the trigger and Drevan described
     // a track he never heard, then couldn't name it). Appended to the MESSAGE (like
     // [HEARD]) so every swarm companion sees it, not just the packet sender.
-    if (attribution.isOwner && pendingMediaId === null
+    if (attribution.isOwner && !mediaPipelineRan
         && /https?:\/\//i.test(effectiveContent) && /\blisten\b/i.test(effectiveContent)) {
       const p = COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID;
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
@@ -1527,7 +1534,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // exists for: a video link shared in conversation, and the companion talked about it as if it had seen
     // it. The listen backstop above needs the word "listen"; a YouTube link needs no word at all -- the
     // model will narrate a plausible video from the URL alone. Appended to the MESSAGE, like [HEARD].
-    else if (attribution.isOwner && pendingMediaId === null && isYouTubeUrl(effectiveContent)) {
+    else if (attribution.isOwner && !mediaPipelineRan && isYouTubeUrl(effectiveContent)) {
       const p = COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID;
       effectiveContent = `${effectiveContent.trim()}\n\n${notWatchedBlock(p)}`;
       stmContent = `${stmContent.trim()}\n${notWatchedStmMarker()}`;
