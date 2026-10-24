@@ -79,7 +79,8 @@ import {
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
   visionEnabled, pickImageAttachments, seenBlock, seenStmMarker, type SeenImage,
   resolveSeenImages, sharedVisionCache, visionTurnBudgetMs, visionPrefetchEnabled, type VisionRedis,
-  commandUsage, COMMAND_PREFIX, listenCommandTarget,
+  commandUsage, COMMAND_PREFIX, mediaCommandTarget, buildCommandTriggers, COMPANION_ALIASES,
+  isWatchEnabled, runWatchPipeline, watchedStmMarker, notWatchedStmMarker, notWatchedBlock, isYouTubeUrl,
   handleClubCommand,
   handleLogCommand,
   handleIntoCommand,
@@ -383,6 +384,9 @@ export interface MessageHandlerDeps {
   MODEL_SWITCH_LIST_INTRO: string;
   MODEL_SWITCH_SUCCESS: (label: string) => string;
   LISTEN_TRIGGER: RegExp;
+  /** Watch (2026-10-23). Optional in the wire; when absent the handler builds it from COMPANION_ALIASES
+   *  so a bot that forgot to pass it still answers `watch <url>` instead of narrating a watch. */
+  VIDEO_TRIGGER?: RegExp;
   CLUB_TRIGGER: RegExp;
   SEARCH_TRIGGER?: RegExp;
   IMAGINE_TRIGGER?: RegExp;
@@ -530,6 +534,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     DISTILLATION_PROMPT, DISTILLATION_INTERVAL, PULSE_INTERVAL,
     AUDIT_TRIGGERS, AUDIT_MODE_INJECTION,
   } = deps;
+  // Watch (2026-10-23): wired like the others, with a fallback built from the alias table so a missing wire
+  // degrades to "still a command", never to the model narrating a watch it did not do.
+  const VIDEO_TRIGGER: RegExp = deps.VIDEO_TRIGGER ?? buildCommandTriggers(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]).video;
   // Burst settle (2026-10-10). Empty / 0 when settle is off, a command, a bot post or a pass turn.
   const settleMs = deps.settleMs ?? 0;
   const burst = deps.burst ?? [];
@@ -1003,9 +1010,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // Same reasoning for the watchalong triggers (2026-10-02): neither is in the guard (a conversational
     // "cy: movie night tonight?" / "dre: at least we tried" must stay conversation), so the real forms are
     // tested here directly.
+    // `watch <url>` (2026-10-23) is in the same position: `watch` stays out of the guard, the URL form is
+    // tested here directly.
     const isOwnerCommand = attribution.isOwner
       && (!!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
-        || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent));
+        || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent)
+        || VIDEO_TRIGGER.test(effectiveContent));
     if (!isOwnerCommand) {
       stmStore.appendInboundOnce(message.channelId, message.id, {
         role: "user",
@@ -1310,6 +1320,61 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Explicit listen/watch command aimed at a DIFFERENT companion: stay out of it.
+    // When the owner tells one companion to listen or watch, only that companion runs the
+    // pipeline and reacts -- siblings must not pop off (2026-06-13: the listener's
+    // late-arriving [HEARD] packet lost Brain's dedup to siblings' bare packets, so
+    // the one told to listen went mute while a blind sibling answered). Placed
+    // before every media trigger / guard / [NOT HEARD] block so siblings return
+    // here and never reach inference at all.
+    if (attribution.isOwner) {
+      const mediaTarget = mediaCommandTarget(effectiveContent);
+      if (mediaTarget !== null && mediaTarget.companion !== COMPANION_ID) return;
+    }
+
+    // Owner watch command (2026-10-23): "<prefix>: watch <url>" / "<prefix>: video <url>". The one-shot
+    // read: yt-dlp pulls the caption track + the info dict (no media download), the transcript rides this
+    // turn as a [WATCHED] block (the [HEARD] pattern), the row lands in media_experiences as a video, and the
+    // reply is saved as the reaction. Checked BEFORE the watchalong block: its "watch <title>" alias would
+    // otherwise open a playhead session on a URL (the live co-watch path is `movie start <url>`, still).
+    let pendingMediaId: string | null = null;
+    if (attribution.isOwner) {
+      const videoMatch = effectiveContent.match(VIDEO_TRIGGER);
+      if (videoMatch) {
+        const ch = message.channel as TextChannel;
+        if (!isWatchEnabled()) {
+          await ch.send("the watch pipeline is switched off on this box (MEDIA_WATCH_ENABLED).");
+          return;
+        }
+        const videoUrl = videoMatch[1]!.trim().replace(/^<|>$/g, ""); // Discord <url> unwrap
+        if (!/^https?:\/\//i.test(videoUrl)) {
+          await ch.send("give me an http(s) link to watch.");
+          return;
+        }
+        await ch.send("\u{1F4FA} watching...");
+        try {
+          const watched = await runWatchPipeline(videoUrl, {
+            companionId: COMPANION_ID,
+            sharedBy: author,
+            frontState: pkMemberName ?? null,
+            halsethSecret: cfg.halsethSecret,
+            transcribe: voiceClient ? (audio, name, timeoutMs) => voiceClient.transcribe(audio, name, timeoutMs) : null,
+          });
+          pendingMediaId = watched.experienceId;
+          console.log(`[${COMPANION_ID}] watched ${watched.meta.video_id ?? videoUrl} source=${watched.source} chars=${watched.transcript_chars} sampled=${watched.sampled ? 1 : 0} experience=${watched.experienceId ?? "none"}`);
+          effectiveContent = `${effectiveContent.trim()}\n\n[WATCHED -- the video's transcript and description were fetched; you have read the whole thing. Respond to what it actually says.]\n${watched.watchedBlock}`;
+          // STM gets a one-line past-tense marker instead of the transcript -- see the stmContent
+          // divergence note near the top of this handler (and the 2026-08-29 [HEARD] lesson).
+          stmContent = `${stmContent.trim()}\n${watchedStmMarker(watched.meta)}`;
+          // fall through to the normal flow below -- no return.
+        } catch (err) {
+          console.error(`[${COMPANION_ID}] watch pipeline failed:`, err);
+          await ch.send(`couldn't watch that one -- ${String(err instanceof Error ? err.message : err).slice(0, 400)}`);
+          return;
+        }
+      }
+    }
+
     // Owner watchalong commands (spec 2026-10-02): "<prefix>: movie start <title>" (+ optional attached
     // .srt/.vtt), "<prefix>: movie pause|play|status|done", "<prefix>: at 47:12". Deterministic Halseth
     // writes + literal acks, never inference. Per-bot aliases, so only the addressed bot matches.
@@ -1318,7 +1383,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // gate: these blocks sit above all of them, and the STT/vision passes above ignore text files, so
     // an .srt reaches this point untouched. Owner `movie start` messages only -- no other message ever
     // has its text attachments fetched.
-    if (attribution.isOwner && MOVIE_TRIGGER) {
+    if (attribution.isOwner && MOVIE_TRIGGER && pendingMediaId === null) {
       const m = effectiveContent.match(MOVIE_TRIGGER);
       if (m) {
         // Group 4 is the "watch <title>" alias (command-triggers.ts): a start with that title.
@@ -1393,25 +1458,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
-    // Explicit listen command aimed at a DIFFERENT companion: stay out of it.
-    // When the owner tells one companion to listen, only that companion runs the
-    // pipeline and reacts -- siblings must not pop off (2026-06-13: the listener's
-    // late-arriving [HEARD] packet lost Brain's dedup to siblings' bare packets, so
-    // the one told to listen went mute while a blind sibling answered). Placed
-    // before the listen trigger / guard / [NOT HEARD] blocks so siblings return
-    // here and never forward to Brain at all.
-    if (attribution.isOwner) {
-      const listenTarget = listenCommandTarget(effectiveContent);
-      if (listenTarget !== null && listenTarget !== COMPANION_ID) return;
-    }
-
     // Owner listen command: <prefix>: listen <url>  (shared-experience Phase 1).
     // Downloads + analyzes on this box, then FALLS THROUGH to the normal reply
     // path with a [HEARD] block appended -- so the in-voice response rides the
     // full context assembly (direct inference; see the pendingMediaId branch at
     // the inference step -- a listen is answered solo by the bot that heard it).
-    let pendingMediaId: string | null = null;
-    if (attribution.isOwner) {
+    // (The sibling-silence check for listen AND watch sits above the watch block.)
+    if (attribution.isOwner && pendingMediaId === null) {
       const listenMatch = effectiveContent.match(LISTEN_TRIGGER);
       if (listenMatch) {
         if (!isListenEnabled()) {
@@ -1469,6 +1522,15 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       effectiveContent = `${effectiveContent.trim()}\n\n[NOT HEARD -- this link was shared but the listen pipeline did not run; nobody has actually played it. Do not describe its sound, mood, or lyrics. Say plainly that you haven't heard it yet; "${p}: listen <url>" lets you actually hear it.]`;
       // STM marker instead of the full block above -- see the stmContent divergence note.
       stmContent = `${stmContent.trim()}\n${notHeardStmMarker()}`;
+    }
+    // The same backstop for a YouTube link nobody opened (2026-10-23). The clusterfuck this whole lane
+    // exists for: a video link shared in conversation, and the companion talked about it as if it had seen
+    // it. The listen backstop above needs the word "listen"; a YouTube link needs no word at all -- the
+    // model will narrate a plausible video from the URL alone. Appended to the MESSAGE, like [HEARD].
+    else if (attribution.isOwner && pendingMediaId === null && isYouTubeUrl(effectiveContent)) {
+      const p = COMMAND_PREFIX[COMPANION_ID] ?? COMPANION_ID;
+      effectiveContent = `${effectiveContent.trim()}\n\n${notWatchedBlock(p)}`;
+      stmContent = `${stmContent.trim()}\n${notWatchedStmMarker()}`;
     }
 
     // Conversation Director (spec 2026-09-03): in director channels every message is published to the

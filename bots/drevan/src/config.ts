@@ -197,6 +197,8 @@ export const MODEL_SWITCH_LIST_INTRO = "i can run:";
 
 // Shared-experience Phase 1 (Ears): owner shares a track, the bot actually hears it.
 export const LISTEN_TRIGGER = COMMAND_TRIGGERS.listen;
+// Watch (2026-10-23): "watch <url>" / "video <url>" -- the one-shot transcript read (shared/video.ts).
+export const VIDEO_TRIGGER = COMMAND_TRIGGERS.video;
 // The Club (0072): owner-gated deterministic commands ("club vote <fragment>", "club status").
 export const CLUB_TRIGGER = COMMAND_TRIGGERS.club;
 // Companion tools (0077 take 14): "search <query>" + "imagine <prompt>".

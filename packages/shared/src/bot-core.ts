@@ -305,6 +305,8 @@ export interface RunBotConfig {
   modelSwitchSuccess: (label: string) => string;
   modelSwitchListIntro: string;
   listenTrigger: RegExp;
+  /** Watch (2026-10-23): `<prefix>: watch <url>` / `video <url>` -- the one-shot transcript read. */
+  videoTrigger?: RegExp;
   clubTrigger: RegExp;
   /** Companion tools (0077 take 14): web search + image gen owner commands. */
   searchTrigger?: RegExp;
@@ -355,7 +357,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     botDir, companionLabel, discordPrefix, companionId, inCharacterFallback,
     somaRefreshIntervalMs, distillationInterval, pulseInterval,
     blueFraming, guestFraming, synthesisPrompt, sessionExtractPrompt, distillationPrompt,
-    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, retractTrigger, watchTrigger, movieTrigger, movieAtTrigger, commandGuard,
+    modelSwitchTrigger, modelSwitchSuccess, modelSwitchListIntro, listenTrigger, videoTrigger, clubTrigger, searchTrigger, imagineTrigger, petTrigger, councilTrigger, impsTrigger, hexTrigger, logTrigger, intoTrigger, retractTrigger, watchTrigger, movieTrigger, movieAtTrigger, commandGuard,
     contextWindowSize, redisUrl, mistralApiKey, voiceId, mistralTtsModel, mistralSttModel,
     autonomous, auditConfig, surface,
   } = brc;
@@ -1118,6 +1120,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       COMPANION_ID: companionId, PK_HOLD_MS, SENT_IDS_CAP, CONTEXT_WINDOW_SIZE: contextWindowSize,
       MODEL_SWITCH_TRIGGER: modelSwitchTrigger, MODEL_SWITCH_LIST_INTRO: modelSwitchListIntro, MODEL_SWITCH_SUCCESS: modelSwitchSuccess,
       LISTEN_TRIGGER: listenTrigger,
+      ...(videoTrigger ? { VIDEO_TRIGGER: videoTrigger } : {}),
       CLUB_TRIGGER: clubTrigger,
       ...(searchTrigger ? { SEARCH_TRIGGER: searchTrigger } : {}),
       ...(imagineTrigger ? { IMAGINE_TRIGGER: imagineTrigger } : {}),

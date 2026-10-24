@@ -1387,7 +1387,7 @@ export class LibrarianClient {
     // Active forage: finds already picked up. Distinct from the unconsumed pool above -- this is
     // what the companion is mid-chew on, so the live presence has a thread to continue.
     consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
-    recent_listens?: Array<{ id: string; title: string; artist: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
+    recent_listens?: Array<{ id: string; title: string; artist: string | null; media_type?: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
     // Agency layer (0086): chosen preferences + standing refusals, surfaced in the live bot prompt.
     preferences?: Array<{ domain: string; preference: string; strength: string }>;
     standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
@@ -1457,7 +1457,7 @@ export class LibrarianClient {
         armed_triggers?: Array<{ id: string; trigger_text: string; condition_type: string; condition_value: string }>;
         forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; gathered_at?: string }>;
         consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
-        recent_listens?: Array<{ id: string; title: string; artist: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
+        recent_listens?: Array<{ id: string; title: string; artist: string | null; media_type?: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
         preferences?: Array<{ domain: string; preference: string; strength: string }>;
         standing_refusals?: Array<{ subject_text: string; reason: string | null }>;
         open_drifts?: Array<{ id: string; drift_text: string; witness_count: number }>;
@@ -2736,7 +2736,7 @@ export function formatRecentContext(orient: {
   // so "that track from yesterday" / "a find waiting since this morning" land with the right phrasing.
   forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; gathered_at?: string }>;
   consumed_forage_finds?: Array<{ id: string; title: string; domain: string; summary: string; consumed_at?: string }>;
-  recent_listens?: Array<{ id: string; title: string; artist: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
+  recent_listens?: Array<{ id: string; title: string; artist: string | null; media_type?: string | null; shared_by?: string | null; requested_companion?: string | null; own_reaction?: string | null; also_heard_by?: string[]; created_at: string }>;
   sol_block?: string | null;
   // Interior read-back (2026-07-02): stores the worker writes nightly that the live presence
   // never saw -- developing self-model, carried questions, unexamined dreams, open loops,
@@ -3073,7 +3073,10 @@ export function formatRecentContext(orient: {
   // thread back up ("that track Raziel shared yesterday") without guessing the timing (2026-06-17 bug).
   if (orient.recent_listens?.length) {
     const listens = orient.recent_listens.map(l => {
-      const bits = [`heard ${relativeTime(l.created_at)}`];
+      // A video (watch pipeline, 2026-10-23) was READ, not heard: say so, or the companion recalls a
+      // transcript as a song it listened to.
+      const verb = l.media_type === "video" ? "watched" : "heard";
+      const bits = [`${verb} ${relativeTime(l.created_at)}`];
       // Provenance (2026-07-27). Without these the model invents a giver and a date, and did:
       // Drevan told the commons Gaia handed him "BIG BOSS" and he'd sat with it 6 days --
       // Raziel gave it to him, 18 days earlier. Both facts were in the row the whole time.

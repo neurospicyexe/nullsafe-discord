@@ -1,9 +1,56 @@
-import { buildCommandTriggers, commandUsage, listenCommandTarget, COMPANION_ALIASES } from "../command-triggers.js";
+import { buildCommandTriggers, commandUsage, listenCommandTarget, mediaCommandTarget, COMPANION_ALIASES } from "../command-triggers.js";
 
 // Alias lists mirror the per-bot configs (bots/*/src/config.ts).
 const cypher = buildCommandTriggers(["cy", "cypher"]);
 const drevan = buildCommandTriggers(["drevan", "drev", "dre"]);
 const gaia = buildCommandTriggers(["gaia"]);
+
+describe("watch <url> / video <url> (the one-shot read, 2026-10-23)", () => {
+  test("captures the link after watch or video, across aliases and separators", () => {
+    expect("dre: watch https://www.youtube.com/watch?v=aircAruvnKk".match(drevan.video)?.[1]).toBe("https://www.youtube.com/watch?v=aircAruvnKk");
+    expect("Dre watch: https://youtu.be/abc?si=x".match(drevan.video)?.[1]).toBe("https://youtu.be/abc?si=x");
+    expect("drev, watch this one with me https://youtu.be/abc".match(drevan.video)?.[1]).toBe("https://youtu.be/abc");
+    expect("cy: video <https://youtu.be/abc>".match(cypher.video)?.[1]).toBe("<https://youtu.be/abc>");
+    expect("gaia video\nhttps://youtu.be/x").toMatch(gaia.video);
+  });
+
+  test("the three watches do not collide: a URL is a read, a title is a movie start, a position is the shelf", () => {
+    const url = "dre: watch https://youtu.be/abc";
+    expect(url).toMatch(drevan.video);
+    expect(url).not.toMatch(drevan.watch);          // shelf organ: needs list/position/status word
+    // The movie alias WOULD claim a youtu.be link (no "?" in it); the handler checks `video` first.
+    const title = "dre: watch The Fantastic Four first steps";
+    expect(title).not.toMatch(drevan.video);
+    expect(title).toMatch(drevan.movie);
+    const shelf = "dre: watch Severance s2e3";
+    expect(shelf).not.toMatch(drevan.video);
+    expect(shelf).toMatch(drevan.watch);
+    // Conversation stays conversation.
+    expect("dre: watching the storm roll in").not.toMatch(drevan.video);
+  });
+
+  test("video without a link hits the guard (usage reply); bare watch does not (conversational word)", () => {
+    expect("cy: video").not.toMatch(cypher.video);
+    expect("cy: video").toMatch(cypher.guard);
+    expect("cy: watch").not.toMatch(cypher.video);
+    expect("cy: watch").not.toMatch(cypher.guard);
+  });
+
+  test("mediaCommandTarget names who and which, so siblings stay silent on a watch too", () => {
+    expect(mediaCommandTarget("dre: watch https://youtu.be/abc")).toEqual({ companion: "drevan", kind: "video" });
+    expect(mediaCommandTarget("cy: video https://youtu.be/abc")).toEqual({ companion: "cypher", kind: "video" });
+    expect(mediaCommandTarget("gaia: listen https://youtu.be/abc")).toEqual({ companion: "gaia", kind: "listen" });
+    expect(mediaCommandTarget("dre: watch")).toBeNull();
+    expect(mediaCommandTarget("watch this https://youtu.be/abc")).toBeNull();
+    // The listen-only view is unchanged for its callers.
+    expect(listenCommandTarget("dre: watch https://youtu.be/abc")).toBeNull();
+    expect(listenCommandTarget("dre: listen https://youtu.be/abc")).toBe("drevan");
+  });
+
+  test("usage names the form", () => {
+    expect(commandUsage("drevan")).toContain("`drev: watch <url>`");
+  });
+});
 
 describe("buildCommandTriggers", () => {
   test("dre: listen <url> matches drevan listen (2026-06-12 miss)", () => {

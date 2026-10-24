@@ -386,7 +386,8 @@ export async function getLyrics(meta: TrackMeta): Promise<LyricsResult | null> {
   return fetchLyricsWeb(meta);
 }
 
-async function postExperience(payload: Record<string, unknown>, secret: string): Promise<string | null> {
+/** POST /mind/media. Shared with the watch pipeline (video.ts): same row, media_type decides. */
+export async function postExperience(payload: Record<string, unknown>, secret: string): Promise<string | null> {
   const base = process.env["HALSETH_URL"];
   if (!base || !secret) {
     console.error("[media] halseth write SKIPPED: HALSETH_URL missing or no companion secret provided");

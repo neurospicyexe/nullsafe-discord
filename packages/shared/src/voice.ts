@@ -42,7 +42,9 @@ export class VoiceClient {
     return Buffer.from(json.audio_data, "base64");
   }
 
-  async transcribe(audio: Buffer, filename: string): Promise<string> {
+  /** `timeoutMs` defaults to the voice-note budget; the watch pipeline's no-captions fallback (video.ts)
+   *  sends up to 25 minutes of audio and passes its own. */
+  async transcribe(audio: Buffer, filename: string, timeoutMs = 60_000): Promise<string> {
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array(audio)]), filename);
     form.append("model", this.sttModel);
@@ -50,7 +52,7 @@ export class VoiceClient {
       method: "POST",
       headers: { Authorization: `Bearer ${this.apiKey}` },
       body: form,
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`STT failed: ${res.status}`);
     const data = (await res.json()) as { text: string };

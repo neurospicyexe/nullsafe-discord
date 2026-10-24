@@ -194,6 +194,12 @@ const shared = {
   OPENSUBTITLES_USERNAME: process.env.OPENSUBTITLES_USERNAME,
   OPENSUBTITLES_PASSWORD: process.env.OPENSUBTITLES_PASSWORD,
   WATCHALONG_ENABLED:     process.env.WATCHALONG_ENABLED,
+  // Watch (2026-10-23, video.ts): `<p>: watch <url>` reads a YouTube video's caption track + description.
+  // Shares YTDLP_PATH / YTDLP_EXTRA_ARGS / MEDIA_CACHE_DIR above; MISTRAL_API_KEY (voice) is the STT
+  // fallback for a video with no captions. Allowlisted here per this file's standing rule.
+  MEDIA_WATCH_ENABLED:    process.env.MEDIA_WATCH_ENABLED,
+  WATCH_TRANSCRIPT_CHARS: process.env.WATCH_TRANSCRIPT_CHARS,
+  WATCH_STT_MAX_SEC:      process.env.WATCH_STT_MAX_SEC,
   // Writeback gate (2026-09-21, S3). WRITEBACK_GATE picks which judgment decides what the
   // companions remember: legacy (today's generative judge, the default), jev-shadow (judge
   // still decides and writes; Jev runs alongside and only logs what it would have done), or

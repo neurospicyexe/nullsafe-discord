@@ -19,17 +19,11 @@
 //
 // Failure never blocks a reply: every delivery path catches, logs, and returns null.
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { halsethEnv } from "./halseth-command-env.js";
 import { parseCaptions, summarizeCues, type Cue, type CueKind } from "./captions.js";
 import { fetchOpenSubtitles } from "./opensubtitles.js";
+import { fetchVideoCaptions } from "./video.js";
 import { COMMAND_PREFIX } from "./command-triggers.js";
-
-const execFileP = promisify(execFile);
 
 // ── Shapes (the Halseth contract, spec "Routes") ────────────────────────────
 
@@ -341,34 +335,16 @@ export interface CaptionDeps {
   hasOpenSubtitlesKey?: () => boolean;
 }
 
-/** yt-dlp: write subs (manual preferred, auto as fallback) as VTT, no media download. */
+/**
+ * yt-dlp: subs (manual preferred, auto as fallback) as VTT, no media download. Since 2026-10-23 this is
+ * the watch pipeline's fetch (video.ts `fetchVideoCaptions`): the old `--sub-langs en.*` here matched every
+ * auto-TRANSLATED track YouTube offers (4,842 on one probe video) and yt-dlp pulled them until YouTube
+ * answered 429 -- with the run then counted as a failure even though the English track had landed.
+ */
 export async function ytDlpSubs(url: string): Promise<{ text: string; title: string | null }> {
-  const YTDLP = process.env["YTDLP_PATH"] ?? "yt-dlp";
-  const extra = (process.env["YTDLP_EXTRA_ARGS"] ?? "").split(" ").filter(Boolean);
-  const dir = await mkdtemp(path.join(process.env["MEDIA_CACHE_DIR"] ?? tmpdir(), "watchalong-"));
-  try {
-    let stdout = "";
-    try {
-      const r = await execFileP(YTDLP, [
-        ...extra, "--no-playlist", "--skip-download", "--no-simulate", "--print", "title",
-        "--write-subs", "--write-auto-subs", "--sub-langs", "en.*", "--sub-format", "vtt",
-        "-o", path.join(dir, "subs.%(ext)s"), url,
-      ], { timeout: 120_000, maxBuffer: 4 * 1024 * 1024 });
-      stdout = r.stdout;
-    } catch (err) {
-      const stderr = String((err as { stderr?: string }).stderr ?? "");
-      console.error(`[watchalong] yt-dlp subs failed for ${url}\n${stderr.slice(-1500) || String(err)}`);
-      throw new Error("yt-dlp couldn't fetch captions for that link");
-    }
-    const files = (await readdir(dir)).filter(f => f.endsWith(".vtt"));
-    const pick = files.find(f => /\.en\.vtt$/.test(f)) ?? files.find(f => /\.en[-_]/.test(f)) ?? files[0];
-    if (!pick) throw new Error("that link has no English captions (manual or auto)");
-    const text = await readFile(path.join(dir, pick), "utf8");
-    const title = stdout.trim().split("\n")[0]?.trim() || null;
-    return { text, title };
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+  const r = await fetchVideoCaptions(url);
+  if (!r.vtt) throw new Error("that link has no English captions (manual or auto)");
+  return { text: r.vtt, title: r.meta.title };
 }
 
 const DEFAULT_DEPS: Required<CaptionDeps> = {

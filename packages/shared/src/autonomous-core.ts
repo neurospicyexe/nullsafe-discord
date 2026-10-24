@@ -1401,7 +1401,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
           l.requested_companion ? `for ${l.requested_companion}` : null,
         ].filter(Boolean).join(" ");
         fresh.push(
-          `listen from ${relativeTime(l.created_at)}${who ? ` (${who})` : ""}: ` +
+          `${l.media_type === "video" ? "video watched" : "listen"} from ${relativeTime(l.created_at)}${who ? ` (${who})` : ""}: ` +
           `"${l.title}"${l.artist ? ` by ${l.artist}` : ""}` +
           (l.own_reaction ? ` -- what you said then: "${l.own_reaction.slice(0, 180)}"` : ""),
         );

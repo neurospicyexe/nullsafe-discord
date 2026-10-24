@@ -16,6 +16,8 @@
 export interface CommandTriggers {
   modelSwitch: RegExp;
   listen: RegExp;
+  /** `watch <url>` / `video <url>`: the one-shot transcript read (video.ts). URL required, like listen. */
+  video: RegExp;
   club: RegExp;
   search: RegExp;
   imagine: RegExp;
@@ -37,6 +39,13 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
   return {
     modelSwitch: new RegExp(`^(?:${alt})\\b[,:]?\\s*model\\s+(.*)`, "i"),
     listen: new RegExp(`^(?:${alt})\\b[,:]?\\s*listen\\b[\\s\\S]*?(<?https?:\\/\\/\\S+)`, "i"),
+    // Watch (2026-10-23): "<prefix>: watch <url>" / "<prefix>: video <url>" / "dre watch this one <url>".
+    // Same shape as listen -- the link has to follow the command word. The handler checks this BEFORE the
+    // watchalong's "watch <title>" alias, so a URL is a one-shot read and a title is still a movie start.
+    // The watch-progress organ (`watch` below) never claims a URL (it needs a list word, a position token or
+    // a status word), so the three "watch"es do not collide. `video` is in the guard; `watch` is not (the
+    // same conversational-word reasoning as the organ).
+    video: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:watch|video)\\b[\\s\\S]*?(<?https?:\\/\\/\\S+)`, "i"),
     club: new RegExp(`^(?:${alt})\\b[,:]?\\s*club\\s+(.+)`, "is"),
     // Companion tools (0077 take 14). An argument is REQUIRED (the trailing \s+(.+)) so
     // a bare "search"/"imagine" misses the trigger and falls to the guard -> usage reply,
@@ -113,7 +122,7 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
       `^(?:${alt})\\b[,:]?\\s*at\\s+(\\d{1,2}:\\d{2}(?::\\d{2})?|\\d{1,3}\\s*(?:m|min|mins|minutes?)|\\d{1,2}\\s*h(?:\\s*\\d{1,2}\\s*(?:m|min|mins|minutes?)?)?)\\s*[.!]?\\s*$`,
       "i",
     ),
-    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
+    guard: new RegExp(`^(?:${alt})\\b[,:]?\\s*(?:model|listen|video|club|search|imagine|pet|council|imps?|hex|log|into)\\b`, "i"),
   };
 }
 
@@ -137,27 +146,39 @@ export const COMPANION_ALIASES: Record<string, string[]> = {
   gaia: ["gaia"],
 };
 
-// Per-companion listen-command matchers, built from the same shape as the live
+// Per-companion media-command matchers, built from the same shape as the live
 // triggers (URL required), so a bare "dre: listen" (no link) is NOT read as a
 // directed command -- the owning bot's guard handles that as a usage reply.
-const LISTEN_COMMAND_BY_COMPANION: Array<[string, RegExp]> = Object.entries(COMPANION_ALIASES)
-  .map(([id, aliases]) => [id, buildCommandTriggers(aliases).listen] as [string, RegExp]);
+const MEDIA_COMMANDS_BY_COMPANION: Array<[string, { listen: RegExp; video: RegExp }]> = Object.entries(COMPANION_ALIASES)
+  .map(([id, aliases]) => {
+    const t = buildCommandTriggers(aliases);
+    return [id, { listen: t.listen, video: t.video }] as [string, { listen: RegExp; video: RegExp }];
+  });
+
+export type MediaCommandKind = "listen" | "video";
 
 /**
- * If `content` is an explicit listen COMMAND aimed at a specific companion
- * (`<alias>: listen ... <url>`), return that companion's id; otherwise null.
+ * If `content` is an explicit listen or watch COMMAND aimed at a specific companion
+ * (`<alias>: listen ... <url>`, `<alias>: watch ... <url>`), return who and which; otherwise null.
  *
- * Used so siblings stay silent when the owner tells ONE companion to listen --
+ * Used so siblings stay silent when the owner tells ONE companion to listen or watch --
  * only the addressed companion runs the pipeline and reacts. Without this the
  * swarm had everyone popping off, and (worse) the listener's [HEARD] packet lost
  * Brain's message_id dedup to siblings' bare packets, muting the one told to
  * listen while a blind sibling answered (2026-06-13).
  */
-export function listenCommandTarget(content: string): string | null {
-  for (const [id, re] of LISTEN_COMMAND_BY_COMPANION) {
-    if (re.test(content)) return id;
+export function mediaCommandTarget(content: string): { companion: string; kind: MediaCommandKind } | null {
+  for (const [companion, re] of MEDIA_COMMANDS_BY_COMPANION) {
+    if (re.listen.test(content)) return { companion, kind: "listen" };
+    if (re.video.test(content)) return { companion, kind: "video" };
   }
   return null;
+}
+
+/** Listen-only view of `mediaCommandTarget`, kept for the callers and tests that predate watch. */
+export function listenCommandTarget(content: string): string | null {
+  const t = mediaCommandTarget(content);
+  return t?.kind === "listen" ? t.companion : null;
 }
 
 export function commandUsage(companionId: string): string {
@@ -165,6 +186,7 @@ export function commandUsage(companionId: string): string {
   return [
     `that looked like a command but didn't parse. forms:`,
     `\`${p}: listen <url>\` (or \`${p} listen: <url>\` -- the link just has to follow the word listen)`,
+    `\`${p}: watch <url>\` (or \`${p}: video <url>\`) -- a YouTube video: I read the transcript + description, then we talk`,
     `\`${p}: club vote <title fragment> [because <reason>]\``,
     `\`${p}: club status\``,
     `\`${p}: retract\` (as a reply to one of my messages: pulls it out of my memory, reversibly)`,
