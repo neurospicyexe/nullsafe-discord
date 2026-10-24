@@ -55,6 +55,15 @@ an ~8-10s hole in which a reply fell back to the canned line. Two things fed it 
     The same gate covers the pm2 reloads a shared-context change triggers (each bot on its own
     companion; autonomous-worker only when all three are quiet).
 
+PER-COMPANION SCOPE (B3, 2026-10-24)
+Once the per-message facts picker (shared/src/facts-pick.ts) is LIVE for a companion, the rest of the
+facts reach it per message and its SOUL only needs the always-on Core set. `FACTS_SYNC_SCOPE_<COMPANION>=core`
+(process env, else the discord .env) makes that companion's SOUL fetch `render?companion=<c>&scope=core`.
+Unset / `full` (anything else) = the full render, so Cypher and Gaia are unchanged. The shared context
+file stays on the full render. The core render has no clock-driven bytes (note carries a core COUNT, no
+footer tail), so it moves only when a core fact does: no daily restarts (B28). Flipping a scope changes
+the block's bytes once, which is a material change and restarts that gateway at the next idle window.
+
 USAGE
     python3 ops/sync-architect-facts.py            # sync, restart only if changed AND idle
     python3 ops/sync-architect-facts.py --dry-run  # report what would change / restart / defer, touch nothing
@@ -153,16 +162,34 @@ def read_env(path):
     return out
 
 
-def fetch_render(env, companion=None):
+def scope_for(env, companion):
+    """'core' or None (full). Reads FACTS_SYNC_SCOPE_<COMPANION> from the process env first, then the
+    parsed discord .env. Only an exact `core` (any case) narrows; unset, blank, `full` or junk = full,
+    so a typo can never silently empty a SOUL."""
+    key = "FACTS_SYNC_SCOPE_" + companion.upper()
+    raw = os.environ.get(key) or (env or {}).get(key) or ""
+    raw = raw.strip().lower()
+    if raw and raw not in ("core", "full"):
+        print("unknown %s=%r, using the full render (valid: core | full)" % (key, raw), file=sys.stderr)
+    return "core" if raw == "core" else None
+
+
+def fetch_render(env, companion=None, scope=None):
     """Fetch one render. companion=None -> shared/no-param render (every authored fact labeled);
-    companion='cypher'|'drevan'|'gaia' -> that companion's own-voice render (siblings labeled)."""
+    companion='cypher'|'drevan'|'gaia' -> that companion's own-voice render (siblings labeled).
+    scope='core' -> only the always-on Core facts (B3); None -> the full render."""
     url = (env.get("HALSETH_URL") or HALSETH_URL_DEFAULT).rstrip("/")
     secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
     if not secret:
         return None, "no HALSETH_SECRET/ADMIN_SECRET in %s" % DISCORD_ENV
     path = "/identity/architect-facts/render"
+    params = []
     if companion:
-        path += "?companion=" + companion
+        params.append("companion=" + companion)
+    if scope:
+        params.append("scope=" + scope)
+    if params:
+        path += "?" + "&".join(params)
     req = urllib.request.Request(
         url + path,
         headers={"Authorization": "Bearer " + secret, "User-Agent": UA},
@@ -429,12 +456,13 @@ def main():
     blocks = {}
     fetch_errors = {}
     for cid in sorted(HERMES_HOMES):
-        block, err = fetch_render(env, companion=cid)
+        scope = scope_for(env, cid)
+        block, err = fetch_render(env, companion=cid, scope=scope)
         if err:
             fetch_errors[cid] = err
         else:
             blocks[cid] = block
-            print("render (%s): %d chars" % (cid, len(block)))
+            print("render (%s%s): %d chars" % (cid, ", core" if scope else "", len(block)))
 
     shared_block, shared_err = fetch_render(env, companion=None)
     if shared_err:

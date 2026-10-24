@@ -1,7 +1,7 @@
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
 import { createHash } from "node:crypto";
 import {
-  readFactsPickMode, readFactsPickTheta, readFactsPickK, pickFacts, factsSeenKey,
+  readFactsPickMode, readFactsPickTheta, readFactsPickK, readFactsPickSkipCategories, pickFacts, factsSeenKey,
   __resetFactsPickWarnings, type FactsPickRedis,
 } from "../facts-pick.js";
 import { hermesDelta } from "../prompt-assembly.js";
@@ -78,6 +78,13 @@ describe("config", () => {
     expect(readFactsPickK(env({ FACTS_PICK_K: "5" }))).toBe(5);
     expect(readFactsPickK(env({ FACTS_PICK_K: "-1" }))).toBe(12);
   });
+
+  it("skip categories: code default is addressing; list parses; none = skip nothing", () => {
+    expect(readFactsPickSkipCategories(env({}))).toEqual(["addressing"]);
+    expect(readFactsPickSkipCategories(env({ FACTS_PICK_SKIP_CATEGORIES: "" }))).toEqual(["addressing"]);
+    expect(readFactsPickSkipCategories(env({ FACTS_PICK_SKIP_CATEGORIES: " Addressing , intimacy,," }))).toEqual(["addressing", "intimacy"]);
+    expect(readFactsPickSkipCategories(env({ FACTS_PICK_SKIP_CATEGORIES: "none" }))).toEqual([]);
+  });
 });
 
 describe("pickFacts", () => {
@@ -109,6 +116,47 @@ describe("pickFacts", () => {
     expect(jevBody.questions.f0.type).toBe("noul");
     expect(jevBody.questions.f0.instructions).toContain("SECRETFACT-0");
     expect(jevBody.state).toContain("Drevan");
+  });
+
+
+  it("addressing facts are dropped from the shortlist BEFORE Jev, for every mode", async () => {
+    const items = [
+      { id: "a1", category: "addressing", status: "active", score: 0.99, fact: "SECRETFACT-ADDR" },
+      { id: "h1", category: "health", status: "active", score: 0.9, fact: "SECRETFACT-H" },
+      { id: "a2", category: "Addressing", status: "active", score: 0.8, fact: "SECRETFACT-ADDR2" },
+      { id: "o1", category: "home", status: "active", score: 0.7, fact: "SECRETFACT-O" },
+    ];
+    for (const mode of ["shadow", "live"] as const) {
+      const f = fakeFetch({ items, jevAnswers: { f0: 0.9, f1: 0.9, f2: 0.9 } });
+      const r = await pickFacts({ ...base, mode, deps: { fetch: f.fn, env: env(), logWriter } });
+      const jevBody = JSON.parse(f.calls[1]!.body!);
+      expect(Object.keys(jevBody.questions)).toEqual(["f0", "f1"]);
+      expect(JSON.stringify(jevBody)).not.toContain("SECRETFACT-ADDR");
+      expect(r.log.shortlist!.map(s => s.id)).toEqual(["h1", "o1"]);
+      expect(r.log.skipped_categories).toBe(2);
+      expect(r.log.picks!.map(p => p.id)).toEqual(["h1", "o1"]);
+    }
+  });
+
+  it("everything shortlisted is skipped -> no Jev call at all", async () => {
+    const f = fakeFetch({ items: [{ id: "a1", category: "addressing", score: 0.9, fact: "X" }] });
+    const r = await pickFacts({ ...base, mode: "live", deps: { fetch: f.fn, env: env(), logWriter } });
+    expect(r.block).toBeNull();
+    expect(f.calls.some(c => c.url.endsWith("/admin/jev"))).toBe(false);
+    expect(r.log.skipped_categories).toBe(1);
+  });
+
+  it("FACTS_PICK_SKIP_CATEGORIES overrides; none keeps addressing", async () => {
+    const items = [
+      { id: "a1", category: "addressing", score: 0.9, fact: "X" },
+      { id: "h1", category: "health", score: 0.8, fact: "Y" },
+    ];
+    const f1 = fakeFetch({ items, jevAnswers: { f0: 0.9, f1: 0.9 } });
+    const r1 = await pickFacts({ ...base, mode: "shadow", deps: { fetch: f1.fn, env: env({ FACTS_PICK_SKIP_CATEGORIES: "none" }), logWriter } });
+    expect(r1.log.shortlist!.map(s => s.id)).toEqual(["a1", "h1"]);
+    const f2 = fakeFetch({ items, jevAnswers: { f0: 0.9, f1: 0.9 } });
+    const r2 = await pickFacts({ ...base, mode: "shadow", deps: { fetch: f2.fn, env: env({ FACTS_PICK_SKIP_CATEGORIES: "health" }), logWriter } });
+    expect(r2.log.shortlist!.map(s => s.id)).toEqual(["a1"]);
   });
 
   it("Jev partial answers: missing = 0, only answered facts can pick", async () => {

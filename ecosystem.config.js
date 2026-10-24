@@ -359,6 +359,7 @@ const shared = {
   FACTS_PICK_THETA_DREVAN:     process.env.FACTS_PICK_THETA_DREVAN,
   FACTS_PICK_THETA_GAIA:       process.env.FACTS_PICK_THETA_GAIA,
   FACTS_PICK_K:                process.env.FACTS_PICK_K,
+  FACTS_PICK_SKIP_CATEGORIES:  process.env.FACTS_PICK_SKIP_CATEGORIES, // code default `addressing` (facts-pick.ts); `none` = skip nothing
   FACTS_PICK_REPEAT_S:         process.env.FACTS_PICK_REPEAT_S,
   FACTS_PICK_TIMEOUT_MS:       process.env.FACTS_PICK_TIMEOUT_MS,
   FACTS_PICK_SHADOW_LOG:       process.env.FACTS_PICK_SHADOW_LOG,

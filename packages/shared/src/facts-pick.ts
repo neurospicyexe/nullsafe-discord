@@ -57,6 +57,21 @@ export function readFactsPickK(env: NodeJS.ProcessEnv = process.env): number {
   return posInt(env.FACTS_PICK_K, 12);
 }
 
+/**
+ * Categories the picker never offers to Jev (B3, 2026-10-24). A CODE default, not only an ecosystem
+ * one: ADDRESS_MODEL went silently off once because its default lived only in ecosystem.config.js.
+ * `addressing` holds style rules ("don't end on a redirect question"), not message facts: Raziel's
+ * labels had them offered 59 times and needed 5. Unset or blank = this default; `none` = skip nothing.
+ */
+export const FACTS_PICK_DEFAULT_SKIP: readonly string[] = ["addressing"];
+
+export function readFactsPickSkipCategories(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = (env.FACTS_PICK_SKIP_CATEGORIES ?? "").trim();
+  if (!raw) return [...FACTS_PICK_DEFAULT_SKIP];
+  if (raw.toLowerCase() === "none") return [];
+  return raw.split(",").map(c => c.trim().toLowerCase()).filter(Boolean);
+}
+
 export const FACTS_PICK_CAP = 5;
 const MSG_CLIP = 4_000;
 
@@ -98,6 +113,8 @@ export interface FactsPickLog {
   would_inject?: string[];
   theta?: number;
   k?: number;
+  /** Shortlisted facts dropped by FACTS_PICK_SKIP_CATEGORIES before the Jev call (count only). */
+  skipped_categories?: number;
   ms?: number;
   error?: string;
 }
@@ -186,11 +203,16 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
   log.theta = theta;
   log.k = k;
 
-  const sl = await shortlistFetch(doFetch, env, input.message, k);
+  const slRes = await shortlistFetch(doFetch, env, input.message, k);
   log.shortlist = [];
   log.picks = [];
   log.would_inject = [];
-  if (!Array.isArray(sl)) { log.error = sl.error; return null; }
+  if (!Array.isArray(slRes)) { log.error = slRes.error; return null; }
+  const slAll = slRes;
+  // Skip categories BEFORE Jev: fewer questions per call, and a skipped fact can never be picked.
+  const skip = new Set(readFactsPickSkipCategories(env));
+  const sl = slAll.filter(f => !skip.has(f.category.trim().toLowerCase()));
+  log.skipped_categories = slAll.length - sl.length;
   log.shortlist = sl.map(f => ({ id: f.id, category: f.category, score: f.score }));
   if (sl.length === 0) return null;
 
@@ -275,7 +297,7 @@ export async function pickFacts(input: FactsPickInput): Promise<FactsPickResult>
     } catch { /* logging never fails the reply */ }
     console.log(
       `[facts-pick] ${input.companion} mode=${input.mode} shortlist=${log.shortlist?.length ?? 0} ` +
-      `picks=${log.picks?.length ?? 0} inject=${log.would_inject?.length ?? 0} ms=${log.ms}` +
+      `skipped=${log.skipped_categories ?? 0} picks=${log.picks?.length ?? 0} inject=${log.would_inject?.length ?? 0} ms=${log.ms}` +
       (log.error ? ` error=${log.error.slice(0, 60)}` : ""),
     );
     return { block, log };

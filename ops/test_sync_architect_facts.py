@@ -219,6 +219,45 @@ with open(bad, "w") as f:
 ts, err = sync.last_activity(bad)
 check("unreadable db -> unknown with a reason", ts is None and "unreadable" in err, (ts, err))
 
+# ── per-companion render scope (B3, 2026-10-24) ────────────────────────────────────────────────
+print("scope_for / fetch_render scope")
+import urllib.request as _ur
+
+for _k in ("FACTS_SYNC_SCOPE_DREVAN", "FACTS_SYNC_SCOPE_CYPHER", "FACTS_SYNC_SCOPE_GAIA"):
+    os.environ.pop(_k, None)
+check("scope defaults to full (None) for every companion",
+      all(sync.scope_for({}, c) is None for c in ("cypher", "drevan", "gaia")))
+check("scope reads the .env dict", sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": "core"}, "drevan") == "core")
+check("scope is per companion", sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": "core"}, "gaia") is None
+      and sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": "core"}, "cypher") is None)
+check("scope is case/space tolerant", sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": " CORE "}, "drevan") == "core")
+check("junk and 'full' fall back to full (a typo cannot empty a SOUL)",
+      sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": "cor"}, "drevan") is None
+      and sync.scope_for({"FACTS_SYNC_SCOPE_DREVAN": "full"}, "drevan") is None)
+os.environ["FACTS_SYNC_SCOPE_GAIA"] = "core"
+check("process env wins over absence in .env", sync.scope_for({}, "gaia") == "core")
+os.environ.pop("FACTS_SYNC_SCOPE_GAIA")
+
+_seen = []
+class _Resp:
+    def __init__(self, body): self._b = body
+    def read(self): return self._b
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+_orig_urlopen = _ur.urlopen
+_ur.urlopen = lambda req, timeout=None: (_seen.append(req.full_url), _Resp(("x" * 2000).encode()))[1]
+try:
+    _e = {"HALSETH_URL": "https://h.test", "HALSETH_SECRET": "s"}
+    sync.fetch_render(_e, companion="drevan", scope="core")
+    sync.fetch_render(_e, companion="gaia")
+    sync.fetch_render(_e, companion=None)
+finally:
+    _ur.urlopen = _orig_urlopen
+check("core render URL carries companion and scope",
+      _seen[0] == "https://h.test/identity/architect-facts/render?companion=drevan&scope=core", _seen[0])
+check("full render URL is unchanged", _seen[1] == "https://h.test/identity/architect-facts/render?companion=gaia", _seen[1])
+check("shared render URL is unchanged", _seen[2] == "https://h.test/identity/architect-facts/render", _seen[2])
+
 print()
 if FAILURES:
     print("%d FAILED: %s" % (len(FAILURES), ", ".join(FAILURES)))
