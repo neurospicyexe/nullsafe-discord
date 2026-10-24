@@ -11,7 +11,14 @@
 # Optional: LABELS=/app/logs/jev-labels.json adds precision/recall/AUROC + best theta to the report.
 set -eu
 cd /app/nullsafe-discord
-export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+# nvm.sh reads unset variables, so `set -u` killed this script silently (stderr was discarded) at every
+# cron run from 2026-10-13 to 10-23; the health check's stale-report warning was the only sign. Source it
+# with -eu lifted and keep its stderr, then fail loudly if node is still missing.
+export NVM_DIR="$HOME/.nvm"
+set +eu
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null
+set -eu
+command -v node >/dev/null || { echo "$(date -u +%FT%TZ) jev-calibration FAILED: node not on PATH after nvm"; exit 1; }
 LABEL_ARGS=""
 [ -n "${LABELS:-}" ] && [ -f "$LABELS" ] && LABEL_ARGS="--labels $LABELS"
 # shellcheck disable=SC2086
