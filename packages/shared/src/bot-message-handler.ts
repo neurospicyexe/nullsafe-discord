@@ -1820,9 +1820,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         let coldPicked = false;
         if (verdict.holder !== COMPANION_ID) {
           // Ruling 4 (2026-10-18, blue-cold-pick.ts): a COLD unnamed Blue message (no holder) may get ONE
-          // companion, picked by Jev. BLUE_COLD_PICK=shadow (default) only logs the pick, detached, and the
-          // silence below stands; `on` lets the picked companion (one, by Redis claim) answer as if it held
-          // the thread (the normal holder takes over once it has spoken); `off` never calls Jev.
+          // companion, picked by Jev. BLUE_COLD_PICK=shadow only logs the pick, detached, and the
+          // silence below stands; `on` (LIVE 2026-10-25, Raziel: Blue should not have to name a companion
+          // to be answered) lets the picked companion (one, by Redis claim) answer as if it held the thread
+          // (the normal holder takes over once it has spoken); `off` never calls Jev. The pick is confined
+          // to this channel's seated companions and prefers its host (#movie-night is Drevan's, as for
+          // Raziel's unnamed lines under R5); this gate runs BEFORE shouldRespond's companion filter, so
+          // the seat list must be passed in or a Drevan-only room could publish a Cypher pick.
           if (verdict.holder === null) {
             const coldMode = blueColdPickMode();
             if (coldMode !== "off") {
@@ -1834,6 +1838,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
                 speaker: author,
                 content: effectiveContent,
                 redis: redis as unknown as BlueColdRedis | null,
+                eligible: (channelEntry?.companions ?? ["cypher", "drevan", "gaia"]) as CompanionId[],
+                host: (channelEntry?.host as CompanionId | undefined) ?? null,
                 fetchRecent: async () => {
                   const hist = await message.channel.messages.fetch({ limit: 8 });
                   return addressTurnsFrom([...hist.values()]

@@ -9,21 +9,40 @@
  * Once it has answered, the normal per-human holder takes over (recordHumanHold at send).
  *
  * BLUE_COLD_PICK:
- *   shadow (default)  the claim winner asks Jev and logs `[blue-cold] pick=<companion|none> ...`
- *                     (ids and numbers, never the text). Nobody speaks: today's silence is kept.
+ *   shadow            the claim winner asks Jev and logs `[blue-cold] pick=<companion|none> ...`
+ *                     (ids and numbers, never the text). Nobody speaks: the old silence is kept.
  *   on                the picked companion answers. Exactly one: one Redis NX claim decides who calls
  *                     Jev, the pick is published for the others, and the picked companion takes a
  *                     second NX claim on the ANSWER so a replay cannot make it speak twice.
  *   off               no Jev call, no Redis, nobody speaks (exactly the old behavior).
- * No Redis, a failed Jev call, a human addressee, or a line that does not invite a reply = no pick =
- * silence. The pick never overrides a holder, a named companion, a human address or any rail: it is
- * consulted only on the branch that used to say "no companion holds Blue's thread, nobody answers".
+ * No Redis, a failed Jev call, a line spoken to a human, or a line that does not invite a reply = no
+ * pick = silence. The pick never overrides a holder, a named companion, a human address or any rail:
+ * it is consulted only on the branch that used to say "no companion holds Blue's thread, nobody answers".
+ *
+ * The decision (2026-10-25 revision, Raziel: "can we make it so Blue doesn't have to always say a
+ * companion's name ... let Jev try"). The first cut returned null whenever Jev's TOP choice was a
+ * human or `nobody`; on the first live movie night (10-25, #movie-night) Jev read Blue's six cold
+ * opening lines as `nobody` at confidence 0.22-0.62 and would have kept all six silent, which is the
+ * exact silence this module exists to replace. Jev's two questions now play two roles:
+ *   1. Is it spoken to a HUMAN? Gate on the probability MASS on raziel + blue + someone_else
+ *      (COLD_PICK_HUMAN_MASS), not on the argmax: a question to Raziel at P(raziel)=0.45 under a
+ *      `nobody` top choice is still Raziel's. Backtest 10-25: Blue's cold rows carried 0.16-0.47 of
+ *      human mass, Raziel's 48 unnamed rows all under 0.2.
+ *   2. Does it want a reply? `invites_reply` (COLD_PICK_MIN_INVITES). `nobody`, `room` and
+ *      `continuing` (there is no holder, so nothing to continue) fall through to this instead of
+ *      answering it by name.
+ * Then who: a companion Jev reads as called without a name (spoken_to >= JEV_SPOKEN_TO_THETA), else
+ * the channel's HOST (channel-config `host`: the room where the pain is, #movie-night, is Drevan's
+ * exactly as it is for Raziel's unnamed lines under R5), else the best mean of spoken-to and
+ * has-something-for over the channel's listed companions (never a companion the room does not seat).
+ * Once the pick has answered it holds Blue's thread (3h in the movie rooms) and this never runs again
+ * until the hold lapses.
  */
 
 import type { CompanionId } from "./types.js";
 import { ALL_COMPANIONS } from "./channel-config.js";
 import {
-  addressJevEnabled, jevAddressEval, renderJevAddressState,
+  addressJevEnabled, jevAddressEval, renderJevAddressState, JEV_SPOKEN_TO_THETA,
   type JevAddressCaller, type JevAddressVerdict,
 } from "./address-jev.js";
 import type { AddressTurn } from "./address-model.js";
@@ -44,34 +63,89 @@ export const BLUE_COLD_TTL_MS = 120_000;
 export const BLUE_COLD_WAIT_MS = 6_500;
 const BLUE_COLD_POLL_MS = 250;
 
-/** Mean of a companion's spoken-to and has-something-to-add nouls must reach this to be picked. */
+/** Mean of a companion's spoken-to and has-something-to-add nouls must reach this to be picked (fit step). */
 export const COLD_PICK_MIN_SCORE = 0.3;
 /** P(the line wants a reply) under this = nobody is picked. */
 export const COLD_PICK_MIN_INVITES = 0.4;
+/** P(raziel) + P(blue) + P(someone_else) at or above this = the line is a human's, not the triad's. */
+export const COLD_PICK_HUMAN_MASS = 0.5;
 
-const NOT_THE_TRIAD = new Set(["raziel", "blue", "someone_else", "nobody"]);
+const HUMANS = ["raziel", "blue", "someone_else"] as const;
 
-export interface ColdPickDecision { pick: CompanionId | null; why: string; score: number | null }
-
-/** Pure: Jev's verdict -> at most one companion, with the reason. Ties go to the earlier companion in ALL_COMPANIONS. */
-export function coldPickDecision(v: JevAddressVerdict): ColdPickDecision {
-  if (NOT_THE_TRIAD.has(v.addressee)) return { pick: null, why: `addressee:${v.addressee}`, score: null };
-  if (v.invitesReply !== null && v.invitesReply < COLD_PICK_MIN_INVITES) return { pick: null, why: "no_invite", score: null };
-  let best: CompanionId | null = null;
-  let bestScore = -1;
-  for (const id of ALL_COMPANIONS) {
-    const sig = [v.spokenTo[id], v.fit[id]].filter((n): n is number => typeof n === "number" && Number.isFinite(n));
-    if (sig.length === 0) continue;
-    const score = sig.reduce((a, b) => a + b, 0) / sig.length;
-    if (score > bestScore) { best = id; bestScore = score; }
-  }
-  if (best === null) return { pick: null, why: "no_signal", score: null };
-  if (bestScore < COLD_PICK_MIN_SCORE) return { pick: null, why: "below_floor", score: bestScore };
-  return { pick: best, why: "ok", score: bestScore };
+export interface ColdPickDecision {
+  pick: CompanionId | null;
+  /** human:<who> | no_invite | spoken_to | host | fit | below_floor | no_signal (plus the caller's jev_error / timeout / error:*). */
+  why: string;
+  score: number | null;
+  /** Human probability mass Jev put on the line (null when the verdict carried no distribution). */
+  human: number | null;
 }
 
-export function pickColdCompanion(v: JevAddressVerdict): CompanionId | null {
-  return coldPickDecision(v).pick;
+export interface ColdPickOpts {
+  /** The channel's listed companions (channel-config `companions`); default all three. A pick is never outside it. */
+  eligible?: readonly CompanionId[];
+  /** The channel's host (channel-config `host`), preferred once the line clears the human and invites gates. */
+  host?: CompanionId | null;
+}
+
+const isCompanionId = (v: unknown): v is CompanionId => typeof v === "string" && (ALL_COMPANIONS as readonly string[]).includes(v);
+
+/** P(human) on the verdict: the sum over the three human choices, and which of them is largest. Falls
+ *  back to the top choice when the verdict has no distribution (a human top choice then counts as 1). */
+export function humanMass(v: JevAddressVerdict): { sum: number | null; top: string } {
+  const p = v.probabilities ?? {};
+  const have = HUMANS.some(h => typeof p[h] === "number");
+  if (!have) {
+    const isHuman = (HUMANS as readonly string[]).includes(v.addressee);
+    return { sum: isHuman ? 1 : null, top: isHuman ? v.addressee : "-" };
+  }
+  let sum = 0, top: string = "-", topV = -1;
+  for (const h of HUMANS) {
+    const n = p[h];
+    if (typeof n !== "number" || !Number.isFinite(n)) continue;
+    sum += n;
+    if (n > topV) { top = h; topV = n; }
+  }
+  return { sum, top };
+}
+
+function meanSignal(v: JevAddressVerdict, id: CompanionId): number | null {
+  const sig = [v.spokenTo[id], v.fit[id]].filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+  return sig.length === 0 ? null : sig.reduce((a, b) => a + b, 0) / sig.length;
+}
+
+/** Pure: Jev's verdict -> at most one companion, with the reason. Ties go to the earlier companion in ALL_COMPANIONS. */
+export function coldPickDecision(v: JevAddressVerdict, opts: ColdPickOpts = {}): ColdPickDecision {
+  const eligible = (opts.eligible ?? ALL_COMPANIONS).filter(isCompanionId);
+  const host = opts.host && eligible.includes(opts.host) ? opts.host : null;
+  const human = humanMass(v);
+  const none = (why: string, score: number | null = null): ColdPickDecision => ({ pick: null, why, score, human: human.sum });
+
+  // 1. A human's line (Blue to Raziel, Blue to a friend, Blue to himself) is not the triad's.
+  if (human.sum !== null && human.sum >= COLD_PICK_HUMAN_MASS) return none(`human:${human.top}`);
+  // 2. A line that wants no reply (a reaction, a status line, thinking aloud) sits, exactly as before.
+  if (v.invitesReply !== null && v.invitesReply < COLD_PICK_MIN_INVITES) return none("no_invite");
+  // 3. Jev read a call to ONE seated companion without a name ("what do you think" after Gaia spoke).
+  if (isCompanionId(v.addressee) && eligible.includes(v.addressee) && (v.spokenTo[v.addressee] ?? 0) >= JEV_SPOKEN_TO_THETA) {
+    return { pick: v.addressee, why: "spoken_to", score: v.spokenTo[v.addressee] ?? null, human: human.sum };
+  }
+  // 4. A hosted room is the host's (R5 parity with Raziel's unnamed lines).
+  if (host) return { pick: host, why: "host", score: meanSignal(v, host), human: human.sum };
+  // 5. Else whoever has the most to say among the seated companions.
+  let best: CompanionId | null = null;
+  let bestScore = -1;
+  for (const id of eligible) {
+    const score = meanSignal(v, id);
+    if (score === null) continue;
+    if (score > bestScore) { best = id; bestScore = score; }
+  }
+  if (best === null) return none("no_signal");
+  if (bestScore < COLD_PICK_MIN_SCORE) return none("below_floor", bestScore);
+  return { pick: best, why: "fit", score: bestScore, human: human.sum };
+}
+
+export function pickColdCompanion(v: JevAddressVerdict, opts: ColdPickOpts = {}): CompanionId | null {
+  return coldPickDecision(v, opts).pick;
 }
 
 /** The subset of the Redis client this needs (fake-testable). `nx` absent = a plain overwriting set. */
@@ -89,6 +163,10 @@ export interface BlueColdPickCtx {
   speaker: string;
   content: string;
   redis: BlueColdRedis | null;
+  /** The channel's listed companions; a pick is never outside it (default all three). */
+  eligible?: readonly CompanionId[];
+  /** The channel's host, preferred once the line clears the human and invites gates. */
+  host?: CompanionId | null;
   /** Undefined = the real Jev call when ADDRESS_JEV is not off; null = never call Jev (tests inject a fake). */
   jev?: JevAddressCaller | null;
   /** Recent room turns oldest-first, excluding this message (the handler's address-turn builder). */
@@ -128,29 +206,33 @@ export async function runBlueColdPick(ctx: BlueColdPickCtx): Promise<BlueColdPic
     const claimed = await ctx.redis.set(BLUE_COLD_CLAIM_PREFIX + ctx.messageId, ctx.companionId, "PX", BLUE_COLD_TTL_MS, "NX");
     let pick: CompanionId | null | undefined;
     if (claimed === "OK") {
-      let decision: ColdPickDecision = { pick: null, why: "jev_error", score: null };
+      let decision: ColdPickDecision = { pick: null, why: "jev_error", score: null, human: null };
       let addressee = "-";
       let conf = "-";
+      let inv = "-";
       try {
         const turns = await ctx.fetchRecent().catch(() => [] as AddressTurn[]);
         const res = await jev(renderJevAddressState({
           speakerSide: "blue", speakerLabel: ctx.speaker, text: ctx.content, turns, holder: null,
         }));
         if (res.ok) {
-          decision = coldPickDecision(res.verdict);
+          decision = coldPickDecision(res.verdict, { eligible: ctx.eligible, host: ctx.host });
           addressee = res.verdict.addressee;
           conf = res.verdict.confidence.toFixed(2);
+          inv = res.verdict.invitesReply === null ? "-" : res.verdict.invitesReply.toFixed(2);
         } else {
-          decision = { pick: null, why: res.reason, score: null };
+          decision = { pick: null, why: res.reason, score: null, human: null };
         }
       } catch (e) {
-        decision = { pick: null, why: `error:${String(e).slice(0, 60)}`, score: null };
+        decision = { pick: null, why: `error:${String(e).slice(0, 60)}`, score: null, human: null };
       }
       pick = decision.pick;
       await ctx.redis.set(BLUE_COLD_PICK_PREFIX + ctx.messageId, pick ?? "none", "PX", BLUE_COLD_TTL_MS).catch(() => {});
+      const f2 = (n: number | null) => (n === null ? "-" : n.toFixed(2));
       log(
         `[blue-cold] pick=${pick ?? "none"} mode=${ctx.mode} ch=${ctx.channelId} msg=${ctx.messageId} by=${ctx.companionId} ` +
-        `why=${decision.why} addressee=${addressee} conf=${conf} score=${decision.score === null ? "-" : decision.score.toFixed(2)}`,
+        `why=${decision.why} addressee=${addressee} conf=${conf} inv=${inv} human=${f2(decision.human)} ` +
+        `host=${ctx.host ?? "-"} score=${f2(decision.score)}`,
       );
     } else if (ctx.mode === "on") {
       // A sibling is asking Jev; wait for its published pick (bounded). Shadow has nothing to wait for.
