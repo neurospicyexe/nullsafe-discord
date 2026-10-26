@@ -125,7 +125,8 @@ describe("host rooms (R5, 2026-09-28: siblings kept landing in Raziel and Drevan
     const { join, dirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../bot-message-handler.ts"), "utf8");
-    expect(src).toContain("channelEntry?.host === COMPANION_ID && attribution.isOwner");
+    // 2026-10-25: the same floor covers Blue's lines (his group call died at an empty bid under a care hold).
+    expect(src).toContain('channelEntry?.host === COMPANION_ID && (attribution.isOwner || userTier === "intimate")');
   });
   it("fargo-watch-party is hosted by Drevan", async () => {
     const { DEFAULT_CHANNEL_CONFIG } = await import("../channel-config.js");

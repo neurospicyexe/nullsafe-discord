@@ -99,15 +99,23 @@ export interface HumanGateInput {
   blueHolder: CompanionId | null;
 }
 
+/**
+ * Rule 1 of the gate, on its own so the handler can tell a `proceed` that came from a NAME (a
+ * companion named, mentioned or replied to anywhere in the burst) from one that came from Rule 4
+ * (an unnamed owner line): only the second is the live Jev gate's business (human-jev-gate.ts).
+ * extractAddress keeps its third-person demotion, a group call counts, and so does the private lexicon.
+ */
+export function companionNamedIn(input: Pick<HumanGateInput, "texts" | "companionMentioned" | "replyToCompanion">): boolean {
+  return input.companionMentioned || input.replyToCompanion
+    || input.texts.some(t => extractAddress(t).type !== "ambient");
+}
+
 export function humanGate(input: HumanGateInput): HumanGateVerdict {
   const { tier, texts, names } = input;
   if (tier !== "owner" && tier !== "intimate") return { kind: "proceed" };
 
-  // Rule 1: a companion named anywhere in the burst. extractAddress keeps its third-person
-  // demotion, a group call counts, and so does the private lexicon.
-  const companionNamed = input.companionMentioned || input.replyToCompanion
-    || texts.some(t => extractAddress(t).type !== "ambient");
-  if (companionNamed) return { kind: "proceed" };
+  // Rule 1: a companion named anywhere in the burst.
+  if (companionNamedIn(input)) return { kind: "proceed" };
 
   const speaker: HumanSide = tier === "owner" ? "raziel" : "blue";
 

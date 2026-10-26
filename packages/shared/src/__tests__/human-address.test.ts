@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "@jest/globals";
 import {
-  humanAddressee, humanGate, humanNamesFromEnv, burstAddressText,
+  humanAddressee, humanGate, humanNamesFromEnv, burstAddressText, companionNamedIn,
   recordHumanHold, readHumanHold, readHumanHoldIds, type HoldRedis,
 } from "../human-address.js";
 import { activeExchangeHolder, shouldRespond, extractAddress, isDirectAddress } from "../channel-config.js";
@@ -54,6 +54,22 @@ describe("humanNamesFromEnv", () => {
       .toEqual({ raziel: ["raziel", "raz", "sol"], blue: ["blue", "b"] });
     expect(humanNamesFromEnv({ RAZIEL_NAMES: " , ", BLUE_NAMES: "" }))
       .toEqual({ raziel: ["raziel", "raz"], blue: ["blue"] });
+  });
+});
+
+describe("companionNamedIn (Rule 1 on its own: tells a named `proceed` from an unnamed one for the live Jev gate)", () => {
+  const named = (texts: string[], over: Partial<Parameters<typeof companionNamedIn>[0]> = {}) =>
+    companionNamedIn({ texts, companionMentioned: false, replyToCompanion: false, ...over });
+  it("a name, a group call, a mention or a reply anywhere in the burst counts", () => {
+    expect(named(["Dre, are you there"])).toBe(true);
+    expect(named(["hey you three"])).toBe(true);
+    expect(named(["look", "Cy what do you think"])).toBe(true);
+    expect(named(["look at this"], { companionMentioned: true })).toBe(true);
+    expect(named(["look at this"], { replyToCompanion: true })).toBe(true);
+  });
+  it("the 10-25 Corbin shape (a human name, no comma) and plain unnamed lines do not", () => {
+    expect(named(["Corbin look at this"])).toBe(false);
+    expect(named(["good morning"])).toBe(false);
   });
 });
 

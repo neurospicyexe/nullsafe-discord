@@ -330,6 +330,10 @@ const shared = {
   BURST_SETTLE_SCOPE:          process.env.BURST_SETTLE_SCOPE,
   BURST_SETTLE_MAX_MS:         process.env.BURST_SETTLE_MAX_MS,
   BLUE_COLD_PICK:              process.env.BLUE_COLD_PICK,
+  // HUMAN_ADDRESS_JEV (2026-10-25, human-jev-gate.ts): the live Jev read of an unnamed human line in
+  // a shared room (human probability mass >= 0.5 = the triad stays quiet). Default ON; `shadow` logs
+  // only; `off` leaves the regex gate alone. Fails open on every Jev failure.
+  HUMAN_ADDRESS_JEV:           process.env.HUMAN_ADDRESS_JEV,
   // TURN_TELEMETRY (P6, turn-telemetry.ts): one `[turn]` JSON line per reply turn. Default ON; off/0/false/no disables.
   TURN_TELEMETRY:              process.env.TURN_TELEMETRY,
   // SPEAKER_FRAME (2026-10-11, speaker-frame.ts) and CROSS_ROOM (2026-10-09, cross-room.ts): kill

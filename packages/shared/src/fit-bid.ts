@@ -331,8 +331,27 @@ export const CARE_HOLD_MIN_BID = 0.25;
  * rules.ts refuses for owner_silence). Owner-authored messages bid against the NORMAL floor; the
  * soft register still rides the prompt, so the reply is gentle -- but it exists.
  */
-export function holdFloorApplies(careHold: boolean, senderIsOwner: boolean): boolean {
-  return careHold && !senderIsOwner;
+export function holdFloorApplies(careHold: boolean, senderIsFamily: boolean): boolean {
+  return careHold && !senderIsFamily;
+}
+// `senderIsFamily` (2026-10-25): Raziel OR Blue. On the 10-25 movie night Blue's group call to the
+// room drew three bids of 0.10 against the raised floor of 0.25 under a care hold, and nobody
+// answered him. Blue is household, not ambient traffic; the only Blue lines that reach the bid at
+// all are explicit group calls (an unnamed line goes through Blue's thread hold, a named one takes
+// the fast path), so exempting him exempts a call, never chatter.
+
+/**
+ * The fit bid's close instant when the live human-address Jev gate ran first (human-jev-gate.ts,
+ * 2026-10-25). `bidDeadlineAt` anchors on the message; a gate that awaited Jev for one to four
+ * seconds leaves that instant already past, every bot's wait clamps to 0, each reads only its own bid,
+ * and the footrace is back. Re-anchor on the verdict's PUBLISH time instead: the three bots read the
+ * same key, so they share that instant to within the poll interval, and the window is the normal one.
+ * `gatePublishedAt` null or 0 = the gate did not run; the message anchor stands.
+ */
+export function bidDeadlineAfterGate(createdTimestamp: number, settleMs: number, gatePublishedAt: number | null | undefined): number {
+  const base = bidDeadlineAt(createdTimestamp, settleMs);
+  if (!gatePublishedAt || !Number.isFinite(gatePublishedAt) || gatePublishedAt <= 0) return base;
+  return Math.max(base, gatePublishedAt + BID_WINDOW_MS);
 }
 
 export async function runBidRound(

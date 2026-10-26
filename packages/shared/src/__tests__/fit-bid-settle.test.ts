@@ -3,7 +3,7 @@
 // bid and reads at once, sees only itself, and all three speak. The deadline must shift by the settle.
 
 import { describe, it, expect } from "@jest/globals";
-import { bidDeadlineAt, BID_WINDOW_MS, runBidRound, type BidRedis } from "../fit-bid.js";
+import { bidDeadlineAt, bidDeadlineAfterGate, BID_WINDOW_MS, runBidRound, type BidRedis } from "../fit-bid.js";
 import type { CompanionId } from "../types.js";
 
 function fakeRedis(): BidRedis {
@@ -22,6 +22,38 @@ describe("bidDeadlineAt", () => {
   });
   it("shifts by the settle the turn waited", () => {
     expect(bidDeadlineAt(1_000_000, 4000)).toBe(1_000_000 + 4000 + 2500);
+  });
+});
+
+describe("bidDeadlineAfterGate (the live human-address Jev gate ran before the bid, 2026-10-25)", () => {
+  it("no gate = the message anchor exactly", () => {
+    expect(bidDeadlineAfterGate(1_000_000, 4000, null)).toBe(bidDeadlineAt(1_000_000, 4000));
+    expect(bidDeadlineAfterGate(1_000_000, 4000, undefined)).toBe(bidDeadlineAt(1_000_000, 4000));
+    expect(bidDeadlineAfterGate(1_000_000, 4000, 0)).toBe(bidDeadlineAt(1_000_000, 4000));
+  });
+  it("a verdict published after the message anchor re-anchors the window on the publish", () => {
+    // Jev answered 3s after the settle: the message anchor (created + 4000 + 2500) is already past.
+    const published = 1_000_000 + 4000 + 3000;
+    expect(bidDeadlineAfterGate(1_000_000, 4000, published)).toBe(published + BID_WINDOW_MS);
+  });
+  it("a verdict published early never pulls the deadline forward", () => {
+    expect(bidDeadlineAfterGate(1_000_000, 4000, 1_000_100)).toBe(bidDeadlineAt(1_000_000, 4000));
+  });
+  it("three bots reading the same publish still converge on ONE speaker", async () => {
+    const redis = fakeRedis();
+    const published = 1_000_000 + 4000 + 3000;
+    // Each bot reaches the bid at a different instant after the publish (poll spread), scores differ.
+    const bots: Array<[CompanionId, number, number]> = [["cypher", 0.3, published + 10], ["drevan", 0.55, published + 260], ["gaia", 0.2, published + 180]];
+    const outs = await Promise.all(bots.map(async ([me, score, arrive]) => {
+      let t = arrive;
+      return runBidRound(redis, "g1", me, score, {
+        deadlineAt: bidDeadlineAfterGate(1_000_000, 4000, published),
+        now: () => t,
+        sleep: async (ms) => { t += ms; await new Promise(r => setTimeout(r, 1)); },
+      });
+    }));
+    expect(outs.filter(o => o.iSpeak).map((_, i) => i)).toHaveLength(1);
+    expect(outs.map(o => o.winner)).toEqual(["drevan", "drevan", "drevan"]);
   });
 });
 

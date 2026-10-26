@@ -40,6 +40,7 @@ import { APPEND_MAX_AGE_MS } from "./write-queue.js";
 import { fireAddressShadow, recordAddressSpoke } from "./address-shadow.js";
 import { ownerTurnLabel, proxyTurnLabel } from "./address-jev.js";
 import { blueColdPickMode, runBlueColdPick, type BlueColdRedis } from "./blue-cold-pick.js";
+import { humanJevGateMode, runHumanJevGate, type HumanJevGateResult, type HumanJevRedis } from "./human-jev-gate.js";
 import { addressModelMode, type AddressTurn } from "./address-model.js";
 import { isSolPost, withoutSol, muzzleVerdict, solDeclineReason, solMomentFraming, solRecognizedLogLine, SOL_AUTHOR_LABEL } from "./sol-sender.js";
 import { Message, TextChannel, type Client, type VoiceBasedChannel } from "discord.js";
@@ -56,9 +57,9 @@ import {
   inferTemperature, createAdapter, withCaller, replyMaxTokensFor, EXTREME_TEMP_THRESHOLD, EXTREME_TEMP_CAP, COOLDOWN_TEMP,
   type AdapterKeys, type AdapterUrls, type InferenceAdapter,
   setLastActivity, noteOwnerArrival, type Redis,
-  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAt, MIN_BID_TO_SPEAK, closeBidLine,
+  buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAfterGate, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
-  humanGate, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
+  humanGate, companionNamedIn, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
   learnHumanName, learnedHumanNames, mergeHumanNames, type NameRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
@@ -1791,6 +1792,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     //    (a per-human Redis hold, not Raziel's per-channel one) answers; no holder, nobody; no bid;
     // 4. else everything below, untouched. Sol, companion bots, DMs, entitled follow-ups and guests skip it.
     let blueThreadMine = false;
+    // Blue's own thread holder, read once here; the fit bid below scores it as holdsThread on Blue's
+    // group calls (2026-10-25: Raziel's per-channel holder was the one being scored on Blue's lines).
+    let blueHolderSeen: CompanionId | null = null;
+    // True when the regex gate let this bot through on an UNNAMED line (Rule 4 for Raziel, or Blue's
+    // thread holder): the live Jev gate (human-jev-gate.ts) runs on exactly these, after shouldRespond.
+    let humanUnnamed = false;
+    let blueColdPicked = false;
     if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
         && (userTier === "owner" || userTier === "intimate")) {
       const mentionedIds = [...message.mentions.users.keys(), ...burst.flatMap(b => b.mentionedIds ?? [])];
@@ -1800,9 +1808,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const blueHolder = userTier === "intimate"
         ? await readHumanHold(holdRedis, "blue", message.channelId, channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS)
         : null;
+      blueHolderSeen = blueHolder;
+      const gateTexts = [...burst.map(b => b.content), effectiveContent];
       const verdict = humanGate({
         tier: userTier,
-        texts: [...burst.map(b => b.content), effectiveContent],
+        texts: gateTexts,
         names: mergeHumanNames(humanNamesFromEnv(), {
           blue: await learnedHumanNames(holdRedis as unknown as NameRedis | null, "blue"),
         }),
@@ -1811,6 +1821,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         mentionedHumans,
         blueHolder,
       });
+      humanUnnamed = verdict.kind === "proceed"
+        ? !companionNamedIn({ texts: gateTexts, companionMentioned: senderCtx.isMentioned, replyToCompanion: isReplyToMe })
+        : verdict.kind === "blue_thread";
       if (verdict.kind === "silent") {
         console.log(`[${COMPANION_ID}] human address: ${userTier === "owner" ? "raziel" : "blue"} -> ${verdict.addressee}, the triad stays quiet (msg=${message.id})`);
         railSuppressed(COMPANION_ID, "human_address", { channelId: message.channelId, detail: `to ${verdict.addressee}` });
@@ -1851,6 +1864,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               else void coldRun;
             }
           }
+          blueColdPicked = coldPicked;
           if (!coldPicked) {
             console.log(`[${COMPANION_ID}] unnamed message from blue -- ${verdict.holder ? `${verdict.holder} holds Blue's thread, standing down` : "no companion holds Blue's thread, nobody answers"} (msg=${message.id})`);
             railSuppressed(COMPANION_ID, "blue_thread", { channelId: message.channelId, detail: verdict.holder ? `held by ${verdict.holder}` : "no holder" });
@@ -1996,6 +2010,47 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         }
       }
       return;
+    }
+
+    // HUMAN ADDRESS, JEV (2026-10-25, human-jev-gate.ts). The regex gate above needs punctuation after
+    // a name; "Corbin look at this" from Raziel to a member of Blue's system got Drevan's answer on
+    // the 10-25 movie night. Here, AFTER shouldRespond (so in a hosted room only the host pays the
+    // call, and the siblings it silenced never wait) and before anything is fetched or generated, the
+    // bots that would speak on an UNNAMED human line in a room two humans share ask Jev once: is this
+    // a human's line (probability mass on raziel + blue + someone_else)? Yes = every one of them stays
+    // quiet. Never for a named, mentioned or replied-to line (humanUnnamed is false), never on a cold
+    // Blue line (the cold pick already mass-gated it), never in an owner-only room or a DM, and
+    // fail-open on every failure: a Jev timeout answers exactly as before this gate existed.
+    let humanJev: HumanJevGateResult | null = null;
+    if (humanUnnamed && !blueColdPicked && !isReplyToMe && !senderCtx.isMentioned
+        && !!channelEntry && !channelEntry.modes?.includes("owner_only")) {
+      const jevMode = humanJevGateMode();
+      if (jevMode !== "off") {
+        const side = userTier === "owner" ? "raziel" as const : "blue" as const;
+        humanJev = await runHumanJevGate({
+          mode: jevMode,
+          companionId: COMPANION_ID as CompanionId,
+          messageId: message.id,
+          channelId: message.channelId,
+          speakerSide: side,
+          speakerLabel: author,
+          content: effectiveContent,
+          holder: side === "blue" ? blueHolderSeen : (senderCtx.activeExchangeWith as CompanionId | null | undefined) ?? null,
+          redis: redis as unknown as HumanJevRedis | null,
+          fetchRecent: async () => {
+            const hist = await message.channel.messages.fetch({ limit: 8 });
+            return addressTurnsFrom([...hist.values()]
+              .filter(m => m.id !== message.id && m.createdTimestamp <= message.createdTimestamp)
+              .sort((a, b) => a.createdTimestamp - b.createdTimestamp));
+          },
+        });
+        if (humanJev.silent) {
+          const v = humanJev.verdict;
+          console.log(`[${COMPANION_ID}] human address (jev): ${side} -> ${v?.top ?? "-"} mass=${v?.mass?.toFixed(2) ?? "-"}, the triad stays quiet (msg=${message.id})`);
+          railSuppressed(COMPANION_ID, "human_address", { channelId: message.channelId, detail: `jev to ${v?.top ?? "-"} mass=${v?.mass?.toFixed(2) ?? "-"}` });
+          return;
+        }
+      }
     }
 
     if (!message.channel.isTextBased()) return;
@@ -2687,15 +2742,18 @@ ${widened}`;
         mentioned: senderCtx.isMentioned,
         // A host room's unaddressed owner message is the host's alone (shouldRespond already
         // silenced the others), so the host must not then lose an empty bid to the floor (R5).
+        // Blue's lines get the same floor (2026-10-25): his 18:56 group call in #movie-night drew
+        // three bids of 0.10 against a care-hold floor and the host answered nothing.
         namedMe: directlyAddressed || namedByExtract || isOwnerDm || blueThreadMine
-          || (channelEntry?.host === COMPANION_ID && attribution.isOwner),
+          || (channelEntry?.host === COMPANION_ID && (attribution.isOwner || userTier === "intimate")),
         replyToMe: isReplyToMe,
       });
       if (fast === null) {
         const signals = buildFitSignals({
           me: COMPANION_ID,
           content: effectiveContent,
-          activeExchangeWith: senderCtx.activeExchangeWith,
+          // On Blue's line the thread that counts is BLUE's (the per-human hold), not Raziel's holder.
+          activeExchangeWith: userTier === "intimate" ? blueHolderSeen : senderCtx.activeExchangeWith,
           recent: railHistory
             .filter(m => m.id !== message.id)
             .slice()
@@ -2714,7 +2772,8 @@ ${widened}`;
         // NEVER for the owner's own messages (holdFloorApplies, 2026-08-16): the hold quiets
         // ambient traffic, not answering Raziel -- three unaddressed owner messages got stonewalled
         // by all three bots under a meds_missed hold, which is withdrawal wearing a care flag.
-        const careHold = holdFloorApplies(careHoldActive(COMPANION_ID), senderCtx.isOwner);
+        // Blue is family, not ambient traffic (2026-10-25): his group call bids against the normal floor too.
+        const careHold = holdFloorApplies(careHoldActive(COMPANION_ID), senderCtx.isOwner || userTier === "intimate");
         // How late this bot reached the bid. THE number to read out of these logs: the deadline anchor
         // tolerates arrival spread only up to BID_WINDOW_MS, and 2500ms is an estimate of how far apart
         // three hermes gateways finish the upstream ambient judge. If the spread across the three bots
@@ -2739,7 +2798,9 @@ ${widened}`;
           // Shifted by the burst settle this turn waited (0 = none): all three bots reach the bid
           // settleMs after the message, so an unshifted deadline is already past and each would
           // read only its own bid. Keyed on the newest (answering) message, same in all three bots.
-          deadlineAt: bidDeadlineAt(message.createdTimestamp, settleMs),
+          // When the live Jev gate ran, re-anchored on its verdict's publish time (shared via Redis),
+          // since the message anchor is already past by the time Jev answers (bidDeadlineAfterGate).
+          deadlineAt: bidDeadlineAfterGate(message.createdTimestamp, settleMs, humanJev?.verdict?.publishedAt),
           ...(b32Floor.minScore !== undefined ? { minScore: b32Floor.minScore } : {}),
         });
         // Log the WHOLE round, every time. The weights and MIN_BID_TO_SPEAK are a first estimate;
