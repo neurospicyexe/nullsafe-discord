@@ -1,4 +1,4 @@
-import { fetchOpenSubtitles, pickSubtitle, OPENSUBTITLES_BASE } from "../opensubtitles.js";
+import { fetchOpenSubtitles, pickSubtitle, parseTitleQuery, normalizeTitle, OPENSUBTITLES_BASE } from "../opensubtitles.js";
 
 type Call = { url: string; init: RequestInit | undefined };
 
@@ -39,7 +39,82 @@ describe("pickSubtitle", () => {
   });
 });
 
+// The 10-26 movie night: the top HI track for "The Evil Dead 1981" belonged to another film.
+const EVIL_DEAD_SEARCH = {
+  data: [
+    { attributes: { language: "en", hearing_impaired: true, download_count: 50000, release: "Horse.Movie.SDH",
+      files: [{ file_id: 900, file_name: "wrong.srt" }],
+      feature_details: { feature_type: "Movie", title: "Some Horse Film", year: 1981, imdb_id: 11111 } } },
+    { attributes: { language: "en", hearing_impaired: true, download_count: 40000, release: "Evil.Dead.2013.SDH",
+      files: [{ file_id: 901, file_name: "remake.srt" }],
+      feature_details: { feature_type: "Movie", title: "Evil Dead", year: 2013, imdb_id: 1288558 } } },
+    { attributes: { language: "en", hearing_impaired: false, download_count: 3000, release: "The.Evil.Dead.1981.BRrip.YIFY",
+      files: [{ file_id: 902, file_name: "yify.srt" }],
+      feature_details: { feature_type: "Movie", title: "The Evil Dead", year: 1981, imdb_id: 83907 } } },
+  ],
+};
+
+describe("parseTitleQuery", () => {
+  test("trailing year, bracketed year, tt id, imdb: id", () => {
+    expect(parseTitleQuery("The Evil Dead 1981")).toEqual({ title: "The Evil Dead", year: 1981, imdbId: null });
+    expect(parseTitleQuery("The Evil Dead (1981)")).toEqual({ title: "The Evil Dead", year: 1981, imdbId: null });
+    expect(parseTitleQuery("The Evil Dead tt0083907")).toEqual({ title: "The Evil Dead", year: null, imdbId: 83907 });
+    expect(parseTitleQuery("tt0083907")).toEqual({ title: "", year: null, imdbId: 83907 });
+    expect(parseTitleQuery("The Evil Dead 1981 imdb:83907")).toEqual({ title: "The Evil Dead", year: 1981, imdbId: 83907 });
+  });
+  test("a title that IS a year stays a title", () => {
+    expect(parseTitleQuery("1917")).toEqual({ title: "1917", year: null, imdbId: null });
+    expect(parseTitleQuery("1917 2019")).toEqual({ title: "1917", year: 2019, imdbId: null });
+  });
+  test("normalizeTitle drops the article and punctuation", () => {
+    expect(normalizeTitle("The Evil Dead")).toBe(normalizeTitle("evil dead"));
+    expect(normalizeTitle("Evil Dead II")).not.toBe(normalizeTitle("Evil Dead"));
+  });
+});
+
+describe("pickSubtitle with a film check", () => {
+  test("rejects the wrong film even when it is HI and most downloaded (10-26)", () => {
+    const p = pickSubtitle(EVIL_DEAD_SEARCH.data, parseTitleQuery("The Evil Dead 1981"));
+    expect(p?.fileId).toBe(902);
+    expect(p).toMatchObject({ matchedTitle: "The Evil Dead", matchedYear: 1981, hearingImpaired: false });
+  });
+  test("an IMDb id pins the film", () => {
+    expect(pickSubtitle(EVIL_DEAD_SEARCH.data, parseTitleQuery("tt1288558"))?.fileId).toBe(901);
+  });
+  test("a confirmed match beats a detail-less track; nothing matching -> null", () => {
+    const bare = { attributes: { language: "en", hearing_impaired: true, download_count: 99999, files: [{ file_id: 7 }] } };
+    expect(pickSubtitle([bare, EVIL_DEAD_SEARCH.data[2]!], parseTitleQuery("The Evil Dead"))?.fileId).toBe(902);
+    expect(pickSubtitle([EVIL_DEAD_SEARCH.data[0]!], parseTitleQuery("The Evil Dead 1981"))).toBeNull();
+  });
+});
+
 describe("fetchOpenSubtitles", () => {
+  test("sends year / imdb_id, returns the matched film, refuses a wrong-film-only result", async () => {
+    const ok = fakeFetch({
+      [`${OPENSUBTITLES_BASE}/subtitles`]: () => jsonRes(200, EVIL_DEAD_SEARCH),
+      [`${OPENSUBTITLES_BASE}/download`]: () => jsonRes(200, { link: "https://dl.example/y" }),
+      "https://dl.example/": () => new Response("1\n00:00:01,000 --> 00:00:02,000\nJoin us\n", { status: 200 }),
+    });
+    const r = await fetchOpenSubtitles("The Evil Dead 1981", { apiKey: "k", username: "", password: "", fetchFn: ok.fn });
+    expect(ok.calls[0]!.url).toContain("query=The+Evil+Dead");
+    expect(ok.calls[0]!.url).toContain("year=1981");
+    expect(r).toMatchObject({ fileId: 902, matchedTitle: "The Evil Dead", matchedYear: 1981 });
+
+    const byId = fakeFetch({
+      [`${OPENSUBTITLES_BASE}/subtitles`]: () => jsonRes(200, EVIL_DEAD_SEARCH),
+      [`${OPENSUBTITLES_BASE}/download`]: () => jsonRes(200, { link: "https://dl.example/y" }),
+      "https://dl.example/": () => new Response("x", { status: 200 }),
+    });
+    await fetchOpenSubtitles("tt0083907", { apiKey: "k", username: "", password: "", fetchFn: byId.fn });
+    expect(byId.calls[0]!.url).toContain("imdb_id=83907");
+    expect(byId.calls[0]!.url).not.toContain("query=");
+
+    const wrong = fakeFetch({ [`${OPENSUBTITLES_BASE}/subtitles`]: () => jsonRes(200, { data: [EVIL_DEAD_SEARCH.data[0]] }) });
+    await expect(fetchOpenSubtitles("The Evil Dead 1981", { apiKey: "k", username: "", password: "", fetchFn: wrong.fn }))
+      .rejects.toThrow(/none for "The Evil Dead" \(1981\); add the year or an IMDb id/);
+    expect(wrong.calls).toHaveLength(1);
+  });
+
   test("no key -> clear error, no network", async () => {
     const { fn, calls } = fakeFetch({});
     await expect(fetchOpenSubtitles("Skinamarink", { apiKey: "", fetchFn: fn })).rejects.toThrow(/OPENSUBTITLES_API_KEY is not set/);

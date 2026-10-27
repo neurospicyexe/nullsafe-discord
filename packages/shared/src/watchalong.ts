@@ -21,7 +21,7 @@
 
 import { halsethEnv } from "./halseth-command-env.js";
 import { parseCaptions, summarizeCues, type Cue, type CueKind } from "./captions.js";
-import { fetchOpenSubtitles } from "./opensubtitles.js";
+import { fetchOpenSubtitles, parseTitleQuery } from "./opensubtitles.js";
 import { fetchVideoCaptions } from "./video.js";
 import { COMMAND_PREFIX } from "./command-triggers.js";
 
@@ -331,7 +331,10 @@ export interface LoadedCaptions {
 
 export interface CaptionDeps {
   ytDlpSubs?: (url: string) => Promise<{ text: string; title: string | null }>;
-  openSubtitles?: (title: string) => Promise<{ text: string; fileId: number; fileName: string | null; hearingImpaired: boolean }>;
+  openSubtitles?: (title: string) => Promise<{
+    text: string; fileId: number; fileName: string | null; hearingImpaired: boolean;
+    release?: string | null; matchedTitle?: string | null; matchedYear?: number | null;
+  }>;
   hasOpenSubtitlesKey?: () => boolean;
 }
 
@@ -371,9 +374,14 @@ export async function loadCaptions(
   if (d.hasOpenSubtitlesKey()) {
     try {
       const r = await d.openSubtitles(t);
+      // Name the film the track belongs to in the "loaded" reply (10-26: a wrong film loaded silently and
+      // ran for an hour). A bare IMDb id request takes the matched title as the session title.
+      const film = r.matchedTitle ? `${r.matchedTitle}${r.matchedYear ? ` (${r.matchedYear})` : ""}` : null;
+      const label = (r.hearingImpaired ? "OpenSubtitles, HI" : "OpenSubtitles") +
+        (film ? `: ${film}` : ": film unconfirmed") + (r.release ? `, ${r.release.slice(0, 60)}` : "");
       return {
         cues: parseCaptions(r.text), source: "opensubtitles", sourceRef: String(r.fileId),
-        sourceLabel: r.hearingImpaired ? "OpenSubtitles, HI" : "OpenSubtitles", discoveredTitle: null,
+        sourceLabel: label, discoveredTitle: film && parseTitleQuery(t).title === "" ? film : null,
       };
     } catch (err) {
       throw new NoCaptionsError(String(err instanceof Error ? err.message : err));

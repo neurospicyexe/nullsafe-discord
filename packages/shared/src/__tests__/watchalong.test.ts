@@ -440,7 +440,16 @@ describe("loadCaptions source order", () => {
     });
     expect(r.source).toBe("opensubtitles");
     expect(r.sourceRef).toBe("7");
-    expect(r.sourceLabel).toBe("OpenSubtitles, HI");
+    expect(r.sourceLabel).toBe("OpenSubtitles, HI: film unconfirmed");
+  });
+  test("the loaded label names the matched film; a bare IMDb id takes it as the title (10-26 wrong film)", async () => {
+    const os = async () => ({ text: SRT, fileId: 8, fileName: "y.srt", hearingImpaired: false,
+      release: "The.Evil.Dead.1981.BRrip.YIFY", matchedTitle: "The Evil Dead", matchedYear: 1981 });
+    const r = await loadCaptions("The Evil Dead 1981", null, { ytDlpSubs: never, hasOpenSubtitlesKey: () => true, openSubtitles: os });
+    expect(r.sourceLabel).toBe("OpenSubtitles: The Evil Dead (1981), The.Evil.Dead.1981.BRrip.YIFY");
+    expect(r.discoveredTitle).toBeNull();
+    const byId = await loadCaptions("tt0083907", null, { ytDlpSubs: never, hasOpenSubtitlesKey: () => true, openSubtitles: os });
+    expect(byId.discoveredTitle).toBe("The Evil Dead (1981)");
   });
   test("no key -> NoCaptionsError", async () => {
     await expect(loadCaptions("Skinamarink", null, { ytDlpSubs: never, openSubtitles: never, hasOpenSubtitlesKey: () => false }))
