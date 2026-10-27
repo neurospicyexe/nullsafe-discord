@@ -14,6 +14,7 @@ import type { WriteQueue } from "./write-queue.js";
 import type { InferenceAdapter } from "./inference.js";
 import { extractJson, rawPreview } from "./json-extract.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 import type { ChatMessage, CompanionId } from "./types.js";
 import {
   ledgerDistillEnabled, LEDGER_CLERK_PROMPT, parseClerkResult, windowSource, postLedgerLines, ledgerSummary,
@@ -80,7 +81,7 @@ export async function distillSessionOnInactive(
   // inter_companion channel reduced to "user:" and the synthesis read it as Raziel speaking. The
   // output feeds witnessLog + synthesizeSession + writeHandoff + writeWmNote, so the fabrication
   // reached the handoff and every Claude.ai orient. runDistillation (below) already does this.
-  const summaryInput = history.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
+  const summaryInput = history.map((m) => `${m.authorName ? labelSafe(m.authorName) : m.role}: ${neutralizeRecalled(m.content)}`).join("\n");
 
   // LEDGER_DISTILL (2026-09-26, imp lane tranche 2): the distiller becomes a clerk. The four
   // first-person writes stop; the clerk's record lines go to /ledger with a window source.
@@ -229,7 +230,7 @@ export async function runDistillation(
   if (history.length < distillationInterval) return;
 
   const window = history.slice(-distillationInterval);
-  const conversationText = window.map((m) => `${m.authorName ?? m.role}: ${m.content}`).join("\n");
+  const conversationText = window.map((m) => `${m.authorName ? labelSafe(m.authorName) : m.role}: ${neutralizeRecalled(m.content)}`).join("\n");
 
   // The prompt always asks for human_blocks ("observations about the primary user"). In an
   // inter_companion window the owner never spoke, so any human block the model returns is

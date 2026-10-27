@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 process.env["DEEPSEEK_API_KEY"] = "test-key";
 const { prompt, promptWithScratchpad } = await import("../deepseek.js");
-const { OWNER_PRONOUN_RULE } = await import("@nullsafe/shared");
+const { OWNER_PRONOUN_RULE, RECALLED_DATA_RULE } = await import("@nullsafe/shared");
 
 function okReply(content: string): Response {
   return {
@@ -42,13 +42,14 @@ describe("prompt() -- owner pronoun rule default", () => {
     expect(sys.content).toContain(OWNER_PRONOUN_RULE);
   });
 
-  it("pushes a system message containing just the rule when none was given", async () => {
+  // Since 2026-10-27 the same hook carries the quoted-material rule (recalled-text.ts), once.
+  it("pushes a system message containing just the rules when none was given", async () => {
     await prompt("say hi");
     const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     const body = bodyOf(call);
     const sys = body.messages.find(m => m.role === "system");
     expect(sys).toBeDefined();
-    expect(sys!.content).toBe(OWNER_PRONOUN_RULE);
+    expect(sys!.content).toBe(`${OWNER_PRONOUN_RULE}\n\n${RECALLED_DATA_RULE}`);
   });
 
   it("omits the rule entirely when ownerPronounRule: false and no system message is given", async () => {

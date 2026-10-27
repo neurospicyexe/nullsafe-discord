@@ -21,6 +21,7 @@
 import type { ChannelConfig } from "./types.js";
 import { relativeTime } from "./relative-time.js";
 import { sanitizeRoomPart } from "./room-tag.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 /** `discord-live/<channel_id>/<message_id>.md` -> the two ids, or null if it is not that shape. */
 export function parseDiscordLivePath(vaultPath: string | undefined | null): { channelId: string; messageId: string } | null {
@@ -171,10 +172,10 @@ export function buildRecallContext(
     : ordered.slice(-(WIDEN_BEFORE + 1 + WIDEN_AFTER));
   const lines = window
     .map(m => {
-      const body = String(m.content ?? "").replace(/\s+/g, " ").trim();
+      const body = neutralizeRecalled(String(m.content ?? "")).replace(/\s+/g, " ").trim();
       if (!body) return null;
       const mark = at >= 0 && m.id === anchorId ? " ←" : "";
-      return `  ${m.author}: ${body.length > 180 ? body.slice(0, 180) + "…" : body}${mark}`;
+      return `  ${labelSafe(m.author)}: ${body.length > 180 ? body.slice(0, 180) + "…" : body}${mark}`;
     })
     .filter((l): l is string => l !== null);
   if (!lines.length) return null;

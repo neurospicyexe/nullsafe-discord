@@ -20,6 +20,7 @@
 //   TRUSTED_GUILD_IDS=a,b     override the trusted servers (default: home + the server shared with Blue)
 
 import type { ChatMessage } from "./types.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 /** Nullsafe Halseth (home) and the server Raziel shares with Blue (guild-seed.ts GUILD_TRIAD_GUILD_ID). */
 export const DEFAULT_TRUSTED_GUILD_IDS = ["1497731504577712191", "1556107154065334272"] as const;
@@ -104,8 +105,7 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
     const newest = kept[kept.length - 1]!.timestamp!;
     const lines = [`${room.label}, last at ${clock(newest)}:`];
     for (const m of kept) {
-      const who = m.role === "assistant" ? `${p.selfName} (you)` : (m.authorName ?? "someone");
-      lines.push(`[${who}]: ${oneLine(m.content, CROSS_ROOM_ITEM_CAP)}`);
+      lines.push(`[${m.role === "assistant" ? `${p.selfName} (you)` : labelSafe(m.authorName ?? "someone")}]: ${oneLine(neutralizeRecalled(m.content), CROSS_ROOM_ITEM_CAP)}`);
     }
     sections.push({ newest, lines });
   }

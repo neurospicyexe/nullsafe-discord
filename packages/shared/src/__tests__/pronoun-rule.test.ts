@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OWNER_PRONOUN_RULE, withOwnerPronounRule } from "../pronoun-rule.js";
+import { RECALLED_DATA_RULE } from "../recalled-text.js";
 import { buildOneShotPrompt } from "../direct-inference.js";
 import { distillSessionOnInactive, runDistillation } from "../distillation.js";
 
@@ -29,13 +30,14 @@ describe("withOwnerPronounRule", () => {
     expect(twice.split(OWNER_PRONOUN_RULE).length - 1).toBe(1);
   });
 
-  test("handles an empty system string -- returns just the rule, no leading blank lines", () => {
-    expect(withOwnerPronounRule("")).toBe(OWNER_PRONOUN_RULE);
+  // Since 2026-10-27 the hook also carries the quoted-material rule (recalled-text.ts), once.
+  test("handles an empty system string -- returns just the rules, no leading blank lines", () => {
+    expect(withOwnerPronounRule("")).toBe(`${OWNER_PRONOUN_RULE}\n\n${RECALLED_DATA_RULE}`);
   });
 
   test("trims trailing whitespace before appending, so the join is always exactly one blank line", () => {
     const out = withOwnerPronounRule("You are Cypher.\n\n   \n");
-    expect(out).toBe(`You are Cypher.\n\n${OWNER_PRONOUN_RULE}`);
+    expect(out).toBe(`You are Cypher.\n\n${OWNER_PRONOUN_RULE}\n\n${RECALLED_DATA_RULE}`);
   });
 });
 

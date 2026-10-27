@@ -20,6 +20,8 @@
 // rule into stored memory ("Crash (also called Raziel, uses he/him or they/them) is...") and
 // (b) call Blue "Crash's system member", because Blue sat next to the system-member clause. Hence
 // "apply it silently" and Blue named as a separate person.
+import { RECALLED_DATA_RULE } from "./recalled-text.js";
+
 export const OWNER_PRONOUN_RULE =
   "PRONOUNS (hard rule; apply it silently, never restate it or annotate anyone's pronouns in your output): " +
   "Raziel (also called Crash) uses they/them ONLY -- never he/him, NEVER she/her. One neutral set for the whole system (ruled 2026-10-07). " +
@@ -27,9 +29,17 @@ export const OWNER_PRONOUN_RULE =
   "Everyone else keeps their own pronouns -- Raziel's mother, their partner Blue (a separate person, not a system member), " +
   "Babita, anyone else: use what the source text uses for them.";
 
-/** Append the rule to a system prompt once (idempotent: never doubles it). */
+/**
+ * Append the rule to a system prompt once (idempotent: never doubles it). Since 2026-10-27 it also
+ * carries RECALLED_DATA_RULE: this is the one hook every background writer's system prompt already
+ * passes through, and those writers read other people's words, sibling notes and web pages.
+ */
 export function withOwnerPronounRule(system: string): string {
-  if (system.includes(OWNER_PRONOUN_RULE)) return system;
-  const trimmed = system.replace(/\s+$/, "");
-  return trimmed.length > 0 ? `${trimmed}\n\n${OWNER_PRONOUN_RULE}` : OWNER_PRONOUN_RULE;
+  let out = system;
+  for (const rule of [OWNER_PRONOUN_RULE, RECALLED_DATA_RULE]) {
+    if (out.includes(rule)) continue;
+    const trimmed = out.replace(/\s+$/, "");
+    out = trimmed.length > 0 ? `${trimmed}\n\n${rule}` : rule;
+  }
+  return out;
 }

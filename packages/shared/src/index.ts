@@ -36,6 +36,7 @@ export {
 export * from "./shared-context.js";
 export * from "./prompt-assembly.js";
 export * from "./pronoun-rule.js";
+export * from "./recalled-text.js";
 export * from "./distillation.js";
 export * from "./day-distillation.js";
 export * from "./ledger-clerk.js";

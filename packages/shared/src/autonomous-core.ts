@@ -60,6 +60,7 @@ import {
   type ReachDmResult, type Route,
 } from "./reach-dm.js";
 import type { OwnerDmLane } from "./owner-dm.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 import {
   badNightMode, heartbeatEligibility, liveSiblingDm, filterDmMovesForSiblingDm, b32Log,
   COME_AS_YOURSELF_LINE, DREVAN_HOLD_LINE, type RedisLike,
@@ -1277,7 +1278,7 @@ export async function runInterCompanion(ctx: AutonomousContext): Promise<void> {
           ordered.map(m => ({ authorId: m.author.id, authorIsBot: isBotTurn(m), createdTimestamp: m.createdTimestamp })),
           new Set<string>(),
         );
-        const lines = ordered.map(m => `${m.author.username}: ${m.content.slice(0, 300)}`);
+        const lines = ordered.map(m => `${labelSafe(m.author.username)}: ${neutralizeRecalled(m.content.slice(0, 300))}`);
         if (lines.length > 0) historyBlock = lines.join("\n");
       }
     } catch { /* fall back to quiet */ }

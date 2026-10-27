@@ -27,6 +27,7 @@ import type { CompanionId } from "./types.js";
 import type { LibrarianClient, LedgerFunction, LedgerSourceKind } from "./librarian.js";
 import { extractJson } from "./json-extract.js";
 import { withOwnerPronounRule } from "./pronoun-rule.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 /** Knob values that mean OFF (trimmed, case-insensitive). Anything else, including unset, is ON. */
 const LEDGER_OFF_VALUES: ReadonlySet<string> = new Set(["off", "0", "false", "no"]);
@@ -72,7 +73,8 @@ export function companionDisplayName(id: string): string {
  */
 export function clerkTranscript(msgs: ChatMessage[], companionId: string): string {
   const self = companionDisplayName(companionId);
-  return msgs.map((m) => `${m.authorName ?? (m.role === "assistant" ? self : m.role)}: ${m.content}`).join("\n");
+  // Speaker labels made safe and control tokens defused (2026-10-27): a clerk reads other people's words.
+  return msgs.map((m) => `${m.authorName ? labelSafe(m.authorName) : (m.role === "assistant" ? self : m.role)}: ${neutralizeRecalled(m.content)}`).join("\n");
 }
 
 /** Max record lines per clerk pass (spec section 5). */

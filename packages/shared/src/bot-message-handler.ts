@@ -126,6 +126,7 @@ import {
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { isPass } from "./director-invite.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 // Writeback gate mode (2026-09-21). Read ONCE per process: a knob re-read per message would
 // let the three modes interleave mid-conversation, and the shadow measurement needs a stable
@@ -2491,7 +2492,8 @@ ${widened}`;
         .map(m => {
           const cid = BOT_ID_COMPANION[m.author.id];
           const lbl = cid ? cid.charAt(0).toUpperCase() + cid.slice(1) : m.author.username;
-          return `${lbl}: "${m.content.slice(0, 2000)}"`;  // Discord max is 2000 -- never truncate a peer's real message
+          // Sibling model output: control tokens defused (recalled-text.ts, 2026-10-27). Quotes left as-is.
+          return `${lbl}: "${neutralizeRecalled(m.content.slice(0, 2000))}"`;  // Discord max is 2000 -- never truncate a peer's real message
         });
       contextPrompt += turnFraming({
         isCompanionBot: senderCtx.isCompanionBot,
@@ -3703,7 +3705,7 @@ ${widened}`;
     if (pulseCount >= PULSE_INTERVAL && !isOwnerDm) {
       pulseCounter.set(message.channelId, 0);
       const recentTurns = stmStore.get(message.channelId).slice(-PULSE_INTERVAL)
-        .map(m => `${m.authorName ?? m.role}: ${m.content.slice(0, 200)}`)
+        .map(m => `${m.authorName ? labelSafe(m.authorName) : m.role}: ${neutralizeRecalled(m.content.slice(0, 200))}`)
         .join("\n");
       writeQueue.fireAndForget(`pulse:${message.channelId}`, () =>
         librarian.writeWmNote(`[discord:pulse] Recent exchange:\n${recentTurns}`, message.channelId));

@@ -162,9 +162,11 @@ export function inferTemperature(message: string, mood?: string | null): number 
 // ── Prefix author labels ──────────────────────────────────────────────────────
 
 function toApiMessage(m: ChatMessage): { role: string; content: string } {
+  // Every user-role history message passes here: the speaker label is made safe and control tokens
+  // defused (recalled-text.ts, 2026-10-27). Idempotent, so text already defused upstream is unchanged.
   const content = m.role === "user" && m.authorName
-    ? `[${m.authorName}]: ${m.content}`
-    : m.content;
+    ? `[${labelSafe(m.authorName)}]: ${neutralizeRecalled(m.content)}`
+    : m.role === "user" ? neutralizeRecalled(m.content) : m.content;
   return { role: m.role, content };
 }
 
@@ -857,6 +859,7 @@ export interface AdapterKeys {
 export interface AdapterUrls { lmstudio?: string; hermes?: string; forceHermes?: boolean }
 
 import { guardScriptBleed } from "./script-bleed.js";
+import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 // Build a single-provider adapter, or null when its credential / URL is absent.
 function buildAdapter(

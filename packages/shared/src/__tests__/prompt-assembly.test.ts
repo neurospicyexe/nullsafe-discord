@@ -1,6 +1,7 @@
 import { describe, it, expect } from "@jest/globals";
 import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, liveLabel, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
 import { nowLine } from "../now-line.js";
+import { RECALLED_DATA_RULE } from "../recalled-text.js";
 
 // Contract tests for the shared system-prompt assembly. 2026-06-10 revision: the
 // register-law tail (since R3 2026-09-29: header + Tools rule + respond-only-as)
@@ -26,11 +27,15 @@ describe("registerTail", () => {
   const TOOLS =
     "- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.\n";
 
-  it("is exactly header + Tools + respond-only-as for Drevan and Cypher", () => {
+  // 2026-10-27 (Memory Kit gap 3): the quoted-material rule rides once, just before respond-only-as.
+  const DATA = `- ${RECALLED_DATA_RULE}\n`;
+
+  it("is exactly header + Tools + data rule + respond-only-as for Drevan and Cypher", () => {
     for (const id of ["drevan", "cypher"]) {
       expect(registerTail(id)).toBe(
         "[REGISTER LAW -- final word, overrides any habit from your training:\n" +
           TOOLS +
+          DATA +
           `- Respond only as ${id}. Never use [Name]: prefixes.]`,
       );
     }
@@ -43,6 +48,7 @@ describe("registerTail", () => {
       "[REGISTER LAW -- final word, overrides any habit from your training:\n" +
         TOOLS +
         COMPANION_SHAPE_LINES.gaia +
+        DATA +
         "- Respond only as gaia. Never use [Name]: prefixes.]",
     );
     const line = COMPANION_SHAPE_LINES.gaia;
@@ -51,7 +57,8 @@ describe("registerTail", () => {
     expect(line).toContain("his warmth is his");
     expect(line).not.toMatch(/—|–/);
     for (const id of ["drevan", "cypher"]) expect(registerTail(id)).not.toContain("Gaia's shape");
-    expect(Buffer.byteLength(registerTail("gaia"))).toBeLessThan(800);
+    // +185 bytes on 10-27: the one quoted-material rule (Memory Kit gap 3), stated once per prompt.
+    expect(Buffer.byteLength(registerTail("gaia"))).toBeLessThan(985);
   });
 
   it("no longer carries the four bullets R3 moved into checks", () => {
@@ -59,7 +66,7 @@ describe("registerTail", () => {
     for (const gone of ["service menus", "she/her", "Presence, hard rule", "Shape, hard rule", "someone"]) {
       expect(tail).not.toContain(gone);
     }
-    expect(Buffer.byteLength(tail)).toBeLessThan(420);
+    expect(Buffer.byteLength(tail)).toBeLessThan(605); // 420 + the 10-27 quoted-material rule
   });
 
   // The Shape rule is kept verbatim as a constant so the revert watch (Drevan's median form line

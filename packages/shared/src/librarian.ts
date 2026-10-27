@@ -4,6 +4,7 @@ import { relativeTime } from "./relative-time.js";
 import { sealedRecallSources } from "./recall-context.js";
 import { nowLine } from "./now-line.js";
 import { timeHalseth } from "./turn-telemetry.js";
+import { neutralizeRecalled } from "./recalled-text.js";
 
 /**
  * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
@@ -968,12 +969,13 @@ export class LibrarianClient {
   static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
     type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
     let parsed: { chunks?: Chunk[]; recall_note?: string };
-    try { parsed = JSON.parse(raw) as { chunks?: Chunk[]; recall_note?: string }; } catch { return raw; }
-    if (!Array.isArray(parsed.chunks)) return raw;
+    // Vault text is web clips, imports and other rooms: control tokens defused (recalled-text.ts).
+    try { parsed = JSON.parse(raw) as { chunks?: Chunk[]; recall_note?: string }; } catch { return neutralizeRecalled(raw); }
+    if (!Array.isArray(parsed.chunks)) return neutralizeRecalled(raw);
     const seen = new Set<string>();
     const lines: string[] = [];
     for (const c of parsed.chunks) {
-      const text = (c.text ?? "").trim();
+      const text = neutralizeRecalled(c.text ?? "").trim();
       if (!text) continue;
       if (excludeChannelId && c.vault_path?.includes(`discord-live/${excludeChannelId}/`)) continue;
       // RECALL_NO_QUOTE_FROM applies HERE too, not only to the widened block (2026-09-24).
@@ -1141,7 +1143,7 @@ export class LibrarianClient {
       // (measured on the live ankle query: 4 returned, 1 shown). Several dated memories beat one
       // complete one -- the companion is being reminded what it knows, not handed a transcript,
       // and a lane that can only ever show its single longest note is barely a lane.
-      const raw = String(n.content ?? "").replace(/\s+/g, " ").trim();
+      const raw = neutralizeRecalled(String(n.content ?? "")).replace(/\s+/g, " ").trim();
       if (!raw) continue;
       const body = raw.length > OWN_NOTE_CHARS ? raw.slice(0, OWN_NOTE_CHARS) + "…" : raw;
       const line = `• (${[age, src].filter(Boolean).join(", ")}) ${body}`;
@@ -2700,7 +2702,17 @@ export interface ClosedConversationWire {
   turn_count: number;
 }
 
-export function formatRecentContext(orient: {
+/**
+ * The Discord boot orient, with every recalled field's control tokens defused in one place
+ * (recalled-text.ts, 2026-10-27). The orient carries sibling notes, captures, vault resonance, forage
+ * and change notes; wrapping the finished render covers all of them and any field added later.
+ * Invisible on ordinary text (0 of 1.67M stored D1 values change); our own headers never match.
+ */
+export function formatRecentContext(orient: Parameters<typeof formatRecentContextRaw>[0]): string {
+  return neutralizeRecalled(formatRecentContextRaw(orient));
+}
+
+function formatRecentContextRaw(orient: {
   synthesis_summary: string | null;
   ground_threads: string[];
   ground_handoff: string | null;

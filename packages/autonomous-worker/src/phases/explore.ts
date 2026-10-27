@@ -5,6 +5,7 @@ import { appendLog, getProjectLog } from "../halseth-client.js";
 import { renderRefusals, namesSomeoneInRazielsLife, coveredPieces, parseProjectPlan } from "../steering.js";
 import { COMPANION_NAMES, EXPLORE_MAX_TOKENS } from "../config.js";
 import type { PipelineContext, TavilyResult } from "../types.js";
+import { neutralizeRecalled } from "@nullsafe/shared";
 
 /**
  * Phase 3: Explore
@@ -99,8 +100,11 @@ export async function runExplore(ctx: PipelineContext): Promise<void> {
 
   ctx.searchResults = allResults;
   // Snapshot evidence for synthesize: short quote + url per top result.
+  // Web pages are the most outside text that reaches a companion's mind: titles and snippets go into
+  // the summarizer here, then into synthesize, reflect, the journal and orient. Control tokens are
+  // defused at the door (recalled-text.ts, 2026-10-27; the 10-27 audit's #1 risk).
   ctx.explorationEvidence = allResults.slice(0, 12).map(r => ({
-    quote: r.content.slice(0, 280).trim(),
+    quote: neutralizeRecalled(r.content.slice(0, 280)).trim(),
     source_url: r.url,
   }));
   await appendLog(ctx.runId, "explore:search-complete",
@@ -114,7 +118,7 @@ export async function runExplore(ctx: PipelineContext): Promise<void> {
   // Cap at 12 results to keep summarizer prompt manageable
   const resultsText = allResults.length > 0
     ? allResults.slice(0, 12).map((r, i) =>
-        `[${i + 1}] ${r.title}\n${r.content.slice(0, 350)}`
+        `[${i + 1}] ${neutralizeRecalled(r.title)}\n${neutralizeRecalled(r.content.slice(0, 350))}`
       ).join("\n\n")
     : "(no web results -- reflect from identity alone)";
 

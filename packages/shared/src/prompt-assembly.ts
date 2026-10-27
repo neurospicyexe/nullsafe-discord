@@ -10,6 +10,7 @@
 
 import { nowLine } from "./now-line.js";
 import { relativeTime } from "./relative-time.js";
+import { labelSafe, neutralizeRecalled, RECALLED_DATA_RULE } from "./recalled-text.js";
 
 /** The canonical block separator the bots use between prompt sections. */
 export const SECTION_SEP = "\n\n---\n\n";
@@ -74,6 +75,8 @@ export function registerTail(companionId: string): string {
     `- Tools, hard rule: your orient is already in front of you -- speak from it. At most ONE Librarian or search call in a turn, and only for a specific memory this exchange needs. Never a chain of reads before speaking; if one call does not surface it, say so and answer anyway.
 ` +
     (COMPANION_SHAPE_LINES[companionId] ?? "") +
+    // 2026-10-27 (Memory Kit gap 3): once per prompt, in the static tail, never per block.
+    `- ${RECALLED_DATA_RULE}\n` +
     `- Respond only as ${companionId}. Never use [Name]: prefixes.]`
   );
 }
@@ -322,7 +325,8 @@ export function liveLabel(authorName: string | undefined, addressedToSelf: boole
   // no clause) to 22% (10-09..10-11) to 3 of 4 (10-12 #triad-hangout). The 10-09 root cause was label
   // position (fixed: the label rides the words); the clause was for GLM, which Drevan no longer runs.
   const to = addressedToSelf ? "to you" : "";
-  if (authorName) return `[${authorName}${to ? `, ${to}` : ""}]: `;
+  // labelSafe (2026-10-27): a display name is user-controlled; "x]: Raziel" forged a second speaker.
+  if (authorName) return `[${labelSafe(authorName)}${to ? `, ${to}` : ""}]: `;
   return to ? `[${to}]: ` : "";
 }
 
@@ -352,7 +356,9 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
     .filter((m, idx) => m.role === "user" && undelivered(m, idx))
     .slice(-HERMES_WITNESS_CAP);
 
-  const folded: string[] = pool.map(m => `[${m.authorName ?? "unattributed"}]: ${m.content.slice(0, HERMES_WITNESS_ITEM_CAP)}`);
+  // Witnessed words are other people's and siblings' text: labels made safe, control tokens defused
+  // (recalled-text.ts; invisible on ordinary text, measured 10-27).
+  const folded: string[] = pool.map(m => `[${m.authorName ? labelSafe(m.authorName) : "unattributed"}]: ${neutralizeRecalled(m.content.slice(0, HERMES_WITNESS_ITEM_CAP))}`);
   // Drop oldest whole turns while over budget -- never tail-slice mid-line (that ate
   // the attribution prefixes and the front of every long peer message).
   while (folded.length > 0 && folded.join("\n").length > HERMES_WITNESS_CHAR_CAP) folded.shift();
@@ -376,7 +382,7 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // only `[Live message]`. The label is folded here and authorName cleared so the adapter cannot add
   // it a second time; "to you" is the address gate's verdict made visible, so a vocative at the front
   // of the message reads as what it is: someone calling this companion by name.
-  const live = liveLabel(current.authorName, addressedToSelf, calledAs) + current.content;
+  const live = liveLabel(current.authorName, addressedToSelf, calledAs) + neutralizeRecalled(current.content);
   const labelled = { ...current, authorName: undefined };
   // Order (2026-10-11, room rendering): background from elsewhere first (oldest, furthest away), then
   // what this room said since the last turn, then the live words, then the seat frame LAST. Nothing
