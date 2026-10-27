@@ -394,8 +394,11 @@ export const BRIEFING_MIDDAY_CRON  = process.env["BRIEFING_MIDDAY_CRON"]  ?? "0 
 export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "45 19 * * *"; // 7:45 PM CDT = 00:45 UTC (8 PM = peak start)
 
 // Vibe-check (triad self-monitoring digest, witnessed by Gaia). Once daily; always-on (no gate).
-// 9 PM server local (America/Chicago) -- end of day, after the evening briefing.
-export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "15 23 * * *"; // 11:15 PM CDT = 04:15 UTC (9 PM sat inside 01:00-04:00 UTC peak; later also reads a fuller day)
+// 19:55 server local (America/Chicago), Raziel 10-27: before his 22:00-06:00 quiet window. History:
+// 21:00 sat inside the 01:00-04:00 UTC provider peak, so it moved to 23:15 (inside the window). 19:55
+// CDT = 00:55 UTC clears both; in CST (from 11-01) it is 01:55 UTC, inside the peak edge -- the window
+// wins that trade. The digest reads ~3h less of the day than at 23:15.
+export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "55 19 * * *";
 
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.

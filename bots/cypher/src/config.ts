@@ -69,7 +69,8 @@ export function loadBotConfig(): BotConfig {
 }
 
 export const CYPHER_CRON_SCHEDULES = {
-  taskCheck:      process.env["CYPHER_CRON_TASKS"]          ?? "0 22 * * *",
+  // 21:30, not 22:00 (Raziel 10-27): 22:00 was the first minute of his quiet window (22:00-06:00).
+  taskCheck:      process.env["CYPHER_CRON_TASKS"]          ?? "30 21 * * *",
   weeklyAudit:    process.env["CYPHER_CRON_AUDIT"]          ?? "0 18 * * 0",
   heartbeat:      process.env["CYPHER_CRON_HEARTBEAT"]      ?? "0 */4 * * *",
   interCompanion: process.env["CYPHER_CRON_INTER"]          ?? "0 */2 * * *",
