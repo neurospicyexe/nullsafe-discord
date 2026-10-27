@@ -3156,9 +3156,14 @@ ${widened}`;
     const factsMode = readFactsPickMode(process.env, COMPANION_ID);
     let factsBlock: string | null = null;
     if (factsMode !== "off" && message.guildId && !isOwnerDm && !isSol && !senderCtx.isCompanionBot) {
+      // Prior turns as Jev context (current message is STM's last entry, so excluded). Speaker-labelled the
+      // way Raziel saw them on the label page; facts-pick keeps the last 3, clipped, and never logs them.
+      const selfName = COMPANION_ID.charAt(0).toUpperCase() + COMPANION_ID.slice(1);
+      const recentTurns = history.slice(0, -1).slice(-3).map(m =>
+        `${m.role === "assistant" ? selfName : (m.authorName ?? "Them")}: ${m.content}`);
       const pick = pickFacts({
         companion: COMPANION_ID, channelId: message.channelId, transcriptId: inferenceSessionId,
-        message: effectiveContent, mode: factsMode, deps: { redis: redis as unknown as FactsPickRedis | null },
+        message: effectiveContent, mode: factsMode, recentTurns, deps: { redis: redis as unknown as FactsPickRedis | null },
       });
       if (factsMode === "live") factsBlock = (await pick).block;
       else void pick;

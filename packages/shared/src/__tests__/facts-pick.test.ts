@@ -71,9 +71,9 @@ describe("config", () => {
     expect(readFactsPickMode(env({ FACTS_PICK_MODE: "live", FACTS_PICK_MODE_GAIA: "lvie" }), "gaia")).toBe("off");
   });
   it("theta and k", () => {
-    expect(readFactsPickTheta(env({}), "gaia")).toBe(0.6);
+    expect(readFactsPickTheta(env({}), "gaia")).toBe(0.65);
     expect(readFactsPickTheta(env({ FACTS_PICK_THETA: "0.7", FACTS_PICK_THETA_GAIA: "0.5" }), "gaia")).toBe(0.5);
-    expect(readFactsPickTheta(env({ FACTS_PICK_THETA: "x" }), "gaia")).toBe(0.6);
+    expect(readFactsPickTheta(env({ FACTS_PICK_THETA: "x" }), "gaia")).toBe(0.65);
     expect(readFactsPickK(env({}))).toBe(12);
     expect(readFactsPickK(env({ FACTS_PICK_K: "5" }))).toBe(5);
     expect(readFactsPickK(env({ FACTS_PICK_K: "-1" }))).toBe(12);
@@ -116,6 +116,29 @@ describe("pickFacts", () => {
     expect(jevBody.questions.f0.type).toBe("noul");
     expect(jevBody.questions.f0.instructions).toContain("SECRETFACT-0");
     expect(jevBody.state).toContain("Drevan");
+  });
+
+  // 2026-10-26: offline A/B on Raziel's 32 labelled turns. Recent turns in Jev's state lifted AUC 0.74 -> 0.83
+  // (the message alone often does not say what "it" or "he" is); the "would it help <companion>" wording
+  // beat "would it need" at the same precision (recall 0.51 -> 0.90 at P ~0.43).
+  it("recent turns ride Jev's state (clipped, last 3) and the question asks whether the fact helps the companion", async () => {
+    const f = fakeFetch({ items: FACTS.slice(0, 2), jevAnswers: {} });
+    const long = "x".repeat(900);
+    await pickFacts({ ...base, mode: "shadow", recentTurns: ["Them: one", "Drevan: two", "Them: three", `Them: ${long}`], deps: { fetch: f.fn, env: env(), logWriter } });
+    const jevBody = JSON.parse(f.calls[1]!.body!);
+    expect(jevBody.state).toMatch(/^Recent conversation:\nDrevan: two\nThem: three\nThem: x+…\n\nMessage to Drevan/);
+    expect(jevBody.state).not.toContain("Them: one");
+    expect(jevBody.state.length).toBeLessThan(1200);
+    expect(jevBody.questions.f0.instructions).toMatch(/^Would knowing this fact help Drevan reply well/);
+    expect(jevBody.questions.f0.instructions).toContain("SECRETFACT-0");
+    // privacy: the shadow log never carries turn text
+    expect(logs.join("\n")).not.toContain("three");
+  });
+
+  it("no recent turns -> state is the message alone, as before", async () => {
+    const f = fakeFetch({ items: FACTS.slice(0, 1), jevAnswers: {} });
+    await pickFacts({ ...base, mode: "shadow", deps: { fetch: f.fn, env: env(), logWriter } });
+    expect(JSON.parse(f.calls[1]!.body!).state).toMatch(/^Message to Drevan/);
   });
 
 
@@ -196,7 +219,7 @@ describe("pickFacts", () => {
     expect(logs[0]).not.toContain("skipped dinner");
     const row = JSON.parse(logs[0]!);
     expect(row.msg_hash).toBe(createHash("sha256").update(base.message).digest("hex").slice(0, 12));
-    expect(row).toMatchObject({ companion: "drevan", channel: "c1", mode: "shadow", msg_len: base.message.length, theta: 0.6, k: 12 });
+    expect(row).toMatchObject({ companion: "drevan", channel: "c1", mode: "shadow", msg_len: base.message.length, theta: 0.65, k: 12 });
     expect(typeof row.ms).toBe("number");
     // Every shortlisted fact carries Jev's p, so theta can be calibrated from shadow rows.
     expect(row.shortlist[0]).toEqual({ id: "fact0", category: "home", score: 0.9, p: 0.9 });

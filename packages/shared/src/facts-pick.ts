@@ -48,9 +48,11 @@ function posInt(raw: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
+// 0.65 since 2026-10-26: the context + "help" question scores everything higher, so the old 0.55-0.6 cut
+// would pass nearly every fact. On Raziel's 32 labelled turns 0.65 gave P 0.43 / R 0.90 (was P 0.43 / R 0.51).
 export function readFactsPickTheta(env: NodeJS.ProcessEnv = process.env, companion?: string): number {
   const per = companion ? env[`FACTS_PICK_THETA_${companion.toUpperCase()}`] : undefined;
-  return num(per, num(env.FACTS_PICK_THETA, 0.6));
+  return num(per, num(env.FACTS_PICK_THETA, 0.65));
 }
 
 export function readFactsPickK(env: NodeJS.ProcessEnv = process.env): number {
@@ -74,6 +76,9 @@ export function readFactsPickSkipCategories(env: NodeJS.ProcessEnv = process.env
 
 export const FACTS_PICK_CAP = 5;
 const MSG_CLIP = 4_000;
+/** Recent turns given to Jev as context: the last few, each clipped. Never logged. */
+const TURNS_MAX = 3;
+const TURN_CLIP = 300;
 
 export interface FactsPickRedis {
   set(key: string, val: string, ex: "EX", seconds: number, nx: "NX"): Promise<string | null>;
@@ -95,6 +100,8 @@ export interface FactsPickInput {
   transcriptId: string;
   message: string;
   mode: FactsPickMode;
+  /** Prior turns, oldest first, already speaker-labelled ("Drevan: ..."). Only the last 3 are used. */
+  recentTurns?: string[];
   deps?: FactsPickDeps;
 }
 
@@ -130,19 +137,30 @@ export function factsSeenKey(companion: string, channelId: string, transcriptId:
   return `ns:facts:seen:${companion}:${channelId}:${transcriptId}:${factId}`;
 }
 
-export function buildFactsQuestions(shortlist: ShortItem[]): Record<string, JevQuestion> {
+// "Would it HELP <companion>" rather than "would the reply NEED it" (2026-10-26 A/B on Raziel's labels):
+// "need" scored facts that make a reply better or more careful (the ankle when they say they're sore) as
+// irrelevant. The explicit "who or what / what they mean / with care" list is what Raziel labelled for.
+export function buildFactsQuestions(shortlist: ShortItem[], companionName = "the companion"): Record<string, JevQuestion> {
   const qs: Record<string, JevQuestion> = {};
   shortlist.forEach((f, i) => {
     qs[`f${i}`] = {
       type: "noul",
-      instructions: `Would replying well to this message need this fact about Raziel: ${f.fact}`,
+      instructions:
+        `Would knowing this fact help ${companionName} reply well to this message? It helps if it explains who or what ` +
+        `the message is about, what they mean, or how to answer with care. Fact about Raziel and their household: ${f.fact}`,
       criteria: {
-        true: "Yes, the reply is better or safer for knowing it",
-        false: "No, it is not relevant to what is being said",
+        true: "Yes, the reply is better or more careful for knowing it",
+        false: "No, the reply would be just as good without it",
       },
     };
   });
   return qs;
+}
+
+function recentTurnsBlock(turns: string[] | undefined): string {
+  const lines = (turns ?? []).filter(t => t && t.trim()).slice(-TURNS_MAX)
+    .map(t => (t.length > TURN_CLIP ? `${t.slice(0, TURN_CLIP)}…` : t).replace(/\s*\n\s*/g, " "));
+  return lines.length ? `Recent conversation:\n${lines.join("\n")}\n\n` : "";
 }
 
 async function defaultLogWriter(path: string, line: string): Promise<void> {
@@ -221,8 +239,10 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
   const msg = input.message.length > MSG_CLIP ? `${input.message.slice(0, MSG_CLIP)} …` : input.message;
   const jev = await postJev({
     purpose: `facts pick for ${companion}`,
-    state: `Message to ${cName} from Raziel (or their household):\n\n${msg}`,
-    questions: buildFactsQuestions(sl),
+    // Recent turns first (2026-10-26): the message alone often doesn't say what "it" or "he" is; with the
+    // last 3 turns Jev's separation of needed facts went 0.74 -> 0.83 AUC on the labelled set.
+    state: `${recentTurnsBlock(input.recentTurns)}Message to ${cName} from Raziel (or their household):\n\n${msg}`,
+    questions: buildFactsQuestions(sl, cName),
   }, { env, fetchImpl: doFetch, timeoutMs: Math.min(4_000, remaining), tag: "[facts-pick]" });
   if (!jev.ok) { log.error = `jev_${jev.reason}`; return null; }
 
