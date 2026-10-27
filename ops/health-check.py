@@ -1476,6 +1476,43 @@ def check_jev_calibration(rep, path=None, now=None):
         rep.add("jev:calibration", "ok", "%d rows / %sd, no drift, no elevated fallback" % (data.get("rows", 0), data.get("window_days", "?")))
 
 
+BACKUP_MARKER = os.environ.get("BACKUP_MARKER", "/app/logs/backup-last.json")
+BACKUP_D1_STALE_HOURS = float(os.environ.get("BACKUP_D1_STALE_HOURS", "36"))
+BACKUP_SB_STALE_DAYS = float(os.environ.get("BACKUP_SB_STALE_DAYS", "9"))
+
+
+def check_backups(rep, path=None, now=None):
+    """Backups (2026-10-27). halseth/scripts/backup/backup-nullsafe.ps1 runs daily on the WORKSTATION
+    (Task Scheduler): exports Halseth D1 + Second Brain's vault queue, weekly the 3.6 GB vector store,
+    PROVES each one restorable, pulls them into Documents\\Nullsafe-Backups, then writes this marker
+    over ssh. Only a VERIFIED backup moves a timestamp, so one rule catches every way it can fail
+    silently: a failed export, a broken script, a task that never fired, the workstation off.
+    Before this there were no backups at all; the stores lived only on Cloudflare and this VPS."""
+    path = path or BACKUP_MARKER
+    now = now if now is not None else time.time()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as e:
+        rep.add("backup:marker", "warning", "no readable backup marker at %s (%s) -- NO backup has been verified; "
+                "run halseth/scripts/backup/backup-nullsafe.ps1 on the workstation" % (path, type(e).__name__))
+        return
+    for key, label, limit_h, what in (
+        ("d1_at", "backup:d1", BACKUP_D1_STALE_HOURS, "Halseth D1 + vault queue (daily)"),
+        ("sb_at", "backup:second_brain", BACKUP_SB_STALE_DAYS * 24, "Second Brain vector store (weekly)"),
+    ):
+        at = data.get(key)
+        if not isinstance(at, (int, float)):
+            rep.add(label, "warning", "%s: never verified (no %s in the marker)" % (what, key))
+            continue
+        age_h = (now - at) / 3600.0
+        if age_h > limit_h:
+            rep.add(label, "warning", "%s: last verified backup %.0fh ago (limit %.0fh) -- workstation off, "
+                    "task not firing, or the backup failing (Documents\\Nullsafe-Backups\\backup.log)" % (what, age_h, limit_h))
+        else:
+            rep.add(label, "ok", "%s: verified %.0fh ago" % (what, age_h))
+
+
 def check_ledger_handoffs(rep, logs=None, now=None):
     """Ledger lane (2026-09-26 review, L2b): a companion that had Discord activity in the last 24h
     but got ZERO accepted distiller ledger lines has a silently stale Claude.ai handoff -- under
@@ -1544,6 +1581,7 @@ def main():
         check_deepinfra_spend(rep)
         check_direct_inference(rep)
         check_jev_calibration(rep)
+        check_backups(rep)
         if not ledger_distill_off(denv):
             check_ledger_handoffs(rep)
     except Exception as e:
