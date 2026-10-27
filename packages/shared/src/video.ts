@@ -114,15 +114,33 @@ export function isYouTubeUrl(s: string): boolean {
  * Explicit English codes, NOT `en.*`. The glob matched every auto-TRANSLATED track YouTube offers
  * (`en-ar`, `en-zh`, ... 4,842 of them on one video, probed 2026-10-23) and yt-dlp started downloading
  * all of them until YouTube answered 429. `en-orig` is the auto-caption code for the spoken language.
+ *
+ * `en-orig` is asked for FIRST. Without a manual track, the auto `en` can be a machine TRANSLATION
+ * (`lang=es&tlang=en` on the 2026-10-27 Mann Gulch video, which YouTube's ASR had tagged Spanish), and
+ * YouTube 429s translated tracks on sight. yt-dlp aborts at the first failed track, so with `en` first the
+ * real English (`en-orig`, 1,515 cues) was never reached and the whole watch failed. Order here is the
+ * DOWNLOAD order only; which landed file gets read is `pickCaptionFile`'s call.
  */
-export const CAPTION_LANGS = ["en", "en-US", "en-GB", "en-orig"] as const;
+export const CAPTION_LANGS = ["en-orig", "en", "en-US", "en-GB"] as const;
 
-/** Prefer the plain English track, then regional, then the auto `en-orig`, then whatever landed. */
-export function pickCaptionFile(files: readonly string[]): string | null {
+const MANUAL_PREFERENCE = ["en", "en-US", "en-GB"] as const;
+
+/**
+ * Which landed track to read: a MANUAL English track first (the uploader's own words), then the untranslated
+ * auto `en-orig`, then an auto `en`/regional (possibly a translation, but it landed), then whatever landed.
+ * `manual` is the language list from `%(subtitles)j`; without it every `en*` file is treated as auto.
+ */
+export function pickCaptionFile(files: readonly string[], manual: readonly string[] = []): string | null {
   const vtt = files.filter(f => f.toLowerCase().endsWith(".vtt"));
   if (vtt.length === 0) return null;
-  for (const lang of CAPTION_LANGS) {
-    const hit = vtt.find(f => f.toLowerCase().endsWith(`.${lang.toLowerCase()}.vtt`));
+  const fileFor = (lang: string) => vtt.find(f => f.toLowerCase().endsWith(`.${lang.toLowerCase()}.vtt`));
+  const manualLower = new Set(manual.map(l => l.toLowerCase()));
+  for (const lang of MANUAL_PREFERENCE) {
+    const hit = manualLower.has(lang.toLowerCase()) ? fileFor(lang) : undefined;
+    if (hit) return hit;
+  }
+  for (const lang of ["en-orig", ...MANUAL_PREFERENCE]) {
+    const hit = fileFor(lang);
     if (hit) return hit;
   }
   return vtt.find(f => /\.en[-_][a-z]+\.vtt$/i.test(f)) ?? vtt[0] ?? null;
@@ -400,6 +418,9 @@ export interface FetchedCaptions {
   meta: VideoMeta;
   vtt: string | null;
   captionKind: "manual" | "auto" | null;
+  /** Set when captions were offered but none could be downloaded (a 429, say): the video info still came
+   *  back, so the pipeline can try speech-to-text and, failing that, say WHY instead of "no captions". */
+  captionError?: string;
 }
 
 function ytDlpBin(): { bin: string; extra: string[] } {
@@ -412,7 +433,9 @@ function ytDlpBin(): { bin: string; extra: string[] } {
 /**
  * One yt-dlp run: captions written to `dir`, two JSON lines on stdout (info subset, then manual-subtitle
  * map). A non-zero exit with a caption file on disk is a SUCCESS (one 429 on a second track must not throw
- * away the one that landed); a non-zero exit with nothing on disk is diagnosed like `listen` does.
+ * away the one that landed). A non-zero exit with no caption but the info line on stdout returns
+ * `vtt: null` + `captionError`, so the pipeline can still transcribe the audio; with nothing at all it is
+ * diagnosed like `listen` does.
  */
 export async function fetchVideoCaptions(url: string): Promise<FetchedCaptions> {
   const { bin, extra } = ytDlpBin();
@@ -420,6 +443,7 @@ export async function fetchVideoCaptions(url: string): Promise<FetchedCaptions> 
   try {
     let stdout = "";
     let stderr = "";
+    let captionError: string | undefined;
     try {
       const r = await execFileP(bin, [
         ...extra, "--no-playlist", "--skip-download", "--no-simulate", "--no-progress",
@@ -434,18 +458,24 @@ export async function fetchVideoCaptions(url: string): Promise<FetchedCaptions> 
       stdout = String(e.stdout ?? "");
       stderr = String(e.stderr ?? "");
       const landed = (await readdir(dir).catch(() => [] as string[])).some(f => f.endsWith(".vtt"));
-      if (!landed || !stdout.trim()) {
+      if (!stdout.trim()) {
         console.error(`[watch] yt-dlp failed for ${url}\n${stderr.slice(-2000) || String(err)}`);
         throw new Error(diagnoseYtDlp(stderr || String(err)));
       }
-      console.warn(`[watch] yt-dlp exited non-zero but captions landed for ${url}; last line: ${stderr.trim().split(/\r?\n/).pop()?.slice(0, 200) ?? ""}`);
+      const lastLine = stderr.trim().split(/\r?\n/).filter(l => /ERROR/.test(l)).pop() ?? stderr.trim().split(/\r?\n/).pop() ?? "";
+      if (landed) {
+        console.warn(`[watch] yt-dlp exited non-zero but captions landed for ${url}; last line: ${lastLine.slice(0, 200)}`);
+      } else {
+        captionError = diagnoseYtDlp(stderr || String(err));
+        console.warn(`[watch] no caption track landed for ${url} (info did); falling through. last line: ${lastLine.slice(0, 200)}`);
+      }
     }
     const [infoLine, subsLine] = stdout.trim().split("\n");
     const meta = parseVideoInfo(infoLine ?? "{}", url);
     const manual = manualCaptionLangs(subsLine ?? "{}");
     const files = await readdir(dir);
-    const pick = pickCaptionFile(files);
-    if (!pick) return { meta, vtt: null, captionKind: null };
+    const pick = pickCaptionFile(files, manual);
+    if (!pick) return { meta, vtt: null, captionKind: null, ...(captionError ? { captionError } : {}) };
     const vtt = await readFile(path.join(dir, pick), "utf8");
     const lang = pick.replace(/^subs\./, "").replace(/\.vtt$/i, "");
     // yt-dlp writes the manual track when one exists for the code and the auto track only otherwise.
@@ -459,10 +489,10 @@ export async function fetchVideoCaptions(url: string): Promise<FetchedCaptions> 
 const STT_MAX_BYTES = 24 * 1024 * 1024;
 
 /** No captions: pull a low-bitrate mp3 and hand it to Voxtral. Bounded by duration and file size. */
-async function transcribeAudio(url: string, meta: VideoMeta, transcribe: NonNullable<WatchDeps["transcribe"]>): Promise<string> {
+async function transcribeAudio(url: string, meta: VideoMeta, transcribe: NonNullable<WatchDeps["transcribe"]>, lead: string): Promise<string> {
   const maxSec = watchSttMaxSec();
   if (typeof meta.duration_sec === "number" && meta.duration_sec > maxSec) {
-    throw new Error(`no captions on that one, and at ${formatTimestamp(meta.duration_sec)} it's past the ${Math.round(maxSec / 60)}-minute limit for transcribing the audio myself`);
+    throw new Error(`${lead}, and at ${formatTimestamp(meta.duration_sec)} it's past the ${Math.round(maxSec / 60)}-minute limit for transcribing the audio myself`);
   }
   const { bin, extra } = ytDlpBin();
   const dir = await mkdtemp(path.join(process.env["MEDIA_CACHE_DIR"] ?? tmpdir(), "watch-stt-"));
@@ -475,11 +505,11 @@ async function transcribeAudio(url: string, meta: VideoMeta, transcribe: NonNull
     } catch (err) {
       const stderr = String((err as { stderr?: string }).stderr ?? "");
       console.error(`[watch] yt-dlp audio failed for ${url}\n${stderr.slice(-2000) || String(err)}`);
-      throw new Error(`no captions on that one, and the audio download failed -- ${diagnoseYtDlp(stderr || String(err))}`);
+      throw new Error(`${lead}, and the audio download failed -- ${diagnoseYtDlp(stderr || String(err))}`);
     }
     const audioPath = path.join(dir, "audio.mp3");
     const size = (await stat(audioPath)).size;
-    if (size > STT_MAX_BYTES) throw new Error("no captions on that one, and the audio is too large to transcribe here");
+    if (size > STT_MAX_BYTES) throw new Error(`${lead}, and the audio is too large to transcribe here`);
     const buf = await readFile(audioPath);
     return await transcribe(buf, "audio.mp3", 240_000);
   } finally {
@@ -496,6 +526,7 @@ export async function runWatchPipeline(
 ): Promise<WatchResult> {
   const fetched = await fetchVideoCaptions(url);
   const { meta } = fetched;
+  const lead = fetched.captionError ? `the caption download failed (${fetched.captionError})` : "no captions on that one";
 
   let transcriptText: string;
   let source: TranscriptSource;
@@ -505,10 +536,12 @@ export async function runWatchPipeline(
     transcriptText = transcriptFromCues(cues, meta.chapters);
     source = fetched.captionKind === "manual" ? "captions" : "auto-captions";
   } else if (opts.transcribe) {
-    const raw = await transcribeAudio(url, meta, opts.transcribe);
-    if (!raw.trim()) throw new Error("no captions on that one, and the audio came back with no speech I could transcribe");
+    const raw = await transcribeAudio(url, meta, opts.transcribe, lead);
+    if (!raw.trim()) throw new Error(`${lead}, and the audio came back with no speech I could transcribe`);
     transcriptText = paragraphsFromPlainText(raw);
     source = "stt";
+  } else if (fetched.captionError) {
+    throw new Error(`the caption download failed (${fetched.captionError}), and there's no speech-to-text key on this box to transcribe the audio instead`);
   } else {
     throw new Error("that link has no English captions (manual or automatic), and there's no speech-to-text key on this box to transcribe the audio");
   }

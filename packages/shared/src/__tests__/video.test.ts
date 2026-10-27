@@ -73,9 +73,18 @@ describe("caption track selection", () => {
     expect(CAPTION_LANGS.join(",")).not.toContain("*");
   });
 
-  it("prefers plain en, then regional, then en-orig, then anything that landed", () => {
-    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en.vtt", "subs.en-US.vtt"])).toBe("subs.en.vtt");
-    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en-US.vtt"])).toBe("subs.en-US.vtt");
+  it("downloads en-orig FIRST: a translated auto `en` 429s and yt-dlp stops at the first failed track (2026-10-27)", () => {
+    expect(CAPTION_LANGS[0]).toBe("en-orig");
+  });
+
+  it("prefers a MANUAL English track, then en-orig, then auto en/regional, then anything that landed", () => {
+    // Manual tracks known: the uploader's own words win over the auto original.
+    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en.vtt", "subs.en-US.vtt"], ["en"])).toBe("subs.en.vtt");
+    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en-US.vtt"], ["en-US", "fr"])).toBe("subs.en-US.vtt");
+    // No manual English: an auto `en` may be a machine translation; the untranslated en-orig wins.
+    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en.vtt", "subs.en-US.vtt"])).toBe("subs.en-orig.vtt");
+    expect(pickCaptionFile(["subs.en-orig.vtt", "subs.en.vtt"], ["fr"])).toBe("subs.en-orig.vtt");
+    expect(pickCaptionFile(["subs.en.vtt", "subs.en-US.vtt"])).toBe("subs.en.vtt");
     expect(pickCaptionFile(["subs.en-orig.vtt"])).toBe("subs.en-orig.vtt");
     expect(pickCaptionFile(["subs.en-GB.vtt", "subs.de.vtt"])).toBe("subs.en-GB.vtt");
     expect(pickCaptionFile(["subs.de.vtt"])).toBe("subs.de.vtt");
