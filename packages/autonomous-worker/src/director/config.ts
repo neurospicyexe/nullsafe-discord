@@ -2,7 +2,9 @@
 export interface DirectorConfig {
   mode: "off" | "shadow" | "live";
   channels: string[];
-  supplyPollMs: number; silenceHours: number; wakingStartHour: number; wakingEndHour: number; tzOffsetHours: number;
+  supplyPollMs: number; silenceHours: number; wakingStartHour: number; wakingEndHour: number;
+  /** Waking-hours clock: IANA zone (DST-aware). Overridden only by an explicit DIRECTOR_TZ_OFFSET_HOURS. */
+  tz: string; tzOffsetHours: number | null;
   noUptakeMs: number; inviteTtlMs: number; turnBudget: number; order: "heat" | "recency"; limbic: boolean;
   minGapMs: number;
 }
@@ -24,7 +26,8 @@ export function directorConfig(): DirectorConfig {
     silenceHours: num("DIRECTOR_SILENCE_HOURS", 6),
     wakingStartHour: num("DIRECTOR_WAKING_START", 7, { allowZero: true }),
     wakingEndHour: num("DIRECTOR_WAKING_END", 23, { allowZero: true }),
-    tzOffsetHours: signedNum("DIRECTOR_TZ_OFFSET_HOURS", -5),
+    tz: (process.env["DIRECTOR_TZ"] ?? "").trim() || "America/Chicago",
+    tzOffsetHours: (process.env["DIRECTOR_TZ_OFFSET_HOURS"] ?? "").trim() === "" ? null : signedNum("DIRECTOR_TZ_OFFSET_HOURS", -5),
     noUptakeMs: num("DIRECTOR_NO_UPTAKE_MS", 90 * 60_000),
     inviteTtlMs: num("DIRECTOR_INVITE_TTL_MS", 3 * 60_000),
     turnBudget: num("DIRECTOR_TURN_BUDGET", 18),

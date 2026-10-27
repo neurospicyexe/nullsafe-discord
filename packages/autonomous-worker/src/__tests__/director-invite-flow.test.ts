@@ -149,7 +149,7 @@ describe("C1: floor survives a land/fade -- reset state, not deleted, so its sil
     const supply = [{ kind: "project" as const, id: "p1", table: "companion_projects", owner: "cypher", title: "p1", body: "", created_at: "2026-09-01", heat: null, consumed_by: [] }];
     const pick = floorSelection({
       states: [reset], supply, nowMs: laterT,
-      silenceHours: 6, wakingStartHour: 7, wakingEndHour: 23, tzOffsetHours: -5,
+      silenceHours: 6, wakingStartHour: 7, wakingEndHour: 23, tz: -5,
       turnsBySpeaker7d: { cypher: 0, drevan: 0, gaia: 0 },
     });
     expect(pick).toMatchObject({ channelId: "c1", companionId: "cypher" });

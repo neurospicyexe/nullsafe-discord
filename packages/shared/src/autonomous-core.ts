@@ -826,13 +826,18 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
 
     const palette = await librarian.getEligibleMetronomePalette(silenceHours)
       .catch(() => ({ actions: [], quietHours: null, reach: null }));
-    const actions = palette.actions;
     const quiet = palette.quietHours;
     // UNKNOWN IS IN FORCE. A null verdict means Halseth was unreachable or predates the field, and
     // the only thing downstream of "not in force" is a message into a channel Raziel reads. We
     // cannot tell 03:00 from 15:00 without the verdict, so the fail-closed reading is the one that
     // cannot wake him; when Halseth is down the palette is empty anyway and there is nothing to lose.
     const quietInForce = quiet ? quiet.in_force : true;
+    // Belt to Halseth's filter (2026-10-27 audit). The check below used to bite only on an EMPTY
+    // palette, so a response that carried actions but no verdict (the pre-field case named above)
+    // went out with no quiet check at all. While the window is in force or unknown, only moves marked
+    // quiet_hours_allowed survive here too (R-1: offer_presence; Halseth-only writes like
+    // write_note_to_raziel never reach Discord). With a current Halseth this removes nothing.
+    const actions = quietInForce ? palette.actions.filter((a) => a.quiet_hours_allowed === 1) : palette.actions;
     if (quietInForce && actions.length === 0) {
       // Quiet hours filter SERVER-side, so an in-force window looks exactly like "no palette
       // configured" and would otherwise drop into the legacy temperature post below (the 4am ping

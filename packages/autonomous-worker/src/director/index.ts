@@ -260,7 +260,7 @@ async function floorTick(rt: DirectorRuntime): Promise<void> {
   }
   const turns7d: Record<CompanionId, number> = { cypher: 0, drevan: 0, gaia: 0 };
   for (const s of states) for (const t of s.turns) if (t.companionId) turns7d[t.companionId]++;
-  const pick = floorSelection({ states, supply: rt.pool.items(), nowMs: rt.now(), silenceHours: cfg.silenceHours, wakingStartHour: cfg.wakingStartHour, wakingEndHour: cfg.wakingEndHour, tzOffsetHours: cfg.tzOffsetHours, turnsBySpeaker7d: turns7d });
+  const pick = floorSelection({ states, supply: rt.pool.items(), nowMs: rt.now(), silenceHours: cfg.silenceHours, wakingStartHour: cfg.wakingStartHour, wakingEndHour: cfg.wakingEndHour, tz: cfg.tzOffsetHours ?? cfg.tz, turnsBySpeaker7d: turns7d });
   if (!pick) return;
   const s = states.find((x) => x.channelId === pick.channelId)!;
   await rt.store.save(s);

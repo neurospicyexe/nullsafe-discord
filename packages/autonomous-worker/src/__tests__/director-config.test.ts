@@ -21,8 +21,13 @@ describe("director config", () => {
     process.env["DIRECTOR_ENABLED"] = "true";
     expect(cfg.directorConfig().mode).toBe("live");
     process.env["DIRECTOR_WAKING_START"] = "0";
+    delete process.env["DIRECTOR_TZ_OFFSET_HOURS"];
+    delete process.env["DIRECTOR_TZ"];
+    expect(cfg.directorConfig().tz).toBe("America/Chicago");
+    expect(cfg.directorConfig().tzOffsetHours).toBeNull();
     process.env["DIRECTOR_TZ_OFFSET_HOURS"] = "0";
     expect(cfg.directorConfig().wakingStartHour).toBe(0);
     expect(cfg.directorConfig().tzOffsetHours).toBe(0);
+    delete process.env["DIRECTOR_TZ_OFFSET_HOURS"];
   });
 });

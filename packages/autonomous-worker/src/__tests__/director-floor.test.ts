@@ -5,12 +5,24 @@ import type { DirectorSupplyItem } from "@nullsafe/shared";
 
 const T = Date.parse("2026-09-03T17:00:00.000Z"); // 12:00 CDT
 const item = (owner: string, id: string): DirectorSupplyItem => ({ kind: "project", id, table: "companion_projects", owner, title: id, body: "", created_at: "2026-09-01", heat: null, consumed_by: [] });
-const base = { nowMs: T, silenceHours: 6, wakingStartHour: 7, wakingEndHour: 23, tzOffsetHours: -5, turnsBySpeaker7d: { cypher: 5, drevan: 40, gaia: 20 } };
+const base = { nowMs: T, silenceHours: 6, wakingStartHour: 7, wakingEndHour: 23, tz: "America/Chicago", turnsBySpeaker7d: { cypher: 5, drevan: 40, gaia: 20 } };
 
 describe("silence floor", () => {
-  it("waking hour respects the tz offset", () => {
+  it("waking hour respects an explicit tz offset", () => {
     expect(isWakingHour(T, 7, 23, -5)).toBe(true);
     expect(isWakingHour(Date.parse("2026-09-03T08:00:00.000Z"), 7, 23, -5)).toBe(false); // 03:00 CDT
+  });
+  it("the default zone follows daylight saving (the fixed -5 was an hour off all winter)", () => {
+    // 12:30Z: 07:30 CDT in summer (waking), 06:30 CST in winter (not waking). -5 calls both 07:30.
+    expect(isWakingHour(Date.parse("2026-10-27T12:30:00.000Z"), 7, 23, "America/Chicago")).toBe(true);
+    expect(isWakingHour(Date.parse("2026-11-03T12:30:00.000Z"), 7, 23, "America/Chicago")).toBe(false);
+    expect(isWakingHour(Date.parse("2026-11-03T12:30:00.000Z"), 7, 23, -5)).toBe(true);
+    // 22:30 Chicago in winter is 04:30Z: still waking (end 23), and midnight is not.
+    expect(isWakingHour(Date.parse("2026-11-04T04:30:00.000Z"), 7, 23, "America/Chicago")).toBe(true);
+    expect(isWakingHour(Date.parse("2026-11-04T06:00:00.000Z"), 7, 23, "America/Chicago")).toBe(false);
+  });
+  it("an unknown zone is never waking (silent, not guessed)", () => {
+    expect(isWakingHour(T, 0, 24, "Not/AZone")).toBe(false);
   });
   it("invites the least-heard companion who has something, on the quietest channel", () => {
     const s = { ...emptyState("c1", new Date(T - 7 * 3600_000).toISOString()) };

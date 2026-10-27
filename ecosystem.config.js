@@ -513,6 +513,7 @@ module.exports = {
         DIRECTOR_SILENCE_HOURS:    process.env.DIRECTOR_SILENCE_HOURS,
         DIRECTOR_WAKING_START:     process.env.DIRECTOR_WAKING_START,
         DIRECTOR_WAKING_END:       process.env.DIRECTOR_WAKING_END,
+        DIRECTOR_TZ:               process.env.DIRECTOR_TZ,
         DIRECTOR_TZ_OFFSET_HOURS:  process.env.DIRECTOR_TZ_OFFSET_HOURS,
         DIRECTOR_NO_UPTAKE_MS:     process.env.DIRECTOR_NO_UPTAKE_MS,
         DIRECTOR_INVITE_TTL_MS:    process.env.DIRECTOR_INVITE_TTL_MS,

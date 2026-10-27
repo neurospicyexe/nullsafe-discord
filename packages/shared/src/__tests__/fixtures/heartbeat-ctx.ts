@@ -48,6 +48,8 @@ export function heartbeatCtx(opts: {
   /** relational_need as GET /mind/drives returns it; default is the dead prod reading (not fired, last
    *  owner message 9.3h ago, outside the 4h "he is here" window). */
   drive?: { level?: number; threshold?: number; fired?: boolean; hours_since_event?: number | null };
+  /** The palette's quiet-hours verdict. Default: daytime, not in force. `null` = Halseth sent none. */
+  quietHours?: { active: boolean; in_force: boolean; local_hour: number | null; tz: string } | null;
 }) {
   const lines = [...(opts.lines ?? [])];
   const decide = opts.decide ? [...opts.decide] : null;
@@ -68,7 +70,7 @@ export function heartbeatCtx(opts: {
   const librarian = {
     getEligibleMetronomePalette: jest.fn(async () => ({
       actions,
-      quietHours: { active: false, in_force: false, local_hour: 10, tz: "America/Chicago" },
+      quietHours: opts.quietHours === undefined ? { active: false, in_force: false, local_hour: 10, tz: "America/Chicago" } : opts.quietHours,
       reach: opts.reach === undefined ? OPEN_LANE : opts.reach,
     })),
     getState: jest.fn(async () => ({})),
