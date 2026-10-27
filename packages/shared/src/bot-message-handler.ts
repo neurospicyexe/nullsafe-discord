@@ -2643,6 +2643,14 @@ ${widened}`;
     // cache). Either way it can be stale by up to the refresh interval, or indefinitely stale if
     // orient has been failing -- refreshNowLine stamps a fresh one over it (or adds one if
     // somehow absent) so the model's one absolute-time anchor is never more than milliseconds old.
+    // Recalled text is data (2026-10-27): everything APPENDED to the base above -- thread spine,
+    // tripwires, recall, sibling replies, place/channel names, watchalong title, speaker frame -- is
+    // defused in one pass. The base itself (identity on the direct path) is never touched. Our own
+    // static blocks never match a rule (checked 10-27), and the helper is idempotent over blocks that
+    // were already defused upstream.
+    if (contextPrompt.startsWith(basePrompt)) {
+      contextPrompt = basePrompt + neutralizeRecalled(contextPrompt.slice(basePrompt.length));
+    }
     contextPrompt = refreshNowLine(contextPrompt);
 
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
