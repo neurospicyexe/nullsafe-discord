@@ -17,7 +17,7 @@
 //    the memory, or report the memory as broken. Raziel has had both.
 
 import { describe, it, expect, jest, beforeEach } from "@jest/globals";
-import { LibrarianClient } from "../librarian.js";
+import { LibrarianClient, MIND_SEARCH_QUERY_MAX } from "../librarian.js";
 
 describe("searchForMessage -- asks for the recall shape, not the musing shape", () => {
   let fetchMock: jest.Mock;
@@ -49,6 +49,13 @@ describe("searchForMessage -- asks for the recall shape, not the musing shape", 
     expect(url.searchParams.get("query")).toBe("did we say we would watch Fargo tonight");
     expect(url.searchParams.get("agent_id")).toBe("drevan");
     expect(url.searchParams.get("mode")).toBe("recall");
+  });
+
+  it("never sends a query Halseth would 400 on (server cap 500); a long message still gets recall", async () => {
+    await client.searchForMessage("x".repeat(700));
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.searchParams.get("query")!.length).toBe(MIND_SEARCH_QUERY_MAX);
+    expect(MIND_SEARCH_QUERY_MAX).toBe(500);
   });
 });
 

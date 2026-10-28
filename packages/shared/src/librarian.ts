@@ -237,6 +237,9 @@ export interface OwnNoteRecall {
   source?: string | null;
 }
 
+/** Halseth /mind/search rejects longer queries with a 400 (handlers/webmind.ts getMindSearch). */
+export const MIND_SEARCH_QUERY_MAX = 500;
+
 export class LibrarianClient {
   private url: string;
   private secret: string;
@@ -1162,7 +1165,10 @@ export class LibrarianClient {
   async searchForMessage(query: string, recentContext?: string | null): Promise<string | null> {
     try {
       const url = new URL(`${this.url}/mind/search`);
-      url.searchParams.set("query", query.slice(0, 800));
+      // 500, not 800 (2026-10-28, Memory Kit gap 2 measurement): Halseth's /mind/search answers 400 to any
+      // query over 500 chars (handlers/webmind.ts getMindSearch), and the !res.ok branch below returns null,
+      // so every message of 501+ chars silently got no vault recall. Same cap recallOwnNotes already uses.
+      url.searchParams.set("query", query.trim().slice(0, MIND_SEARCH_QUERY_MAX));
       url.searchParams.set("agent_id", this.companionId);
       // RECALL, not musing (2026-08-10). Per-message retrieval is asking "what did we actually say", and the
       // default pool mix spends 30% of every payload on deliberately query-blind material (pure novelty +
