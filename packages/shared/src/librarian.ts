@@ -246,6 +246,10 @@ export class LibrarianClient {
   private clerkSecret: string;
   private companionId: CompanionId;
   private _fetch: typeof fetch;
+  /** The Halseth session this bot last opened (sessionOpen), stamped on its raw journal writes so
+   *  "what I said" connects to "the conversation it was in" (halseth STATUS B61 D4, 2026-10-28).
+   *  null until a real id comes back; never a placeholder. */
+  private halsethSessionId: string | null = null;
 
   constructor(opts: LibrarianOptions) {
     this.url = opts.url.replace(/\/$/, "");
@@ -348,7 +352,16 @@ export class LibrarianClient {
    * E.g., `discord:#general`, `autonomous:worker`, `claude:code-session`
    */
   async sessionOpen(sessionType: "work" | "checkin" | "hangout" | "ritual" = "work", surface?: string) {
-    return this.ask("open my session", undefined, sessionType, surface);
+    const state = await this.ask("open my session", undefined, sessionType, surface);
+    // Every opener (boot, the consolidation re-open) goes through here, so the stamp follows rotation.
+    const id = state?.["session_id"];
+    if (typeof id === "string" && id.trim() && id !== "unknown") this.halsethSessionId = id;
+    return state;
+  }
+
+  /** The session journal writes are stamped with (null before any open). */
+  currentSessionId(): string | null {
+    return this.halsethSessionId;
   }
 
   async sessionClose(params: {
@@ -442,6 +455,7 @@ export class LibrarianClient {
         tags: ["discord", "memory-judge", ...(channelId ? [`channel:${channelId}`] : []), ...(roomTag ? [roomTag] : [])],
         source: "memory_judge",
         ...(messageId ? { external_id: `judge:${messageId}` } : {}),
+        ...(this.halsethSessionId ? { session_id: this.halsethSessionId } : {}),
       }),
       signal: AbortSignal.timeout(8_000),
     });
@@ -487,6 +501,8 @@ export class LibrarianClient {
           tags: ["discord", "speech", `channel:${channelId}`, ...(roomTag ? [roomTag] : []), ...extraTags],
           source: "discord_speech",
           external_id: `discord:${messageId}`,
+          // The session this was said in (B61 D4): the graph links speech to its conversation.
+          ...(this.halsethSessionId ? { session_id: this.halsethSessionId } : {}),
         }),
         signal: AbortSignal.timeout(8_000),
       });
