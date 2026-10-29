@@ -3320,7 +3320,13 @@ ${widened}`;
         console.warn(`[${COMPANION_ID}] self-switch to unknown model "${switchKey}" -- skipped`);
       }
     };
-    const postProcess = (raw: string) => postProcessReply(raw, { careFollowUp: !!careFollowUpTurn, hasSpine: !!spine, onModelToken: switchModel });
+    // The switch is recorded, not applied, so a [model:x] in a text the bleed guard discards never
+    // fires; only the text that posts switches, once (applied after the bleed block below).
+    let pendingSwitch: string | null = null;
+    const postProcess = (raw: string) => {
+      pendingSwitch = null;
+      return postProcessReply(raw, { careFollowUp: !!careFollowUpTurn, hasSpine: !!spine, onModelToken: (k) => { pendingSwitch = k; } });
+    };
 
     let post = postProcess(response);
     if (post.passed) { holdCarePass(); return; }
@@ -3372,6 +3378,7 @@ ${widened}`;
         }
       }
     }
+    if (pendingSwitch) switchModel(pendingSwitch);
 
     // Pre-send seat repair (2026-10-11): a reply that calls someone by this companion's own name has
     // the name cut before it reaches the room (voice-markers.ts repairMisseated). The post-send
