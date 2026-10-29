@@ -891,6 +891,10 @@ function buildAdapter(
 export const DEEPINFRA_FLASH_MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731";
 /** DeepSeek FLASH under either platform id (`deepseek-chat` is the delisted alias of flash). */
 export const isDeepSeekFlash = (model: string): boolean => /^deepseek-(v\d+-flash|chat)$/i.test(model.trim());
+// DeepInfra's pinned V4-Pro (probed 200 on 2026-10-29, which retired the "unverified" reason Pro
+// was left on direct DeepSeek). `deepseek-reasoner` is the delisted alias of pro.
+export const DEEPINFRA_PRO_MODEL = "deepseek-ai/DeepSeek-V4-Pro-0813";
+export const isDeepSeekPro = (model: string): boolean => /^deepseek-(v\d+-pro|reasoner)$/i.test(model.trim());
 
 const FALLBACK_ORDER: Array<{ provider: InferenceProvider; model: string }> = [
   // DeepInfra FIRST (2026-09-26, Raziel: ALL DeepSeek-model inference goes through DeepInfra;
@@ -945,14 +949,15 @@ export function createAdapterUnguarded(
     return new HermesAdapter(urls.hermes, keys.hermes ?? "", "", fetchFn);
   }
   const chain: Array<{ name: string; adapter: InferenceAdapter }> = [];
-  // A request for DeepSeek FLASH is served by DeepInfra first when this host holds a DeepInfra
-  // key (2026-09-26 rule: same weights; direct DeepSeek is the emergency lane). `deepseek-chat`
-  // is the delisted alias of the same model. Pro is NOT rerouted: DeepInfra hosting V4-Pro is
-  // unverified, and silently downgrading a "deep thinking" request to Flash would be a lie.
-  const reroutedToDeepInfra = provider === "deepseek" && !!keys.deepinfra && isDeepSeekFlash(model);
+  // A request for a DeepSeek model is served by DeepInfra first when this host holds a DeepInfra
+  // key (2026-09-26 rule, widened to Pro 2026-10-29 by Raziel: "everything should call
+  // deepinfra"; direct DeepSeek is the emergency lane). Flash maps to Flash and Pro to Pro, never
+  // Pro to Flash: silently downgrading a "deep thinking" request would be a lie.
+  const diModel = isDeepSeekFlash(model) ? DEEPINFRA_FLASH_MODEL : isDeepSeekPro(model) ? DEEPINFRA_PRO_MODEL : null;
+  const reroutedToDeepInfra = provider === "deepseek" && !!keys.deepinfra && diModel !== null;
   const handled = new Set<InferenceProvider>([provider]);
   if (reroutedToDeepInfra) {
-    const di = buildAdapter("deepinfra", DEEPINFRA_FLASH_MODEL, keys, urls, fetchFn, cacheKey);
+    const di = buildAdapter("deepinfra", diModel!, keys, urls, fetchFn, cacheKey);
     if (di) chain.push({ name: "deepinfra", adapter: di });
     handled.add("deepinfra");
   }

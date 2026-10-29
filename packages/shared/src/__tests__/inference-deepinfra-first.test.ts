@@ -7,7 +7,7 @@
 // else. These pin: DeepInfra first, no DeepSeek call when DeepInfra answers, a loud line on fall.
 
 import { jest, describe, it, expect, beforeEach, afterEach } from "@jest/globals";
-import { createAdapter, FELL_BACK_TAG, isDeepSeekFlash, DEEPINFRA_FLASH_MODEL } from "../inference.js";
+import { createAdapter, FELL_BACK_TAG, isDeepSeekFlash, isDeepSeekPro, DEEPINFRA_FLASH_MODEL, DEEPINFRA_PRO_MODEL } from "../inference.js";
 
 const ok = (content: string) => ({
   ok: true, status: 200,
@@ -41,15 +41,22 @@ describe("createAdapter -- DeepSeek flash requests go to DeepInfra first", () =>
     expect(warnLines().some((l) => l.includes(FELL_BACK_TAG))).toBe(true);
   }, 15000);
 
-  it("the delisted `deepseek-chat` alias is flash and reroutes too; pro is NOT rerouted", async () => {
+  it("the delisted `deepseek-chat` alias is flash and reroutes too", async () => {
     expect(isDeepSeekFlash("deepseek-chat")).toBe(true);
     expect(isDeepSeekFlash("deepseek-v4-flash")).toBe(true);
     expect(isDeepSeekFlash("deepseek-v4-pro")).toBe(false);
+  });
 
+  // 2026-10-29 (Raziel: "everything should call deepinfra"): Pro goes to DeepInfra's PRO, never
+  // downgraded to Flash, and api.deepseek.com is not touched when DeepInfra answers.
+  it.each(["deepseek-v4-pro", "deepseek-reasoner"])("%s reroutes to DeepInfra's Pro, not Flash", async (model) => {
+    expect(isDeepSeekPro(model)).toBe(true);
     const fetchMock = jest.fn(async (_url: string) => ok("pro answer"));
-    const adapter = createAdapter("deepseek", "deepseek-v4-pro", { deepseek: "dk", deepinfra: "di" }, {}, fetchMock as any);
+    const adapter = createAdapter("deepseek", model, { deepseek: "dk", deepinfra: "di" }, {}, fetchMock as any);
     await adapter.generate("sys", [{ role: "user", content: "hi" }]);
-    expect(fetchMock.mock.calls[0]![0]).toBe("https://api.deepseek.com/chat/completions");
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual(["https://api.deepinfra.com/v1/openai/chat/completions"]);
+    const body = JSON.parse(((fetchMock.mock.calls[0] as unknown[])[1] as any).body);
+    expect(body.model).toBe(DEEPINFRA_PRO_MODEL);
   });
 
   it("the resilience tail tries DeepInfra before DeepSeek for a non-DeepSeek primary", async () => {
