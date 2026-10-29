@@ -1372,6 +1372,8 @@ export class LibrarianClient {
     ground_handoff: string | null;
     rag_excerpts: string[];
     history_excerpts?: string[];
+    /** Halseth contract 0.22.0 (M6): the [Linked] block, rendered on the Worker. "" = nothing linked. */
+    graph_linked?: string;
     identity_anchor?: string | null;
     active_tensions?: string[];
     relational_state_owner?: string[];
@@ -1463,6 +1465,7 @@ export class LibrarianClient {
         ground_handoff?: string | null;
         rag_excerpts?: string[];
         history_excerpts?: string[];
+        graph_linked?: string;
         identity_anchor?: string | null;
         active_tensions?: string[];
         relational_state_owner?: string[];
@@ -1511,6 +1514,7 @@ export class LibrarianClient {
         ground_handoff: data.ground_handoff ?? null,
         rag_excerpts: Array.isArray(data.rag_excerpts) ? data.rag_excerpts : [],
         history_excerpts: Array.isArray(data.history_excerpts) ? data.history_excerpts : [],
+        graph_linked: typeof data.graph_linked === "string" ? data.graph_linked : "",
         identity_anchor: data.identity_anchor ?? null,
         active_tensions: Array.isArray(data.active_tensions) ? data.active_tensions : [],
         relational_state_owner: Array.isArray(data.relational_state_owner) ? data.relational_state_owner : [],
@@ -2740,6 +2744,7 @@ function formatRecentContextRaw(orient: {
   ground_handoff: string | null;
   rag_excerpts: string[];
   history_excerpts?: string[];
+  graph_linked?: string;
   identity_anchor?: string | null;
   active_tensions?: string[];
   relational_state_owner?: string[];
@@ -3082,6 +3087,12 @@ function formatRecentContextRaw(orient: {
       : c.winner_title ? `now experiencing "${c.winner_title}" -- bring it up if it's alive in you`
       : `round ${c.status}`;
     parts.push(`[Club] ${clubLine}`);
+  }
+  // [Linked] (Halseth 0.22.0, M6): what the things this boot showed connect to, named, rendered on
+  // the Worker exactly as Claude.ai sees it. Structure from memory, so above the ephemera boundary;
+  // last of the status blocks, so it gives way before identity or status under a tail cut.
+  if (orient.graph_linked?.trim()) {
+    parts.push(orient.graph_linked.trim());
   }
   // ── EPHEMERA BOUNDARY: nothing status-shaped below this line. ──────────────────────────────
   // Excerpt ephemera renders LAST in the unpinned rest (2026-08-16 reorder): with a tail-cut
