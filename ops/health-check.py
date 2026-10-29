@@ -659,11 +659,13 @@ def check_graph_lanes(rep, rebuild_counts):
 
 
 def check_graph_reach(rep, reach):
-    """ZERO REACH: orient rendered nothing from the graph for N boots running.
+    """ZERO REACH: orient rendered nothing from the graph for N readings running.
 
     Freshness is not reach -- the 10-27 audit found a fresh 50k-edge graph whose orient
-    neighborhood showed Fargo and little else. Each companion's last Claude.ai orient records what
-    it actually rendered (src/graph/reach.ts); one empty boot is noise, a streak is a finding.
+    neighborhood showed Fargo and little else. Each orient records what it actually rendered
+    (src/graph/reach.ts), keyed per companion and surface ("cypher" is Claude.ai, "cypher@discord"
+    the bot). An unchanged reading is recorded at most hourly, so a streak of N is N empty hours
+    on a busy surface, never N five-minute bot refreshes. One empty reading is noise.
     """
     if not isinstance(reach, dict) or not reach:
         rep.add("graph:reach", "notice", "no orient has recorded graph reach yet")
@@ -673,7 +675,7 @@ def check_graph_reach(rep, reach):
         streak = r.get("zero_streak")
         if isinstance(streak, int) and streak >= GRAPH_REACH_ZERO_STREAK:
             rep.add("graph:reach:%s" % cid, "warning",
-                    "%s's last %d orients rendered nothing from the graph (last reached: %s)"
+                    "%s: the last %d orient readings rendered nothing from the graph (last reached: %s)"
                     % (cid, streak, r.get("last_nonzero_at") or "never"))
         else:
             rep.add("graph:reach:%s" % cid, "ok", "%s orient reached %s edges / %s nodes"
