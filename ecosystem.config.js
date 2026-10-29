@@ -324,7 +324,7 @@ const shared = {
   // SUPERSEDE_SIDE_AWARE: default on; off = any human message supersedes (old rule).
   // SUPERSEDE_B: default OFF; `on` restores the mid-inference drop of a finished reply (check B).
   // BURST_SETTLE_SCOPE: `side` (default) or `speaker` (old). BURST_SETTLE_MAX_MS: default 20000, 0 = no cap.
-  // BLUE_COLD_PICK: `shadow` (default; logs the Jev pick, nobody speaks), `on`, `off`.
+  // BLUE_COLD_PICK: `on` (default since 2026-10-29, ruled live 10-25), `shadow` (logs the Jev pick, nobody speaks), `off`.
   SUPERSEDE_SIDE_AWARE:        process.env.SUPERSEDE_SIDE_AWARE,
   SUPERSEDE_B:                 process.env.SUPERSEDE_B,
   BURST_SETTLE_SCOPE:          process.env.BURST_SETTLE_SCOPE,

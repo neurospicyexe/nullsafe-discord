@@ -55,6 +55,8 @@ export const HUMAN_JEV_VERDICT_PREFIX = "ns:humanjev:verdict:";
 export const HUMAN_JEV_TTL_MS = 120_000;
 /** A waiter gives up after this (Jev's own timeout plus slack) and proceeds. */
 export const HUMAN_JEV_WAIT_MS = 6_500;
+/** The winner's Discord fetch is capped here (2026-10-29, N-3) so fetch + Jev (4s) always lands inside the waiters' window. */
+export const HUMAN_JEV_FETCH_MS = 1_500;
 const HUMAN_JEV_POLL_MS = 250;
 /** Human probability mass at or above this = the line is a human's. One threshold with the cold pick. */
 export const HUMAN_JEV_MASS = COLD_PICK_HUMAN_MASS;
@@ -106,6 +108,8 @@ export interface HumanJevGateCtx {
   now?: () => number;
   pollMs?: number;
   waitMs?: number;
+  /** Cap on the recent-turns fetch (default HUMAN_JEV_FETCH_MS). */
+  fetchMs?: number;
 }
 
 export interface HumanJevGateResult {
@@ -166,7 +170,16 @@ export async function runHumanJevGate(ctx: HumanJevGateCtx): Promise<HumanJevGat
         silent: false, mass: null, top: "-", addressee: "-", confidence: null, invites: null, why: "jev_error", publishedAt: 0,
       };
       try {
-        const turns = await ctx.fetchRecent().catch(() => [] as AddressTurn[]);
+        // 2026-10-29 (review N-3): the Discord fetch had no cap, so winner wall time = fetch + Jev (4s cap)
+        // could pass the waiters' 6.5s fail-open and the winner's verdict landed after they had already
+        // spoken. Bounded to HUMAN_JEV_FETCH_MS, falling back to no context (Jev still decides on the line).
+        const fetchMs = ctx.fetchMs ?? HUMAN_JEV_FETCH_MS;
+        let fetchTimer: ReturnType<typeof setTimeout> | undefined;
+        const turns = await Promise.race([
+          ctx.fetchRecent().catch(() => [] as AddressTurn[]),
+          new Promise<AddressTurn[]>(r => { fetchTimer = setTimeout(() => r([]), fetchMs); }),
+        ]);
+        if (fetchTimer) clearTimeout(fetchTimer);
         const res = await jev(renderJevAddressState({
           speakerSide: ctx.speakerSide, speakerLabel: ctx.speakerLabel, text: ctx.content, turns, holder: ctx.holder,
         }));

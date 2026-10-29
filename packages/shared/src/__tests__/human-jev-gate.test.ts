@@ -153,6 +153,18 @@ describe("runHumanJevGate: on", () => {
     expect(stuck.lines[0]).toMatch(/open why=wait_timeout waited_ms=\d+/);
   });
 
+  it("N-3: a hung recent-turns fetch is capped; the winner still asks Jev with no context and publishes", async () => {
+    const redis = new FakeRedis();
+    let seen = "";
+    const w = rig("on", "drevan", redis, async (state: string) => { seen = state; return ok(CORBIN); }, {
+      fetchRecent: () => new Promise(() => {}), fetchMs: 20,
+    });
+    const r = await w.run();
+    expect(r).toMatchObject({ silent: true, source: "me", verdict: { why: "jev" } });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(await redis.get(HUMAN_JEV_VERDICT_PREFIX + "m1")).toBeTruthy();
+  });
+
   it("FAILS OPEN: a throwing Jev, a throwing Redis, no Redis, ADDRESS_JEV off", async () => {
     const redis = new FakeRedis();
     const t = rig("on", "drevan", redis, async () => { throw new Error("boom"); });

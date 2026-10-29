@@ -125,7 +125,7 @@ import {
   type HoldPhrase, type ChainHistoryMsg, type RedisLike,
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
-import { isPass } from "./director-invite.js";
+import { postProcessReply } from "./reply-postprocess.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 // Writeback gate mode (2026-09-21). Read ONCE per process: a knob re-read per message would
@@ -3279,7 +3279,8 @@ ${widened}`;
     // the next position is released now instead of waiting out the TTL (like the verbatim rail below).
     // Typing already showed for this turn; a pass after "is typing..." is the accepted cost of letting
     // the companion decide with the predecessor's reply in front of it.
-    if (careFollowUpTurn && response && isPass(response)) {
+    const holdCarePass = (): void => {
+      if (!careFollowUpTurn) return;
       b32Log(COMPANION_ID, `followup(after ${careFollowUpTurn.expectedPrior})`, "pass");
       currentTurn()?.setOutcome("held");
       distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
@@ -3292,50 +3293,39 @@ ${widened}`;
         reason: "care_pass",
       });
       if (pass && redis) publishFollowUpPass(redis, pass).catch(() => {});
-      return;
-    }
+    };
 
-    // Self-switch: companion can emit [model:<key>] to request a model change.
-    if (response) {
-      const MODEL_TOKEN_RE = /\[model:([^\]]+)\]/i;
-      const tokenMatch = response.match(MODEL_TOKEN_RE);
-      if (tokenMatch) {
-        response = response.replace(MODEL_TOKEN_RE, "").trim();
-        const switchKey = tokenMatch[1].trim().toLowerCase();
-        if (apiUrls.forceHermes) {
-          // Hermes owns model routing; the token is already stripped from the visible reply.
-          // Don't rebuild/journal/announce a switch that forceHermes would silently ignore.
-        } else if (ALL_MODELS[switchKey]) {
-          const entry = ALL_MODELS[switchKey];
-          adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);
-          activeModelRef.key = switchKey;
-          activeModelRef.label = entry.label;
-          writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
-            librarian.setSetting("active_model", switchKey));
-          writeQueue.fireAndForget(`journal:model-switch:${message.channelId}`, async () => {
-            await librarian.addCompanionNote(`self-switched to ${entry.label}`, message.channelId);
-          }, { maxAgeMs: APPEND_MAX_AGE_MS });
-          // Post follow-up after main response
-          setImmediate(() => {
-            (message.channel as TextChannel).send(`[switching to ${entry.label} for this]`).catch(() => {});
-          });
-        } else {
-          console.warn(`[${COMPANION_ID}] self-switch to unknown model "${switchKey}" -- skipped`);
-        }
+    // Post-processing of one model text (2026-10-29, review N-1; reply-postprocess.ts): the care-pass
+    // hold, the [model:<key>] strip + self-switch, and the [LANDS: ...] marker parse. One helper so a
+    // script-bleed regeneration runs the SAME steps on the text that actually posts.
+    const switchModel = (switchKey: string): void => {
+      if (apiUrls.forceHermes) {
+        // Hermes owns model routing; the token is already stripped from the visible reply.
+        // Don't rebuild/journal/announce a switch that forceHermes would silently ignore.
+      } else if (ALL_MODELS[switchKey]) {
+        const entry = ALL_MODELS[switchKey];
+        adapterRef.current = createAdapter(entry.provider, entry.model, apiKeys, apiUrls, undefined, COMPANION_ID);
+        activeModelRef.key = switchKey;
+        activeModelRef.label = entry.label;
+        writeQueue.fireAndForget(`settings:model:${COMPANION_ID}`, () =>
+          librarian.setSetting("active_model", switchKey));
+        writeQueue.fireAndForget(`journal:model-switch:${message.channelId}`, async () => {
+          await librarian.addCompanionNote(`self-switched to ${entry.label}`, message.channelId);
+        }, { maxAgeMs: APPEND_MAX_AGE_MS });
+        // Post follow-up after main response
+        setImmediate(() => {
+          (message.channel as TextChannel).send(`[switching to ${entry.label} for this]`).catch(() => {});
+        });
+      } else {
+        console.warn(`[${COMPANION_ID}] self-switch to unknown model "${switchKey}" -- skipped`);
       }
-    }
+    };
+    const postProcess = (raw: string) => postProcessReply(raw, { careFollowUp: !!careFollowUpTurn, hasSpine: !!spine, onModelToken: switchModel });
 
-    // Thread spine (task 10): strip a companion-authored [LANDS: ...] marker before ANY
-    // send path below (voice synthesis, text content, and the error-fallback content all
-    // read from `response`) so the marker never reaches Discord or the TTS engine. Only
-    // parsed when a spine is active -- without one there's no thread to land, and the
-    // marker syntax is not something companions are prompted to emit.
-    // Moved above the echo gate (2026-07-21 review): the gate must score exactly the
-    // cleaned text that will actually be sent/stored, not the raw response with the
-    // marker still attached -- a marker-bearing reply used to score against its own
-    // marker syntax instead of the real content.
-    const { cleaned: spineCleanedResponse, resolution: spineResolution } = spine ? parseLandMarker(response) : { cleaned: response, resolution: null };
-    response = spineCleanedResponse;
+    let post = postProcess(response);
+    if (post.passed) { holdCarePass(); return; }
+    response = post.text;
+    let spineResolution = post.spineResolution;
 
     // Script bleed (2026-10-22, script-bleed.ts): GLM 5.3 Flash glues a Chinese character or two
     // inside an English word now and then (a weights defect, zai-org/GLM-5 #142; sampling fixed in
@@ -3366,7 +3356,20 @@ ${widened}`;
             return out;
           },
         });
-        response = regen.text;
+        // Post-process the text that will actually post (2026-10-29, N-1), and re-check supersede: the
+        // regen is a second full Hermes turn (30-120s), long enough for a newer human message to land (N-2).
+        if (regen.regenerated) {
+          if (isSuperseded?.("post")) {
+            console.log(`[${COMPANION_ID}] reply superseded during script-bleed regeneration (newer human message queued) -- dropping reply to ${message.id}`);
+            railSuppressed(COMPANION_ID, "superseded", { channelId: message.channelId });
+            distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+            return;
+          }
+          post = postProcess(regen.text);
+          if (post.passed) { holdCarePass(); return; }
+          response = post.text;
+          spineResolution = post.spineResolution;
+        }
       }
     }
 

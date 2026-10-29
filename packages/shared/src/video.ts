@@ -34,6 +34,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseCaptions, type Cue } from "./captions.js";
+import { neutralizeRecalled } from "./recalled-text.js";
 import { diagnoseYtDlp, postExperience } from "./media.js";
 
 const execFileP = promisify(execFile);
@@ -371,22 +372,24 @@ function sourceLabel(source: TranscriptSource): string {
 export function buildWatchedBlock(meta: VideoMeta, transcript: SampledTranscript, source: TranscriptSource): string {
   const lines: string[] = [];
   const duration = typeof meta.duration_sec === "number" ? ` (${formatTimestamp(meta.duration_sec)})` : "";
-  lines.push(`Video: ${meta.title}${meta.channel ? ` -- ${meta.channel}` : ""}${duration}`);
+  // Title, channel, description, chapter titles and the transcript are third-party text appended to the
+  // user turn: neutralized as data (2026-10-29, review N-6; recalled-text.ts, commit 96fa85c).
+  lines.push(`Video: ${neutralizeRecalled(meta.title)}${meta.channel ? ` -- ${neutralizeRecalled(meta.channel)}` : ""}${duration}`);
   const facts: string[] = [];
   if (meta.upload_date) facts.push(`published ${meta.upload_date}`);
   if (meta.categories.length > 0) facts.push(`YouTube files it under ${meta.categories.join(", ")}`);
   if (facts.length > 0) lines.push(facts.join("; "));
   const desc = cleanVideoDescription(meta.description);
-  if (desc) lines.push(`About (the uploader's description, trimmed): ${desc}`);
+  if (desc) lines.push(`About (the uploader's description, trimmed): ${neutralizeRecalled(desc)}`);
   if (meta.chapters.length > 0) {
     const shown = meta.chapters.slice(0, CHAPTERS_LISTED);
-    lines.push(`Chapters (${meta.chapters.length}):\n` + shown.map(c => `  [${formatTimestamp(c.start_sec)}] ${c.title}`).join("\n")
+    lines.push(`Chapters (${meta.chapters.length}):\n` + shown.map(c => `  [${formatTimestamp(c.start_sec)}] ${neutralizeRecalled(c.title)}`).join("\n")
       + (meta.chapters.length > shown.length ? `\n  … and ${meta.chapters.length - shown.length} more` : ""));
   }
   const coverage = transcript.sampled
     ? `SAMPLED -- about ${Math.max(1, Math.round(transcript.kept_ratio * 100))}% of the words, spread evenly across the runtime; every gap is marked [… skipped …]`
     : "complete";
-  lines.push(`Transcript (${sourceLabel(source)}; ${coverage}):\n${transcript.text}`);
+  lines.push(`Transcript (${sourceLabel(source)}; ${coverage}):\n${neutralizeRecalled(transcript.text)}`);
   lines.push(
     "What is above is what was said in the video, in order; you have read it, you have not seen the picture. " +
     "Speak to its content and the people in it. Do not invent lines that are not here. Where the sampling skipped a " +

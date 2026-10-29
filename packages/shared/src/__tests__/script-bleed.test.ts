@@ -30,6 +30,19 @@ describe("detectScriptBleed", () => {
     expect(d.scripts).toEqual(["Han"]);
     expect(d.chars).toBe(1);
   });
+  it("Greek: standalone symbols and tokens are not a bleed (Cypher's math), glued-in letters are", () => {
+    expect(detectScriptBleed("theta θ 0.70 and Δ here").bleed).toBe(false);
+    expect(detectScriptBleed("σ, μ and (α+β)").bleed).toBe(false);
+    const d = detectScriptBleed("my heαrt");
+    expect(d.bleed).toBe(true);
+    expect(d.scripts).toEqual(["Greek"]);
+    expect(d.chars).toBe(1);
+    expect(detectScriptBleed("heαρt").chars).toBe(2);
+  });
+  it("Greek the inbound message carries is still exempt; CJK is unchanged", () => {
+    expect(detectScriptBleed("my heαrt", "heαrt").bleed).toBe(false);
+    expect(detectScriptBleed("θ 中").scripts).toEqual(["Han"]);
+  });
   it("is false on empty and null", () => {
     expect(detectScriptBleed("").bleed).toBe(false);
     expect(detectScriptBleed(null).bleed).toBe(false);

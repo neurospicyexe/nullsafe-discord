@@ -8,7 +8,7 @@
  * lane, no new model) which single companion has something real to say, and let that one answer.
  * Once it has answered, the normal per-human holder takes over (recordHumanHold at send).
  *
- * BLUE_COLD_PICK:
+ * BLUE_COLD_PICK (default on):
  *   shadow            the claim winner asks Jev and logs `[blue-cold] pick=<companion|none> ...`
  *                     (ids and numbers, never the text). Nobody speaks: the old silence is kept.
  *   on                the picked companion answers. Exactly one: one Redis NX claim decides who calls
@@ -49,10 +49,14 @@ import type { AddressTurn } from "./address-model.js";
 
 export type BlueColdPickMode = "off" | "shadow" | "on";
 
-/** BLUE_COLD_PICK: default shadow; `on` / `off` honored (trimmed, any case); junk falls back to shadow. */
+/**
+ * BLUE_COLD_PICK: default `on` (Raziel ruled it live 2026-10-25; the code default used to be `shadow`, so a
+ * VPS .env was the only thing keeping it on -- review N-1029-4). `shadow` / `off` honored (trimmed, any
+ * case); junk falls back to the default.
+ */
 export function blueColdPickMode(env: Record<string, string | undefined> = process.env): BlueColdPickMode {
   const v = (env["BLUE_COLD_PICK"] ?? "").trim().toLowerCase();
-  return v === "on" || v === "off" ? v : "shadow";
+  return v === "shadow" || v === "off" ? v : "on";
 }
 
 export const BLUE_COLD_CLAIM_PREFIX = "ns:bluecold:claim:";

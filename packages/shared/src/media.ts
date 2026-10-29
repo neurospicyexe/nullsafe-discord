@@ -16,6 +16,7 @@ import { promisify } from "node:util";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { neutralizeRecalled } from "./recalled-text.js";
 
 const execFileP = promisify(execFile);
 
@@ -161,7 +162,9 @@ export function buildHeardBlock(
     ? (onsets / dur).toFixed(1) : null;
 
   const lines: string[] = [];
-  lines.push(`Track: ${meta.title}${meta.artist ? ` -- ${meta.artist}` : ""}${duration ? ` (${duration})` : ""}`);
+  // Title, artist and lyrics are third-party text (web-scraped lyrics most of all): neutralized as data
+  // (2026-10-29, review N-6; same treatment as the recalled-text sites, commit 96fa85c).
+  lines.push(`Track: ${neutralizeRecalled(meta.title)}${meta.artist ? ` -- ${neutralizeRecalled(meta.artist)}` : ""}${duration ? ` (${duration})` : ""}`);
   if (typeof tempo === "number") lines.push(`Tempo: ~${Math.round(tempo)} BPM${tempoNote}`);
   if (keyName) lines.push(`Key: ${keyName}${typeof keyRaw?.confidence === "number" ? ` (confidence ${keyRaw.confidence})` : ""}`);
   if (density) lines.push(`Onset density: ${density}/sec (${onsets} onsets)`);
@@ -170,7 +173,7 @@ export function buildHeardBlock(
     lines.push(`Enrichment: ${JSON.stringify(librosa).slice(0, 300)}`);
   }
   if (lyrics) {
-    const excerpt = lyrics.split("\n").filter(l => l.trim()).slice(0, 24).join("\n").slice(0, 1600);
+    const excerpt = neutralizeRecalled(lyrics.split("\n").filter(l => l.trim()).slice(0, 24).join("\n").slice(0, 1600));
     if (lyricsSource === "web") {
       // Web-scraped: partial and possibly imperfect. Tell the companion so it doesn't
       // treat a truncated first verse as the whole song.

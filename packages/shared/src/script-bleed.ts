@@ -53,7 +53,9 @@ const SCRIPTS: ReadonlyArray<readonly [string, RegExp]> = [
   ["Hangul", /\p{Script=Hangul}/gu],
   ["Tibetan", /\p{Script=Tibetan}/gu],
   ["Cyrillic", /\p{Script=Cyrillic}/gu],
-  ["Greek", /\p{Script=Greek}/gu],
+  // Greek only counts when glued inside a Latin word (letter on both sides: "heαrt"); standalone
+  // symbols and tokens ("θ 0.70", "Δ") are Cypher's math, not a bleed (2026-10-29, review N-5).
+  ["Greek", /(?<=\p{Script=Latin}\p{Script=Greek}*)\p{Script=Greek}(?=\p{Script=Greek}*\p{Script=Latin})/gu],
   ["Arabic", /\p{Script=Arabic}/gu],
   ["Hebrew", /\p{Script=Hebrew}/gu],
   ["Thai", /\p{Script=Thai}/gu],

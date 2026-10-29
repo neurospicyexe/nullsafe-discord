@@ -27,11 +27,12 @@ const verdict = (over: Partial<JevAddressVerdict> = {}): JevAddressVerdict => ({
 });
 
 describe("blueColdPickMode", () => {
-  it("defaults to shadow; on and off are honored (trimmed, any case); junk is shadow", () => {
-    expect(blueColdPickMode({})).toBe("shadow");
+  it("defaults to on (2026-10-29); shadow and off are honored (trimmed, any case); junk is the default", () => {
+    expect(blueColdPickMode({})).toBe("on");
     expect(blueColdPickMode({ BLUE_COLD_PICK: " ON " })).toBe("on");
+    expect(blueColdPickMode({ BLUE_COLD_PICK: " Shadow " })).toBe("shadow");
     expect(blueColdPickMode({ BLUE_COLD_PICK: "off" })).toBe("off");
-    expect(blueColdPickMode({ BLUE_COLD_PICK: "wat" })).toBe("shadow");
+    expect(blueColdPickMode({ BLUE_COLD_PICK: "wat" })).toBe("on");
   });
 });
 
