@@ -599,6 +599,85 @@ GRAPH_STATE_PATH = "/home/nullsafe/.nullsafe-graph-state.json"
 GRAPH_REBUILD_STALE_HOURS = float(os.environ.get("GRAPH_REBUILD_STALE_HOURS", "26"))
 GRAPH_DAILY_SNAPSHOT_SECONDS = 24 * 3600
 GRAPH_COLLAPSE_RATIO = float(os.environ.get("GRAPH_COLLAPSE_RATIO", "0.10"))
+# M7 (halseth docs/PLAN-memory-map-2026-10-28.md). A lane whose last run fell this far below the
+# run before it is worth a look even short of zero; small lanes are exempt from the ratio (a lane
+# of 6 losing 4 is noise, not a finding).
+GRAPH_LANE_DROP_RATIO = float(os.environ.get("GRAPH_LANE_DROP_RATIO", "0.50"))
+GRAPH_LANE_DROP_MIN = int(os.environ.get("GRAPH_LANE_DROP_MIN", "20"))
+GRAPH_REACH_ZERO_STREAK = int(os.environ.get("GRAPH_REACH_ZERO_STREAK", "3"))
+
+
+def _lane_counts(run):
+    """{lane_name: count} for one rebuild run: each source, plus each alongside sub-lane."""
+    out = {}
+    for s in (run or {}).get("sources") or []:
+        name = s.get("source")
+        if not name:
+            continue
+        out[name] = s.get("inserted")
+        for lane, n in (s.get("lanes") or {}).items():
+            out["%s/%s" % (name, lane)] = n
+    return out
+
+
+def check_graph_lanes(rep, rebuild_counts):
+    """DEAD LANE: a lane that held edges after the previous rebuild and holds none now.
+
+    The total-edges check cannot see this: one lane dying while the others grow keeps the sum
+    steady. Compares the Worker's own last two completed runs (src/graph/tick.ts), so there is
+    no state to keep here and the comparison is always run-over-run, never poll-over-poll.
+    """
+    if not rebuild_counts or not rebuild_counts.get("last"):
+        rep.add("graph:lanes", "notice", "no rebuild lane history yet (first M7 rebuild has not run)")
+        return
+    if not rebuild_counts.get("prev"):
+        rep.add("graph:lanes", "ok", "one rebuild recorded; lane comparison starts after the next")
+        return
+    last = _lane_counts(rebuild_counts["last"])
+    prev = _lane_counts(rebuild_counts["prev"])
+    dead, dropped = [], []
+    for name, before in sorted(prev.items()):
+        now = last.get(name)
+        if not isinstance(before, int) or before <= 0:
+            continue
+        if not isinstance(now, int) or now == 0:
+            dead.append("%s (%d -> 0)" % (name, before))
+        elif before >= GRAPH_LANE_DROP_MIN and now < before * (1 - GRAPH_LANE_DROP_RATIO):
+            dropped.append("%s (%d -> %d)" % (name, before, now))
+    if dead:
+        rep.add("graph:dead_lane", "warning",
+                "graph lane(s) produced edges last rebuild and none now: %s" % "; ".join(dead))
+    if dropped:
+        rep.add("graph:lane_drop", "notice",
+                "graph lane(s) fell by more than %d%% run-over-run: %s"
+                % (int(GRAPH_LANE_DROP_RATIO * 100), "; ".join(dropped)))
+    if not dead and not dropped:
+        diff = rebuild_counts["last"].get("diff") or {}
+        rep.add("graph:lanes", "ok", "%d lanes alive; last rebuild +%s ~%s -%s"
+                % (sum(1 for v in last.values() if isinstance(v, int) and v > 0),
+                   diff.get("added", "?"), diff.get("updated", "?"), diff.get("removed", "?")))
+
+
+def check_graph_reach(rep, reach):
+    """ZERO REACH: orient rendered nothing from the graph for N boots running.
+
+    Freshness is not reach -- the 10-27 audit found a fresh 50k-edge graph whose orient
+    neighborhood showed Fargo and little else. Each companion's last Claude.ai orient records what
+    it actually rendered (src/graph/reach.ts); one empty boot is noise, a streak is a finding.
+    """
+    if not isinstance(reach, dict) or not reach:
+        rep.add("graph:reach", "notice", "no orient has recorded graph reach yet")
+        return
+    for cid in sorted(reach):
+        r = reach[cid] or {}
+        streak = r.get("zero_streak")
+        if isinstance(streak, int) and streak >= GRAPH_REACH_ZERO_STREAK:
+            rep.add("graph:reach:%s" % cid, "warning",
+                    "%s's last %d orients rendered nothing from the graph (last reached: %s)"
+                    % (cid, streak, r.get("last_nonzero_at") or "never"))
+        else:
+            rep.add("graph:reach:%s" % cid, "ok", "%s orient reached %s edges / %s nodes"
+                    % (cid, r.get("edges", "?"), r.get("nodes", "?")))
 
 
 def check_graph_health(rep, env):
@@ -615,6 +694,7 @@ def check_graph_health(rep, env):
       * EDGES COLLAPSED  -- total row count down >10% from the last daily snapshot: a rebuild
         wipe or regression a same-run comparison would miss, since a rebuild deletes and
         re-derives within milliseconds of this check's own poll.
+    Plus M7's two (check_graph_lanes, check_graph_reach): DEAD LANE and ZERO REACH.
     """
     url = env.get("HALSETH_URL")
     secret = env.get("HALSETH_SECRET") or env.get("ADMIN_SECRET")
@@ -657,6 +737,10 @@ def check_graph_health(rep, env):
                     % (age_h, GRAPH_REBUILD_STALE_HOURS))
         else:
             rep.add("graph:rebuild_stale", "ok", "rebuilt %.1fh ago" % age_h)
+
+    # --- M7: dead lanes and zero reach. Both read only what the Worker already holds.
+    check_graph_lanes(rep, data.get("rebuild_counts"))
+    check_graph_reach(rep, data.get("reach"))
 
     live_count = data.get("live_count")
     total_count = data.get("total_count")
