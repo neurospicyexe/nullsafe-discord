@@ -1,4 +1,4 @@
-// The director's Jev (2026-10-20 redesign): echo brake (live, graduated), veto check (shadow), one decide row.
+// The director's Jev (2026-10-20 redesign): echo brake (live, graduated), one decide row.
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 vi.mock("../halseth-client.js", () => ({
@@ -36,34 +36,21 @@ const invite = { kind: "invite" as const, companionId: "gaia" as const, reason: 
 afterEach(() => { delete process.env["DIRECTOR_JEV"]; });
 
 describe("fireDirectorJev", () => {
-  it("logs the director's pick beside the echo read and a veto check on the picked companion", async () => {
+  it("logs the director's pick beside the echo read", async () => {
     const log = vi.fn();
-    const echoFn = vi.fn(ok(0.7)); const vetoFn = vi.fn(ok(0.1));
-    await fireDirectorJev(state(), invite, false, { cfg }, { echoFn, vetoFn, log, brakeCfg, vetoTheta: 0.3 }).done;
+    const echoFn = vi.fn(ok(0.7));
+    await fireDirectorJev(state(), invite, false, { cfg }, { echoFn, log, brakeCfg }).done;
     expect(echoFn.mock.calls[0]![0]).toContain("Cypher: Gaia, what do you see?");
-    expect(vetoFn).toHaveBeenCalledWith(expect.any(String), "gaia");
     expect(log).toHaveBeenCalledWith(expect.objectContaining({
       kind: "decide", channel_id: "ch1", after_msg_id: "m9", after_author: "cypher", bot_turns: 5,
       director: { kind: "invite", companion: "gaia", reason: "addressed", paced: false },
       echo: expect.objectContaining({ p: 0.7, streak: 1, action: "steer", effective: "steer", mode: "on" }),
-      veto: expect.objectContaining({ companion: "gaia", p: 0.1, theta: 0.3, would_veto: true }),
     }));
-  });
-  it("a high veto p is not a would_veto; a silence or paced invite asks no veto", async () => {
-    const log = vi.fn(); const vetoFn = vi.fn(ok(0.9));
-    await fireDirectorJev(state(), invite, false, { cfg }, { echoFn: ok(0.1), vetoFn, log, brakeCfg, vetoTheta: 0.3 }).done;
-    expect(log.mock.calls[0]![0].veto.would_veto).toBe(false);
-    vetoFn.mockClear(); log.mockClear();
-    await fireDirectorJev(state(), { kind: "silence", reason: "nothing_to_add" }, false, { cfg }, { echoFn: ok(0.1), vetoFn, log, brakeCfg }).done;
-    await fireDirectorJev(state(), invite, true, { cfg }, { echoFn: ok(0.1), vetoFn, log, brakeCfg }).done;
-    expect(vetoFn).not.toHaveBeenCalled();
-    expect(log.mock.calls.every((c) => c[0].veto === null)).toBe(true);
   });
   it("failures are logged as reasons; a throw never escapes", async () => {
     const log = vi.fn();
-    await fireDirectorJev(state(), invite, false, { cfg }, { echoFn: async () => ({ ok: false as const, reason: "http_502", wall_ms: 40 }), vetoFn: async () => { throw new Error("boom"); }, log, brakeCfg }).done;
-    expect(log.mock.calls[0]![0]).toMatchObject({ echo: { p: null, failure: "http_502", action: "none" }, veto: { p: null, would_veto: null } });
-    expect(log.mock.calls[0]![0].veto.failure).toMatch(/^throw:/);
+    await fireDirectorJev(state(), invite, false, { cfg }, { echoFn: async () => ({ ok: false as const, reason: "http_502", wall_ms: 40 }), log, brakeCfg }).done;
+    expect(log.mock.calls[0]![0]).toMatchObject({ echo: { p: null, failure: "http_502", action: "none" } });
   });
   it("DIRECTOR_JEV=off: no call, no row, no echo read", async () => {
     process.env["DIRECTOR_JEV"] = "off";

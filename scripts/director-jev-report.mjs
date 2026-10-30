@@ -3,14 +3,13 @@
  * Read-out for the director's Jev (shared/src/director-jev.ts; shadow 2026-10-13, redesigned 2026-10-20). The
  * worker appends to DIRECTOR_JEV_LOG (default /app/logs/director-jev.jsonl):
  *   kind:"decide"  per commons message the director decided on: its pick beside the echo read
- *                  {p, streak, action, effective} and the veto check {companion, p, theta, would_veto}
+ *                  {p, streak, action, effective}
  *                  (rows before 2026-10-20 carry jev{nextSpeaker, threadHasMore, echoing} instead)
  *   kind:"turn"    every commons turn ingested: who ACTUALLY spoke
  *   kind:"invite"  an invitation issued (steer:"loop_break" when it carried the echo steer);
  *   kind:"result"  how it ended (spoke / pass / expired / empty)
  *
- * Sections: 1 legacy next_speaker (old rows only; thread_has_more is gone), 2 veto shadow (would_veto rate per
- * companion, p distribution, mean p when the invitee spoke vs passed), 3 echo brake (fires, steers, by thread length).
+ * Sections: 1 legacy next_speaker (old rows only; thread_has_more is gone), 2 echo brake (fires, steers, by thread length).
  *
  * USAGE (on the VPS):  node scripts/director-jev-report.mjs [--file x.jsonl] [--days 7] [--next-window 600]
  * Ids and counts only: the log carries no message text. Read-only.
@@ -38,7 +37,7 @@ const results = new Map(rows.filter((r) => r.kind === "result").map((r) => [r.in
 const ok = decides.filter((r) => r.jev);
 const out = [];
 
-out.push(`# Director Jev (echo brake live, veto shadow)`);
+out.push(`# Director Jev (echo brake live)`);
 out.push(``);
 out.push(`Rows: decide ${decides.length} (Jev ok ${ok.length}), turn ${turns.length}, invite ${invites.length}, result ${results.size}. Window: ${DAYS > 0 ? `${DAYS}d` : "all"}.`);
 out.push(``);
@@ -89,35 +88,9 @@ else {
 }
 out.push(``);
 
-// 2. veto shadow (per-companion "does X have something to add") ---------------
-out.push(`## 2. Veto shadow (would the veto have fired on the director's pick? never acted on)`);
-out.push(``);
-const vrows = decides.filter((d) => d.veto);
-if (!vrows.length) out.push(`No veto rows yet.`);
-else {
-  const fmtQ = (xs) => (xs.length ? `p10 ${q(xs, 0.1).toFixed(2)} / p50 ${q(xs, 0.5).toFixed(2)} / p90 ${q(xs, 0.9).toFixed(2)}` : "n/a");
-  for (const c of ["cypher", "drevan", "gaia"]) {
-    const g = vrows.filter((d) => d.veto.companion === c);
-    const okv = g.filter((d) => typeof d.veto.p === "number");
-    const wv = okv.filter((d) => d.veto.would_veto).length;
-    out.push(`- ${c}: ${g.length} picks, Jev ok ${okv.length}, would_veto ${wv} (${pct(wv, okv.length)}); p ${fmtQ(okv.map((d) => d.veto.p))}`);
-  }
-  const liveV = invites.filter((i) => i.mode === "live" && results.has(i.invite_id));
-  const vFor = (inv) => vrows.filter((d) => d.channel_id === inv.channel_id && d.veto.companion === inv.companion && typeof d.veto.p === "number" && Date.parse(d.at) <= Date.parse(inv.at) + 10_000)
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
-  const vp = liveV.map((inv) => ({ res: results.get(inv.invite_id), d: vFor(inv) })).filter((x) => x.d);
-  const spokeV = vp.filter((x) => x.res.outcome === "spoke");
-  const notV = vp.filter((x) => x.res.outcome !== "spoke");
-  const meanV = (xs) => (xs.length ? (xs.reduce((s, x) => s + x.d.veto.p, 0) / xs.length).toFixed(2) : "n/a");
-  out.push(`- resolved live invites paired with a veto p: ${vp.length}; mean p when the invitee spoke: ${meanV(spokeV)} (n=${spokeV.length}); when it passed/expired/empty: ${meanV(notV)} (n=${notV.length}) (a gap is the signal)`);
-  const vetoed = vp.filter((x) => x.d.veto.would_veto);
-  out.push(`- of those, would_veto ${vetoed.length}; the invitee passed or let it expire on ${vetoed.filter((x) => x.res.outcome !== "spoke").length}`);
-}
-out.push(``);
-
-// 3. echo brake ----------------------------------------------------------------
+// 2. echo brake ----------------------------------------------------------------
 // New rows carry echo {p, streak, echoing, action (raw), effective}; old rows carry jev.echoing.
-out.push(`## 3. Echo brake (live: 1st echo read steers the invite, 2nd in a row lets the thread rest)`);
+out.push(`## 2. Echo brake (live: 1st echo read steers the invite, 2nd in a row lets the thread rest)`);
 out.push(``);
 const eP = (d) => (typeof d.echo?.p === "number" ? d.echo.p : typeof d.jev?.echoing === "number" ? d.jev.echoing : null);
 const ech = decides.filter((d) => eP(d) !== null);

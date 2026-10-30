@@ -14,8 +14,8 @@ import { randomUUID } from "node:crypto";
 import cron from "node-cron";
 import {
   createSubscriberClient, onCommonsMessage, onDirectorResult, publishDirectorInvite,
-  directorJevEnabled, directorEchoEval, directorVetoEval, renderDirectorJevState, appendDirectorJevLine,
-  readEchoBrakeConfig, readVetoTheta, echoBrakeStep, LOOP_BREAK_STEER,
+  directorJevEnabled, directorEchoEval, renderDirectorJevState, appendDirectorJevLine,
+  readEchoBrakeConfig, echoBrakeStep, LOOP_BREAK_STEER,
   type DirectorNoulResult, type EchoBrakeConfig, type EchoAction,
   type Redis, type CommonsMessagePayload, type DirectorResultPayload, type DirectorSupplyItem,
 } from "@nullsafe/shared";
@@ -54,9 +54,8 @@ function tableFor(kind: DirectorSupplyItem["kind"]): string {
 }
 
 /**
- * Jev beside select() (2026-10-20 redesign, shared/director-jev.ts). Two SEPARATE calls per decide on a
- * commons message (event-triggered, never the floor timer): the echo read (feeds the live brake) and,
- * when the director picks someone, a shadow-only veto check on that companion. Never throws; a failed
+ * Jev beside select() (2026-10-20 redesign, shared/director-jev.ts). One call per decide on a
+ * commons message (event-triggered, never the floor timer): the echo read (feeds the live brake). Never throws; a failed
  * call is a logged reason. Returns the echo promise so decide() can act on it before inviting.
  */
 export type EchoRead = DirectorNoulResult | null;
@@ -71,17 +70,15 @@ export function resolveEcho(s: ConversationState, sel: Selection, read: EchoRead
 }
 
 export interface DirectorJevDeps {
-  echoFn?: typeof directorEchoEval; vetoFn?: typeof directorVetoEval; log?: typeof appendDirectorJevLine;
-  brakeCfg?: EchoBrakeConfig; vetoTheta?: number;
+  echoFn?: typeof directorEchoEval; log?: typeof appendDirectorJevLine;
+  brakeCfg?: EchoBrakeConfig;
 }
 
 export function fireDirectorJev(s: ConversationState, sel: Selection, paced: boolean, rt: Pick<DirectorRuntime, "cfg">, deps: DirectorJevDeps = {}): { echo: Promise<EchoRead>; done: Promise<void> } {
   if (!directorJevEnabled()) return { echo: Promise.resolve(null), done: Promise.resolve() };
   const echoFn = deps.echoFn ?? directorEchoEval;
-  const vetoFn = deps.vetoFn ?? directorVetoEval;
   const log = deps.log ?? appendDirectorJevLine;
   const cfg = deps.brakeCfg ?? readEchoBrakeConfig();
-  const vetoTheta = deps.vetoTheta ?? readVetoTheta();
   const state = renderDirectorJevState({ turns: s.turns, topic: s.topic, openMoves: s.openMoves, botTurns: s.botTurns, turnBudget: rt.cfg.turnBudget });
   const last = s.turns[s.turns.length - 1];
   const director = sel.kind === "invite"
@@ -89,18 +86,16 @@ export function fireDirectorJev(s: ConversationState, sel: Selection, paced: boo
     : { kind: "silence" as const, reason: sel.reason };
   const safe = (p: Promise<DirectorNoulResult>): Promise<DirectorNoulResult> => p.catch((e) => ({ ok: false as const, reason: `throw:${String(e).slice(0, 80)}`, wall_ms: 0 }));
   const echo = safe(echoFn(state));
-  // A paced invite is never issued, so there is nothing to veto.
-  const veto = sel.kind === "invite" && !paced ? safe(vetoFn(state, sel.companionId)) : null;
-  const done = Promise.all([echo, veto]).then(([e, v]) => {
+  // The per-companion veto shadow was retired 2026-10-30: no signal (p 0.76 spoke vs 0.77 passed, 0 fires in 18 picks).
+  const done = echo.then((e) => {
     const r = resolveEcho(s, sel, e, cfg);
     log({
       kind: "decide", channel_id: s.channelId, after_msg_id: last?.messageId ?? null,
       after_author: last ? (last.companionId ?? last.author) : null, bot_turns: s.botTurns,
       director,
       echo: { p: e.ok ? e.p : null, failure: e.ok ? null : e.reason, wall_ms: e.wall_ms, mode: cfg.mode, streak: r.streak, echoing: r.echoing, action: r.raw, effective: r.effective },
-      veto: sel.kind === "invite" && v ? { companion: sel.companionId, p: v.ok ? v.p : null, failure: v.ok ? null : v.reason, wall_ms: v.wall_ms, theta: vetoTheta, would_veto: v.ok ? v.p < vetoTheta : null } : null,
     });
-    console.log(`[director-jev] ${s.channelId} director=${director.kind === "invite" && !paced ? director.companion : `silence:${director.kind === "invite" ? "pacing" : director.reason}`} echo=${e.ok ? e.p.toFixed(2) : "?"}/${r.effective}${v && v.ok ? ` veto_p=${v.p.toFixed(2)}${v.p < vetoTheta ? " WOULD_VETO" : ""}` : ""}`);
+    console.log(`[director-jev] ${s.channelId} director=${director.kind === "invite" && !paced ? director.companion : `silence:${director.kind === "invite" ? "pacing" : director.reason}`} echo=${e.ok ? e.p.toFixed(2) : "?"}/${r.effective}`);
   }).catch((e) => { console.warn(`[director-jev] shadow failed: ${String(e).slice(0, 200)}`); });
   return { echo, done };
 }

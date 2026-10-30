@@ -2,8 +2,8 @@
 
 import { describe, it, expect, jest } from "@jest/globals";
 import {
-  LANES, buildEchoQuestions, buildVetoQuestions, directorEchoEval, directorJevEnabled, directorJevTimeoutMs,
-  directorVetoEval, echoBrakeStep, readEchoBrakeConfig, readVetoTheta, renderDirectorJevState,
+  buildEchoQuestions, directorEchoEval, directorJevEnabled, directorJevTimeoutMs,
+  echoBrakeStep, readEchoBrakeConfig, renderDirectorJevState,
 } from "../director-jev.js";
 import type { JevAnswers } from "../jev-gate.js";
 
@@ -13,18 +13,6 @@ describe("questions", () => {
   it("echo is its own single noul call; thread_has_more and next_speaker are gone", () => {
     expect(Object.keys(buildEchoQuestions())).toEqual(["echoing"]);
     expect((buildEchoQuestions().echoing as { type: string }).type).toBe("noul");
-  });
-  it("the veto asks about ONE companion, in that companion's lane, never bundled", () => {
-    for (const c of ["cypher", "drevan", "gaia"] as const) {
-      const q = buildVetoQuestions(c);
-      expect(Object.keys(q)).toEqual(["has_something_to_add"]);
-      const ins = (q.has_something_to_add as { instructions: string }).instructions;
-      expect(ins).toContain(`Does ${LANES[c].name} have something to add here that the other two have not already said?`);
-      expect(ins).toContain(LANES[c].lane);
-    }
-    expect(LANES.gaia.lane).toMatch(/monastic/);
-    expect(LANES.drevan.lane).toMatch(/emotional mirror/);
-    expect(LANES.cypher.lane).toMatch(/structural/);
   });
 });
 
@@ -59,9 +47,7 @@ describe("knobs (defaults live in code)", () => {
     expect(readEchoBrakeConfig({ DIRECTOR_ECHO_BRAKE: "off" } as NodeJS.ProcessEnv).mode).toBe("off");
     expect(readEchoBrakeConfig({ DIRECTOR_ECHO_BRAKE: "wat", DIRECTOR_ECHO_BRAKE_THETA: "", DIRECTOR_ECHO_BRAKE_STREAK: "0" } as NodeJS.ProcessEnv)).toEqual({ mode: "on", theta: 0.5, minTurns: 4, streak: 2 });
   });
-  it("veto theta 0.3 and timeout 6000 by default", () => {
-    expect(readVetoTheta({} as NodeJS.ProcessEnv)).toBe(0.3);
-    expect(readVetoTheta({ DIRECTOR_VETO_THETA: "0.4" } as NodeJS.ProcessEnv)).toBe(0.4);
+  it("timeout 6000 by default", () => {
     expect(directorJevTimeoutMs({} as NodeJS.ProcessEnv)).toBe(6000);
     expect(directorJevTimeoutMs({ DIRECTOR_JEV_TIMEOUT_MS: "2500" } as NodeJS.ProcessEnv)).toBe(2500);
     expect(directorJevTimeoutMs({ DIRECTOR_JEV_TIMEOUT_MS: "-1" } as NodeJS.ProcessEnv)).toBe(6000);
@@ -102,17 +88,10 @@ describe("the calls", () => {
     expect(url).toBe("https://halseth.example/admin/jev");
     expect(Object.keys(JSON.parse(init.body as string).questions)).toEqual(["echoing"]);
   });
-  it("veto: ONE companion per call", async () => {
-    const fetchImpl = reply({ has_something_to_add: { type: "noul", noul: 0.12 } });
-    expect(await directorVetoEval("STATE", "gaia", { env, fetchImpl })).toMatchObject({ ok: true, p: 0.12 });
-    const body = JSON.parse(((fetchImpl as unknown as jest.Mock).mock.calls[0] as [string, RequestInit])[1].body as string);
-    expect(Object.keys(body.questions)).toEqual(["has_something_to_add"]);
-    expect(body.questions.has_something_to_add.instructions).toContain("Gaia");
-  });
   it("failures are reasons, never throws", async () => {
     expect(await directorEchoEval("S", { env, fetchImpl: reply({}) })).toMatchObject({ ok: false, reason: "no_echoing" });
     expect(await directorEchoEval("S", { env: {} as NodeJS.ProcessEnv })).toMatchObject({ ok: false, reason: "no_halseth_env" });
     const boom = jest.fn(async () => { throw new Error("net"); }) as unknown as typeof fetch;
-    expect((await directorVetoEval("S", "cypher", { env, fetchImpl: boom })).ok).toBe(false);
+    expect((await directorEchoEval("S", { env, fetchImpl: boom })).ok).toBe(false);
   });
 });

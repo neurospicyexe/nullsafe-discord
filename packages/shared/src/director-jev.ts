@@ -16,12 +16,11 @@
 //     Fails open: a Jev failure/timeout (DIRECTOR_JEV_TIMEOUT_MS, 6000) means no steer, no brake, today's behaviour.
 //     Companion-side, bot-message-handler's detectSelfLoop/loopBreakDirective (echo-guard.ts) still guards a
 //     single voice repeating itself; this brake is the room-level counterpart and does not replace it.
-//   VETO CHECK (SHADOW ONLY). When the director picks companion X, a separate noul call asks whether X has
-//     something to add that the other two have not said (X's lane in LANES). Logs p and would_veto
-//     (p < DIRECTOR_VETO_THETA, 0.3). Never changes the pick.
+//   The per-companion veto shadow ("does X have something to add") was retired 2026-10-30: no signal (veto p 0.76
+//     when the invitee spoke vs 0.77 when it passed, 0 would_veto fires in 18 picks).
 //
 // Rows go to /app/logs/director-jev.jsonl (DIRECTOR_JEV_LOG):
-//   kind "decide"  what select() chose, beside `echo` {p, action, streak} and `veto` {companion, p, theta, would_veto}
+//   kind "decide"  what select() chose, beside `echo` {p, action, streak}
 //                  (old rows carry `jev` {nextSpeaker, threadHasMore, echoing}; the report still reads them)
 //   kind "invite"  an invitation the director issued (inviteId, companion, reason)
 //   kind "result"  how that invitation ended (spoke / pass / expired / empty): the #6 label
@@ -75,10 +74,6 @@ export function readEchoBrakeConfig(env: NodeJS.ProcessEnv = process.env): EchoB
   };
 }
 
-export function readVetoTheta(env: NodeJS.ProcessEnv = process.env): number {
-  return numEnv(env["DIRECTOR_VETO_THETA"], 0.3);
-}
-
 export type EchoAction = "none" | "steer" | "brake";
 
 /**
@@ -101,13 +96,6 @@ export const LOOP_BREAK_STEER =
 // Questions (one call each; never bundled)
 // ---------------------------------------------------------------------------
 
-/** Lane wording follows the identity canon (project CLAUDE.md "Companion Triad"); short on purpose. */
-export const LANES: Record<CompanionId, { name: string; lane: string }> = {
-  cypher: { name: "Cypher", lane: "the structural or logical read: direct, pattern-aware, clarity over cleverness" },
-  drevan: { name: "Drevan", lane: "depth: the emotional mirror, the poetic or spiral register, holding tender and dark" },
-  gaia: { name: "Gaia", lane: "ground and witness: minimal, monastic, one weighted line, holding the perimeter" },
-};
-
 export function buildEchoQuestions(): Record<string, JevQuestion> {
   return {
     echoing: {
@@ -116,20 +104,6 @@ export function buildEchoQuestions(): Record<string, JevQuestion> {
       criteria: {
         true: "The recent turns agree, mirror, or rephrase without moving the thread",
         false: "Each recent turn brings something the others did not",
-      },
-    },
-  };
-}
-
-export function buildVetoQuestions(companion: CompanionId): Record<string, JevQuestion> {
-  const { name, lane } = LANES[companion];
-  return {
-    has_something_to_add: {
-      type: "noul",
-      instructions: `Does ${name} have something to add here that the other two have not already said? ${name}'s lane is ${lane}.`,
-      criteria: {
-        true: `${name} could say something in their own lane that none of the recent turns has said`,
-        false: `${name}'s lane has nothing new here; whatever they would say is already on the page`,
       },
     },
   };
@@ -205,11 +179,6 @@ async function noulCall(purpose: string, key: string, questions: Record<string, 
 /** P(the recent companion turns restate each other). Never throws. */
 export function directorEchoEval(state: string, opts: CallOpts = {}): Promise<DirectorNoulResult> {
   return noulCall("director: are the companions restating each other", "echoing", buildEchoQuestions(), state, opts);
-}
-
-/** P(`companion` has something to add the other two have not said). Shadow only. Never throws. */
-export function directorVetoEval(state: string, companion: CompanionId, opts: CallOpts = {}): Promise<DirectorNoulResult> {
-  return noulCall(`director shadow: does ${companion} have something to add`, "has_something_to_add", buildVetoQuestions(companion), state, opts);
 }
 
 // ---------------------------------------------------------------------------
