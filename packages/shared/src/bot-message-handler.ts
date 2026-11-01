@@ -108,7 +108,7 @@ import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { detectScriptBleed, regenerateAfterBleed, scriptBleedGuardOn } from "./script-bleed.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
-import { runWritebackGate } from "./writeback-gate.js";
+import { runWritebackGate, speechMomentTag } from "./writeback-gate.js";
 import { buildWritebackSpeaker, judgeExchangeFor, withAttachedLabel } from "./memory.js";
 import { stampRelative } from "./relative-time.js";
 import {
@@ -3819,8 +3819,13 @@ ${widened}`;
       // computes the words. Lands in the CHATTER lane: embedded + searchable, but barred
       // from orient's recency slots and the motif miner. See halseth journal-lanes.ts.
       // external_id = the sent message id, so writeQueue's retry-on-failure can't duplicate it.
+      // B34 (2026-11-01): `reply_to:<user message id>` names the MOMENT this reply answers. The memory
+      // judge (external_id judge:<id>) and its observation note (correlation judge:<id>) already key on
+      // the same id, so one exchange's tray drafts can be joined exactly instead of by a time window
+      // (which merges the wrong lines in a burst). Split replies share it too. Tag only: nothing reads it
+      // yet except the tray-moments readout.
       if (!misseated) writeQueue.fireAndForget(`journal:speech:${COMPANION_ID}:${sent[0]!.id}`, () =>
-        librarian.journalSpeech(response, message.channelId, sent[0]!.id, roomTagForMessage(message)), { maxAgeMs: APPEND_MAX_AGE_MS });
+        librarian.journalSpeech(response, message.channelId, sent[0]!.id, roomTagForMessage(message), [speechMomentTag(message.id)]), { maxAgeMs: APPEND_MAX_AGE_MS });
       // Discord thread -> Halseth mind-thread (2026-08-15, first cut of the floor rework's
       // thread mapping). Speaking inside a Discord thread upserts a wm_mind_thread keyed
       // `discord:<thread_id>` for THIS companion, titled with the thread's name -- so a

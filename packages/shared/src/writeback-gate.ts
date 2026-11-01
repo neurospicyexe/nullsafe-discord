@@ -107,6 +107,14 @@ export function __resetShadowLogWarning(): void {
  * be every trivial note once Jev can tell them apart. In legacy and shadow modes promoteToWm is
  * always true, so behaviour is unchanged there.
  */
+/**
+ * B34 (2026-11-01): the MOMENT key. One human line (its Discord id) is one moment; the judge's journal
+ * row (`external_id judge:<id>`), its observation note (`correlation_id judge:<id>`) and the reply's
+ * speech row (tag `reply_to:<id>`) all name it, so the tray can join one exchange's drafts exactly.
+ */
+export function judgeMomentKey(messageId: string): string { return `judge:${messageId}`; }
+export function speechMomentTag(messageId: string): string { return `reply_to:${messageId}`; }
+
 export async function dispatchWriteback(
   wb: Exclude<Writeback, null>,
   librarian: WritebackLibrarian,
@@ -115,7 +123,7 @@ export async function dispatchWriteback(
   if (wb.type === "companion_note") {
     // KEYED when possible (2026-09-26): the judge's note memorialising a fabricated number could
     // only be found by content and archived by hand. With the key, `<prefix>: retract` reaches it.
-    const key = opts.messageId ? `judge:${opts.messageId}` : undefined;
+    const key = opts.messageId ? judgeMomentKey(opts.messageId) : undefined;
     if (librarian.journalJudgeNote && opts.messageId) {
       await librarian.journalJudgeNote(wb.content, opts.channelId, opts.messageId, opts.roomTag ?? null);
     } else {

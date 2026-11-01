@@ -439,3 +439,23 @@ describe("dispatchWriteback / runWritebackGate -- room tag", () => {
     expect(judged?.[1][3]).toBe(ROOM);
   });
 });
+
+// B34 (2026-11-01): one human line = one moment. The judge row, its observation note and the reply's
+// speech row must all carry the SAME user message id, or the tray-moments join silently finds nothing.
+import { judgeMomentKey, speechMomentTag } from "../writeback-gate.js";
+describe("B34 moment key", () => {
+  it("judge key and speech tag carry the same user message id", () => {
+    const id = "1556334678024396862";
+    expect(judgeMomentKey(id)).toBe(`judge:${id}`);
+    expect(speechMomentTag(id)).toBe(`reply_to:${id}`);
+    expect(judgeMomentKey(id).split(":")[1]).toBe(speechMomentTag(id).split(":")[1]);
+  });
+  it("the librarian's keyed judge write uses the same judge: prefix", async () => {
+    const src = (await import("node:fs")).readFileSync(new URL("../librarian.ts", import.meta.url), "utf8");
+    expect(src).toContain("external_id: `judge:${messageId}`");
+  });
+  it("the reply's speech write is tagged with the USER message id, not the sent reply id", async () => {
+    const src = (await import("node:fs")).readFileSync(new URL("../bot-message-handler.ts", import.meta.url), "utf8");
+    expect(src).toContain("[speechMomentTag(message.id)]");
+  });
+});
