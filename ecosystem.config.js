@@ -367,6 +367,8 @@ const shared = {
   // channel (default 21600 = 6h). A rotated/retracted transcript re-injects regardless.
   PK_PROFILE_REPEAT_S:         process.env.PK_PROFILE_REPEAT_S,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
+  // FRAME_PACKET (frame-packet.ts, 2026-11-01): per-turn `[Right now]` block (tasks, own projects, spark, calendar slot). off|shadow|on, CODE DEFAULT shadow (logs counts, injects nothing).
+  FRAME_PACKET:                process.env.FRAME_PACKET,
   // FACTS_PICK_* (B3, 2026-10-18, facts-pick.ts): per human message, Halseth embedding shortlist -> Jev picks the
   // Architect facts this message needs. Default OFF; `shadow` logs picks to FACTS_PICK_SHADOW_LOG (ids/scores only)
   // and injects nothing; `live` injects the picked facts once per transcript. Per-companion overrides win.

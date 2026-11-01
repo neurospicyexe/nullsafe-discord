@@ -11,6 +11,7 @@
 // audit config, autonomous hooks). identity-cache.json and channel-config.json reads stay
 // bot-side via botDir — those paths resolve against the bot's own module location.
 
+import { readFramePacketMode, framePacketFor } from "./frame-packet.js";
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } from "./watch-command.js";
 import { parseCreatedAtTimestamp } from "./relative-time.js";
@@ -408,6 +409,8 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     identityCache,
     surface,
   });
+  // Per-turn [Right now] packet (frame-packet.ts): build the packet now so the calendar slot is named once at boot.
+  { const m = readFramePacketMode(); console.log(`[frame] ${companionId} mode=${m}`); if (m !== "off") framePacketFor(librarian, companionId); }
 
   let cleanupEventSubs: (() => Promise<void>) | null = null;
   let presenceInterval: ReturnType<typeof setInterval> | null = null;

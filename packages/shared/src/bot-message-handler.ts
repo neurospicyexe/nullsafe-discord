@@ -106,6 +106,7 @@ import { selectImp, impRider, type ImpState } from "./imps.js";
 import { ledgerDistillEnabled, preflightLedgerBody, companionDisplayName } from "./ledger-clerk.js";
 import type { LedgerEntryInput } from "./librarian.js";
 import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
+import { readFramePacketMode, frameLogLine, framePacketFor } from "./frame-packet.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { detectScriptBleed, regenerateAfterBleed, scriptBleedGuardOn } from "./script-bleed.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
@@ -3446,6 +3447,20 @@ ${widened}`;
       }
       else void pick;
     }
+    // Per-turn `[Right now]` packet (frame-packet.ts, 2026-11-01): tasks, own projects, a rotating spark, a
+    // calendar slot. Hermes turns that already carry the clock; never Sol or a sibling. Shadow builds and
+    // logs counts only; `on` rides it above the facts and the frame (frame stays LAST). Never throws.
+    let rightNowBlock: string | null = null;
+    const framePacketMode = readFramePacketMode();
+    if (inferenceMode === "hermes" && framePacketMode !== "off" && !isSol && !senderCtx.isCompanionBot && (message.guildId || isOwnerDm)) {
+      try {
+        const packet = await framePacketFor(librarian, COMPANION_ID).build(Date.now());
+        console.log(frameLogLine(COMPANION_ID, packet));
+        if (framePacketMode === "on") rightNowBlock = packet.text;
+      } catch (e) {
+        console.warn(`[frame] ${COMPANION_ID} build failed: ${String(e).slice(0, 120)}`);
+      }
+    }
     const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;
     // Consumed once it rides a frame. STM holds the repaired text, so the rule check never sees the
     // slip; the gateway transcript holds the original, and the model copies its own lines.
@@ -3463,7 +3478,7 @@ ${widened}`;
 
     const hermesOut = inferenceMode === "hermes"
       ? hermesDelta(liveHistory, hermesDeliveredMark.get(message.channelId) ?? null, Date.now(), allAddressed.includes(COMPANION_ID),
-          calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, frame: frameTail ?? undefined })
+          calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, rightNow: rightNowBlock ?? undefined, frame: frameTail ?? undefined })
       : null;
     const inferenceHistory = hermesOut ? hermesOut.messages : liveHistory;
 
@@ -3621,7 +3636,7 @@ ${widened}`;
             const fresh = hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), bumpN);
             // Fresh transcript: nothing delivered yet, so the delta re-sends the whole window (mark 0).
             const full = hermesDelta(liveHistory, 0, Date.now(), allAddressed.includes(COMPANION_ID),
-              calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, frame: frameTail ?? undefined });
+              calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, rightNow: rightNowBlock ?? undefined, frame: frameTail ?? undefined });
             const out = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, full.messages, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), fresh.sessionId, fresh.sessionKey));
             if (out !== null) {
               hermesLastSessionId.set(message.channelId, fresh.sessionId);
