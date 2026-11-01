@@ -222,7 +222,8 @@ describe("pickFacts", () => {
     expect(row).toMatchObject({ companion: "drevan", channel: "c1", mode: "shadow", msg_len: base.message.length, theta: 0.65, k: 12 });
     expect(typeof row.ms).toBe("number");
     // Every shortlisted fact carries Jev's p, so theta can be calibrated from shadow rows.
-    expect(row.shortlist[0]).toEqual({ id: "fact0", category: "home", score: 0.9, p: 0.9 });
+    // trust/p_adj ride the shadow row since FACTS_TRUST (default shadow); a legacy fact reads trust null = 1.0.
+    expect(row.shortlist[0]).toEqual({ id: "fact0", category: "home", score: 0.9, p: 0.9, trust: null, p_adj: 0.9 });
   });
 
   it("live: claims, injects only claimed, second turn dedups", async () => {
@@ -322,5 +323,46 @@ describe("turn trace accounting (P6)", () => {
     trace.finish({ superseded: false });
     const payload = JSON.parse(lines[0]!.replace(/^\[turn\] /, ""));
     expect(payload.halseth_ms).toBeGreaterThanOrEqual(70); // two sequential 40ms calls
+  });
+});
+
+// FACTS_TRUST (2026-11-01, Halseth mig 0158): Jev's p weighed by the fact's derived trust.
+import { readFactsTrustMode } from "../facts-pick.js";
+describe("FACTS_TRUST", () => {
+  const T = [
+    { id: "raz", category: "home", status: "active", score: 0.9, fact: "SECRET-raz", trust: 1 },
+    { id: "inf", category: "home", status: "active", score: 0.8, fact: "SECRET-inf", trust: 0.5 },
+    { id: "low", category: "home", status: "active", score: 0.7, fact: "SECRET-low", trust: 0.45 },
+    { id: "legacy", category: "home", status: "active", score: 0.6, fact: "SECRET-legacy", trust: null },
+  ];
+  const answers = { f0: 0.7, f1: 0.8, f2: 0.9, f3: 0.65 };
+  it("mode defaults to shadow; off and on read", () => {
+    expect(readFactsTrustMode(env())).toBe("shadow");
+    expect(readFactsTrustMode(env({ FACTS_TRUST: "on" }))).toBe("on");
+    expect(readFactsTrustMode(env({ FACTS_TRUST: "off" }))).toBe("off");
+  });
+  it("shadow logs trust and p_adj, flags the change, and picks exactly as before", async () => {
+    const f = fakeFetch({ items: T, jevAnswers: answers });
+    await pickFacts({ ...base, mode: "shadow", deps: { fetch: f.fn, env: env(), logWriter } });
+    const row = JSON.parse(logs[logs.length - 1]!);
+    expect(row.shortlist.find((x: any) => x.id === "inf")).toMatchObject({ trust: 0.5, p_adj: 0.4 });
+    expect(row.shortlist.find((x: any) => x.id === "legacy")).toMatchObject({ trust: null, p_adj: 0.65 });
+    expect(row.picks.map((x: any) => x.id).sort()).toEqual(["inf", "legacy", "low", "raz"]);   // by p, unchanged
+    expect(row.trust_would_change).toBe(true);
+    expect(JSON.stringify(row)).not.toContain("SECRET");
+  });
+  it("on (live) picks by p_adj and hedges a low-trust pick", async () => {
+    const f = fakeFetch({ items: T, jevAnswers: answers });
+    const r = await pickFacts({ ...base, mode: "live", deps: { fetch: f.fn, env: env({ FACTS_TRUST: "on", FACTS_PICK_THETA: "0.4" }), logWriter } });
+    expect(r.log.picks!.map(x => x.id).sort()).toEqual(["inf", "legacy", "low", "raz"]);   // inf p_adj 0.4 just clears 0.4
+    expect(r.block).toContain("- SECRET-raz");
+    const [sure, hedged] = r.block!.split("Less certain");
+    expect(sure).not.toContain("SECRET-low");
+    expect(hedged).toContain("SECRET-low");
+  });
+  it("on drops a fact whose p_adj falls under theta", async () => {
+    const f = fakeFetch({ items: T, jevAnswers: answers });
+    const r = await pickFacts({ ...base, mode: "live", deps: { fetch: f.fn, env: env({ FACTS_TRUST: "on" }), logWriter } });
+    expect(r.log.picks!.map(x => x.id).sort()).toEqual(["legacy", "raz"]);
   });
 });

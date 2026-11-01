@@ -50,6 +50,19 @@ function posInt(raw: string | undefined, fallback: number): number {
 
 // 0.65 since 2026-10-26: the context + "help" question scores everything higher, so the old 0.55-0.6 cut
 // would pass nearly every fact. On Raziel's 32 labelled turns 0.65 gave P 0.43 / R 0.90 (was P 0.43 / R 0.51).
+/**
+ * FACTS_TRUST (2026-11-01, Halseth mig 0158): weigh Jev's p by the fact's derived trust. off | shadow | on,
+ * code default shadow. Shadow logs `trust` and `p_adj = p * trust` per shortlisted fact plus `trust_would_change`
+ * (would the pick set at theta differ) and changes nothing; on picks by p_adj and injects a pick with trust < 0.5
+ * under a hedged "Less certain:" line. A null trust (legacy row, or Halseth before 0158) reads as 1.0.
+ */
+export type FactsTrustMode = "off" | "shadow" | "on";
+export function readFactsTrustMode(env: NodeJS.ProcessEnv = process.env): FactsTrustMode {
+  const v = String(env.FACTS_TRUST ?? "").trim().toLowerCase();
+  return v === "off" || v === "on" ? v : "shadow";
+}
+export const FACTS_TRUST_HEDGE_BELOW = 0.5;
+
 export function readFactsPickTheta(env: NodeJS.ProcessEnv = process.env, companion?: string): number {
   const per = companion ? env[`FACTS_PICK_THETA_${companion.toUpperCase()}`] : undefined;
   return num(per, num(env.FACTS_PICK_THETA, 0.65));
@@ -115,10 +128,13 @@ export interface FactsPickLog {
   msg_hash?: string;
   // `p` = Jev's score for every shortlisted fact (absent when Jev never answered), so theta can be
   // calibrated from shadow data instead of only seeing what cleared the current threshold.
-  shortlist?: Array<{ id: string; category: string; score: number; p?: number }>;
+  shortlist?: Array<{ id: string; category: string; score: number; p?: number; trust?: number | null; p_adj?: number }>;
   picks?: Array<{ id: string; category: string; p: number }>;
   would_inject?: string[];
   theta?: number;
+  /** FACTS_TRUST: would weighing by trust change the pick set at theta (shadow), or did it (on). */
+  trust_would_change?: boolean;
+  trust_mode?: FactsTrustMode;
   k?: number;
   /** Shortlisted facts dropped by FACTS_PICK_SKIP_CATEGORIES before the Jev call (count only). */
   skipped_categories?: number;
@@ -131,7 +147,7 @@ export interface FactsPickResult {
   log: FactsPickLog;
 }
 
-interface ShortItem { id: string; category: string; status?: string; score: number; fact: string }
+interface ShortItem { id: string; category: string; status?: string; score: number; fact: string; trust?: number | null }
 
 export function factsSeenKey(companion: string, channelId: string, transcriptId: string, factId: string): string {
   return `ns:facts:seen:${companion}:${channelId}:${transcriptId}:${factId}`;
@@ -201,6 +217,7 @@ async function shortlistFetch(
         status: it.status,
         score: typeof it.score === "number" && Number.isFinite(it.score) ? it.score : 0,
         fact: it.fact,
+        trust: typeof it.trust === "number" && Number.isFinite(it.trust) ? Math.min(1, Math.max(0, it.trust)) : null,
       });
     }
   }
@@ -252,8 +269,22 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
     const p = a && a.type === "noul" && typeof a.noul === "number" && Number.isFinite(a.noul) ? a.noul : 0;
     return { f, p };
   });
-  log.shortlist = scored.map(({ f, p }) => ({ id: f.id, category: f.category, score: f.score, p }));
-  const picked = scored.filter(s => s.p >= theta).sort((a, b) => b.p - a.p).slice(0, FACTS_PICK_CAP);
+  const trustMode = readFactsTrustMode(env);
+  const trustOf = (f: ShortItem) => (typeof f.trust === "number" ? f.trust : 1);
+  log.shortlist = scored.map(({ f, p }) => ({
+    id: f.id, category: f.category, score: f.score, p,
+    ...(trustMode !== "off" ? { trust: f.trust ?? null, p_adj: Math.round(p * trustOf(f) * 1000) / 1000 } : {}),
+  }));
+  const pickBy = (val: (s: { f: ShortItem; p: number }) => number) =>
+    scored.filter(s => val(s) >= theta).sort((a, b) => val(b) - val(a)).slice(0, FACTS_PICK_CAP);
+  const byP = pickBy(s => s.p);
+  const byAdj = trustMode === "off" ? byP : pickBy(s => s.p * trustOf(s.f));
+  if (trustMode !== "off") {
+    log.trust_mode = trustMode;
+    const a = byP.map(s => s.f.id).sort().join(","), b = byAdj.map(s => s.f.id).sort().join(",");
+    log.trust_would_change = a !== b;
+  }
+  const picked = trustMode === "on" ? byAdj : byP;
   log.picks = picked.map(s => ({ id: s.f.id, category: s.f.category, p: s.p }));
   if (picked.length === 0) return null;
 
@@ -274,7 +305,14 @@ async function run(input: FactsPickInput, log: FactsPickLog, deadline: number): 
   }
   log.would_inject = fresh.map(f => f.id);
   if (mode !== "live" || fresh.length === 0) return null;
-  return `[Architect facts relevant here]\n${fresh.map(f => `- ${f.fact.trim()}`).join("\n")}`;
+  // FACTS_TRUST=on: a low-trust pick still rides, but under a hedge so it is never read as Raziel's own word.
+  const sure = trustMode === "on" ? fresh.filter(f => trustOf(f) >= FACTS_TRUST_HEDGE_BELOW) : fresh;
+  const unsure = trustMode === "on" ? fresh.filter(f => trustOf(f) < FACTS_TRUST_HEDGE_BELOW) : [];
+  const lines = [
+    ...sure.map(f => `- ${f.fact.trim()}`),
+    ...(unsure.length ? ["Less certain (a companion's inference, not Raziel's own words):", ...unsure.map(f => `- ${f.fact.trim()}`)] : []),
+  ];
+  return `[Architect facts relevant here]\n${lines.join("\n")}`;
 }
 
 /** Never throws. mode "off" returns immediately with no network and no log line. */
