@@ -14,6 +14,7 @@ import {
   fetchVoiceRows, rowTime, windowZ, warnMarkers, twoNightWarn, logLine,
   type BaselineFile, type VoiceRow, type WeightOpts,
 } from "./voice-drift-core.js";
+import { stageVoiceLesson } from "./voice-lessons.js";
 
 const COMPANION_IDS = ["cypher", "drevan", "gaia"] as const;
 export const baselinePath = () => process.env["VOICE_BASELINE_PATH"] ?? "/app/logs/voice-baseline.json";
@@ -37,6 +38,7 @@ function lastRow(companion: string): { ts: string; warn_h24?: string[] } | null 
 export interface DriftDeps {
   fetchRows?: (companion: string, from: string, to: string) => Promise<VoiceRow[] | null>;
   now?: () => Date;
+  stageLesson?: (companion: string, z: Record<string, number>, flagged: string[]) => Promise<unknown>;
 }
 
 export async function runVoiceDriftTick(deps: DriftDeps = {}): Promise<void> {
@@ -68,6 +70,9 @@ export async function runVoiceDriftTick(deps: DriftDeps = {}): Promise<void> {
       }
       console.log(logLine(companion, h24, d7, warn2));
       if (warn2.length) console.warn(`[voice-drift] WARN ${companion} |z|>=2 two nights running: ${warn2.join(", ")}`);
+      // Voice lessons (mig 0159): a moved marker tonight -> ONE staged lesson in the companion's own voice,
+      // from marker names and z only. Staged for Raziel; never applied.
+      if (warnNow.length) await (deps.stageLesson ?? stageVoiceLesson)(companion, h24.z, warnNow);
     } catch (e) {
       console.warn(`[voice-drift] ${companion} failed: ${e instanceof Error ? e.message : String(e)}`);
     }

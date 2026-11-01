@@ -74,6 +74,7 @@ const shared = {
   ESCALATION_DISCORD_USER_ID:   process.env.ESCALATION_DISCORD_USER_ID,
   // Voice drift job (2026-11-01): VOICE_DRIFT=off kills; paths default under /app/logs; cron default 20 8 * * * (UTC).
   VOICE_DRIFT:                  process.env.VOICE_DRIFT,
+  VOICE_LESSONS:                process.env.VOICE_LESSONS,  // voice-lessons.ts: off kills; default on (it only STAGES)
   VOICE_DRIFT_CRON:             process.env.VOICE_DRIFT_CRON,
   VOICE_DRIFT_PATH:             process.env.VOICE_DRIFT_PATH,
   VOICE_BASELINE_PATH:          process.env.VOICE_BASELINE_PATH,
