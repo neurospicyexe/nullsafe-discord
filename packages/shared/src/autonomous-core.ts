@@ -60,6 +60,9 @@ import {
   type ReachDmResult, type Route,
 } from "./reach-dm.js";
 import type { OwnerDmLane } from "./owner-dm.js";
+import { checkFloor } from "./floor.js";
+// Type-only: heartbeat-dry-run.ts imports nothing at runtime from this module (no cycle).
+import type { DryRunSink } from "./heartbeat-dry-run.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 import {
   badNightMode, heartbeatEligibility, liveSiblingDm, filterDmMovesForSiblingDm, b32Log,
@@ -139,6 +142,13 @@ export interface AutonomousContext {
    * and the DM moves are simply not offered (never re-routed to a channel).
    */
   ownerDm?: OwnerDmLane;
+  /**
+   * STATUS B56 dry run. Only heartbeat-dry-run.ts `dryRunCtx()` sets these. When true the heartbeat composes
+   * for real but sends, reserves, records and advances NOTHING: every send/record seam below checks this flag
+   * explicitly (belt), and the ctx's librarian/redis/client/ownerDm are deny-by-default proxies (braces).
+   */
+  dryRun?: true;
+  dryRunSink?: DryRunSink;
 }
 
 export function isOnCooldown(ctx: AutonomousContext, channelId: string): boolean {
@@ -166,6 +176,14 @@ export function skipIfActive(ctx: AutonomousContext, label: string): boolean {
 export async function withFloor(ctx: AutonomousContext, fn: () => Promise<void>): Promise<void> {
   const { redis } = ctx;
   if (!redis) { await fn(); return; }
+  if (ctx.dryRun) {
+    // Read the floor, never take it (the claim is a SET NX on a shared key the siblings' real ticks read).
+    const holder = await checkFloor(redis).catch(() => null);
+    ctx.dryRunSink?.gate("floor", !holder, holder ? `held by ${holder}; the real tick would skip` : "free (not claimed in a dry run)");
+    if (holder) return;
+    await fn();
+    return;
+  }
   const claimed = await claimFloor(redis, ctx.companionId, ctx.floorLockMs).catch(() => false);
   if (!claimed) {
     console.log(`[${ctx.companionId}/autonomous] floor held, skipping`);
@@ -216,6 +234,13 @@ export async function sendAutonomousMessage(
   trigger: string,
   opts?: { onSent?: (id: string) => void },
 ): Promise<boolean> {
+  if (ctx.dryRun) {
+    // Seam 1 of 2 (B56): capture and return BEFORE the cooldown stamp, the send, registerSentId, the wm note,
+    // the director journal, the live index and the voice score. The cooldown is read so the report can say so.
+    const cd = isOnCooldown(ctx, channelId);
+    ctx.dryRunSink?.compose(`channel ${channelId} (${trigger})`, "post", content, cd ? "cooldown would block this send" : undefined);
+    return !cd;
+  }
   if (isOnCooldown(ctx, channelId)) return false;
   try {
     const channel = await ctx.client.channels.fetch(channelId);
@@ -465,6 +490,12 @@ export async function executeMetronomeAction(
           // misrouted to this companion's own journal (ack:true, routed_to:"journal" --
           // indistinguishable from success) and ref_type/ref_id/reason were dropped outright
           // (companionJournalAdd takes no ref). (2026-07-20 thinking-quality-fix-4 review.)
+          if (ctx.dryRun) {
+            // B56: the composed note, never the write, the nudge or convoOpen (all three are below).
+            ctx.dryRunSink?.compose(`inter-companion note to ${target} (Halseth write skipped)`, "note", content,
+              ref_type && ref_id ? `ref ${ref_type}:${ref_id}` : "plain note, no ref");
+            break;
+          }
           const ok = await librarianWriteChecked(
             librarian, companionId, "inter-companion note",
             `write inter-companion note to ${target}`,
@@ -501,6 +532,7 @@ export async function executeMetronomeAction(
       // routed to journal_add -> human_journal AND rejected the `content` field, so this
       // silently no-op'd every fire. "add companion note" -> companion_journal handles
       // {content, tags:[...]} correctly (2026-06-13 bug hunt).
+      if (ctx.dryRun) { ctx.dryRunSink?.compose("companion journal (Halseth write skipped)", "journal", content ?? "", content ? undefined : "generation returned empty"); break; }
       await writeMetronomeJournal(librarian, companionId, "journal entry", content, ["metronome"]);
       break;
     }
@@ -510,6 +542,7 @@ export async function executeMetronomeAction(
       // feeling_log requires { emotion } (writes.ts execFeelingLog) -- sending { content }
       // silently no-op'd every fire (returns a witness, not a throw). The writeFeeling prompt
       // generates a feeling word/phrase, so it IS the emotion. (2026-06-16 sweep.)
+      if (ctx.dryRun) { ctx.dryRunSink?.compose("feeling log (Halseth write skipped)", "feeling", content ?? "", content ? undefined : "generation returned empty"); break; }
       if (content) await librarianWriteChecked(librarian, companionId, "feeling", "log feeling", JSON.stringify({ emotion: content }));
       break;
     }
@@ -523,6 +556,12 @@ export async function executeMetronomeAction(
         prepare: async () => {
           // Inject currently-held open questions so the model doesn't re-ask the same themes.
           let heldBlock = "";
+          // B56: botOrient WRITES server-side (warms heat, marks Raziel's answered questions delivered), so a
+          // dry run never calls it; the held-questions guard is simply absent from the dry composition.
+          if (ctx.dryRun) {
+            ctx.dryRunSink?.note("ask_question: would orient for held questions (skipped in dry run)");
+            return action.prompt ?? prompts.askQuestion;
+          }
           try {
             const orient = await librarian.botOrient();
             const held = orient?.open_questions ?? [];
@@ -592,6 +631,7 @@ export async function executeMetronomeAction(
       // companion_journal tagged letter_to_raziel (surfaces in Hearth /journal), same
       // pattern as the guardian weekly letter. Was routing to human_journal + rejected
       // on the `content` field -> silent no-op (2026-06-13 bug hunt).
+      if (ctx.dryRun) { ctx.dryRunSink?.compose("note to raziel (journal only, Halseth write skipped)", "note_to_raziel", content ?? "", content ? undefined : "held or empty"); break; }
       await writeMetronomeJournal(librarian, companionId, "note to raziel", content, ["metronome", "letter_to_raziel"]);
       break;
     }
@@ -608,7 +648,7 @@ export async function executeMetronomeAction(
       const msg = (await generateOutward(inference, bootCtx.systemPrompt, prompt, companionId, action.action_type))
         || tendLine(companionId, tAction, creature.name);
       // Record the tending (builds trust) then show it in the channel.
-      await ctx.librarian.interactCreature(creature.id, companionId, tAction).catch((e: unknown) => console.warn(`[${companionId}/tend_creature] interact failed for ${creature.id}:`, e));
+      if (!ctx.dryRun) await ctx.librarian.interactCreature(creature.id, companionId, tAction).catch((e: unknown) => console.warn(`[${companionId}/tend_creature] interact failed for ${creature.id}:`, e));
       if (msg) await sendAutonomousMessage(ctx, heartbeatChannelId, msg, "tend_creature");
       break;
     }
@@ -629,6 +669,7 @@ export async function executeMetronomeAction(
         console.log(`[${companionId}/drift_open] nothing real to declare`);
         break;
       }
+      if (ctx.dryRun) { ctx.dryRunSink?.compose("drift_open (Halseth write skipped)", "drift", content.slice(0, 600)); break; }
       await ctx.librarian.driftOpen(content.slice(0, 600), "metronome");
       console.log(`[${companionId}/drift_open] opened: ${content.slice(0, 80)}`);
       break;
@@ -752,9 +793,15 @@ export async function runHeartbeat(ctx: AutonomousContext): Promise<void> {
     mark("error", { reason: e instanceof Error ? e.message : String(e) });
     throw e;
   } finally {
-    heartbeatTick(ctx.companionId, outcome, info);
-    // B32 B5: one [b32] line per hold tick that ran, named by how the tick ended.
-    if (b32.eligible) b32Log(ctx.companionId, b32.eligible, b32HeartbeatOutcome(outcome), info.action);
+    if (ctx.dryRun) {
+      // B56: a dry run emits NO [tick] and NO [b32] line (a readout would count it as a real tick); the
+      // outcome goes to the report instead.
+      ctx.dryRunSink?.finish(outcome, info);
+    } else {
+      heartbeatTick(ctx.companionId, outcome, info);
+      // B32 B5: one [b32] line per hold tick that ran, named by how the tick ended.
+      if (b32.eligible) b32Log(ctx.companionId, b32.eligible, b32HeartbeatOutcome(outcome), info.action);
+    }
   }
 }
 
@@ -785,12 +832,23 @@ type MarkTick = (outcome: HeartbeatOutcome | null, info?: HeartbeatTickInfo) => 
 
 async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32Tick = { eligible: null }): Promise<void> {
   const { librarian, inference, bootCtx, redis, cycleGuard, prompts, companionId, heartbeatChannelId } = ctx;
-  if (!heartbeatChannelId) { mark("no_eligible_actions", { reason: "no heartbeat channel configured" }); return; }
-  if (skipIfActive(ctx, "heartbeat")) { mark("conversation_active"); return; }
+  // B56 dry-run seams. Outside a dry run: `g` is a no-op, `force` is false, `rail`/`b32l` are the real
+  // emitters, so every branch below behaves exactly as before.
+  const g = (name: string, passed: boolean, detail?: string, forced?: boolean): void => ctx.dryRunSink?.gate(name, passed, detail, forced);
+  const force = ctx.dryRun === true && ctx.dryRunSink?.force === true;
+  const rail: typeof railSuppressed = (c, r, e) => { if (!ctx.dryRun) railSuppressed(c, r, e); else ctx.dryRunSink?.note(`rail ${r}${e?.detail ? ` (${e.detail})` : ""}`); };
+  const b32l: typeof b32Log = (...a) => { if (!ctx.dryRun) b32Log(...a); };
+  if (!heartbeatChannelId) { g("heartbeat channel configured", false); mark("no_eligible_actions", { reason: "no heartbeat channel configured" }); return; }
+  g("heartbeat channel configured", true);
+  const activeNow = skipIfActive(ctx, "heartbeat");
+  g("no live conversation", !activeNow, activeNow ? "a live session window is open" : undefined, activeNow && force);
+  if (activeNow && !force) { mark("conversation_active"); return; }
   if (redis) {
     const lastActivityTs = await getLastActivityMs(redis).catch(() => null);
-    if (lastActivityTs !== null && Date.now() - lastActivityTs < 15 * 60 * 1000) {
-      console.log(`[${companionId}/autonomous] recent activity, skipping heartbeat`);
+    const recentActivity = lastActivityTs !== null && Date.now() - lastActivityTs < 15 * 60 * 1000;
+    if (recentActivity) console.log(`[${companionId}/autonomous] recent activity, skipping heartbeat`);
+    g("no activity in the last 15 min", !recentActivity, recentActivity ? `last activity ${Math.round((Date.now() - (lastActivityTs as number)) / 60_000)} min ago (typing this command counts)` : undefined, recentActivity && force);
+    if (recentActivity && !force) {
       mark("recent_activity");
       return;
     }
@@ -805,18 +863,22 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
   const holdAtTick = careHoldActive(companionId);
   const elig = heartbeatEligibility({ myWindow: isMyHeartbeatWindow(companionId, HEARTBEAT_ORDER), careHold: holdAtTick, mode: b32Mode });
   if (!elig.run) {
-    if (elig.shadow) b32Log(companionId, "heartbeat:hold", "shadow", "would run outside its window");
+    if (elig.shadow) b32l(companionId, "heartbeat:hold", "shadow", "would run outside its window");
     console.log(`[${companionId}/autonomous] not my heartbeat window, skipping`);
-    mark("not_my_window");
-    return;
+    g("my heartbeat window", false, "not this companion's 4h window", force);
+    if (!force) { mark("not_my_window"); return; }
+  } else {
+    g("my heartbeat window", true);
   }
+  // Past the window gate `elig.run` is true, except in a forced dry run (force stepped over a closed window).
+  const eligRun = elig.run ? elig : { run: true as const, eligible: "window" as const, bypassFloor: false };
   if (holdAtTick && b32Mode === "on") {
-    b32.eligible = `heartbeat:${elig.eligible}`;
-    if (elig.eligible === "hold") console.log(`[${companionId}/autonomous] care hold: outside my window, eligible anyway (B32)`);
+    b32.eligible = `heartbeat:${eligRun.eligible}`;
+    if (eligRun.eligible === "hold") console.log(`[${companionId}/autonomous] care hold: outside my window, eligible anyway (B32)`);
   } else if (holdAtTick && b32Mode === "shadow") {
-    b32Log(companionId, "heartbeat:window", "shadow", "floor kept; siblings not asked");
+    b32l(companionId, "heartbeat:window", "shadow", "floor kept; siblings not asked");
   }
-  const runUnderFloor = elig.bypassFloor
+  const runUnderFloor = eligRun.bypassFloor
     ? async (fn: () => Promise<void>): Promise<void> => { await fn(); }
     : (fn: () => Promise<void>): Promise<void> => withFloor(ctx, fn);
   mark("floor_held"); // withFloor logs and returns without entering the body if a sibling holds it
@@ -827,12 +889,16 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
 
     const palette = await librarian.getEligibleMetronomePalette(silenceHours)
       .catch(() => ({ actions: [], quietHours: null, reach: null }));
+    g("palette from Halseth", palette.actions.length > 0, `${palette.actions.length} eligible move(s) server-side${palette.actions.length === 0 ? "; empty means the legacy temperature post or a server-side quiet filter" : ""}`);
     const quiet = palette.quietHours;
     // UNKNOWN IS IN FORCE. A null verdict means Halseth was unreachable or predates the field, and
     // the only thing downstream of "not in force" is a message into a channel Raziel reads. We
     // cannot tell 03:00 from 15:00 without the verdict, so the fail-closed reading is the one that
     // cannot wake him; when Halseth is down the palette is empty anyway and there is nothing to lose.
-    const quietInForce = quiet ? quiet.in_force : true;
+    const quietReal = quiet ? quiet.in_force : true;
+    // force skips ONLY this client-side quiet belt. Halseth's own server-side quiet filter already ran and cannot be forced.
+    const quietInForce = force ? false : quietReal;
+    g("quiet hours", !quietReal, quietReal ? (quiet ? `in force (local hour ${quiet.local_hour ?? "unknown"} ${quiet.tz})` : "no verdict from Halseth, treated as in force") : undefined, quietReal && force);
     // Belt to Halseth's filter (2026-10-27 audit). The check below used to bite only on an EMPTY
     // palette, so a response that carried actions but no verdict (the pre-field case named above)
     // went out with no quiet check at all. While the window is in force or unknown, only moves marked
@@ -867,7 +933,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       // It is an unprompted post into a channel Raziel reads, so it is production and care_hold
       // quiets it; there is no presence variant of it to keep.
       if (careHold) {
-        railSuppressed(companionId, "care_hold", { detail: "legacy temperature heartbeat" });
+        rail(companionId, "care_hold", { detail: "legacy temperature heartbeat" });
         mark("suppressed_care_hold", { action: "post_heartbeat (legacy)" });
         return;
       }
@@ -879,10 +945,12 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
         const f3 = parseFloat(String(state["soma_float_3"] ?? "0.5"));
         if (!isNaN(f1) && !isNaN(f2) && !isNaN(f3)) temperature = somaToTemperature(f1, f2, f3);
       } catch { /* default warm */ }
-      const cycleResult = cycleGuard.check(temperature);
+      // B56: the guard is a stateful counter; a dry run neither reads nor advances it.
+      const cycleResult = ctx.dryRun ? "ok" : cycleGuard.check(temperature);
+      if (ctx.dryRun) ctx.dryRunSink?.note("cycle guard not evaluated (stateful counter)");
       if (cycleResult === "escalate") {
         console.warn(`[${companionId}/cycle-guard] loop detected`);
-        await librarianWriteChecked(librarian, companionId, "loop-guard note", "journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles");
+        if (!ctx.dryRun) await librarianWriteChecked(librarian, companionId, "loop-guard note", "journal note: [loop_guard_tripped] consecutive same-register heartbeat cycles");
         mark("chose_to_hold", { reason: "cycle guard: loop detected" });
         return;
       }
@@ -905,6 +973,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
 
     // Signal detection: run if any eligible action requires a signal
     const detectedSignals = await detectSignals(ctx, actions);
+    g("signals", true, detectedSignals.length > 0 ? `detected: ${detectedSignals.join(", ")}` : "none detected (only matters for moves that require one)");
 
     // Filter out actions whose required signal wasn't detected
     const signalFiltered = actions.filter(a => {
@@ -913,6 +982,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     });
 
     if (signalFiltered.length === 0) {
+      g("moves with their required signal", false, "every eligible move requires a signal that was not detected");
       console.log(`[${companionId}/heartbeat] all eligible actions require undetected signals, skipping`);
       mark("signals_undetected");
       return;
@@ -962,6 +1032,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     const { kept: justifiedActions, verdict: demand } = filterDemandByReason(signalFiltered, demandReasons, companionId);
     const hadDemand = signalFiltered.some(a => isDemandMove(companionId, a.action_type));
     if (hadDemand) mark(null, { demand });
+    g("demand justification", demand.held.length === 0, demand.held.length > 0 ? `held: ${demand.held.join(", ")} (${demand.missing.join("; ")})` : (hadDemand ? `open: ${demand.open.join(", ")}` : "no demand moves in the palette"));
     if (demand.held.length > 0) {
       // Not silent: the gate names what it held and why, every tick (and the [tick] line carries it).
       console.log(`[${companionId}/heartbeat] justification gate held ${demand.held.length} demand move(s): ${demand.held.join(", ")} (${demand.missing.join("; ")})`);
@@ -991,6 +1062,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       holdPresenceExempt: b32Mode === "on", companionId,
     });
     const dmDropped = afterCareHold.length - candidateActions.length;
+    g("care hold / DM lane + cap preview", dmDropped === 0, `care hold ${careHold ? "ON" : "off"}; REACH_DM ${dmOn ? "on" : "OFF"}${ctx.ownerDm ? "" : "; no owner-DM lane"}; ${dmDropped} DM move(s) removed; the atomic cap reserve is NOT taken in a dry run`);
     if (!dmOn && dmDropped > 0) {
       console.log(`[${companionId}/heartbeat] REACH_DM off: ${dmDropped} DM move(s) removed from the palette`);
       mark(null, { dmMovesOff: dmDropped });
@@ -1004,6 +1076,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     let siblingDmHeld = 0;
     if (careHold && b32Mode !== "off" && candidateActions.some(a => routeFor(a.action_type) === "dm")) {
       const live = await liveSiblingDm(redis as unknown as RedisLike | null, companionId);
+      g("no sibling DM live (hold)", live === null, live === null ? undefined : String(live));
       if (live !== null) {
         const kept = filterDmMovesForSiblingDm(candidateActions, live, t => routeFor(t) === "dm");
         const why = live === "unknown" ? "sibling DM state unknown (no Redis)" : `${live} DM with Raziel is live`;
@@ -1012,7 +1085,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
           candidateActions = kept;
           console.log(`[${companionId}/heartbeat] B32 D4: ${why} -- ${siblingDmHeld} DM move(s) removed`);
         } else {
-          b32Log(companionId, "heartbeat:dm", "shadow", `would drop ${candidateActions.length - kept.length} DM move(s): ${why}`);
+          b32l(companionId, "heartbeat:dm", "shadow", `would drop ${candidateActions.length - kept.length} DM move(s): ${why}`);
         }
       }
     }
@@ -1024,6 +1097,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     let backoffHeld = 0;
     if (candidateActions.some(a => routeFor(a.action_type) === "dm")) {
       const bo = await reachBackoff(redis);
+      g("reach back-off", !bo.blocked, bo.blocked ? `streak ${bo.streak}, wait ${Math.ceil(bo.waitMs / 60_000)} min` : undefined);
       if (bo.blocked) {
         const holdPresenceOn = careHold && b32Mode === "on";
         const kept = filterDmMovesForBackoff(candidateActions, bo, t => routeFor(t) === "dm",
@@ -1053,7 +1127,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
         return;
       }
       if (careHold && justifiedActions.length > 0) {
-        railSuppressed(companionId, "care_hold", { detail: `${justifiedActions.length} production action(s) dropped` });
+        rail(companionId, "care_hold", { detail: `${justifiedActions.length} production action(s) dropped` });
         console.log(`[${companionId}/heartbeat] care_hold: only production actions were eligible -- staying silent`);
         mark("suppressed_care_hold");
         return;
@@ -1063,7 +1137,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       return;
     }
     if (careHold && candidateActions.length < justifiedActions.length) {
-      railSuppressed(companionId, "care_hold", {
+      rail(companionId, "care_hold", {
         detail: `${justifiedActions.length - candidateActions.length} production action(s) dropped`,
       });
     }
@@ -1074,6 +1148,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       const onList = new Set(candidateActions.map(a => a.action_type));
       decisionCtx.demand = { ...demand, open: demand.open.filter(t => onList.has(t)) };
     }
+    ctx.dryRunSink?.palette(candidateActions.map(a => a.action_type === a.name ? a.name : `${a.name} [${a.action_type}]`));
     let decisionPrompt = buildDecisionPrompt(companionId, candidateActions, state, recentNotes, silenceHours, decisionCtx);
     // B32 (on only): the hold's register lines ride the decision itself, where presence is chosen.
     if (careHold && b32Mode === "on") {
@@ -1098,7 +1173,9 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       demand: decisionCtx.demand ? [decisionCtx.demand.open, decisionCtx.demand.held] : null,
       hold: careHold,
     });
-    if (heartbeatDeclineCap.isCapped(capKey, capFp)) {
+    const capped = heartbeatDeclineCap.isCapped(capKey, capFp);
+    g("converged-judgment cap", !capped, capped ? `${heartbeatDeclineCap.maxDeclines} declines on unchanged state, the decision call is withheld` : undefined);
+    if (capped) {
       console.log(`[${companionId}/heartbeat] converged: ${heartbeatDeclineCap.maxDeclines} declines on unchanged state, decision call withheld`);
       mark("converged_hold", { reason: `${heartbeatDeclineCap.maxDeclines} consecutive holds, state unchanged` });
       return;
@@ -1147,8 +1224,12 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       read = reread;
     }
     const decision = read.decision;
-    if (decision.action.action_type === "nothing") heartbeatDeclineCap.recordDecline(capKey, capFp);
-    else heartbeatDeclineCap.recordAccept(capKey);
+    ctx.dryRunSink?.decision(rawDecision, `${decision.action.name} (${decision.action.action_type})`, decision.reason ?? null);
+    // B56: the cap is module state ctx cannot reach; a dry run neither counts a decline nor clears the key.
+    if (!ctx.dryRun) {
+      if (decision.action.action_type === "nothing") heartbeatDeclineCap.recordDecline(capKey, capFp);
+      else heartbeatDeclineCap.recordAccept(capKey);
+    }
     console.log(`[${companionId}/heartbeat] chose: ${decision.action.name} (${decision.action.action_type}) -- ${decision.reason}`);
     // A chosen silence is a SUCCESS and is recorded as one; it is the outcome Cadence's design
     // calls first-class and ours could not previously distinguish from a crash.
@@ -1156,7 +1237,8 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       action: decision.action.action_type, reason: decision.reason,
     });
 
-    const runId = await librarian.writeAutonomyRun("continuation").catch(e => {
+    // B56: no run row in a dry run (the record is an INSERT the readouts count).
+    const runId = ctx.dryRun ? null : await librarian.writeAutonomyRun("continuation").catch(e => {
       onWriteError(companionId, "continuation run record lost")(e);
       return null;
     });
@@ -1166,7 +1248,8 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     try {
       // T-4: the origin is minted HERE, after this companion's own decision parsed, and only for a
       // DM move. It is single-use and bound to this companion and this action type.
-      const origin = routeFor(decision.action.action_type) === "dm"
+      // B56: no origin is minted in a dry run (single-use state); speakToOwnerDm's dry path ignores it.
+      const origin = routeFor(decision.action.action_type) === "dm" && !ctx.dryRun
         ? issueOrigin(companionId, decision.action.action_type, decision.action.id)
         : undefined;
       const result = await executeMetronomeAction(ctx, decision, origin);
@@ -1176,7 +1259,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       if (heldDm && result) {
         mark("held_dm", { action: decision.action.action_type, reason: `${result.outcome}${result.reason ? `:${result.reason}` : ""}` });
       }
-      if (decision.action.action_type !== "nothing" && !heldDm) {
+      if (decision.action.action_type !== "nothing" && !heldDm && !ctx.dryRun) {
         await librarian.recordMetronomeActionFired(decision.action.id).catch(onWriteError(companionId, "metronome action fired"));
       }
       if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(companionId, "autonomy run completion"));

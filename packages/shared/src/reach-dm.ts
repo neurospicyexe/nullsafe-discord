@@ -317,7 +317,10 @@ function problemWith(spec: ReachDmSpec, line: string, recent: readonly string[],
 export async function speakToOwnerDm(ctx: AutonomousContext, origin: unknown, spec: ReachDmSpec): Promise<ReachDmResult> {
   const { companionId } = ctx;
   const tag = `[${companionId}/${spec.actionType}]`;
-  if (!consumeOrigin(origin, companionId, spec.actionType)) {
+  // B56 dry run: the origin is neither consumed nor required (single-use state a real tick needs); no slot is
+  // reserved, released or marked; nothing is sent, recorded in the reach ledger, or told to the lane.
+  const dry = ctx.dryRun === true;
+  if (!dry && !consumeOrigin(origin, companionId, spec.actionType)) {
     console.error(`${tag} refused: no live companion origin (T-4: only this companion's own heartbeat decision may send this move)`);
     return { outcome: "refused_origin" };
   }
@@ -337,13 +340,15 @@ export async function speakToOwnerDm(ctx: AutonomousContext, origin: unknown, sp
   const prompt = await spec.prepare().catch(() => null);
   if (!prompt) return { outcome: "nothing_to_say" };
 
-  const slot = await ctx.librarian.reachReserve(spec.actionType, careHoldActive(companionId));
+  const slot = dry
+    ? { reserved: true as const, id: -1 }
+    : await ctx.librarian.reachReserve(spec.actionType, careHoldActive(companionId));
   if (!slot.reserved) {
     console.log(`${tag} held: shared triad cap (${slot.reason})`);
     return { outcome: "capped", reason: slot.reason };
   }
   const release = async (why: string) => {
-    await ctx.librarian.reachRelease(slot.id).catch(() => false);
+    if (!dry) await ctx.librarian.reachRelease(slot.id).catch(() => false);
     console.log(`${tag} held after reserve (${why}); slot released`);
   };
 
@@ -368,6 +373,12 @@ export async function speakToOwnerDm(ctx: AutonomousContext, origin: unknown, sp
       path = `regenerated:${problem.kind}`;
     }
     const text = line!;
+    if (dry) {
+      // Seam 2 of 2 (B56): capture and return. beforeSend (the preference write), target.send, reachDelivered,
+      // lane.onSent, recordReachSend and afterSend (the question tracker) are all below and none runs.
+      ctx.dryRunSink?.compose(`owner DM (${spec.actionType}; captured, NOT sent)`, "dm", text, path === "generated" ? undefined : path);
+      return { outcome: "sent", path, reason: "dry_run" };
+    }
     if (spec.beforeSend) await spec.beforeSend(text).catch((e: unknown) => console.warn(`${tag} before-send step failed:`, e));
 
     let messageId: string;

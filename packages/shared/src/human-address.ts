@@ -158,6 +158,18 @@ export interface HoldRedis {
 const holdKey = (human: HumanSide, channelId: string) => `ns:humanhold:${human}:${channelId}`;
 const holdIdsKey = (human: HumanSide, channelId: string) => `ns:humanhold:${human}:ids:${channelId}`;
 
+/**
+ * Does this reply to Blue make me the holder of Blue's thread? (2026-11-01, movie night.) In a HOSTED room a
+ * sibling who answers a group call ("you guys") is a guest voice, not the new thread owner: Gaia answered one
+ * group call at 11:43, the last-writer-wins hold moved to her for the room's 3h window, and Drevan stood down on
+ * every unnamed Blue line after it. A non-host takes the hold only when Blue spoke to it directly (named,
+ * @-mentioned, or replied to its message). The host, and every non-hosted room, keep the old rule.
+ */
+export function takesBlueHold(o: { host: string | null | undefined; me: string; addressedMe: boolean }): boolean {
+  if (!o.host || o.host === o.me) return true;
+  return o.addressedMe;
+}
+
 /** A companion replied to `human` in `channelId`: it now holds that human's thread. Never throws. */
 export async function recordHumanHold(
   redis: HoldRedis | null,

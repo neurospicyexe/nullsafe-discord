@@ -59,7 +59,7 @@ import {
   setLastActivity, noteOwnerArrival, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAfterGate, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
-  humanGate, companionNamedIn, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
+  humanGate, companionNamedIn, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, takesBlueHold, type HumanSide, type HoldRedis,
   learnHumanName, learnedHumanNames, mergeHumanNames, type NameRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
@@ -80,7 +80,7 @@ import {
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
   visionEnabled, pickImageAttachments, seenBlock, seenStmMarker, type SeenImage,
   resolveSeenImages, sharedVisionCache, visionTurnBudgetMs, visionPrefetchEnabled, type VisionRedis,
-  commandUsage, COMMAND_PREFIX, mediaCommandTarget, buildCommandTriggers, COMPANION_ALIASES,
+  commandUsage, COMMAND_PREFIX, mediaCommandTarget, buildCommandTriggers, buildDryRunTrigger, COMPANION_ALIASES,
   isWatchEnabled, runWatchPipeline, watchedStmMarker, notWatchedStmMarker, notWatchedBlock, isYouTubeUrl,
   handleClubCommand,
   handleLogCommand,
@@ -126,6 +126,7 @@ import {
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { postProcessReply } from "./reply-postprocess.js";
+import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport, sendReportToOwnerDm } from "./heartbeat-dry-run.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
 import {
   decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
@@ -556,6 +557,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
   const VIDEO_TRIGGER: RegExp = deps.VIDEO_TRIGGER ?? buildCommandTriggers(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]).video;
   /** "Dre, in" / "Cy, out" -- the whole message, this companion's aliases only (room-timing.ts). */
   const ROOM_OVERRIDE_TRIGGER: RegExp = buildRoomOverrideTrigger(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]);
+  /** "dre: dry-run heartbeat [force]" (B56). Owner-only, heartbeat-dry-run.ts. */
+  const DRY_RUN_TRIGGER: RegExp = buildDryRunTrigger(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]);
   // Burst settle (2026-10-10). Empty / 0 when settle is off, a command, a bot post or a pass turn.
   const settleMs = deps.settleMs ?? 0;
   const burst = deps.burst ?? [];
@@ -1046,7 +1049,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // tested here directly.
     const roomOverride = attribution.isOwner ? ROOM_OVERRIDE_TRIGGER.exec(effectiveContent) : null;
     const isOwnerCommand = attribution.isOwner
-      && (!!roomOverride || !!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
+      && (!!roomOverride || DRY_RUN_TRIGGER.test(effectiveContent) || !!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
         || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent)
         || VIDEO_TRIGGER.test(effectiveContent));
     if (!isOwnerCommand) {
@@ -1059,6 +1062,36 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username),
         timestamp: message.createdTimestamp,
       });
+    }
+
+    // Heartbeat dry run (B56): the REAL heartbeat composition for THIS companion, answered in the channel it was
+    // typed in. Sends, reserves and records nothing (see heartbeat-dry-run.ts); the reply is the report.
+    if (attribution.isOwner) {
+      const dryRun = DRY_RUN_TRIGGER.exec(effectiveContent);
+      if (dryRun) {
+        const live = getHeartbeatCtx(COMPANION_ID);
+        let reply: string;
+        if (!live) {
+          reply = "dry-run heartbeat unavailable: the autonomous runtime has not started on this bot yet.";
+        } else {
+          try { await (message.channel as TextChannel).sendTyping?.(); } catch { /* cosmetic */ }
+          // The direct, tool-less lane only: a Hermes compose could write through its own tools (tool_choice none is
+          // ignored by the gateway), so with no direct adapter the run stops and says so.
+          const report = await runDryRunHeartbeat(live, { force: !!dryRun[1], directAdapter: directAdapter ?? null });
+          reply = formatDryRunReport(report);
+        }
+        console.log(`[${COMPANION_ID}] dry-run heartbeat${dryRun[1] ? " force" : ""} in ${message.channelId}`);
+        // The report quotes would-be DM text, so it goes to Raziel's DM, not a room others read. Typed in the DM
+        // itself: reply there. A reply to his own command, not a reach-out (no cap, no ledger).
+        if (isOwnerDm || !live) {
+          await sendLong(message.channel as TextChannel, reply);
+        } else if (await sendReportToOwnerDm(live, reply)) {
+          await (message.channel as TextChannel).send("dry run sent to your DMs.");
+        } else {
+          await (message.channel as TextChannel).send("dry run done, but your DM could not be opened, so nothing was posted here.");
+        }
+        return;
+      }
     }
 
     // Owner model switch command: <prefix>: model <key> | <prefix>: model list
@@ -1697,6 +1730,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       ? burstAddressText(effectiveContent, burst.map(b => b.content))
       : effectiveContent;
     let directlyAddressed = isDirectAddress(addressText, COMPANION_ID);
+    // Did the speaker address ME (name, @-mention, reply to my message)? Captured before the Blue-thread
+    // branch below sets directlyAddressed for the holder, so it means "spoken to", not "holds the thread".
+    const addressedMeByName = directlyAddressed || !!senderCtx.isMentioned || isReplyToMe;
     const holdRedis = redis as unknown as HoldRedis | null;
 
     // Active-exchange holder (2026-07-27). Observed: Raziel wrote "Drevan baby ... Fargo in
@@ -3750,7 +3786,8 @@ ${widened}`;
     // Per-human thread hold (2026-10-10): a reply to BLUE makes me the holder of Blue's thread in this
     // channel (her own 15-minute hold, never Raziel's) and remembers the ids so Raziel's holder walk
     // skips them. Only turns on Blue's own human message; a pass turn or a sibling post never writes it.
-    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp) {
+    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+        && takesBlueHold({ host: channelEntry?.host ?? null, me: COMPANION_ID, addressedMe: addressedMeByName })) {
       void recordHumanHold(holdRedis, "blue", message.channelId, COMPANION_ID as CompanionId, sent.map(m => m.id), channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
     }
     if (sent.length > 0 && holdOnForTurn && !isOwnerDm) {

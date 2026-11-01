@@ -65,6 +65,7 @@ export * from "./inter-seed-gate.js";
 export * from "./guild-seed.js";
 export * from "./triggers.js";
 export * from "./command-triggers.js";
+export { registerHeartbeatCtx, getHeartbeatCtx } from "./heartbeat-dry-run.js";
 export * from "./care-state.js";
 export * from "./reach-ledger.js";
 export * from "./bad-night.js";

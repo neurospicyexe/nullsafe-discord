@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { Client } from "discord.js";
+import { registerHeartbeatCtx } from "@nullsafe/shared";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, Redis,
 } from "@nullsafe/shared";
@@ -81,6 +82,8 @@ export function startAutonomous(
   };
 
   // Scheduling stays per-bot (timing is identity); the bodies are shared.
+  // B56: `<prefix>: dry-run heartbeat` finds this live ctx here (read-only use; the dry run copies and proxies it).
+  registerHeartbeatCtx(ctx);
   tasks.push(cron.schedule(GAIA_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
   // #the-triad server-scoped seeder (2026-10-05): OUTSIDE the director branch on purpose. #the-triad is not a
   // director channel, so the director never seeds it; this runs whatever DIRECTOR_ENABLED says. Off by default

@@ -157,6 +157,38 @@ spoken TO (`[ids]` / `"room"` / `"continuing"`), and who is only MENTIONED.
   Stdout never prints text; `--out` writes `label-disagreements.md` / `.csv` (with text) for Raziel.
   Flip to live is a later build, only after the model beats the regex on his labels.
 
+## Heartbeat dry run (B56, 2026-11-01)
+
+`<prefix>: dry-run heartbeat` (owner only; `dre:` / `cy:` / `gaia:` and the other aliases) runs the REAL `runHeartbeat`
+for that companion and replies in the channel where it was typed with: each gate and whether it passed or stopped the
+tick, the palette offered to the decision, the chosen move, and the composed line exactly as it would be sent (or why
+nothing would be), plus the list of writes that were blocked. **It never sends, reserves, records or advances anything.**
+`<prefix>: dry-run heartbeat force` steps over ONLY the time/window/activity/quiet gates (typing the command is itself
+activity, so the plain form usually stops at `recent_activity`; use `force` to see a composition at any hour). It never
+skips the care hold, the DM lane/cap preview, the back-off, the floor, or the converged-judgment cap.
+
+Fail-safe by construction (`heartbeat-dry-run.ts`), three layers: (1) `dryRunCtx()` hands the heartbeat deny-by-default
+proxies for the librarian (read allow-list `LIBRARIAN_READ_ALLOWLIST`; every other method is a recorded stub, unknown
+methods are blocked, never passed), redis (`REDIS_READ_ALLOWLIST`; writes answer shaped no-ops, SET NX -> "OK"), the
+Discord client (sends captured) and the owner-DM lane (send captured), plus copies of the cooldown map and message
+buffer and a cycle guard that never counts; (2) explicit `ctx.dryRun` checks in `autonomous-core.ts` for module state the
+ctx cannot reach (decline cap, origin mint, run records, fired record, `[tick]`/`[rail]`/`[b32]` lines, floor claim); (3)
+capture-and-return at the two send seams (`sendAutonomousMessage`, `speakToOwnerDm`). **A new READ the heartbeat starts using must be added to one of those
+allow-lists or the dry run cannot see it; a new write needs nothing, it is blocked by default** (that is the point). **Inference is NEVER Hermes** (revised same day): the Hermes
+gateway runs the full agent with Halseth MCP tools and ignores `tool_choice: "none"` / `tools: []`, so a Hermes compose could
+write through its own tools past every proxy. The dry ctx's `inference` is the bot's direct, tool-less adapter
+(`withCaller(directAdapter, "heartbeat_dry_run")`, the judges' lane) with the companion's Hermes SOUL prepended
+(`hermesSoulPath`: Cypher `~/.hermes/SOUL.md`, Drevan/Gaia `~/.hermes/profiles/<id>/SOUL.md`, `HERMES_HOME` overrides the base;
+unreadable falls back to the bot's own system prompt and the report says so). No direct adapter (no `DEEPINFRA_API_KEY`) =
+the run stops before any inference and says why. The report labels the voice: close, not the Hermes line. The allow-list is
+audited against halseth: `botOrient` (warms heat, marks Raziel's answered questions delivered) and `getState` (`ask("my state")`
+can route to a session open) are NOT allowed and are stubbed; the allowed reads are listed on `LIBRARIAN_READ_ALLOWLIST`.
+**The report goes to Raziel's DM** (it quotes would-be DM text; the channel may be a room others read), via the owner-DM lane's
+`send` only (no reach cap, no ledger); the channel gets "dry run sent to your DMs.", and typed in the DM it replies there.
+**Typing the command counts as you being here**: it is an owner message, so `setLastActivity`, `clearConsolidation` and
+`noteOwnerArrival` run (which settles open DM reach-outs as replied); that is correct for Raziel being present, and the report
+footer says so. A dry run emits NO `[tick]` line, so readouts never count it. Tests: `__tests__/heartbeat-dry-run.test.ts`.
+
 ## Autonomous Worker
 
 Standalone package (`packages/autonomous-worker/`) runs a 6-phase pipeline per companion on a cron schedule:

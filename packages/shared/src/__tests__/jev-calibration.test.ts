@@ -86,3 +86,34 @@ describe("analyseCompanion", () => {
     expect(r.labels.best.theta).toBe(0.8);
   });
 });
+
+describe("volume rooms (2026-11-01): watch-along chatter is analysed apart, never in the drift alarm", () => {
+  const TH = { cypher: 0.7, drevan: 0.7, gaia: 0.6 };
+  const MOVIE = "1556334678024396862";
+  const mixed = () => [
+    ...Array.from({ length: 40 }, () => row({ channel_id: "home", worth: 0.9 })),   // writes
+    ...Array.from({ length: 160 }, () => row({ channel_id: MOVIE, worth: 0.3 })),   // light commentary
+  ];
+  it("default treats #movie-night as a volume room; `none` and a custom list parse", () => {
+    expect([...cal.parseVolumeRooms("")]).toEqual([MOVIE]);
+    expect(cal.parseVolumeRooms("none").size).toBe(0);
+    expect([...cal.parseVolumeRooms(" a, b ,")]).toEqual(["a", "b"]);
+  });
+  it("a movie-heavy week does not move the steady write rate or fire the alarm", () => {
+    const baseline = { drevan: { rows_ok: 40, jev_write_rate: 1, worth_hist: cal.histogram(Array(40).fill(0.9)), theta: 0.7 } };
+    const r = cal.buildReport({ rows: mixed(), thetas: TH, notable: 2, baseline, labels: null, days: 7, opts: OPTS, now: NOW });
+    expect(r.companions.drevan.jev_write_rate).toBe(1);
+    expect(r.companions.drevan.volume_rooms).toEqual({ rows: 160, jev_ok: 160, jev_write_rate: 0 });
+    expect(r.warnings.filter((w: any) => w.companion === "drevan" && w.name === "write_rate_shift")).toEqual([]);
+    expect(cal.renderReport(r)).toContain("volume rooms (kept out of drift): rows 160  jev write 0%");
+  });
+  it("with volume rooms off the same rows DO fire it (the old false alarm, reproduced)", () => {
+    const baseline = { drevan: { rows_ok: 40, jev_write_rate: 1, worth_hist: cal.histogram(Array(40).fill(0.9)), theta: 0.7 } };
+    const r = cal.buildReport({ rows: mixed(), thetas: TH, notable: 2, baseline, labels: null, days: 7, opts: OPTS, now: NOW, volumeRooms: new Set() });
+    expect(r.warnings.some((w: any) => w.companion === "drevan" && w.name === "write_rate_shift")).toBe(true);
+  });
+  it("the baseline is saved from steady rows only", () => {
+    const r = cal.buildReport({ rows: mixed(), thetas: TH, notable: 2, baseline: null, labels: null, days: 7, opts: OPTS, now: NOW });
+    expect(cal.baselineFrom(r).drevan.jev_write_rate).toBe(1);
+  });
+});
