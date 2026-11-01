@@ -556,6 +556,12 @@ export async function executeMetronomeAction(
         prepare: async () => {
           // Inject currently-held open questions so the model doesn't re-ask the same themes.
           let heldBlock = "";
+          // B56: botOrient WRITES server-side (warms heat, marks Raziel's answered questions delivered), so a
+          // dry run never calls it; the held-questions guard is simply absent from the dry composition.
+          if (ctx.dryRun) {
+            ctx.dryRunSink?.note("ask_question: would orient for held questions (skipped in dry run)");
+            return action.prompt ?? prompts.askQuestion;
+          }
           try {
             const orient = await librarian.botOrient();
             const held = orient?.open_questions ?? [];
@@ -1079,7 +1085,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
           candidateActions = kept;
           console.log(`[${companionId}/heartbeat] B32 D4: ${why} -- ${siblingDmHeld} DM move(s) removed`);
         } else {
-          b32Log(companionId, "heartbeat:dm", "shadow", `would drop ${candidateActions.length - kept.length} DM move(s): ${why}`);
+          b32l(companionId, "heartbeat:dm", "shadow", `would drop ${candidateActions.length - kept.length} DM move(s): ${why}`);
         }
       }
     }

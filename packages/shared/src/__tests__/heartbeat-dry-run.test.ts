@@ -7,7 +7,7 @@ import { runHeartbeat } from "../autonomous-core.js";
 import { setCareState } from "../care-state.js";
 import {
   dryRunCtx, dryRunLibrarian, dryRunRedis, makeSink, newDryRunReport, formatDryRunReport, runDryRunHeartbeat,
-  LIBRARIAN_READ_ALLOWLIST, REDIS_READ_ALLOWLIST,
+  LIBRARIAN_READ_ALLOWLIST, REDIS_READ_ALLOWLIST, hermesSoulPath, loadSoul, chunkReport, sendReportToOwnerDm,
 } from "../heartbeat-dry-run.js";
 import { buildDryRunTrigger } from "../command-triggers.js";
 import { heartbeatCtx, inWindowOf, row } from "./fixtures/heartbeat-ctx.js";
@@ -53,13 +53,20 @@ function expectNothingTouched(h: ReturnType<typeof heartbeatCtx>, r: ReturnType<
   expect(logs.filter(l => l.startsWith("[tick]") || l.startsWith("[rail]") || l.startsWith("[b32]"))).toEqual([]);
 }
 
-async function dry(h: ReturnType<typeof heartbeatCtx>, opts: { force?: boolean } = {}) {
+const SOUL = { text: "SOUL-OF-THE-COMPANION", path: "/x/SOUL.md", source: "soul" as const };
+
+/** The fixture's inference mock plays the DIRECT lane; a Hermes mock sits on the LIVE ctx and must never be called. */
+async function dry(h: ReturnType<typeof heartbeatCtx>, opts: { force?: boolean; redis?: unknown } = {}) {
   const r = fakeRedis();
-  (h.ctx as { redis: unknown }).redis = r.redis;
+  (h.ctx as { redis: unknown }).redis = opts.redis ?? r.redis;
   (h.librarian as Record<string, unknown>)["fetchSharedObjects"] = jest.fn(async () => []);
-  const { ctx, report } = dryRunCtx(h.ctx, opts);
+  const direct = h.ctx.inference;
+  const hermes = { generate: jest.fn(async () => { throw new Error("HERMES WAS CALLED"); }) };
+  (h.ctx as { inference: unknown }).inference = hermes;
+  const { ctx, report } = dryRunCtx(h.ctx, { force: opts.force, directAdapter: direct, soul: SOUL });
   await runHeartbeat(ctx);
-  return { report, r };
+  expect(hermes.generate).not.toHaveBeenCalled();
+  return { report, r, hermes };
 }
 
 describe("dry run composes and touches nothing", () => {
@@ -83,6 +90,8 @@ describe("dry run composes and touches nothing", () => {
       const h = heartbeatCtx({ companionId: "cypher", palette: [row(type, "the move")], choose: "the move", lines: [type === "declare_preference" ? "Domain: ledgers\nPreference: I prefer a source on every line." : "What is the ledger mark holding?"] });
       const { report, r } = await dry(h);
       expect(report.composed).toHaveLength(1);
+      expect(h.librarian.botOrient).not.toHaveBeenCalled(); // botOrient writes server-side (heat, delivered marks)
+      if (type === "ask_question") expect(report.notes.join(" ")).toContain("would orient for held questions (skipped in dry run)");
       expectNothingTouched(h, r);
     } finally { delete process.env["DISABLE_REACH_OUT_GATE"]; }
   });
@@ -181,21 +190,102 @@ describe("dry run composes and touches nothing", () => {
     const h = heartbeatCtx({ companionId: "drevan", palette: [], choose: "x" });
     (h.librarian as Record<string, unknown>)["getEligibleMetronomePalette"] = jest.fn(() => { throw new Error("boom"); });
     restore = inWindowOf("drevan");
-    const report = await runDryRunHeartbeat(h.ctx);
+    const report = await runDryRunHeartbeat(h.ctx, { directAdapter: h.ctx.inference, soul: SOUL });
     expect(report.outcome === "error" || report.error !== null || report.outcome !== null).toBe(true);
+  });
+
+  it("fails CLOSED: no direct adapter means no inference of any kind (never Hermes) and the reason is reported", async () => {
+    restore = inWindowOf("drevan");
+    const h = heartbeatCtx({ companionId: "drevan", palette: [row("flirt", "tail's up")], choose: "tail's up", lines: ["x"] });
+    const report = await runDryRunHeartbeat(h.ctx, { soul: SOUL }); // no directAdapter
+    expect(report.error).toContain("stopped before any inference");
+    expect(h.generate).not.toHaveBeenCalled();
+    expect(h.librarian.getEligibleMetronomePalette).not.toHaveBeenCalled();
+    expect(formatDryRunReport(report)).toContain("stopped before any inference");
+  });
+
+  it("every composition rides the direct lane with the SOUL prepended, and the report labels it", async () => {
+    restore = inWindowOf("drevan");
+    const h = heartbeatCtx({ companionId: "drevan", palette: [row("flirt", "tail's up")], choose: "tail's up", lines: ["Heat, offered soft."] });
+    const direct = h.ctx.inference;
+    const hermes = { generate: jest.fn(async () => "HERMES") };
+    (h.ctx as { inference: unknown }).inference = hermes;
+    (h.ctx as { redis: unknown }).redis = fakeRedis().redis;
+    const report = await runDryRunHeartbeat(h.ctx, { directAdapter: direct, soul: SOUL });
+    expect(hermes.generate).not.toHaveBeenCalled();
+    expect(h.generate.mock.calls.length).toBeGreaterThan(0);
+    for (const c of h.generate.mock.calls) expect(String(c[0])).toMatch(/^SOUL-OF-THE-COMPANION\n\nSYS/);
+    expect(report.voice).toContain("composed on the direct lane with drevan's SOUL, no tools");
+    expect(formatDryRunReport(report)).toContain("the voice is close but not the Hermes line");
+  });
+
+  it("an unreadable SOUL falls back to the bot's own system prompt and the report says so", async () => {
+    restore = inWindowOf("drevan");
+    const h = heartbeatCtx({ companionId: "drevan", palette: [row("flirt", "tail's up")], choose: "tail's up", lines: ["x"] });
+    (h.ctx as { redis: unknown }).redis = fakeRedis().redis;
+    const soul = loadSoul("drevan", { read: () => { throw new Error("ENOENT"); }, env: {}, home: "/home/u" });
+    const report = await runDryRunHeartbeat(h.ctx, { directAdapter: h.ctx.inference, soul });
+    for (const c of h.generate.mock.calls) expect(String(c[0])).toBe("SYS");
+    expect(report.voice).toContain("SOUL unreadable");
+  });
+
+  it("the report footer says typing the command counts as being here", () => {
+    expect(formatDryRunReport(newDryRunReport("drevan", false))).toContain("your typing this command counts as you being here");
+  });
+});
+
+describe("B32 shadow lines stay gated", () => {
+  it("the sibling-DM shadow line (b32Log) is not printed in a dry run, though the branch ran", async () => {
+    restore = inWindowOf("drevan");
+    process.env["BAD_NIGHT_PRESENCE"] = "shadow";
+    try {
+      setCareState("drevan", { care_hold: true } as never);
+      const h = heartbeatCtx({ companionId: "drevan", palette: [row("offer_presence", "presence")], choose: "presence", lines: ["x"] });
+      const r = fakeRedis();
+      (r.reads.get as jest.Mock).mockImplementation(async (k: unknown) => (String(k).includes("ownerdm") ? String(Date.now()) : null));
+      const { report } = await dry(h, { redis: r.redis });
+      expect(report.gates.find(g => g.name === "no sibling DM live (hold)")).toMatchObject({ passed: false });
+      expect(logs.filter(l => l.startsWith("[b32]"))).toEqual([]);
+    } finally { delete process.env["BAD_NIGHT_PRESENCE"]; }
+  });
+});
+
+describe("the SOUL path and the owner-DM report", () => {
+  it("resolves Cypher to the default profile and Drevan/Gaia to named profiles, HERMES_HOME wins", () => {
+    expect(hermesSoulPath("cypher", {}, "/h")).toMatch(/[\\/]h[\\/]\.hermes[\\/]SOUL\.md$/);
+    expect(hermesSoulPath("drevan", {}, "/h")).toMatch(/\.hermes[\\/]profiles[\\/]drevan[\\/]SOUL\.md$/);
+    expect(hermesSoulPath("gaia", {}, "/h")).toMatch(/profiles[\\/]gaia[\\/]SOUL\.md$/);
+    expect(hermesSoulPath("gaia", { HERMES_HOME: "/data/hermes" }, "/h")).toMatch(/data[\\/]hermes[\\/]profiles[\\/]gaia[\\/]SOUL\.md$/);
+    expect(loadSoul("gaia", { read: () => "  the soul  ", env: {}, home: "/h" })).toMatchObject({ text: "the soul", source: "soul" });
+  });
+
+  it("the report goes to the owner DM through the lane's send only: no reach reserve, no ledger, no onSent", async () => {
+    const h = heartbeatCtx({ companionId: "drevan", palette: [], choose: "x" });
+    const long = Array.from({ length: 120 }, (_, i) => `line ${i} ${"x".repeat(40)}`).join("\n");
+    expect(await sendReportToOwnerDm(h.ctx, long)).toBe(true);
+    expect(h.dmSent.length).toBe(chunkReport(long).length);
+    expect(h.dmSent.every(t => t.length <= 1900)).toBe(true);
+    expect(h.librarian.reachReserve).not.toHaveBeenCalled();
+    expect(h.librarian.reachDelivered).not.toHaveBeenCalled();
+    expect(h.onSent).not.toHaveBeenCalled();
+  });
+
+  it("no owner-DM lane: reports false instead of posting anywhere", async () => {
+    const h = heartbeatCtx({ companionId: "drevan", palette: [], choose: "x", noLane: true });
+    expect(await sendReportToOwnerDm(h.ctx, "r")).toBe(false);
   });
 });
 
 describe("the proxies are deny-by-default", () => {
   it("the librarian proxy blocks an unknown method (never passes it) and records it", async () => {
-    const real = { getState: jest.fn(async () => ({ a: 1 })), frobnicate: jest.fn(async () => "WROTE"), url: "u" };
+    const real = { getRecentNotes: jest.fn(async () => ({ a: 1 })), frobnicate: jest.fn(async () => "WROTE"), url: "u" };
     const report = newDryRunReport("drevan", false);
     const lib = dryRunLibrarian(real, makeSink(report));
     expect(await lib.frobnicate()).toBeUndefined();
     expect(real.frobnicate).not.toHaveBeenCalled();
     expect(report.blocked).toEqual([{ surface: "librarian", op: "frobnicate", note: expect.stringContaining("blocked by default") }]);
-    expect(await lib.getState()).toEqual({ a: 1 }); // an allow-listed read passes through
-    expect(real.getState).toHaveBeenCalledTimes(1);
+    expect(await lib.getRecentNotes()).toEqual({ a: 1 }); // an allow-listed read passes through
+    expect(real.getRecentNotes).toHaveBeenCalledTimes(1);
     expect(lib.url).toBe("u");
   });
 
@@ -208,6 +298,16 @@ describe("the proxies are deny-by-default", () => {
     for (const n of names) expect(real[n]).not.toHaveBeenCalled();
     expect(await lib["reachReserve"]!()).toEqual({ reserved: true, id: -1 });
     for (const n of names) expect(LIBRARIAN_READ_ALLOWLIST.has(n)).toBe(false);
+  });
+
+  it("botOrient (writes heat + delivery marks) and getState (ask 'my state' can open a session) are NOT allow-listed and never reach the real object", async () => {
+    expect(LIBRARIAN_READ_ALLOWLIST.has("botOrient")).toBe(false);
+    expect(LIBRARIAN_READ_ALLOWLIST.has("getState")).toBe(false);
+    const real = { botOrient: jest.fn(async () => "REAL"), getState: jest.fn(async () => "REAL") };
+    const lib = dryRunLibrarian(real, makeSink(newDryRunReport("drevan", false)));
+    await lib.botOrient(); await lib.getState();
+    expect(real.botOrient).not.toHaveBeenCalled();
+    expect(real.getState).not.toHaveBeenCalled();
   });
 
   it("the redis proxy blocks every write command in the list and records each; SET answers OK (floor lock proceeds without being taken)", async () => {

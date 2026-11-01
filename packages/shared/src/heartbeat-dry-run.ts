@@ -17,7 +17,11 @@
 //
 // This module imports NO runtime code from autonomous-core (type-only), so there is no import cycle.
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { AutonomousContext } from "./autonomous-core.js";
+import { withCaller, type InferenceAdapter } from "./inference.js";
 import type { HeartbeatOutcome, HeartbeatTickInfo } from "./rail-telemetry.js";
 
 // ── The report ──────────────────────────────────────────────────────────────
@@ -42,6 +46,8 @@ export interface DryRunReport {
   info: HeartbeatTickInfo;
   /** Set when runHeartbeat threw; the dry run never rethrows into the handler. */
   error: string | null;
+  /** Which voice composed the text, and where its SOUL came from. */
+  voice: string | null;
 }
 
 /** What the heartbeat body calls on ctx.dryRunSink. Every method must be safe to call and never throw. */
@@ -53,13 +59,14 @@ export interface DryRunSink {
   decision(raw: string | null, move: string | null, reason: string | null): void;
   compose(seam: string, kind: string, text: string, note?: string): void;
   blocked(surface: string, op: string, note?: string): void;
+  voice(text: string): void;
   finish(outcome: HeartbeatOutcome | null, info: HeartbeatTickInfo): void;
 }
 
 export function newDryRunReport(companionId: string, force: boolean): DryRunReport {
   return {
     companionId, force, gates: [], paletteSize: null, paletteNames: [], decisionRaw: null, move: null, moveReason: null,
-    composed: [], blocked: [], notes: [], outcome: null, info: {}, error: null,
+    composed: [], blocked: [], notes: [], outcome: null, info: {}, error: null, voice: null,
   };
 }
 
@@ -73,6 +80,7 @@ export function makeSink(report: DryRunReport): DryRunSink {
     decision: (raw, move, reason) => safe(() => { report.decisionRaw = raw; report.move = move; report.moveReason = reason; }),
     compose: (seam, kind, text, note) => safe(() => { report.composed.push({ seam, kind, text, ...(note ? { note } : {}) }); }),
     blocked: (surface, op, note) => safe(() => { report.blocked.push({ surface, op, ...(note ? { note } : {}) }); }),
+    voice: (text) => safe(() => { report.voice = text; }),
     finish: (outcome, info) => safe(() => { report.outcome = outcome; report.info = info; }),
   };
 }
@@ -80,15 +88,23 @@ export function makeSink(report: DryRunReport): DryRunSink {
 // ── Deny-by-default proxies ─────────────────────────────────────────────────
 
 /**
- * The Librarian methods the heartbeat path actually calls to READ (verified against autonomous-core.ts and
- * reach-dm.ts, 2026-11-01): palette, state, notes, drives, Raziel's state, shared objects for the inter-companion
- * note, orient (the ask_question held-questions guard), creatures, drifts, preferences. Anything else is a write
- * or unknown and is blocked. NOTE `ask` is deliberately NOT here: it is the generic request path and carries
- * every write (librarianWriteChecked); the read helpers that use it internally (getState) run on the real object.
+ * The Librarian methods the heartbeat path calls that are PURE READS, each verified by following it into halseth
+ * (2026-11-01 audit; no INSERT/UPDATE/DELETE, no heat warming, no delivery marking, no session open):
+ *   getEligibleMetronomePalette -> GET /mind/metronome/actions/:id/eligible (listActions, reachLaneVerdict, readCareHold)
+ *   getRecentNotes   -> GET /mind/notes/recent (readRecentNotes)
+ *   getDrives        -> GET /mind/drives/:id (readDrivesSql, pure accrual math)
+ *   getRazielState   -> GET /biometrics/latest (one SELECT)
+ *   fetchSharedObjects -> GET /mind/questions/:id, /companion-growth/tensions/:id, /mind/council/next-open (SELECTs)
+ *   creaturesList    -> GET /mind/creatures (SELECTs + pure liveState)
+ *   driftsOpen       -> GET /drifts/:id (readDrifts, one SELECT)
+ *   getPreferences   -> GET /agency/preferences/:id (readPreferences, one SELECT)
+ * DELIBERATELY NOT here: `botOrient` (execBotOrient warms heat and runs markAnswersDelivered, consuming Raziel's
+ * answered questions), `getState` (it is `ask("my state")`: the Librarian classifier can route that to a session
+ * open), and `ask` itself (the generic path that carries every write). Those are stubbed and recorded.
  */
 export const LIBRARIAN_READ_ALLOWLIST: ReadonlySet<string> = new Set([
-  "getEligibleMetronomePalette", "getState", "getRecentNotes", "getDrives", "getRazielState",
-  "fetchSharedObjects", "botOrient", "creaturesList", "driftsOpen", "getPreferences",
+  "getEligibleMetronomePalette", "getRecentNotes", "getDrives", "getRazielState",
+  "fetchSharedObjects", "creaturesList", "driftsOpen", "getPreferences",
 ]);
 
 /** Safe answers for the writes the heartbeat is known to make, so callers proceed as if they succeeded. */
@@ -100,6 +116,9 @@ const LIBRARIAN_STUBS: Record<string, unknown> = {
   patchAutonomyRun: undefined,
   recordMetronomeActionFired: undefined,
   ask: { ack: true, id: "dryrun:ask" },
+  // Reads that are NOT pure (see the allow-list note): empty answers, so the decision prompt simply lacks them.
+  getState: {},
+  botOrient: {},
   writeWmNote: undefined,
   journalSpeech: undefined,
   convoOpen: undefined,
@@ -242,16 +261,63 @@ export function dryRunOwnerDm(real: Lane, sink: DryRunSink): Lane {
   };
 }
 
+// ── The direct, tool-less inference lane ────────────────────────────────────
+//
+// Hermes runs the FULL agent with Halseth MCP tools on every call, and the gateway IGNORES tool_choice "none" and
+// tools [] (verified on the VPS 2026-11-01), so a Hermes compose could write feelings/notes/journals mid-dry-run
+// past every proxy. A dry run therefore NEVER calls Hermes: every inference goes through the direct adapter (the
+// judges' lane, DeepInfra via withCaller), tool-less by construction, with the companion's Hermes SOUL prepended.
+
+export interface SoulLoad { text: string | null; path: string; source: "soul" | "fallback" }
+
+/** Where the companion's Hermes SOUL.md lives: Cypher is the default profile, Drevan and Gaia have named profiles. */
+export function hermesSoulPath(companionId: string, env: Record<string, string | undefined> = process.env, home: string = homedir()): string {
+  const base = (env["HERMES_HOME"] ?? "").trim() || join(home, ".hermes");
+  return companionId === "cypher" ? join(base, "SOUL.md") : join(base, "profiles", companionId, "SOUL.md");
+}
+
+export function loadSoul(
+  companionId: string,
+  o: { read?: (path: string) => string; env?: Record<string, string | undefined>; home?: string } = {},
+): SoulLoad {
+  const path = hermesSoulPath(companionId, o.env, o.home);
+  try {
+    const text = (o.read ?? ((p: string) => readFileSync(p, "utf8")))(path).trim();
+    if (text) return { text, path, source: "soul" };
+  } catch { /* fall through */ }
+  return { text: null, path, source: "fallback" };
+}
+
+/** The dry ctx's inference: direct lane, SOUL first, session ids dropped (the direct adapters take none). */
+export function dryRunInference(direct: InferenceAdapter | null | undefined, soul: SoulLoad | null): InferenceAdapter {
+  if (!direct) {
+    return { generate: async () => { throw new Error("dry run: no direct inference lane; refusing to fall back to Hermes"); } } as InferenceAdapter;
+  }
+  const lane = withCaller(direct, "heartbeat_dry_run");
+  return {
+    generate: (...args: Parameters<InferenceAdapter["generate"]>) => {
+      const [system, messages, temperature, maxTokens] = args;
+      const sys = soul?.text ? `${soul.text}\n\n${system ?? ""}` : (system ?? "");
+      return lane.generate(sys, messages, temperature, maxTokens);
+    },
+  } as InferenceAdapter;
+}
+
 /** A cycle guard that never counts. The real one is a stateful counter, so a dry run neither reads nor advances it. */
 const NO_CYCLE_GUARD = { check: () => "ok", reset: () => {} } as unknown as AutonomousContext["cycleGuard"];
 
 /** Build the dry-run ctx. Pure: returns the ctx plus the report the run fills in. */
-export function dryRunCtx(ctx: AutonomousContext, opts: { force?: boolean } = {}): { ctx: AutonomousContext; report: DryRunReport } {
+export function dryRunCtx(
+  ctx: AutonomousContext,
+  opts: { force?: boolean; directAdapter?: InferenceAdapter | null; soul?: SoulLoad | null } = {},
+): { ctx: AutonomousContext; report: DryRunReport } {
   const report = newDryRunReport(ctx.companionId, opts.force === true);
   const sink = makeSink(report);
   const real = ctx.sessionWindows;
   const dry: AutonomousContext = {
     ...ctx,
+    // The live ctx.inference (Hermes) is replaced unconditionally: it is unreachable from the dry ctx.
+    inference: dryRunInference(opts.directAdapter, opts.soul ?? null),
     dryRun: true,
     dryRunSink: sink,
     librarian: dryRunLibrarian(ctx.librarian, sink),
@@ -283,6 +349,7 @@ const noDash = (s: string) => s.replace(/—/g, ";").replace(/–/g, "-");
 /** One phone-readable reply. Plain text, no em dashes; long text capped (the full text is never sent anywhere). */
 export function formatDryRunReport(r: DryRunReport): string {
   const out: string[] = [];
+  if (r.voice) out.push(r.voice);
   out.push(`DRY RUN heartbeat (${r.companionId})${r.force ? " [force: time/window/activity/quiet gates skipped]" : ""}. Nothing was sent, reserved or recorded.`);
   if (r.error) out.push(`ERROR: the run threw: ${cap(r.error, 300)}`);
   const stoppedBy = r.outcome && r.outcome !== "chose_to_act" ? r.outcome : null;
@@ -307,6 +374,7 @@ export function formatDryRunReport(r: DryRunReport): string {
     for (const b of r.blocked) { const k = `${b.surface}.${b.op}`; counts.set(k, (counts.get(k) ?? 0) + 1); }
     out.push(`Blocked writes (${r.blocked.length}): ${cap([...counts].map(([k, n]) => (n > 1 ? `${k} x${n}` : k)).join(", "), 400)}`);
   }
+  out.push("Note: your typing this command counts as you being here (it refreshes your last-activity and settles open DM reach-outs as replied).");
   return noDash(out.join("\n"));
 }
 
@@ -320,9 +388,19 @@ const inFlight = new Set<string>();
  */
 export async function runDryRunHeartbeat(
   live: AutonomousContext,
-  opts: { force?: boolean; timeoutMs?: number } = {},
+  opts: { force?: boolean; timeoutMs?: number; directAdapter?: InferenceAdapter | null; soul?: SoulLoad | null } = {},
 ): Promise<DryRunReport> {
-  const { ctx, report } = dryRunCtx(live, { force: opts.force });
+  const soul = opts.soul ?? loadSoul(live.companionId);
+  const { ctx, report } = dryRunCtx(live, { force: opts.force, directAdapter: opts.directAdapter, soul });
+  report.voice = opts.directAdapter
+    ? `composed on the direct lane with ${live.companionId}'s SOUL, no tools: the move is the real decision path, the voice is close but not the Hermes line`
+      + (soul.source === "soul" ? ` (SOUL: ${soul.path})` : ` (SOUL unreadable at ${soul.path}: used the bot's own system prompt only)`)
+    : null;
+  if (!opts.directAdapter) {
+    // Fail CLOSED: nothing below this line runs, so no inference of any kind happens, Hermes or otherwise.
+    report.error = "no direct inference lane (no DEEPINFRA key on this bot); the dry run stopped before any inference rather than fall back to Hermes";
+    return report;
+  }
   if (inFlight.has(live.companionId)) {
     report.error = "a dry run is already running for this companion";
     return report;
@@ -342,4 +420,30 @@ export async function runDryRunHeartbeat(
     inFlight.delete(live.companionId);
   }
   return report;
+}
+
+/** Split a long report into Discord-sized pieces on line boundaries. */
+export function chunkReport(text: string, max = 1900): string[] {
+  const out: string[] = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    const l = line.length > max ? line.slice(0, max) : line;
+    if (cur && cur.length + 1 + l.length > max) { out.push(cur); cur = l; } else { cur = cur ? `${cur}\n${l}` : l; }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * Deliver the report to the OWNER's DM (it quotes would-be DM text; the typing channel may be a guild room others read).
+ * A reply to his own command, not a reach-out: it uses the lane's resolve()/target.send only, never speakToOwnerDm, so
+ * no reach cap, reserve or ledger row is touched. Returns false when the DM could not be reached.
+ */
+export async function sendReportToOwnerDm(live: AutonomousContext, report: string): Promise<boolean> {
+  try {
+    const target = live.ownerDm ? await live.ownerDm.resolve() : null;
+    if (!target) return false;
+    for (const part of chunkReport(report)) await target.send(part);
+    return true;
+  } catch { return false; }
 }

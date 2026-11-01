@@ -126,7 +126,7 @@ import {
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { postProcessReply } from "./reply-postprocess.js";
-import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport } from "./heartbeat-dry-run.js";
+import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport, sendReportToOwnerDm } from "./heartbeat-dry-run.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
 import {
   decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
@@ -1075,11 +1075,21 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           reply = "dry-run heartbeat unavailable: the autonomous runtime has not started on this bot yet.";
         } else {
           try { await (message.channel as TextChannel).sendTyping?.(); } catch { /* cosmetic */ }
-          const report = await runDryRunHeartbeat(live, { force: !!dryRun[1] });
+          // The direct, tool-less lane only: a Hermes compose could write through its own tools (tool_choice none is
+          // ignored by the gateway), so with no direct adapter the run stops and says so.
+          const report = await runDryRunHeartbeat(live, { force: !!dryRun[1], directAdapter: directAdapter ?? null });
           reply = formatDryRunReport(report);
         }
         console.log(`[${COMPANION_ID}] dry-run heartbeat${dryRun[1] ? " force" : ""} in ${message.channelId}`);
-        await sendLong(message.channel as TextChannel, reply);
+        // The report quotes would-be DM text, so it goes to Raziel's DM, not a room others read. Typed in the DM
+        // itself: reply there. A reply to his own command, not a reach-out (no cap, no ledger).
+        if (isOwnerDm || !live) {
+          await sendLong(message.channel as TextChannel, reply);
+        } else if (await sendReportToOwnerDm(live, reply)) {
+          await (message.channel as TextChannel).send("dry run sent to your DMs.");
+        } else {
+          await (message.channel as TextChannel).send("dry run done, but your DM could not be opened, so nothing was posted here.");
+        }
         return;
       }
     }
