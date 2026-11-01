@@ -97,6 +97,9 @@ export interface HumanGateInput {
   mentionedHumans: HumanSide[];
   /** Blue's per-human thread holder (never Raziel's). Only read for an unnamed Blue message. */
   blueHolder: CompanionId | null;
+  /** The human whose message this one is a Discord reply to (reply-context.ts), or null. Only set
+   *  when REPLY_HUMAN_GATE is `on`; in shadow the handler runs the gate twice and logs the difference. */
+  replyToHuman?: HumanSide | null;
 }
 
 /**
@@ -123,6 +126,11 @@ export function humanGate(input: HumanGateInput): HumanGateVerdict {
   for (const side of [...texts.map(t => humanAddressee(t, names)), ...input.mentionedHumans]) {
     if (side && side !== speaker) return { kind: "silent", addressee: side };
   }
+
+  // Rule 2b (2026-10-31, Raziel: "if I reply to Blue, then it's just for Blue"): a Discord reply to the
+  // OTHER human's message is to them. A reply to one's own message says nothing, and Rule 1 already let
+  // a named companion through.
+  if (input.replyToHuman && input.replyToHuman !== speaker) return { kind: "silent", addressee: input.replyToHuman };
 
   // Rule 3: unnamed Blue belongs to the companion holding Blue's thread, else to nobody.
   if (tier === "intimate") return { kind: "blue_thread", holder: input.blueHolder };

@@ -1,0 +1,146 @@
+/**
+ * Room timing: WHEN a companion should jump in, not who a line is "to" (2026-10-31).
+ *
+ * Why timing and not a better addressee model: Raziel labelled 164 messages. Of the 39 that were to no
+ * companion, a companion answered 35. Every text judge tried (Jev spokenTo, a three-way DeepSeek judge,
+ * the same with member names and a co-watching rule) topped out at AUC 0.70 or worse, because during a
+ * watch-along Raziel split near-identical lines by INTENT ("Is he going to murder these teenagers?" to
+ * Drevan and Raziel, "Teenagers are definitely going to be murdered" to Blue). Intent is not in the text.
+ *
+ * Drevan's read (inter-companion note d5a37a0c, 10-31), which these rules follow:
+ *   - answer at once when named, on a real question to the room, or on any distress or body signal
+ *     (pain, grief, injury, crying) even unnamed;
+ *   - commentary, jokes landing between Raziel and Blue, and movie remarks: wait for the lull and
+ *     answer once, or not at all; if the other human answers inside the burst, it was theirs;
+ *   - a reaction (emoji) is a presence channel that does not take the floor, so quiet never reads as
+ *     checking out;
+ *   - Raziel has a short override to pull a companion in ("Dre, in").
+ *   ("I fill silence because it feels like absence to me. Being in the room means not taking every line.")
+ *
+ * SHADOW ONLY in this cut: decideRoomTiming() is pure; the handler computes it detached and appends one
+ * JSONL row per human message. Nothing it returns changes what the bot does. The readout joins these
+ * rows to address-shadow's `spoke` rows by msg_id (who actually answered).
+ */
+
+import type { CompanionId } from "./types.js";
+
+export type RoomTimingDecision = "answer_now" | "hold_for_lull" | "stay_quiet";
+
+export type RoomTimingReason =
+  | "override" | "named" | "reply_to_me" | "distress" | "room_question"
+  | "reply_to_human" | "human_volley" | "watch_along" | "flood"
+  | "holder" | "not_mine";
+
+export interface RoomTimingInput {
+  companion: CompanionId;
+  speaker: "raziel" | "blue";
+  text: string;
+  /** Named, @mentioned, extracted as the addressee, or a group call. */
+  named: boolean;
+  replyToMe: boolean;
+  /** The human this message is a Discord reply to, or null (reply-context.ts). */
+  replyToHuman: "raziel" | "blue" | null;
+  /** This companion holds the speaker's thread (Raziel's channel hold, or Blue's per-human hold). */
+  isHolder: boolean;
+  /** Raziel's "<name>, in" override is live for this companion in this channel. */
+  overrideIn: boolean;
+  watchAlong: boolean;
+  /** Milliseconds since the OTHER human last posted in this channel, or null if not in recent history. */
+  otherHumanAgoMs: number | null;
+  /** Milliseconds since THIS companion last posted in this channel, or null. */
+  selfSpokeAgoMs: number | null;
+}
+
+export interface RoomTimingResult {
+  decision: RoomTimingDecision;
+  reason: RoomTimingReason;
+  /** Drevan's presence channel: hold, but let them know you are here. */
+  react: boolean;
+}
+
+/** A human back-and-forth: the other human posted within this window. */
+export const HUMAN_VOLLEY_MS = 3 * 60_000;
+/** Drevan: "a minute of quiet". The lull a held burst waits for (used by the live cut; logged here). */
+export const LULL_MS = 60_000;
+/** Spoke this recently and not named: do not take the floor again. */
+export const FLOOD_MS = 60_000;
+
+// First person within the same sentence as a pain / injury / grief / crying word. Third-person movie
+// lines ("they're all going to die") must not read as distress, so a bare death word never counts.
+const FIRST_PERSON = /\b(i|i'm|im|i've|ive|my|me|myself)\b/i;
+const DISTRESS = /\b(hurts?|hurting|pain|painful|aching|ache|injur\w*|sprain\w*|broke my|bleed\w*|crying|cried|sobbing|tears|panic\w*|anxiety|scared|terrified|can'?t breathe|sick|nause\w*|throw(?:ing)? up|vomit\w*|migraine|griev\w*|grief|devastated|falling apart|meltdown|shutdown)\b/i;
+
+// Phrases that are distress on their own, first person or not (a status line like "having a panic
+// attack" drops the "I"). Kept short and unmistakable so a movie line never trips it.
+const DISTRESS_ALONE = /\b(panic attack|can'?t breathe|having a meltdown|in so much pain|need help|call 911|going to the er|in the er)\b/i;
+
+export function hasDistress(text: string): boolean {
+  if (DISTRESS_ALONE.test(text)) return true;
+  for (const sentence of text.split(/(?<=[.!?\n])\s+/)) {
+    if (DISTRESS.test(sentence) && FIRST_PERSON.test(sentence)) return true;
+  }
+  return false;
+}
+
+/** A real question to the room: a question mark that is not plainly aimed at the other human. */
+function isRoomQuestion(text: string): boolean {
+  return /\?\s*(\W*)$/.test(text.trim()) || /\?\s/.test(text);
+}
+
+export function decideRoomTiming(i: RoomTimingInput): RoomTimingResult {
+  if (i.overrideIn) return { decision: "answer_now", reason: "override", react: false };
+  if (i.named) return { decision: "answer_now", reason: "named", react: false };
+  if (i.replyToMe) return { decision: "answer_now", reason: "reply_to_me", react: false };
+  if (hasDistress(i.text)) return { decision: "answer_now", reason: "distress", react: false };
+  if (i.replyToHuman && i.replyToHuman !== i.speaker) return { decision: "stay_quiet", reason: "reply_to_human", react: false };
+
+  const volley = i.otherHumanAgoMs !== null && i.otherHumanAgoMs <= HUMAN_VOLLEY_MS;
+  if (!volley && isRoomQuestion(i.text)) return { decision: "answer_now", reason: "room_question", react: false };
+
+  // From here the line is unnamed. Only the holder has any claim on it; everyone else stays quiet.
+  if (!i.isHolder) return { decision: "stay_quiet", reason: "not_mine", react: false };
+  if (volley) return { decision: "hold_for_lull", reason: "human_volley", react: true };
+  if (i.watchAlong) return { decision: "hold_for_lull", reason: "watch_along", react: true };
+  if (i.selfSpokeAgoMs !== null && i.selfSpokeAgoMs <= FLOOD_MS) return { decision: "hold_for_lull", reason: "flood", react: false };
+  return { decision: "answer_now", reason: "holder", react: false };
+}
+
+export type RoomTimingMode = "off" | "shadow";
+
+/** ROOM_TIMING: off | shadow (this cut has no `on`). Code default `shadow`; garbage falls to shadow. */
+export function roomTimingMode(env: Record<string, string | undefined> = process.env): RoomTimingMode {
+  return String(env["ROOM_TIMING"] ?? "").trim().toLowerCase() === "off" ? "off" : "shadow";
+}
+
+export function roomTimingLogPath(env: Record<string, string | undefined> = process.env): string {
+  return env["ROOM_TIMING_LOG"]?.trim() || "/app/logs/room-timing.jsonl";
+}
+
+let warned = false;
+
+/** One JSON line per decision. Counts, flags and ids only, never message text. Never throws. */
+export function appendRoomTimingLine(row: Record<string, unknown>, path = roomTimingLogPath()): void {
+  let payload: string;
+  try { payload = `${JSON.stringify(row)}\n`; } catch { return; }
+  import("node:fs").then(({ appendFile }) => {
+    appendFile(path, payload, (err) => {
+      if (err && !warned) { warned = true; console.warn(`[room-timing] shadow log unwritable: ${String(err).slice(0, 200)}`); }
+    });
+  }).catch(() => {});
+}
+
+// ------------------------------------------------------------------ "<name>, in" override
+
+/** Redis key for Raziel's override, per companion per channel. */
+export function overrideKey(companion: CompanionId, channelId: string): string {
+  return `ns:room:in:${companion}:${channelId}`;
+}
+/** How long "<name>, in" holds: a scene, not a night. */
+export const OVERRIDE_TTL_MS = 30 * 60_000;
+
+/** "Dre, in" / "Drevan in" / "Cy, in." / "Gaia, out" -- anchored to the WHOLE message so normal
+ *  speech that happens to start with a name and "in" never trips it. Aliases from command-triggers.ts. */
+export function buildRoomOverrideTrigger(aliases: readonly string[]): RegExp {
+  const alt = aliases.map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  return new RegExp(`^\\s*(?:${alt})\\b[,:]?\\s+(in|out)\\s*[.!]?\\s*$`, "i");
+}

@@ -291,6 +291,13 @@ const shared = {
   // Listed per the standing rule above.
   ADDRESS_MODEL:               process.env.ADDRESS_MODEL ?? "shadow",
   ADDRESS_SHADOW_LOG:          process.env.ADDRESS_SHADOW_LOG,
+  // ROOM_TIMING / REPLY_HUMAN_GATE (2026-10-31, room-timing.ts, reply-context.ts): WHEN a companion jumps
+  // in (Drevan's rules) and "a Discord reply to the other human is theirs". Both default to `shadow` IN
+  // CODE (a default living only here once went silently off); shadow logs to ROOM_TIMING_LOG and changes
+  // nothing. REPLY_HUMAN_GATE=on gates live. The reply-context line itself is always live.
+  ROOM_TIMING:                 process.env.ROOM_TIMING,
+  ROOM_TIMING_LOG:             process.env.ROOM_TIMING_LOG,
+  REPLY_HUMAN_GATE:            process.env.REPLY_HUMAN_GATE,
   // ADDRESS_JEV (2026-10-13, B37 step 2, address-jev.ts): Jev as the second shadow voice, on Raziel's
   // AND Blue's messages, same row as Flash. Runs whenever ADDRESS_MODEL=shadow; `off` is the kill
   // switch (needs a reload with --update-env). Listed per the standing rule above.

@@ -112,7 +112,7 @@ import { runWritebackGate } from "./writeback-gate.js";
 import { buildWritebackSpeaker, judgeExchangeFor, withAttachedLabel } from "./memory.js";
 import { stampRelative } from "./relative-time.js";
 import {
-  WatchalongDelivery, watchalongEnabled, handleMovieCommand, handleAtCommand, readCaptionAttachment,
+  WatchalongDelivery, watchalongEnabled, handleMovieCommand, handleAtCommand, readCaptionAttachment, getActiveWatchalong,
   type PreparedDelivery, type CaptionAttachment,
 } from "./watchalong.js";
 import {
@@ -126,6 +126,10 @@ import {
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { postProcessReply } from "./reply-postprocess.js";
+import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
+import {
+  decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
+} from "./room-timing.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
 // Writeback gate mode (2026-09-21). Read ONCE per process: a knob re-read per message would
@@ -539,6 +543,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
   // Watch (2026-10-23): wired like the others, with a fallback built from the alias table so a missing wire
   // degrades to "still a command", never to the model narrating a watch it did not do.
   const VIDEO_TRIGGER: RegExp = deps.VIDEO_TRIGGER ?? buildCommandTriggers(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]).video;
+  /** "Dre, in" / "Cy, out" -- the whole message, this companion's aliases only (room-timing.ts). */
+  const ROOM_OVERRIDE_TRIGGER: RegExp = buildRoomOverrideTrigger(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]);
   // Burst settle (2026-10-10). Empty / 0 when settle is off, a command, a bot post or a pass turn.
   const settleMs = deps.settleMs ?? 0;
   const burst = deps.burst ?? [];
@@ -741,6 +747,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         console.log(`[${COMPANION_ID}] reply-to resolved durably via thread ledger (msg=${refId} not in sentIds)`);
       }
     }
+    // What a human's Discord reply points at (2026-10-31, reply-context.ts). Feeds the reply-context line
+    // the model sees on the live turn and Rule 2b of the human address gate (a reply to the other human
+    // is theirs). One cache read, at most one fetch; a missing or deleted target is null and changes nothing.
+    const replyTgt: ReplyTarget | null = isHumanTraffic && message.reference?.messageId
+      ? await replyTarget(message.reference.messageId, message.channel as unknown as Parameters<typeof replyTarget>[1], {
+          selfCompanion: COMPANION_ID as CompanionId,
+          botIdCompanion: BOT_ID_COMPANION as Record<string, CompanionId | undefined>,
+          ownerDiscordId: cfg.ownerDiscordId,
+          blueDiscordId: cfg.blueDiscordId,
+          solWebhookId: solId,
+          roster: pkRoster ?? null,
+        }).catch(() => null)
+      : null;
     // Discord threads inherit CONFIG from their parent channel (2026-08-15): a thread's own
     // snowflake was never in channelConfig, so threads under owner_only channels ran as open
     // ones. Storage keys everywhere below deliberately keep message.channelId (the thread id)
@@ -1014,8 +1033,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // tested here directly.
     // `watch <url>` (2026-10-23) is in the same position: `watch` stays out of the guard, the URL form is
     // tested here directly.
+    const roomOverride = attribution.isOwner ? ROOM_OVERRIDE_TRIGGER.exec(effectiveContent) : null;
     const isOwnerCommand = attribution.isOwner
-      && (!!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
+      && (!!roomOverride || !!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
         || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent)
         || VIDEO_TRIGGER.test(effectiveContent));
     if (!isOwnerCommand) {
@@ -1241,6 +1261,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // itself. So one retract now also (a) forwards the reply text so Halseth drops its stm_entries
     // rows, (b) drops the in-memory window lines, and (c) bumps the per-channel transcript id, so
     // the next turn starts a fresh gateway session and re-sends the window without it.
+    // "Dre, in" / "Dre, out" (2026-10-31, Drevan's ask): Raziel pulls one companion into the scene for
+    // OVERRIDE_TTL_MS, or lets them go. Room timing is shadow-only in this cut, so the override is recorded
+    // (Redis, per companion per channel) and read by the shadow decision; acknowledged with a reaction.
+    if (roomOverride) {
+      const key = overrideKey(COMPANION_ID as CompanionId, message.channelId);
+      const r = redis as unknown as { set(k: string, v: string, mode: string, ttl: number): Promise<unknown>; del(k: string): Promise<unknown> } | null;
+      if (roomOverride[1]!.toLowerCase() === "in") await r?.set(key, String(Date.now()), "PX", OVERRIDE_TTL_MS).catch(() => null);
+      else await r?.del(key).catch(() => null);
+      console.log(`[${COMPANION_ID}] room override: ${roomOverride[1]!.toLowerCase()} (channel ${message.channelId})`);
+      await message.react(roomOverride[1]!.toLowerCase() === "in" ? "👀" : "👋").catch(() => {});
+      return;
+    }
+
     if (attribution.isOwner && RETRACT_TRIGGER && RETRACT_TRIGGER.test(effectiveContent)) {
       const refId = message.reference?.messageId ?? null;
       let reply: string;
@@ -1811,7 +1844,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         : null;
       blueHolderSeen = blueHolder;
       const gateTexts = [...burst.map(b => b.content), effectiveContent];
-      const verdict = humanGate({
+      const gateInput = {
         tier: userTier,
         texts: gateTexts,
         names: mergeHumanNames(humanNamesFromEnv(), {
@@ -1821,10 +1854,70 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         replyToCompanion: isReplyToMe,
         mentionedHumans,
         blueHolder,
-      });
+      };
+      // Rule 2b (a Discord reply to the other human is theirs) behind REPLY_HUMAN_GATE: `on` gates live;
+      // `shadow` runs the gate both ways and logs only where the reply would have silenced this companion.
+      const replyHuman = replyToHumanSide(replyTgt);
+      const replyMode = replyHumanGateMode();
+      const verdict = humanGate({ ...gateInput, replyToHuman: replyMode === "on" ? replyHuman : null });
+      if (replyMode === "shadow" && replyHuman && verdict.kind !== "silent") {
+        const would = humanGate({ ...gateInput, replyToHuman: replyHuman });
+        if (would.kind === "silent") {
+          console.log(`[${COMPANION_ID}] reply-human gate (shadow): ${userTier === "owner" ? "raziel" : "blue"} replied to ${replyHuman}, would stay quiet (msg=${message.id})`);
+          appendRoomTimingLine({ kind: "reply_gate", at: new Date().toISOString(), companion: COMPANION_ID, msg_id: message.id, channel_id: message.channelId, speaker: userTier === "owner" ? "raziel" : "blue", reply_to: replyHuman, live: verdict.kind });
+        }
+      }
       humanUnnamed = verdict.kind === "proceed"
         ? !companionNamedIn({ texts: gateTexts, companionMentioned: senderCtx.isMentioned, replyToCompanion: isReplyToMe })
         : verdict.kind === "blue_thread";
+      // Room timing, SHADOW (room-timing.ts, Drevan's rules 10-31): what this companion WOULD do with this
+      // human line -- answer now, hold for the lull (with a reaction), or stay quiet. Detached: computed and
+      // logged after this turn moves on; never awaited, never acted on. Runs before the silent return below
+      // so the lines the gate already silences are scored too.
+      if (roomTimingMode() === "shadow") {
+        const speakerSide: "raziel" | "blue" = userTier === "owner" ? "raziel" : "blue";
+        const named = senderCtx.isMentioned || directlyAddressed || !humanUnnamed && verdict.kind === "proceed";
+        const isHolder = speakerSide === "blue" ? blueHolder === COMPANION_ID : senderCtx.activeExchangeWith === COMPANION_ID;
+        const at = message.createdTimestamp;
+        void (async () => {
+          try {
+            let otherHumanAgoMs: number | null = null;
+            let selfSpokeAgoMs: number | null = null;
+            const recent = [...(message.channel.messages.cache?.values?.() ?? [])]
+              .filter(m => m.id !== message.id && m.createdTimestamp <= at)
+              .sort((a, b) => b.createdTimestamp - a.createdTimestamp)
+              .slice(0, 25);
+            const selfId = message.client.user?.id;
+            for (const m of recent) {
+              if (selfSpokeAgoMs === null && selfId && m.author.id === selfId && !m.webhookId) selfSpokeAgoMs = at - m.createdTimestamp;
+              if (otherHumanAgoMs === null) {
+                const side = (m.author.id === cfg.ownerDiscordId) ? "raziel" : (m.author.id === cfg.blueDiscordId) ? "blue"
+                  : m.webhookId && !isSolPost(m, solId) ? (pkRoster?.identify(m.author.username)?.isOwner ? "raziel" : pkRoster?.identify(m.author.username) ? "blue" : null)
+                  : null;
+                if (side && side !== speakerSide) otherHumanAgoMs = at - m.createdTimestamp;
+              }
+            }
+            const overrideIn = !!(await (redis as unknown as { get(k: string): Promise<string | null> } | null)
+              ?.get(overrideKey(COMPANION_ID as CompanionId, message.channelId)).catch(() => null));
+            let watchAlong = false;
+            if (watchalongEnabled()) {
+              try { watchAlong = !!(await getActiveWatchalong(cfg.halsethSecret, message.channelId, 0, 0)).session; } catch { watchAlong = false; }
+            }
+            const r = decideRoomTiming({
+              companion: COMPANION_ID as CompanionId, speaker: speakerSide, text: effectiveContent,
+              named, replyToMe: isReplyToMe, replyToHuman: replyHuman, isHolder, overrideIn, watchAlong,
+              otherHumanAgoMs, selfSpokeAgoMs,
+            });
+            appendRoomTimingLine({
+              kind: "decision", at: new Date().toISOString(), companion: COMPANION_ID, msg_id: message.id,
+              channel_id: message.channelId, speaker: speakerSide, decision: r.decision, reason: r.reason, react: r.react,
+              gate: verdict.kind, holder: isHolder, watch_along: watchAlong, reply_to: replyTgt?.author.kind ?? null,
+              other_human_ago_s: otherHumanAgoMs === null ? null : Math.round(otherHumanAgoMs / 1000),
+              self_spoke_ago_s: selfSpokeAgoMs === null ? null : Math.round(selfSpokeAgoMs / 1000),
+            });
+          } catch { /* shadow never disturbs a turn */ }
+        })();
+      }
       if (verdict.kind === "silent") {
         console.log(`[${COMPANION_ID}] human address: ${userTier === "owner" ? "raziel" : "blue"} -> ${verdict.addressee}, the triad stays quiet (msg=${message.id})`);
         railSuppressed(COMPANION_ID, "human_address", { channelId: message.channelId, detail: `to ${verdict.addressee}` });
@@ -3033,6 +3126,23 @@ ${widened}`;
       // Only reachable if a message burst pushed the live turn out of the context window
       // mid-turn; the injection is the point of this turn, so append rather than lose it.
       if (!swapped) liveHistory.push({ role: "user", content: effectiveContent });
+    }
+
+    // Reply context, LIVE (2026-10-31, reply-context.ts): when the human's message is a Discord reply,
+    // the model sees which message it answers -- "(replying to your message: '...')" -- prefixed to the
+    // LIVE user turn only. Raziel: "if I reply to Drevan for a message three back, can he know that it's
+    // specifically about that message?" Before this, he answered as if the newest line continued.
+    const replyLine = replyContextLine(replyTgt);
+    if (replyLine) {
+      const withReply = [...liveHistory];
+      for (let i = withReply.length - 1; i >= 0; i--) {
+        const m = withReply[i]!;
+        if (m.role === "user" && (m.content.endsWith(stmContent) || m.content.endsWith(effectiveContent))) {
+          withReply[i] = { ...m, content: `${replyLine}\n${m.content}` };
+          liveHistory = withReply;
+          break;
+        }
+      }
     }
 
     // Watchalong delivery (spec 2026-10-02): the cues between this bot's lastDelivered and the playhead,
