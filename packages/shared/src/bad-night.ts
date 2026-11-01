@@ -71,7 +71,7 @@ const VOCATIVE_NAMES: readonly string[] = ALL_COMPANIONS
   .concat(["triad", "you three", "all of you", "everyone"])
   .sort((a, b) => b.length - a.length);
 
-function normalizeSentence(s: string): string {
+export function normalizeSentence(s: string): string {
   let t = s.toLowerCase().replace(/[‘’ʼ]/g, "'").replace(/\s+/g, " ").trim();
   // Strip leading/trailing non-alphanumerics (punctuation, emoji, markdown asterisks).
   t = t.replace(/^[^a-z0-9]+/, "").replace(/[^a-z0-9]+$/, "");

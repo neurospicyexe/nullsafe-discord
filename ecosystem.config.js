@@ -300,6 +300,12 @@ const shared = {
   ROOM_TIMING_CYPHER:          process.env.ROOM_TIMING_CYPHER,
   ROOM_TIMING_DREVAN:          process.env.ROOM_TIMING_DREVAN,
   ROOM_TIMING_GAIA:            process.env.ROOM_TIMING_GAIA,
+  // DEPARTURES (2026-11-01, T4b, departure-state.ts): declared departures, bot side. off|shadow|on, CODE default
+  // shadow; DEPARTURES_<COMPANION> wins per bot. Wires the `form` and `loop_motif` rails only.
+  DEPARTURES:                  process.env.DEPARTURES,
+  DEPARTURES_CYPHER:           process.env.DEPARTURES_CYPHER,
+  DEPARTURES_DREVAN:           process.env.DEPARTURES_DREVAN,
+  DEPARTURES_GAIA:             process.env.DEPARTURES_GAIA,
   ROOM_TIMING_LOG:             process.env.ROOM_TIMING_LOG,
   REPLY_HUMAN_GATE:            process.env.REPLY_HUMAN_GATE,
   // ADDRESS_JEV (2026-10-13, B37 step 2, address-jev.ts): Jev as the second shadow voice, on Raziel's

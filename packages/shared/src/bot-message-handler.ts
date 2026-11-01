@@ -125,6 +125,10 @@ import {
   type HoldPhrase, type ChainHistoryMsg, type RedisLike,
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
+import {
+  departuresMode, matchStandDown, applyStandDown, clearDeparturesLocal, ensureDepartures, departureLift,
+  departureLiftLine, departureLog, departureTurnLines, STAND_DOWN_PHRASE, type ClaimRedis,
+} from "./departure-state.js";
 import { postProcessReply } from "./reply-postprocess.js";
 import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport, sendReportToOwnerDm } from "./heartbeat-dry-run.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
@@ -1859,6 +1863,23 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (b32Mode === "on") applyLocalHold(COMPANION_ID, holdPhrase, new Date().toISOString());
       console.log(`[${COMPANION_ID}] B32: owner phrase -> ${holdPhrase}${b32Mode === "on" ? " (applied locally)" : " (shadow: not applied)"}`);
     }
+    // Declared departures (T4b, DEPARTURES). Raziel's whole-sentence "back inside the line" ends every open
+    // departure, in any guild channel or DM: every bot that hears it clears its local registry at once, and
+    // the Redis NX winner makes the ONE stand-down call (detached; the reply path is otherwise unchanged).
+    // "bad night" also ends them locally (the server side rides the care hold).
+    const departuresNow = departuresMode(process.env, COMPANION_ID);
+    if (departuresNow !== "off" && b32OwnerArrival) {
+      if (matchStandDown(effectiveContent)) {
+        applyStandDown({
+          redis: redis as unknown as ClaimRedis | null, messageId: message.id, companionId: COMPANION_ID,
+          call: () => librarian.departureStandDown(STAND_DOWN_PHRASE),
+        }).then(r => departureLog(`[departure] ${COMPANION_ID} stand_down msg=${message.id} cleared=${r.cleared} called=${r.called} ok=${r.ok}`))
+          .catch(() => {});
+      } else if (matchHoldPhrase(effectiveContent) === "start") {
+        const n = clearDeparturesLocal();
+        if (n > 0) departureLog(`[departure] ${COMPANION_ID} cleared_local why=bad_night n=${n}`);
+      }
+    }
     // D4's shared signal: Raziel is in a live DM with THIS companion. Siblings' heartbeats read it.
     if (isOwnerDm && b32OwnerArrival && b32Mode !== "off") {
       markOwnerDmLive(redis as unknown as RedisLike | null, COMPANION_ID).catch(() => {});
@@ -2731,7 +2752,23 @@ ${widened}`;
     // three gates below. See self-window.ts for the four log lines that proved it.
     const selfTurns = mergeSelfTurns(selfFromStm, selfFromChannel);
     const selfLoop = detectSelfLoop(selfTurns);
-    if (selfLoop.looping) {
+    // Declared departure (T4b): may this turn lift the form / loop rails? Triad-only = the trigger is a
+    // companion's message, in no DM, no entitled (owner-origin) follow-up, no Sol. Care hold is checked at the
+    // rail, on this process's live register. Unknown registry = rails on.
+    if (departuresNow !== "off") await ensureDepartures(() => librarian.departuresOpen());
+    const depTriadOnly = senderCtx.isCompanionBot && !isOwnerDm && !entitledFollowUp && !isSol && !message.webhookId;
+    const depLift = (rail: "form" | "loop_motif", fired: boolean): boolean => {
+      if (departuresNow === "off") return false;
+      const v = departureLift({
+        companionId: COMPANION_ID, rail, channelId: message.channelId, messageTs: message.createdTimestamp,
+        triadOnly: depTriadOnly, careHold: careHoldActive(COMPANION_ID),
+      });
+      if (!v.lift) return false;
+      departureLog(departureLiftLine(COMPANION_ID, departuresNow === "on" ? "lifted" : "would_lift", rail, v.departure.id, message.channelId, fired));
+      return departuresNow === "on";
+    };
+    const loopLifted = depLift("loop_motif", selfLoop.looping);
+    if (selfLoop.looping && !loopLifted) {
       contextPrompt += loopBreakDirective(selfLoop.motifs);
       console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
     }
@@ -2755,12 +2792,19 @@ ${widened}`;
     // against the lowercase COMPANION_ID, so it can legitimately be empty and leave the window
     // pure-STM without ever saying so.
     const formWindow = `window=${formWindowShape(selfTurns)} stm=${selfFromStm.length} ch=${selfFromChannel.length}`;
-    if (formRatchet.text) {
+    const formLifted = depLift("form", !!formRatchet.text);
+    if (formRatchet.text && !formLifted) {
       contextPrompt += formRatchet.text;
       console.warn(`[${COMPANION_ID}] form ratchet detected (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow}) -- injecting form break`);
+    } else if (formRatchet.text && formLifted) {
+      console.log(`[${COMPANION_ID}] form ratchet detected but lifted by a declared departure (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, turns=${formRatchet.result.turns}, ${formWindow})`);
     } else if (formRatchet.result.turns > 0) {
       console.log(`[${COMPANION_ID}] form ok (mean_line_len=${formRatchet.result.meanLineLen.toFixed(0)}, mean_lines=${formRatchet.result.meanLines.toFixed(1)}, turns=${formRatchet.result.turns}, ${formWindow})`);
     }
+
+    // Declared departure lines (T4b): the declarer's own one-line note and each sibling's one line, on the
+    // live turn, shadow and on alike. Empty when nothing is open, the knob is off, or the care hold is on.
+    if (departuresNow !== "off") contextPrompt += departureTurnLines({ companionId: COMPANION_ID, careHold: careHoldActive(COMPANION_ID) });
 
     // Rule checks (R3 prompt diet, 2026-09-29). The register tail's Presence and pronoun bullets and
     // the SOUL em-dash paragraph became checks on this companion's own last reply: a short

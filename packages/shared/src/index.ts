@@ -69,6 +69,7 @@ export { registerHeartbeatCtx, getHeartbeatCtx } from "./heartbeat-dry-run.js";
 export * from "./care-state.js";
 export * from "./reach-ledger.js";
 export * from "./bad-night.js";
+export * from "./departure-state.js";
 export * from "./media.js";
 export * from "./video.js";
 export * from "./vision.js";
