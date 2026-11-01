@@ -15,7 +15,8 @@ import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } from "./watch-command.js";
 import { parseCreatedAtTimestamp } from "./relative-time.js";
 import { setArmedTriggers } from "./triggers.js";
-import { setCareState } from "./care-state.js";
+import { setCareState, careHoldSince } from "./care-state.js";
+import { startBlueNoteScheduler, blueDiscordIdFrom, type BlueRedis, type RoomLine } from "./blue-note.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
@@ -698,6 +699,48 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       console.log(`[${companionId}] med_reminder scheduler started`);
     } else {
       console.log(`[${companionId}] med_reminder scheduler NOT started (${env.ownerDiscordId ? "MED_REMINDER=off" : "no owner id"})`);
+    }
+    // Blue update channel (2026-11-01, blue-note.ts): one daily note + a bad-night heads-up. BLUE_NOTE
+    // off|preview|on, code default preview (DMs RAZIEL, not Blue). Own scheduler, direct tool-less lane.
+    if (env.ownerDiscordId) {
+      startBlueNoteScheduler({
+        companionId,
+        ownerName: env.ownerDisplayName,
+        redis: redis as unknown as BlueRedis | null,
+        roomLines: () => {
+          const out: RoomLine[] = [];
+          for (const chId of stmStore.channelIds()) {
+            const guildId = (client.channels.cache.get(chId) as { guildId?: string | null } | undefined)?.guildId ?? null;
+            for (const m of stmStore.get(chId)) out.push({ channelId: chId, guildId, role: m.role, authorName: m.authorName, content: m.content, timestamp: m.timestamp });
+          }
+          return out;
+        },
+        ownNotes: () => librarian.getRecentNotes({ sinceHours: 30, limit: 30, agentId: companionId }),
+        generate: (system, prompt) => {
+          const a = withCaller(directAdapter, "blue_note");
+          if (!a) return Promise.resolve(null); // never Hermes: its agent could write through tools
+          return a.generate(system, [{ role: "user", content: prompt }], 0.8);
+        },
+        systemPrompt: () => bootCtx.systemPrompt,
+        sendToBlue: async (text) => {
+          const blueId = blueDiscordIdFrom();
+          if (!blueId) return false;
+          const dm = await (await client.users.fetch(blueId)).createDM();
+          sealDmChannel(dm.id);
+          await dm.send(text.slice(0, 1990));
+          return true;
+        },
+        sendToOwner: async (text) => {
+          const t = await ownerDmLane.resolve();
+          if (!t) return false;
+          const body = text.slice(0, 1990);
+          const id = await t.send(body);
+          await ownerDmLane.onSent(t.channelId, body, id);
+          return true;
+        },
+        holdSince: () => careHoldSince(companionId),
+      });
+      console.log(`[${companionId}] blue-note scheduler started`);
     }
     registerGuildCommands(client, buildCompanionCommands(companionLabel))
       .then((n) => console.log(`[${companionId}] slash commands registered on ${n} guild(s)`))

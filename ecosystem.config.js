@@ -252,6 +252,9 @@ const shared = {
   MED_REMINDER:                process.env.MED_REMINDER,
   MED_REMINDER_GEN_TIMEOUT_MS: process.env.MED_REMINDER_GEN_TIMEOUT_MS,
   MED_REMINDER_POLL_MS:        process.env.MED_REMINDER_POLL_MS,
+  // BLUE_NOTE (2026-11-01, blue-note.ts): off | preview | on, code default preview (DMs Raziel, not Blue).
+  BLUE_NOTE:                   process.env.BLUE_NOTE,
+  BLUE_NOTE_HOUR:              process.env.BLUE_NOTE_HOUR,
   DM_MEMORY:                   process.env.DM_MEMORY,
   // REACH_DM (2026-09-27, reach-dm.ts reachDmOn): the kill switch for B7's Raziel-facing DM moves.
   // Default OFF; only `on` opens it (fails closed). Off, those moves are removed from the heartbeat
