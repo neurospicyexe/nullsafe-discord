@@ -215,3 +215,17 @@ describe("per-human thread hold", () => {
     expect([...r.kv.keys()].every(k => k.includes(":blue:"))).toBe(true);
   });
 });
+
+// 2026-11-01 movie night: Gaia answered Blue's group call at 11:43 and took Blue's thread from the host for 3h.
+import { takesBlueHold } from "../human-address.js";
+describe("takesBlueHold: a guest voice in a hosted room never takes the host's Blue thread", () => {
+  it("hosted room: the host always takes it; a sibling only when Blue addressed it", () => {
+    expect(takesBlueHold({ host: "drevan", me: "drevan", addressedMe: false })).toBe(true);
+    expect(takesBlueHold({ host: "drevan", me: "gaia", addressedMe: false })).toBe(false);  // group-call answer
+    expect(takesBlueHold({ host: "drevan", me: "gaia", addressedMe: true })).toBe(true);    // "Gaia, ..."
+  });
+  it("non-hosted rooms keep last-replier-wins", () => {
+    expect(takesBlueHold({ host: null, me: "gaia", addressedMe: false })).toBe(true);
+    expect(takesBlueHold({ host: undefined, me: "cypher", addressedMe: false })).toBe(true);
+  });
+});

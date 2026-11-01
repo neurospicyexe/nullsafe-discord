@@ -59,7 +59,7 @@ import {
   setLastActivity, noteOwnerArrival, type Redis,
   buildFitSignals, scoreFit, fastPathWinner, runBidRound, claimSpoken, bidDeadlineAfterGate, MIN_BID_TO_SPEAK, closeBidLine,
   type InboxItem, ACTIVE_EXCHANGE_WINDOW_MS,
-  humanGate, companionNamedIn, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, type HumanSide, type HoldRedis,
+  humanGate, companionNamedIn, humanAddressee, humanNamesFromEnv, burstAddressText, readHumanHold, readHumanHoldIds, recordHumanHold, takesBlueHold, type HumanSide, type HoldRedis,
   learnHumanName, learnedHumanNames, mergeHumanNames, type NameRedis,
   careHoldActive, CARE_HOLD_MIN_BID, holdFloorApplies,
   FollowUpLedger, namedOrderInMessage, bidSpeakingOrder, FOLLOW_UP_TTL_MS, followUpPassFor, publishFollowUpPass, type FollowUpEntitlement,
@@ -1697,6 +1697,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       ? burstAddressText(effectiveContent, burst.map(b => b.content))
       : effectiveContent;
     let directlyAddressed = isDirectAddress(addressText, COMPANION_ID);
+    // Did the speaker address ME (name, @-mention, reply to my message)? Captured before the Blue-thread
+    // branch below sets directlyAddressed for the holder, so it means "spoken to", not "holds the thread".
+    const addressedMeByName = directlyAddressed || !!senderCtx.isMentioned || isReplyToMe;
     const holdRedis = redis as unknown as HoldRedis | null;
 
     // Active-exchange holder (2026-07-27). Observed: Raziel wrote "Drevan baby ... Fargo in
@@ -3750,7 +3753,8 @@ ${widened}`;
     // Per-human thread hold (2026-10-10): a reply to BLUE makes me the holder of Blue's thread in this
     // channel (her own 15-minute hold, never Raziel's) and remembers the ids so Raziel's holder walk
     // skips them. Only turns on Blue's own human message; a pass turn or a sibling post never writes it.
-    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp) {
+    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+        && takesBlueHold({ host: channelEntry?.host ?? null, me: COMPANION_ID, addressedMe: addressedMeByName })) {
       void recordHumanHold(holdRedis, "blue", message.channelId, COMPANION_ID as CompanionId, sent.map(m => m.id), channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
     }
     if (sent.length > 0 && holdOnForTurn && !isOwnerDm) {
