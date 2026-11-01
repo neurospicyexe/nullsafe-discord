@@ -34,6 +34,7 @@
  *   --warn-write-shift 10   percentage points of Jev write-rate shift vs baseline that warns
  *   --warn-fallback 5       fallback/error rate (percent) that warns
  *   --warn-ks 0.25          KS distance on worth vs baseline that warns
+ *   --volume-rooms IDS      channels kept out of drift + baseline (default #movie-night; `none` = all alike)
  *   --min-rows 30           rows needed before a rate-based warning may fire
  *
  * The first run with no baseline writes one (a `notice`); re-baseline deliberately with
@@ -230,14 +231,41 @@ export function analyseCompanion(c, rows, theta, notable, baseline, labels, opts
   return out;
 }
 
-export function buildReport({ rows, thetas, notable, baseline, labels, days, opts, now = Date.now() }) {
+/**
+ * Volume rooms (2026-11-01): channels whose traffic is mostly light running commentary, today #movie-night
+ * (watch-alongs). 267 of Drevan's 336 judged lines in a week came from it, written at 24%, while every
+ * other room sat at 73-76% against an 80% baseline: the write-rate alarm was reading the room MIX, not
+ * Jev. Re-baselining cannot fix that (the mix changes night to night), so these rows are analysed apart
+ * and kept out of the drift comparison and the baseline. Override with --volume-rooms / env
+ * JEV_CALIBRATION_VOLUME_ROOMS (comma list of channel ids; `none` = treat every room alike).
+ */
+export const DEFAULT_VOLUME_ROOMS = ["1556334678024396862"]; // #movie-night (Blue's server; Drevan hosts)
+
+export function parseVolumeRooms(spec) {
+  const v = String(spec ?? "").trim();
+  if (!v) return new Set(DEFAULT_VOLUME_ROOMS);
+  if (v.toLowerCase() === "none") return new Set();
+  return new Set(v.split(",").map((x) => x.trim()).filter(Boolean));
+}
+
+/** Write rate in the volume rooms, same rule as analyseCompanion's (worth >= live theta on jev_ok rows). */
+export function volumeSummary(rows, theta) {
+  const ok = rows.filter((r) => r.jev_ok && typeof r.worth === "number");
+  if (!ok.length) return null;
+  return { rows: rows.length, jev_ok: ok.length, jev_write_rate: ok.filter((r) => r.worth >= theta).length / ok.length };
+}
+
+export function buildReport({ rows, thetas, notable, baseline, labels, days, opts, now = Date.now(), volumeRooms = new Set(DEFAULT_VOLUME_ROOMS) }) {
   const companions = {};
   for (const c of COMPANIONS) {
-    companions[c] = analyseCompanion(c, rows.filter((r) => r.companion === c), thetas[c], notable, baseline, labels, opts, now);
+    const mine = rows.filter((r) => r.companion === c);
+    const inVolume = (r) => volumeRooms.has(String(r.channel_id ?? ""));
+    companions[c] = analyseCompanion(c, mine.filter((r) => !inVolume(r)), thetas[c], notable, baseline, labels, opts, now);
+    companions[c].volume_rooms = volumeSummary(mine.filter(inVolume), thetas[c]);
   }
   const warnings = [];
   for (const c of COMPANIONS) for (const x of companions[c].warnings) warnings.push({ companion: c, ...x });
-  return { generated_at: new Date(now).toISOString(), window_days: days, rows: rows.length, thetas, thresholds: opts, companions, warnings };
+  return { generated_at: new Date(now).toISOString(), window_days: days, rows: rows.length, volume_rooms: [...volumeRooms], thetas, thresholds: opts, companions, warnings };
 }
 
 export function baselineFrom(report) {
@@ -259,6 +287,7 @@ export function renderReport(r) {
     o.push(`## ${c}  theta ${x.theta}  rows ${x.rows}  jev_ok ${x.jev_ok}`);
     o.push(`write: jev ${pct(x.jev_write_rate)} | judge ${pct(x.legacy.judge_write_rate)} (jev ${pct(x.legacy.jev_write_rate_same_rows)} on the ${x.legacy.rows_with_judge} judged rows) | promote ${pct(x.promote_rate)}`);
     const m = x.legacy.matrix;
+    if (x.volume_rooms) o.push(`volume rooms (kept out of drift): rows ${x.volume_rooms.rows}  jev write ${pct(x.volume_rooms.jev_write_rate)}`);
     o.push(`matrix: both-write ${m.both_write}  jev-only ${m.jev_only}  judge-only ${m.judge_only}  both-skip ${m.both_skip}  agreement ${pct(x.legacy.agreement)}`);
     o.push(`errors ${pct(x.error_rate)} (24h ${pct(x.error_rate_24h)})  fallback ${pct(x.fallback_rate)}  worth p10/p50/p90 ${f2(x.worth_q.p10)}/${f2(x.worth_q.p50)}/${f2(x.worth_q.p90)}`);
     if (x.drift) o.push(`drift vs baseline: write ${x.drift.write_rate_shift_pts == null ? "n/a" : x.drift.write_rate_shift_pts.toFixed(1)} pts, KS ${f2(x.drift.ks_worth)}`);
@@ -297,7 +326,8 @@ function main() {
   let baseline = null;
   if (existsSync(BASELINE)) { try { baseline = JSON.parse(readFileSync(BASELINE, "utf8")); } catch { /* treated as absent */ } }
 
-  const report = buildReport({ rows, thetas, notable, baseline, labels, days: DAYS, opts });
+  const volumeRooms = parseVolumeRooms(flag("--volume-rooms", process.env.JEV_CALIBRATION_VOLUME_ROOMS ?? ""));
+  const report = buildReport({ rows, thetas, notable, baseline, labels, days: DAYS, opts, volumeRooms });
   if (bad) report.unparseable_lines = bad;
 
   if (argv.includes("--save-baseline") || !baseline) {
