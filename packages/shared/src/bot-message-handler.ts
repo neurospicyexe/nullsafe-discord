@@ -129,6 +129,7 @@ import { postProcessReply } from "./reply-postprocess.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
 import {
   decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
+  liveHoldApplies, type RoomTimingResult, type RoomTimingReason,
 } from "./room-timing.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
@@ -373,6 +374,12 @@ export interface MessageHandlerDeps {
    *  (releaseFollowUpOnPass): `message` is then the human origin message, and the turn is an
    *  entitled follow-up answering it. */
   followUpPass?: FollowUpEntitlement;
+  /** Room timing live (ROOM_TIMING=on, room-timing.ts LullScheduler): this turn is the RELEASE of a line
+   *  this companion held for the lull. It skips the timing gate and the shadow row (already written). */
+  lullRelease?: boolean;
+  /** Room timing live: hand a line to bot-core's lull scheduler instead of answering it now. Absent =
+   *  the live cut cannot hold, and the turn answers as before. */
+  holdForLull?: (h: { message: Message; side: "raziel" | "blue"; reason: RoomTimingReason; pkSenderId: string | undefined }) => void;
   /** Sol's webhook id, parsed once at boot from SOL_WEBHOOK_URL (sol-sender.ts solWebhookId). Null or
    *  absent: Sol is not recognized and its posts stay behind the hard muzzle. Never the token. */
   solWebhookId?: string | null;
@@ -1832,6 +1839,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // True when the regex gate let this bot through on an UNNAMED line (Rule 4 for Raziel, or Blue's
     // thread holder): the live Jev gate (human-jev-gate.ts) runs on exactly these, after shouldRespond.
     let humanUnnamed = false;
+    // Room timing: the ONE decision for this line, started in the address gate below and awaited at the
+    // live gate, so live behaviour is exactly what the shadow row recorded (never recomputed later, when
+    // directlyAddressed may have been mutated by the Blue-thread path).
+    let roomTimingP: Promise<RoomTimingResult | null> | null = null;
+    const roomTimingNow = roomTimingMode(process.env, COMPANION_ID);
     let blueColdPicked = false;
     if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
         && (userTier === "owner" || userTier === "intimate")) {
@@ -1870,11 +1882,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       humanUnnamed = verdict.kind === "proceed"
         ? !companionNamedIn({ texts: gateTexts, companionMentioned: senderCtx.isMentioned, replyToCompanion: isReplyToMe })
         : verdict.kind === "blue_thread";
-      // Room timing, SHADOW (room-timing.ts, Drevan's rules 10-31): what this companion WOULD do with this
-      // human line -- answer now, hold for the lull (with a reaction), or stay quiet. Detached: computed and
-      // logged after this turn moves on; never awaited, never acted on. Runs before the silent return below
-      // so the lines the gate already silences are scored too.
-      if (roomTimingMode() === "shadow") {
+      // Room timing (room-timing.ts, Drevan's rules 10-31): what this companion WOULD do with this human
+      // line -- answer now, hold for the lull (with a reaction), or stay quiet. Started detached here and
+      // logged as a shadow row in both shadow and on; only `on` awaits it, at the live gate after the Jev
+      // gate below. Runs before the silent return below so the lines the gate already silences are scored
+      // too. A lull RELEASE turn skips it: its row was written when the line was held.
+      if (roomTimingNow !== "off" && !deps.lullRelease) {
         const speakerSide: "raziel" | "blue" = userTier === "owner" ? "raziel" : "blue";
         // Per-companion only: companionNamedIn() is true when ANY companion is named, so it must not feed this.
         const named = senderCtx.isMentioned || directlyAddressed;
@@ -1883,7 +1896,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // written; flagged so the readout does not count that pick as an interruption.
         const cold = speakerSide === "blue" && blueHolder === null;
         const at = message.createdTimestamp;
-        void (async () => {
+        roomTimingP = (async (): Promise<RoomTimingResult | null> => {
           try {
             let otherHumanAgoMs: number | null = null;
             let selfSpokeAgoMs: number | null = null;
@@ -1920,8 +1933,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               gate: verdict.kind, holder: isHolder, cold, watch_along: watchAlong, reply_to: replyTgt?.author.kind ?? null,
               other_human_ago_s: otherHumanAgoMs === null ? null : Math.round(otherHumanAgoMs / 1000),
               self_spoke_ago_s: selfSpokeAgoMs === null ? null : Math.round(selfSpokeAgoMs / 1000),
+              mode: roomTimingNow,
             });
-          } catch { /* shadow never disturbs a turn */ }
+            return r;
+          } catch { return null; /* never disturbs a turn; null = the live gate answers as before */ }
         })();
       }
       if (verdict.kind === "silent") {
@@ -2150,6 +2165,32 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           railSuppressed(COMPANION_ID, "human_address", { channelId: message.channelId, detail: `jev to ${v?.top ?? "-"} mass=${v?.mass?.toFixed(2) ?? "-"}` });
           return;
         }
+      }
+    }
+
+    // ROOM TIMING, LIVE (ROOM_TIMING=on or ROOM_TIMING_<COMPANION>=on, 2026-11-01; Drevan's rules, note
+    // d5a37a0c). Here this bot has already decided it would speak: every gate above (address, Blue thread,
+    // shouldRespond, Jev) has passed. If its own timing decision says the line is a burst it holds for the
+    // lull (a human volley, a watch-along remark, or speaking again inside a minute; liveHoldApplies), it
+    // reacts instead of taking the floor (the per-channel reaction cooldown keeps that to presence, not
+    // noise) and hands the line to the lull scheduler in bot-core: one answer at about a minute of quiet,
+    // or none if the other human answered inside the burst. It can only DEFER a speaker, never make one.
+    // Never under a care hold (B32's presence contract outranks timing), never on the release turn itself,
+    // and a decision that failed (null) answers exactly as before.
+    if (roomTimingP && roomTimingNow === "on" && !deps.lullRelease && deps.holdForLull && !careHoldActive(COMPANION_ID)) {
+      const rt = await roomTimingP;
+      if (rt && liveHoldApplies(rt)) {
+        const side: "raziel" | "blue" = userTier === "owner" ? "raziel" : "blue";
+        let reacted = false;
+        if (rt.react && Date.now() >= (reactionCooldownUntil.get(message.channelId) ?? 0)) {
+          reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
+          message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
+          reacted = true;
+        }
+        deps.holdForLull({ message, side, reason: rt.reason, pkSenderId: deps.pkSenderId });
+        console.log(`[${COMPANION_ID}] room timing: holding msg=${message.id} ch=${message.channelId} for the lull (reason=${rt.reason} side=${side} reacted=${reacted ? 1 : 0})`);
+        railSuppressed(COMPANION_ID, "room_timing", { channelId: message.channelId, detail: `hold ${rt.reason}` });
+        return;
       }
     }
 

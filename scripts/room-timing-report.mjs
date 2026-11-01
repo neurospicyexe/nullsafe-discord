@@ -58,3 +58,21 @@ if (gates.length) {
     if (g.length) console.log(`- ${c}: ${g.length} replies would have been left to the humans; spoke on ${g.filter((r) => spoke.get(r.msg_id)?.has(c)).length}`);
   }
 }
+
+// Live cut (ROOM_TIMING=on, 2026-11-01): what happened to each held line. `released` = answered once at the
+// lull; `dropped:other_human` = the other human answered inside the burst (it was theirs); `self_spoke` =
+// this companion spoke anyway (named on a later line); `replaced` = a newer held line took its place (one
+// answer per burst); `stale` = the lull came more than 5 minutes after the line.
+const lulls = rows.filter((r) => r.kind === "lull");
+if (lulls.length) {
+  console.log(`## Live holds (ROOM_TIMING=on)\n\n| companion | outcome | count | median age at outcome (s) |\n|---|---|---|---|`);
+  for (const c of ["drevan", "cypher", "gaia"]) {
+    const mine = lulls.filter((r) => r.companion === c);
+    const by = new Map();
+    for (const r of mine) (by.get(r.outcome) ?? by.set(r.outcome, []).get(r.outcome)).push(r.age_s ?? 0);
+    for (const [o, ages] of [...by].sort((a, b) => b[1].length - a[1].length)) {
+      const s = ages.slice().sort((a, b) => a - b);
+      console.log(`| ${c} | ${o} | ${ages.length} | ${s[Math.floor(s.length / 2)]} |`);
+    }
+  }
+}

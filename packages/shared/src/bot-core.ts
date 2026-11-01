@@ -66,6 +66,7 @@ import type { OwnerDmLane } from "./owner-dm.js";
 import { VoiceClient, markVoiceUsed } from "./voice.js";
 import { buildCompanionCommands, registerGuildCommands, installSlashCommandHandler } from "./slash-commands.js";
 import { solWebhookId as parseSolWebhookId, isSolPost, solUnsetBootLine } from "./sol-sender.js";
+import { LullScheduler, roomTimingMode, appendRoomTimingLine } from "./room-timing.js";
 
 // Watch-party freshness (2026-09-14): a bound channel session with this many human messages and no
 // episode named still counts as watching -- see the SessionWindowManager callback below.
@@ -891,6 +892,29 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const settleScope = burstSettleScope();
   const settleMaxMs = burstSettleMaxMs();
   console.log(`[${companionId}] inbox: supersede side_aware=${supersedeSideAware ? "on" : "off"} check_b=${supersedeB ? "on" : "off"} settle_scope=${settleScope} settle_max=${settleMaxMs > 0 ? `${settleMaxMs}ms` : "off"}`);
+  // Room timing, LIVE cut (room-timing.ts LullScheduler, 2026-11-01). The handler holds a burst line here
+  // instead of answering it; MessageCreate feeds every message in (below, before the inbox) so the lull
+  // and "the other human answered, it was theirs" are read at event time, never inside a turn. Release =
+  // one turn on the held message through the same inbox as everything else, not human-authored (it can
+  // never supersede), with lullRelease set so it skips the gate. Ids and reasons only in every line.
+  console.log(`[${companionId}] room timing: ${roomTimingMode(process.env, companionId)}`);
+  const lull = new LullScheduler<{ message: Message; pkSenderId: string | undefined }>({
+    onRelease: (h) => {
+      const ageS = Math.round((Date.now() - h.messageAt) / 1000);
+      console.log(`[${companionId}] room timing: lull reached, answering held msg=${h.messageId} ch=${h.channelId} reason=${h.reason} age_s=${ageS}`);
+      appendRoomTimingLine({ kind: "lull", at: new Date().toISOString(), companion: companionId, msg_id: h.messageId, channel_id: h.channelId, outcome: "released", reason: h.reason, age_s: ageS });
+      const origin = h.payload.message;
+      inbox.enqueue(
+        { id: `${origin.id}:lull`, channelId: origin.channelId, authorIsHuman: false, content: origin.content },
+        (isSuperseded, ctx) => tracedTurn(origin, h.side, isSuperseded, ctx, () => runTurn(origin, h.payload.pkSenderId, isSuperseded, undefined, undefined, { lullRelease: true })),
+      );
+    },
+    onDrop: (h, why) => {
+      const ageS = Math.round((Date.now() - h.messageAt) / 1000);
+      console.log(`[${companionId}] room timing: dropped held msg=${h.messageId} ch=${h.channelId} why=${why} age_s=${ageS}`);
+      appendRoomTimingLine({ kind: "lull", at: new Date().toISOString(), companion: companionId, msg_id: h.messageId, channel_id: h.channelId, outcome: `dropped:${why}`, reason: h.reason, age_s: ageS });
+    },
+  });
   const inbox = new ChannelInbox({
     settleMs,
     supersedeSideAware,
@@ -1045,6 +1069,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       { ownerDiscordId: env.ownerDiscordId, blueDiscordId: env.blueDiscordId },
       pkRoster,
     );
+    // Room timing live: every message in the channel moves the lull clock (mine cancels a hold).
+    lull.noteMessage(message.channelId, {
+      side: isSol ? null : inboxSide,
+      isSelf: message.author.id === client.user?.id,
+      messageId: message.id,
+    });
     inbox.enqueue(
       {
         id: message.id,
@@ -1102,8 +1132,13 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
 
   // One turn. Every per-process dependency, wired once; the MessageCreate path and the
   // follow-up pass path above both come through here, so they cannot drift.
-  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: (phase?: SupersedePhase) => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext): Promise<void> {
+  function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: (phase?: SupersedePhase) => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext, opts?: { lullRelease?: boolean }): Promise<void> {
     return handleMessage(message, {
+      ...(opts?.lullRelease ? { lullRelease: true } : {}),
+      holdForLull: (h) => lull.hold({
+        channelId: h.message.channelId, messageId: h.message.id, side: h.side, messageAt: h.message.createdTimestamp,
+        reason: h.reason, payload: { message: h.message, pkSenderId: h.pkSenderId },
+      }),
       client,
       cfg: { ownerDiscordId: env.ownerDiscordId, ownerDisplayName: env.ownerDisplayName, blueDiscordId: env.blueDiscordId, halsethSecret: env.halsethSecret },
       voiceClient, redis, librarian,
@@ -1216,6 +1251,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
       catch (e) { console.warn(`[${companionId}] ${e instanceof Error ? e.message : String(e)}; continuing`); }
     }
     if (stopPassListener) stopPassListener();
+    lull.clearAll();
     client.destroy();
     process.exit(0);
   }

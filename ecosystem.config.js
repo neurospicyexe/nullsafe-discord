@@ -295,7 +295,11 @@ const shared = {
   // in (Drevan's rules) and "a Discord reply to the other human is theirs". Both default to `shadow` IN
   // CODE (a default living only here once went silently off); shadow logs to ROOM_TIMING_LOG and changes
   // nothing. REPLY_HUMAN_GATE=on gates live. The reply-context line itself is always live.
+  // ROOM_TIMING=on (2026-11-01) is the live "wait for the lull" cut; ROOM_TIMING_<COMPANION> wins per bot.
   ROOM_TIMING:                 process.env.ROOM_TIMING,
+  ROOM_TIMING_CYPHER:          process.env.ROOM_TIMING_CYPHER,
+  ROOM_TIMING_DREVAN:          process.env.ROOM_TIMING_DREVAN,
+  ROOM_TIMING_GAIA:            process.env.ROOM_TIMING_GAIA,
   ROOM_TIMING_LOG:             process.env.ROOM_TIMING_LOG,
   REPLY_HUMAN_GATE:            process.env.REPLY_HUMAN_GATE,
   // ADDRESS_JEV (2026-10-13, B37 step 2, address-jev.ts): Jev as the second shadow voice, on Raziel's

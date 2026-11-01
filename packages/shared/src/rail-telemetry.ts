@@ -45,6 +45,7 @@ export type RailName =
   | "verbatim"       // verbatim-copy rail: reply is a byte copy of a sibling's or my own recent message (09-26)
   | "human_address"  // human-address gate: Raziel/Blue spoke to each other by name, the triad stays quiet (10-10)
   | "blue_thread"    // human-address gate: unnamed Blue message belongs to another companion, or to nobody (10-10)
+  | "room_timing"    // room timing live: held for the lull instead of taking the floor mid-burst (11-01)
   | "cooldown";      // any timed hold
 
 export interface RailEvent {
