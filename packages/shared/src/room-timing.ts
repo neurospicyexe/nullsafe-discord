@@ -160,6 +160,24 @@ export function liveHoldApplies(r: RoomTimingResult | null): boolean {
   return r.reason === "human_volley" || r.reason === "watch_along" || r.reason === "flood";
 }
 
+/**
+ * Does this companion hold the speaker's thread, for the timing decision? Raziel's line: the channel's
+ * exchange holder. Blue's: Blue's per-human hold. PLUS a pending lull hold of the same side in this
+ * channel: under the live cut the holder stops posting while it waits, so the exchange window (read from
+ * who spoke last) would lapse mid-burst and the next unnamed line would read `not_mine`, go inert, and be
+ * answered mid-burst by the bid or the host path. Holding a line for the lull IS holding the thread.
+ */
+export function timingHolder(i: {
+  me: CompanionId;
+  speakerSide: "raziel" | "blue";
+  blueHolder: CompanionId | null;
+  activeExchangeWith: CompanionId | null;
+  pendingHoldSide: "raziel" | "blue" | null;
+}): boolean {
+  if (i.pendingHoldSide === i.speakerSide) return true;
+  return i.speakerSide === "blue" ? i.blueHolder === i.me : i.activeExchangeWith === i.me;
+}
+
 export interface HeldLine<T> {
   channelId: string;
   messageId: string;

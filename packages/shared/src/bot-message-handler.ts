@@ -129,7 +129,7 @@ import { postProcessReply } from "./reply-postprocess.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
 import {
   decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
-  liveHoldApplies, type RoomTimingResult, type RoomTimingReason,
+  liveHoldApplies, timingHolder, type RoomTimingResult, type RoomTimingReason,
 } from "./room-timing.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
 
@@ -380,6 +380,10 @@ export interface MessageHandlerDeps {
   /** Room timing live: hand a line to bot-core's lull scheduler instead of answering it now. Absent =
    *  the live cut cannot hold, and the turn answers as before. */
   holdForLull?: (h: { message: Message; side: "raziel" | "blue"; reason: RoomTimingReason; pkSenderId: string | undefined }) => void;
+  /** Room timing: the side of the line this companion is holding for the lull in this channel, or null.
+   *  A pending hold counts as holding the thread (timingHolder): holding means not posting, and the
+   *  exchange window would otherwise lapse mid-burst and hand the next line to someone else. */
+  lullPendingSide?: (channelId: string) => "raziel" | "blue" | null;
   /** Sol's webhook id, parsed once at boot from SOL_WEBHOOK_URL (sol-sender.ts solWebhookId). Null or
    *  absent: Sol is not recognized and its posts stay behind the hard muzzle. Never the token. */
   solWebhookId?: string | null;
@@ -1891,7 +1895,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         const speakerSide: "raziel" | "blue" = userTier === "owner" ? "raziel" : "blue";
         // Per-companion only: companionNamedIn() is true when ANY companion is named, so it must not feed this.
         const named = senderCtx.isMentioned || directlyAddressed;
-        const isHolder = speakerSide === "blue" ? blueHolder === COMPANION_ID : senderCtx.activeExchangeWith === COMPANION_ID;
+        const isHolder = timingHolder({
+          me: COMPANION_ID as CompanionId, speakerSide, blueHolder,
+          activeExchangeWith: (senderCtx.activeExchangeWith as CompanionId | null | undefined) ?? null,
+          pendingHoldSide: deps.lullPendingSide?.(message.channelId) ?? null,
+        });
         // A cold unnamed Blue line (no holder) may still be answered by BLUE_COLD_PICK after this row is
         // written; flagged so the readout does not count that pick as an interruption.
         const cold = speakerSide === "blue" && blueHolder === null;

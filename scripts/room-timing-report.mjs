@@ -28,6 +28,9 @@ for (const r of read(ADDRESS)) if (r.kind === "spoke" && Date.parse(r.at) >= sin
 
 const decisions = rows.filter((r) => r.kind === "decision");
 const gates = rows.filter((r) => r.kind === "reply_gate");
+// Live cut: a held line answered at the lull also writes a `spoke` row on its msg_id. That is the rule working,
+// not an interruption, so released holds are counted apart (per companion, keyed companion|msg).
+const releasedAtLull = new Set(rows.filter((r) => r.kind === "lull" && r.outcome === "released").map((r) => `${r.companion}|${r.msg_id}`));
 console.log(`# Room timing (shadow)\n\nwindow since ${new Date(since).toISOString()} -- ${decisions.length} decisions, ${gates.length} reply-gate rows\n`);
 
 for (const c of ["drevan", "cypher", "gaia"]) {
@@ -39,15 +42,16 @@ for (const c of ["drevan", "cypher", "gaia"]) {
   for (const r of mine) { const k = key(r); (groups.get(k) ?? groups.set(k, []).get(k)).push(r); }
   for (const [k, rs] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
     const [d, why] = k.split("|");
-    const did = rs.filter((r) => spoke.get(r.msg_id)?.has(c)).length;
+    const did = rs.filter((r) => spoke.get(r.msg_id)?.has(c) && !releasedAtLull.has(`${c}|${r.msg_id}`)).length;
     console.log(`| ${d} | ${why} | ${rs.length} | ${d === "answer_now" ? "-" : did} |`);
   }
   const held = mine.filter((r) => r.decision !== "answer_now");
   // A cold Blue line (no holder) can be answered by BLUE_COLD_PICK after the row is written: that pick is
   // the system working, not an interruption, so it is counted apart.
-  const interruptions = held.filter((r) => spoke.get(r.msg_id)?.has(c) && !r.cold);
+  const atLull = held.filter((r) => releasedAtLull.has(`${c}|${r.msg_id}`));
+  const interruptions = held.filter((r) => spoke.get(r.msg_id)?.has(c) && !r.cold && !releasedAtLull.has(`${c}|${r.msg_id}`));
   const coldPicks = held.filter((r) => spoke.get(r.msg_id)?.has(c) && r.cold);
-  console.log(`\nWould have held ${held.length}; spoke on ${interruptions.length} of them (what the live cut removes or batches to the lull), plus ${coldPicks.length} cold Blue picks.`);
+  console.log(`\nWould have held ${held.length}; spoke on ${interruptions.length} of them (what the live cut removes or batches to the lull), plus ${coldPicks.length} cold Blue picks${atLull.length ? `, plus ${atLull.length} answered at the lull (live)` : ""}.`);
   console.log(`Reaction offered on ${mine.filter((r) => r.react).length}.\n`);
 }
 

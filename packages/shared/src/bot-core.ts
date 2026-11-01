@@ -1135,6 +1135,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   function runTurn(message: Message, pkSenderId: string | undefined, isSuperseded: (phase?: SupersedePhase) => boolean, followUpPass?: FollowUpEntitlement, turnCtx?: TurnContext, opts?: { lullRelease?: boolean }): Promise<void> {
     return handleMessage(message, {
       ...(opts?.lullRelease ? { lullRelease: true } : {}),
+      lullPendingSide: (channelId) => lull.pending(channelId)?.side ?? null,
       holdForLull: (h) => lull.hold({
         channelId: h.message.channelId, messageId: h.message.id, side: h.side, messageAt: h.message.createdTimestamp,
         reason: h.reason, payload: { message: h.message, pkSenderId: h.pkSenderId },

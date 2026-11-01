@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "@jest/globals";
 import {
-  LullScheduler, liveHoldApplies, roomTimingMode, LULL_MS, LULL_MAX_AGE_MS,
+  LullScheduler, liveHoldApplies, roomTimingMode, timingHolder, LULL_MS, LULL_MAX_AGE_MS,
   type HeldLine, type LullDropReason, type RoomTimingResult,
 } from "../room-timing.js";
 
@@ -186,5 +186,21 @@ describe("ROOM_TIMING mode with a per-companion override", () => {
     expect(roomTimingMode(env, "cypher")).toBe("shadow");
     expect(roomTimingMode({ ROOM_TIMING: "on", ROOM_TIMING_GAIA: "off" }, "gaia")).toBe("off");
     expect(roomTimingMode({ ROOM_TIMING_DREVAN: "" , ROOM_TIMING: "on" }, "drevan")).toBe("on");
+  });
+});
+
+describe("timingHolder: a pending lull hold keeps the thread", () => {
+  const base = { me: "drevan" as const, blueHolder: null, activeExchangeWith: null, pendingHoldSide: null };
+  it("the exchange holder holds Raziel's thread; Blue's per-human hold holds Blue's", () => {
+    expect(timingHolder({ ...base, speakerSide: "raziel", activeExchangeWith: "drevan" })).toBe(true);
+    expect(timingHolder({ ...base, speakerSide: "blue", blueHolder: "drevan" })).toBe(true);
+    expect(timingHolder({ ...base, speakerSide: "blue", activeExchangeWith: "drevan" })).toBe(false);
+  });
+  it("holding a line for the lull still holds after the exchange window lapsed (holding = not posting)", () => {
+    expect(timingHolder({ ...base, speakerSide: "raziel", activeExchangeWith: null, pendingHoldSide: "raziel" })).toBe(true);
+    expect(timingHolder({ ...base, speakerSide: "raziel", activeExchangeWith: "cypher", pendingHoldSide: "raziel" })).toBe(true);
+  });
+  it("a hold on the OTHER side's line does not claim this speaker's thread", () => {
+    expect(timingHolder({ ...base, speakerSide: "blue", pendingHoldSide: "raziel" })).toBe(false);
   });
 });
