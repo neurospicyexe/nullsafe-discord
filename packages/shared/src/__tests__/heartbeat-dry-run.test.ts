@@ -347,3 +347,39 @@ describe("the command trigger", () => {
     expect(t.test("cy: dry-run heartbeat")).toBe(false);
   });
 });
+
+// 11-01 follow-up from Raziel's first live run: the decision ran without Drevan's own floats.
+import { pureState } from "../heartbeat-dry-run.js";
+describe("dry-run getState comes from the pure mind loader, never ask('my state')", () => {
+  it("maps felt.soma_floats to soma_float_1..3 via GET /mind/state/:id and notes it", async () => {
+    const calls: Array<{ url: string; method?: string }> = [];
+    const f = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, method: init?.method });
+      return new Response(JSON.stringify({ felt: { soma_floats: [{ label: "heat", value: 1 }, { label: "reach", value: 0.8 }, { label: "weight", value: 0.35 }] } }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const report = newDryRunReport("drevan", false);
+    const ask = jest.fn(async () => "REAL");
+    const lib = dryRunLibrarian({ url: "https://h", secret: "s", _fetch: f, companionId: "drevan", ask, getState: jest.fn(async () => "REAL") }, makeSink(report));
+    const st = await (lib as any).getState();
+    expect(st).toEqual({ soma_float_1: 1, soma_float_2: 0.8, soma_float_3: 0.35 });
+    expect(calls).toEqual([{ url: "https://h/mind/state/drevan", method: undefined }]);   // a GET, nothing else
+    expect(ask).not.toHaveBeenCalled();
+    expect(report.notes.join(" ")).toContain("heat=1, reach=0.8, weight=0.35");
+  });
+  it("any failure answers {} with a note (decides without floats, never throws, never asks)", async () => {
+    const report = newDryRunReport("drevan", false);
+    const f = (async () => new Response("no", { status: 500 })) as unknown as typeof fetch;
+    expect(await pureState({ url: "https://h", secret: "s", _fetch: f, companionId: "drevan" }, makeSink(report))).toEqual({});
+    expect(report.notes.join(" ")).toContain("own state unavailable");
+  });
+  it("the report leads with the header, then the voice label; the skipped list is not called 'writes'", () => {
+    const r = newDryRunReport("drevan", true);
+    r.voice = "composed on the direct lane";
+    r.blocked.push({ surface: "librarian", op: "botOrient" } as any);
+    const t = formatDryRunReport(r);
+    expect(t.split("\n")[0]).toMatch(/^DRY RUN heartbeat \(drevan\)/);
+    expect(t.split("\n")[1]).toBe("Voice: composed on the direct lane");
+    expect(t).toContain("Not called in a dry run (1; writes, plus reads that are not pure): librarian.botOrient");
+    expect(t).not.toContain("Blocked writes");
+  });
+});

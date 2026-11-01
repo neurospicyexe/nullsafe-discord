@@ -116,7 +116,8 @@ const LIBRARIAN_STUBS: Record<string, unknown> = {
   patchAutonomyRun: undefined,
   recordMetronomeActionFired: undefined,
   ask: { ack: true, id: "dryrun:ask" },
-  // Reads that are NOT pure (see the allow-list note): empty answers, so the decision prompt simply lacks them.
+  // Reads that are NOT pure (see the allow-list note). getState is answered by `pureState` below instead when it can
+  // be; this empty answer is only the fallback.
   getState: {},
   botOrient: {},
   writeWmNote: undefined,
@@ -127,6 +128,33 @@ const LIBRARIAN_STUBS: Record<string, unknown> = {
   postQuestion: undefined,
   driftOpen: { id: "dryrun:drift" },
 };
+
+/** The librarian fields pureState needs (private on the class; read structurally). */
+interface PureStateClient { url?: string; secret?: string; _fetch?: typeof fetch; companionId?: string }
+
+/**
+ * The heartbeat's `getState()` shape (soma_float_1..3) from GET /mind/state/:id. felt.soma_floats is ordered
+ * float_1..3 (heat/reach/weight for Drevan). Any failure = {} (the decision prompt lacks floats, as before) and a note.
+ */
+export async function pureState(c: PureStateClient, sink: DryRunSink): Promise<Record<string, unknown>> {
+  try {
+    if (!c.url || !c.secret || !c.companionId) throw new Error("librarian has no url/secret/companion");
+    const f = c._fetch ?? fetch;
+    const res = await f(`${c.url}/mind/state/${encodeURIComponent(c.companionId)}`, {
+      headers: { Authorization: `Bearer ${c.secret}` }, signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`mind/state ${res.status}`);
+    const d = (await res.json()) as { felt?: { soma_floats?: Array<{ label?: string; value?: number | null }> } };
+    const fl = d.felt?.soma_floats ?? [];
+    const out: Record<string, unknown> = {};
+    fl.slice(0, 3).forEach((x, i) => { if (typeof x?.value === "number") out[`soma_float_${i + 1}`] = x.value; });
+    sink.note(`own state from the pure mind loader: ${fl.slice(0, 3).map((x) => `${x?.label ?? "?"}=${x?.value ?? "?"}`).join(", ") || "no floats"}`);
+    return out;
+  } catch (e) {
+    sink.note(`own state unavailable (${String(e).slice(0, 80)}); decided without soma floats`);
+    return {};
+  }
+}
 
 export const DRY_RUN_MARK = Symbol.for("nullsafe.heartbeat.dryRunProxy");
 
@@ -142,6 +170,9 @@ export function dryRunLibrarian<T extends object>(real: T, sink: DryRunSink): T 
       const v = (target as Record<string, unknown>)[prop];
       if (typeof v !== "function") return v; // data (url, companionId): harmless
       if (LIBRARIAN_READ_ALLOWLIST.has(prop)) return (...args: unknown[]) => (v as (...a: unknown[]) => unknown).apply(target, args);
+      // getState is `ask("my state")` (can route to a session open), so it never runs. Its floats come from the
+      // pure-D1 mind loader instead (GET /mind/state/:id, the read Hearth uses; no heat warming, no session).
+      if (prop === "getState") return () => pureState(target as unknown as PureStateClient, sink);
       return (..._args: unknown[]) => {
         const known = Object.prototype.hasOwnProperty.call(LIBRARIAN_STUBS, prop);
         sink.blocked("librarian", prop, known ? undefined : "not on the read allow-list (blocked by default)");
@@ -349,8 +380,8 @@ const noDash = (s: string) => s.replace(/—/g, ";").replace(/–/g, "-");
 /** One phone-readable reply. Plain text, no em dashes; long text capped (the full text is never sent anywhere). */
 export function formatDryRunReport(r: DryRunReport): string {
   const out: string[] = [];
-  if (r.voice) out.push(r.voice);
   out.push(`DRY RUN heartbeat (${r.companionId})${r.force ? " [force: time/window/activity/quiet gates skipped]" : ""}. Nothing was sent, reserved or recorded.`);
+  if (r.voice) out.push(`Voice: ${r.voice}`);
   if (r.error) out.push(`ERROR: the run threw: ${cap(r.error, 300)}`);
   const stoppedBy = r.outcome && r.outcome !== "chose_to_act" ? r.outcome : null;
   if (r.gates.length > 0) {
@@ -372,7 +403,7 @@ export function formatDryRunReport(r: DryRunReport): string {
   if (r.blocked.length > 0) {
     const counts = new Map<string, number>();
     for (const b of r.blocked) { const k = `${b.surface}.${b.op}`; counts.set(k, (counts.get(k) ?? 0) + 1); }
-    out.push(`Blocked writes (${r.blocked.length}): ${cap([...counts].map(([k, n]) => (n > 1 ? `${k} x${n}` : k)).join(", "), 400)}`);
+    out.push(`Not called in a dry run (${r.blocked.length}; writes, plus reads that are not pure): ${cap([...counts].map(([k, n]) => (n > 1 ? `${k} x${n}` : k)).join(", "), 400)}`);
   }
   out.push("Note: your typing this command counts as you being here (it refreshes your last-activity and settles open DM reach-outs as replied).");
   return noDash(out.join("\n"));
