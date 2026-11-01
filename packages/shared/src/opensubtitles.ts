@@ -85,6 +85,9 @@ function filmMatch(fd: FeatureDetails | undefined, want: TitleQuery): FilmMatch 
     if (!episode) return "mismatch";
     if (typeof fd.season_number === "number" && fd.season_number !== want.season) return "mismatch";
     if (typeof fd.episode_number === "number" && fd.episode_number !== want.episode) return "mismatch";
+    // "The Twilight Zone 1959 S2E7": the year names the series' run. An episode aired from that year to ten after
+    // matches; a reboot sharing the title (1985, 2020) does not.
+    if (want.year !== null && typeof fd.year === "number" && (fd.year < want.year || fd.year > want.year + 10)) return "mismatch";
   }
   // An IMDb id may name the show (parent) or one episode itself: either is a match for that episode.
   if (want.imdbId !== null && episode && (fd.imdb_id === want.imdbId || fd.parent_imdb_id === want.imdbId)) return "match";
@@ -221,7 +224,10 @@ export async function fetchOpenSubtitles(title: string, opts: OpenSubtitlesOptio
   const params = new URLSearchParams({ languages: "en", order_by: "download_count" });
   if (want.imdbId !== null) params.set("imdb_id", String(want.imdbId));
   else params.set("query", want.title);
-  if (want.year !== null && want.imdbId === null) params.set("year", String(want.year));
+  // For an EPISODE the API's `year` is the episode's air year (Nick of Time: 1960), not the series' (1959), so it
+  // is never sent there; the year instead picks the run in filmMatch (1959 vs the 1985 and 2020 reboots).
+  const isEpisodeAsk = want.season != null && want.episode != null;
+  if (want.year !== null && want.imdbId === null && !isEpisodeAsk) params.set("year", String(want.year));
   if (want.season != null && want.episode != null) {
     params.set("season_number", String(want.season));
     params.set("episode_number", String(want.episode));

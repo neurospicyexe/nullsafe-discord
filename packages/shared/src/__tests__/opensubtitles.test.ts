@@ -212,3 +212,16 @@ describe("TV episodes", () => {
     expect(urls[0]).toContain("episode_number=7");
   });
 });
+
+describe("TV episodes: the year names the series run (2026-11-01, Nick of Time)", () => {
+  const ep = (o: Record<string, unknown>, file: number) =>
+    ({ attributes: { language: "en", download_count: 5, files: [{ file_id: file }], feature_details: { feature_type: "Episode", parent_title: "The Twilight Zone", season_number: 2, episode_number: 7, ...o } } });
+  it("1959 picks the original over the 2020 reboot's S2E7, and the year is not sent as the air year", async () => {
+    const want = parseTitleQuery("The Twilight Zone 1959 S2E7");
+    expect(pickSubtitle([ep({ year: 2020 }, 20), ep({ year: 1960 }, 60)] as any, want)?.fileId).toBe(60);
+    const urls: string[] = [];
+    const fetchFn = (async (u: string) => { urls.push(String(u)); return new Response(JSON.stringify({ data: [] }), { status: 200 }); }) as unknown as typeof fetch;
+    await fetchOpenSubtitles("The Twilight Zone 1959 S2E7", { apiKey: "k", fetchFn }).catch(() => {});
+    expect(urls[0]).not.toContain("year=");
+  });
+});
