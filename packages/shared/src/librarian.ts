@@ -1949,6 +1949,48 @@ export class LibrarianClient {
     }
   }
 
+  private async frameGet<T>(path: string, pick: (d: unknown) => T | null): Promise<T | null> {
+    try {
+      const res = await this._fetch(`${this.url}${path}`, {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (!res.ok) return null;
+      return pick(await res.json().catch(() => null));
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * This companion's OPEN projects: GET /mind/projects/:id?status=open (halseth handlers/projects.ts
+   * getProjects -> readProjects, a single SELECT on companion_projects, no writes). A pure read, unlike
+   * botOrient (which warms heat and consumes answered questions). null = failed, [] = none open.
+   */
+  async projectsOpen(): Promise<Array<{ id: string; title: string; status: string }> | null> {
+    return this.frameGet(`/mind/projects/${encodeURIComponent(this.companionId)}?status=open&limit=5`, d => {
+      const rows = (d as { projects?: unknown } | null)?.projects;
+      return Array.isArray(rows) ? rows as Array<{ id: string; title: string; status: string }> : null;
+    });
+  }
+
+  /** Unconsumed forage finds, own + shared pool: GET /mind/forage/:id (handlers/forage.ts getForageFinds, SELECT only; consuming is the separate PATCH). */
+  async forageFindsPeek(limit = 5): Promise<Array<{ title: string }> | null> {
+    return this.frameGet(`/mind/forage/${encodeURIComponent(this.companionId)}?limit=${limit}`, d => {
+      const rows = (d as { finds?: unknown } | null)?.finds;
+      return Array.isArray(rows) ? rows as Array<{ title: string }> : null;
+    });
+  }
+
+  /** Recent listens/watches: GET /mind/media/recent (handlers/media.ts getRecentMedia, SELECT only). */
+  async recentMediaPeek(limit = 5): Promise<Array<{ title: string | null; artist: string | null }> | null> {
+    return this.frameGet(`/mind/media/recent?limit=${limit}`, d => {
+      const rows = (d as { experiences?: unknown } | null)?.experiences;
+      return Array.isArray(rows) ? rows as Array<{ title: string | null; artist: string | null }> : null;
+    });
+  }
+
   /** Raziel's "back inside the line": POST /mind/departures/stand-down. Non-throwing; `ok` is a 2xx. */
   async departureStandDown(phrase: string): Promise<{ ok: boolean; status: number | null }> {
     try {

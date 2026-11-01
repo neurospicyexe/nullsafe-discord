@@ -234,23 +234,21 @@ export function announceFramePacket(sources: Pick<FrameSources, "calendar">, log
 const COMPANION_ASSIGNEES = new Set(["cypher", "drevan", "gaia"]);
 
 /**
- * Live sources off the Librarian client (all READS, nothing consumed):
- *   tasks    = `listTasks()` (Halseth GET /tasks, non-done), urgent first, minus rows assigned to a companion.
- *   projects = this companion's open projects from `botOrient().projects` (Halseth mig 0122 companion_projects,
- *              oldest-touched first; the same list the orient block renders).
- *   spark    = the pool the autonomous seed draws its fresh material from, read-only: unconsumed forage finds,
- *              the find in hand, recent listens, open loops (botOrient). One is picked per Chicago hour.
+ * Live sources off the Librarian client. EVERY one is a pure GET (never `botOrient()`: Halseth's
+ * execBotOrient warms heat and runs markAnswersDelivered, which consumes Raziel's answered questions):
+ *   tasks    = `listTasks()`: Halseth GET /tasks (handlers/history.ts getTasks, SELECT only), urgent first,
+ *              minus rows assigned to a companion.
+ *   projects = `projectsOpen()`: GET /mind/projects/:id?status=open (handlers/projects.ts getProjects, SELECT
+ *              on companion_projects, mig 0122), top 2.
+ *   spark    = unconsumed forage finds (`forageFindsPeek`: GET /mind/forage/:id, SELECT only) plus recent
+ *              listens (`recentMediaPeek`: GET /mind/media/recent, SELECT only), the same material the
+ *              autonomous seed draws on; one picked per Chicago hour. Fails only if BOTH reads fail.
  *   calendar = no reader exists; null slot.
- * `botOrient()` returns null on failure, which the packet reads as FAILED (never as empty).
+ * null from a read = FAILED, which the packet renders as a marker, never as empty.
  */
-export function librarianFrameSources(librarian: Pick<LibrarianClient, "listTasks" | "botOrient">, calendar: FrameListSource | null = null): FrameSources {
-  // One orient round trip serves both projects and spark when they load together.
-  let memo: { at: number; p: ReturnType<LibrarianClient["botOrient"]> } | null = null;
-  const orient = () => {
-    const now = Date.now();
-    if (!memo || now - memo.at > 15_000) memo = { at: now, p: librarian.botOrient() };
-    return memo.p;
-  };
+export type FrameLibrarian = Pick<LibrarianClient, "listTasks" | "projectsOpen" | "forageFindsPeek" | "recentMediaPeek">;
+
+export function librarianFrameSources(librarian: FrameLibrarian, calendar: FrameListSource | null = null): FrameSources {
   return {
     tasks: async () => {
       const rows = await librarian.listTasks();
@@ -260,18 +258,16 @@ export function librarianFrameSources(librarian: Pick<LibrarianClient, "listTask
         .map(r => r.title);
     },
     projects: async () => {
-      const o = await orient();
-      if (!o) return null;
-      return (o.projects ?? []).filter(p => p.status === "open").map(p => p.title);
+      const rows = await librarian.projectsOpen();
+      if (rows === null) return null;
+      return rows.filter(p => p.status === "open").map(p => p.title);
     },
     spark: async () => {
-      const o = await orient();
-      if (!o) return null;
+      const [finds, media] = await Promise.all([librarian.forageFindsPeek(), librarian.recentMediaPeek()]);
+      if (finds === null && media === null) return null;
       return [
-        ...(o.forage_finds ?? []).map(f => `a find: ${f.title}`),
-        ...(o.consumed_forage_finds ?? []).map(f => `a find you are chewing on: ${f.title}`),
-        ...(o.recent_listens ?? []).map(l => `a listen: ${l.title}${l.artist ? ` by ${l.artist}` : ""}`),
-        ...(o.open_loops ?? []).map(l => `an open loop: ${l.loop_text}`),
+        ...(finds ?? []).map(f => `a find: ${f.title}`),
+        ...(media ?? []).filter(m => m.title).map(m => `a listen: ${m.title}${m.artist ? ` by ${m.artist}` : ""}`),
       ];
     },
     calendar,
@@ -281,7 +277,7 @@ export function librarianFrameSources(librarian: Pick<LibrarianClient, "listTask
 const packets = new Map<string, FramePacket>();
 
 /** The process's packet for a companion, built on first use; announces the calendar slot once. */
-export function framePacketFor(librarian: Pick<LibrarianClient, "listTasks" | "botOrient">, companion: string): FramePacket {
+export function framePacketFor(librarian: FrameLibrarian, companion: string): FramePacket {
   let p = packets.get(companion);
   if (!p) {
     const sources = librarianFrameSources(librarian);

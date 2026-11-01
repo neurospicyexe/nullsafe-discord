@@ -115,28 +115,41 @@ describe("frame packet", () => {
     expect(line).not.toContain("SECRETTITLE");
   });
 
-  it("librarian sources: tasks skip companion-assigned; projects open only; null = failure", async () => {
+  it("librarian sources are pure reads and NEVER call botOrient", async () => {
+    let orient = 0;
     const lib = {
+      botOrient: async () => { orient++; return null; },
       listTasks: async () => [
         { id: "1", title: "Raz task", priority: "normal", status: "open", due_at: null, assigned_to: "raziel" },
         { id: "2", title: "Cy task", priority: "urgent", status: "open", due_at: null, assigned_to: "cypher" },
         { id: "3", title: "Unassigned", priority: "low", status: "in_progress", due_at: null, assigned_to: null },
       ],
-      botOrient: async () => ({
-        projects: [
-          { id: "a", title: "Open one", intention: "", status: "open", days_idle: 1, stale: false },
-          { id: "b", title: "Paused", intention: "", status: "paused", days_idle: 1, stale: false },
-        ],
-        forage_finds: [{ id: "f", title: "A find", domain: "d", summary: "" }],
-      }),
-    } as never;
-    const s = librarianFrameSources(lib);
+      projectsOpen: async () => [{ id: "a", title: "Open one", status: "open" }, { id: "b", title: "Paused", status: "paused" }],
+      forageFindsPeek: async () => [{ title: "A find" }],
+      recentMediaPeek: async () => [{ title: "Song", artist: "Band" }],
+    };
+    const s = librarianFrameSources(lib as never);
     expect(await s.tasks()).toEqual(["Raz task", "Unassigned"]);
     expect(await s.projects()).toEqual(["Open one"]);
-    expect(await s.spark()).toEqual(["a find: A find"]);
-    const dead = librarianFrameSources({ listTasks: async () => null, botOrient: async () => null } as never);
+    expect(await s.spark()).toEqual(["a find: A find", "a listen: Song by Band"]);
+    const p = new FramePacket({ sources: s, companion: "c" });
+    expect((await p.build(NOW)).fields).toEqual(["tasks", "projects", "spark"]);
+    expect(orient).toBe(0);
+  });
+
+  it("failed reads are failures; spark fails only when both reads fail", async () => {
+    const dead = librarianFrameSources({
+      listTasks: async () => null, projectsOpen: async () => null,
+      forageFindsPeek: async () => null, recentMediaPeek: async () => null,
+    } as never);
     expect(await dead.tasks()).toBeNull();
     expect(await dead.projects()).toBeNull();
+    expect(await dead.spark()).toBeNull();
+    const half = librarianFrameSources({
+      listTasks: async () => [], projectsOpen: async () => [],
+      forageFindsPeek: async () => null, recentMediaPeek: async () => [{ title: "S", artist: null }],
+    } as never);
+    expect(await half.spark()).toEqual(["a listen: S"]);
   });
 });
 
