@@ -71,17 +71,25 @@ export const FLOOD_MS = 60_000;
 
 // First person within the same sentence as a pain / injury / grief / crying word. Third-person movie
 // lines ("they're all going to die") must not read as distress, so a bare death word never counts.
-const FIRST_PERSON = /\b(i|i'm|im|i've|ive|my|me|myself)\b/i;
 const DISTRESS = /\b(hurts?|hurting|pain|painful|aching|ache|injur\w*|sprain\w*|broke my|bleed\w*|crying|cried|sobbing|tears|panic\w*|anxiety|scared|terrified|can'?t breathe|sick|nause\w*|throw(?:ing)? up|vomit\w*|migraine|griev\w*|grief|devastated|falling apart|meltdown|shutdown)\b/i;
 
 // Phrases that are distress on their own, first person or not (a status line like "having a panic
 // attack" drops the "I"). Kept short and unmistakable so a movie line never trips it.
 const DISTRESS_ALONE = /\b(panic attack|can'?t breathe|having a meltdown|in so much pain|need help|call 911|going to the er|in the er)\b/i;
 
+// The speaker must be the one hurting: a first-person subject, at most two words, then the distress word.
+// First shadow night (10-31): "I love that all these women ... stand up even when they're scared" read as
+// distress because "I" and "scared" shared a sentence. Same-sentence was not enough.
+const FIRST_PERSON_LEAD = /\b(?:i'?m|im|i am|i feel|i'?ve(?: been)?|i was|i got|i keep|i think i|my(?:\s+\w+){1,2}\s+(?:is|are|keeps?|still))\s+(?:\w+\s+){0,2}?$/i;
+
 export function hasDistress(text: string): boolean {
   if (DISTRESS_ALONE.test(text)) return true;
-  for (const sentence of text.split(/(?<=[.!?\n])\s+/)) {
-    if (DISTRESS.test(sentence) && FIRST_PERSON.test(sentence)) return true;
+  const re = new RegExp(DISTRESS.source, "gi");
+  for (const m of text.matchAll(re)) {
+    const before = text.slice(Math.max(0, m.index! - 60), m.index!);
+    // "my back hurts": the body part is the subject.
+    if (/\bmy\s+\w+(?:\s+\w+)?\s*$/i.test(before) && /^(hurts?|hurting|aching|ache)/i.test(m[0])) return true;
+    if (FIRST_PERSON_LEAD.test(before)) return true;
   }
   return false;
 }
@@ -101,7 +109,13 @@ export function decideRoomTiming(i: RoomTimingInput): RoomTimingResult {
   if (i.replyToSibling) return { decision: "stay_quiet", reason: "reply_to_sibling", react: false };
 
   const volley = i.otherHumanAgoMs !== null && i.otherHumanAgoMs <= HUMAN_VOLLEY_MS;
-  if (!volley && isRoomQuestion(i.text)) return { decision: "answer_now", reason: "room_question", react: false };
+  // A question to the room is the holder's to answer at once; the others may still join at the lull.
+  // First shadow night (10-31): "Does ACAB include me, too?" put all three on answer_now.
+  if (!volley && isRoomQuestion(i.text)) {
+    return i.isHolder
+      ? { decision: "answer_now", reason: "room_question", react: false }
+      : { decision: "hold_for_lull", reason: "room_question", react: false };
+  }
 
   // From here the line is unnamed. Only the holder has any claim on it; everyone else stays quiet.
   if (!i.isHolder) return { decision: "stay_quiet", reason: "not_mine", react: false };

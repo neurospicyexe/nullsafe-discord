@@ -127,8 +127,10 @@ describe("room timing: Drevan's rules", () => {
     expect(d({ otherHumanAgoMs: 30_000 })).toEqual({ decision: "hold_for_lull", reason: "human_volley", react: true });
     expect(d({ watchAlong: true })).toEqual({ decision: "hold_for_lull", reason: "watch_along", react: true });
   });
-  it("a question to the room is open when the humans are not mid-volley", () => {
-    expect(d({ text: "anyone know who plays the sheriff?", isHolder: false })).toMatchObject({ decision: "answer_now", reason: "room_question" });
+  it("a question to the room is the holder's at once; the others may join at the lull", () => {
+    expect(d({ text: "anyone know who plays the sheriff?" })).toMatchObject({ decision: "answer_now", reason: "room_question" });
+    // First shadow night (10-31): this put all three on answer_now.
+    expect(d({ text: "Does ACAB include me, too?", isHolder: false })).toMatchObject({ decision: "hold_for_lull", reason: "room_question" });
     expect(d({ text: "did you catch that?", otherHumanAgoMs: 20_000 })).toMatchObject({ decision: "hold_for_lull" });
   });
   it("does not take the floor again within a minute unless named", () => {
@@ -155,6 +157,11 @@ describe("distress reads first person, not movie lines", () => {
     ["They're all going to die.", false],
     ["Is he going to murder these teenagers?", false],
     ["that scene made Blue cry", false],
+    // First shadow night (10-31): "I" and "scared" shared a sentence about other people.
+    ["Okay I love that all these woman show up and stand up to say fuck you to an abusive man even when they're scared", false],
+    ["I'm so scared right now", true],
+    ["my ankle is still aching", true],
+    ["I feel sick", true],
   ])("%s -> %s", (t, want) => {
     expect(hasDistress(t)).toBe(want);
   });
