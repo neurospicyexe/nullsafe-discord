@@ -72,6 +72,11 @@ const shared = {
   // have taken the fallback path. CUSTODIAN_DISCORD_USER_ID rides along for symmetry (the health
   // check reads .env directly, but any future worker-side custodian logic must not re-hit this).
   ESCALATION_DISCORD_USER_ID:   process.env.ESCALATION_DISCORD_USER_ID,
+  // Voice drift job (2026-11-01): VOICE_DRIFT=off kills; paths default under /app/logs; cron default 20 8 * * * (UTC).
+  VOICE_DRIFT:                  process.env.VOICE_DRIFT,
+  VOICE_DRIFT_CRON:             process.env.VOICE_DRIFT_CRON,
+  VOICE_DRIFT_PATH:             process.env.VOICE_DRIFT_PATH,
+  VOICE_BASELINE_PATH:          process.env.VOICE_BASELINE_PATH,
   ESCALATION_FALLBACK_CHANNEL_ID: process.env.ESCALATION_FALLBACK_CHANNEL_ID,
   CUSTODIAN_DISCORD_USER_ID:    process.env.CUSTODIAN_DISCORD_USER_ID,
   // 2026-08-07: FOURTH instance of the trap this file keeps documenting. The consolidation
@@ -390,6 +395,8 @@ const shared = {
   SERVED_MEMORY_AUDIT:         process.env.SERVED_MEMORY_AUDIT,
   SERVED_MEMORY_LOG:           process.env.SERVED_MEMORY_LOG,
   WRITEBACK_LOWINFO:           process.env.WRITEBACK_LOWINFO,
+  // Voice drift loop (2026-11-01, task 31648f0a): fraction of CLEAN replies posted to voice_scores, default 1.0 (all; 0.1 = old sample).
+  VOICE_SCORE_SAMPLE:          process.env.VOICE_SCORE_SAMPLE,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

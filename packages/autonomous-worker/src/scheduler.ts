@@ -26,7 +26,8 @@ import { runCareGestureTick } from "./care.js";
 import { runEscalationDeliveryTick } from "./escalation.js";
 import { runBriefingTick } from "./briefing.js";
 import { runVibeCheckTick } from "./vibecheck.js";
-import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON } from "./config.js";
+import { runVoiceDriftTick } from "./voice-drift.js";
+import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON, VOICE_DRIFT_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
 /** Guards against overlapping runs for the same companion. */
@@ -307,6 +308,12 @@ export function startScheduler(): void {
   console.log(`[scheduler] vibecheck → cron "${VIBECHECK_CRON}"`);
   cron.schedule(VIBECHECK_CRON, () => {
     runVibeCheckTick().catch(e => console.error("[scheduler] vibecheck failed:", e));
+  });
+
+  // Voice drift (task 31648f0a): rolling z-scores vs the stored baseline -> /app/logs/voice-drift.jsonl.
+  console.log(`[scheduler] voice-drift cron "${VOICE_DRIFT_CRON}"`);
+  cron.schedule(VOICE_DRIFT_CRON, () => {
+    runVoiceDriftTick().catch(e => console.error("[scheduler] voice-drift failed:", e));
   });
 
   console.log("[scheduler] all companions scheduled");

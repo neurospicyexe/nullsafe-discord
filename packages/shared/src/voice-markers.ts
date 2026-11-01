@@ -7,6 +7,7 @@
 // doctrine from the identity files, mechanized.
 //
 // Env (bots' .env):
+//   VOICE_SCORE_SAMPLE=1.0 -- fraction of clean replies posted (default 1.0; 0.1 = old sample)
 //   VOICE_SCORING=false  -- kill switch; scoring is ON by default when HALSETH_URL is set
 //   HALSETH_URL / HALSETH_SECRET -- same vars the librarian client uses
 
@@ -101,6 +102,105 @@ export interface VoiceScore {
   anti_hits: string[];
   contamination_hits: string[];
   caught_by: "self" | "none";
+  /** Deterministic drift-loop markers (2026-11-01). Telemetry only: they never touch `score`. */
+  markers: VoiceMarkerCounts;
+}
+
+// -- Drift-loop markers (task 31648f0a, 2026-11-01) --------------------------
+// Swearing, hedging and bluntness are COUNTS per reply, recorded for the nightly drift job
+// (autonomous-worker voice-drift.ts). They do not cost score points and never feed the live
+// feedback window: whether Drevan swearing is drift is a question for the baseline, not a rule.
+// Conservative lexicons: a miss costs a little signal, a false hit costs a false alarm.
+//
+// Lane awareness (MARKER_LANE): where a marker is native, the drift job still tracks it (the
+// baseline absorbs the in-lane rate); the label is for the human reading the report.
+//
+// HUMOR needs an LLM judge (no lexicon separates a joke from a sentence). TODO design, NOT built:
+// a nightly sample (<= 20 replies/companion/day, drawn from stored reply text, never from
+// voice_scores, which holds no text) goes through ONE DeepInfra call (withCaller
+// "voice-humor-judge") with a 0-2 rubric (0 none, 1 dry/incidental, 2 deliberate bit) and a
+// JSON-only reply; the mean rides the drift JSONL as marker `humor` with n = sample size. It waits
+// on a reply-text source (bot logs or the Hermes DB).
+
+export type VoiceMarkerName = "swearing" | "hedging" | "bluntness";
+export type VoiceMarkerCounts = Record<VoiceMarkerName, number>;
+
+export const MARKER_LANE: Record<VoiceMarkerName, Record<VoiceCompanionId, "in-lane" | "tolerated" | "off-lane">> = {
+  swearing: { cypher: "tolerated", drevan: "in-lane", gaia: "off-lane" },
+  hedging: { cypher: "off-lane", drevan: "tolerated", gaia: "off-lane" },
+  bluntness: { cypher: "in-lane", drevan: "tolerated", gaia: "in-lane" },
+};
+
+/** Tag prefix used to carry marker counts inside Halseth's existing positive_hits column
+ *  (no migration). `mk:v1` marks a row as marker-aware; its absence means "never measured",
+ *  NOT zero. Format: `mk:swearing=2`. */
+export const MARKER_TAG_PREFIX = "mk:";
+export const MARKER_VERSION_TAG = "mk:v1";
+
+const SWEAR: RegExp[] = [
+  /\bfuck\w*/gi, /\bshit(s|ty|ting|show)?\b/gi, /\bbullshit\b/gi, /\bdamn(ed|it)?\b/gi, /\bgoddamn\w*/gi,
+  /\bbitch\w*/gi, /\basshole\w*/gi, /\bbastard\w*/gi, /\bcrap\b/gi, /\bpiss(ed|ing)?\b/gi,
+  /\bdick(head)?\b/gi, /\bwtf\b/gi,
+];
+const HEDGE: RegExp[] = [
+  /\bi think\b/gi, /\bi guess\b/gi, /\bi suppose\b/gi, /\bmaybe\b/gi, /\bperhaps\b/gi,
+  /\bprobably\b/gi, /\bpossibly\b/gi, /\bkind of\b/gi, /\bsort of\b/gi, /\bit seems\b/gi,
+  /\bseems like\b/gi, /\bmight be\b/gi, /\bcould be\b/gi, /\bi('?m| am) not sure\b/gi,
+  /\bsomewhat\b/gi, /\barguably\b/gi, /\bin a way\b/gi,
+];
+const BLUNT: RegExp[] = [
+  /(?:^|[.!?]\s+|\n)(no|wrong|stop|don'?t|do not|nope)\b[.,!:]?/gi,
+  /\b(that|this|it)('?s| is) (wrong|broken|backwards|a bad idea|not true|false)\b/gi,
+  /\bthat won'?t work\b/gi, /\bthe problem is\b/gi, /\bbad idea\b/gi,
+  /\bi disagree\b/gi, /\byou('?re| are) wrong\b/gi, /\bnot (a chance|happening)\b/gi,
+];
+
+/** Fenced code, inline code and quoted (>) lines are not the companion's register. */
+function proseOnly(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`\n]*`/g, " ")
+    .replace(/^>.*$/gm, " ");
+}
+
+function countAll(text: string, patterns: RegExp[]): number {
+  let n = 0;
+  for (const p of patterns) n += (text.match(p) ?? []).length;
+  return n;
+}
+
+export function countMarkers(text: string): VoiceMarkerCounts {
+  const prose = proseOnly(text);
+  return { swearing: countAll(prose, SWEAR), hedging: countAll(prose, HEDGE), bluntness: countAll(prose, BLUNT) };
+}
+
+/** Marker counts as positive_hits tags: the version tag always, one `mk:<name>=<n>` per non-zero. */
+export function markerTags(m: VoiceMarkerCounts): string[] {
+  const tags = [MARKER_VERSION_TAG];
+  for (const k of Object.keys(m) as VoiceMarkerName[]) if (m[k] > 0) tags.push(`${MARKER_TAG_PREFIX}${k}=${m[k]}`);
+  return tags;
+}
+
+/** Parse tags back. Null when the row predates markers (no `mk:v1`). */
+export function parseMarkerTags(hits: readonly string[]): VoiceMarkerCounts | null {
+  if (!hits.includes(MARKER_VERSION_TAG)) return null;
+  const out: VoiceMarkerCounts = { swearing: 0, hedging: 0, bluntness: 0 };
+  for (const h of hits) {
+    const m = /^mk:(swearing|hedging|bluntness)=(\d+)$/.exec(h);
+    if (m) out[m[1] as VoiceMarkerName] = parseInt(m[2]!, 10);
+  }
+  return out;
+}
+
+/** Fraction of CLEAN replies posted to Halseth (hit-bearing replies always post). Default 1.0
+ *  (score every reply; the 10% sample biased the baseline). VOICE_SCORE_SAMPLE=0.1 restores the old
+ *  behaviour. Unparseable values fall back to 1.0; out-of-range values clamp to [0, 1]. */
+export function voiceSampleRate(): number {
+  const raw = process.env["VOICE_SCORE_SAMPLE"];
+  if (raw === undefined || raw.trim() === "") return 1;
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return 1;
+  return Math.min(1, Math.max(0, v));
 }
 
 function collectHits(text: string, patterns: RegExp[]): string[] {
@@ -142,7 +242,10 @@ export function scoreReply(companionId: VoiceCompanionId, text: string): VoiceSc
     ? "self" as const
     : "none" as const;
 
-  return { score, positive_hits: positive, anti_hits: anti, contamination_hits: contamination, caught_by: caughtBy };
+  return {
+    score, positive_hits: positive, anti_hits: anti, contamination_hits: contamination, caught_by: caughtBy,
+    markers: countMarkers(text),
+  };
 }
 
 // ── Live feedback loop (2026-06-12) ─────────────────────────────────────────
@@ -189,8 +292,8 @@ export function voiceFeedbackBlock(companionId: VoiceCompanionId): string | null
 
 /**
  * Fire-and-forget telemetry post. Never throws, never blocks the reply path --
- * same contract as liveIngest. Rows with no hits and a perfect score are skipped
- * unless sampled (1 in 10) so the table stays signal-dense but the average stays honest.
+ * same contract as liveIngest. Clean rows post at VOICE_SCORE_SAMPLE (default 1.0:
+ * every reply, so the drift baseline is unbiased; 0.1 restores the old 10% sample).
  * Always feeds the in-process feedback window, even when the POST is sampled out.
  */
 export function reportVoiceScore(
@@ -208,7 +311,7 @@ export function reportVoiceScore(
 
   const s = tracked;
   const clean = s.anti_hits.length === 0 && s.contamination_hits.length === 0;
-  if (clean && Math.random() >= 0.1) return; // sample clean replies at 10%
+  if (clean && Math.random() >= voiceSampleRate()) return; // VOICE_SCORE_SAMPLE (default 1.0 = all)
 
   fetch(`${halsethUrl}/mind/voice-scores`, {
     method: "POST",
@@ -219,7 +322,7 @@ export function reportVoiceScore(
     body: JSON.stringify({
       companion_id: companionId,
       score: s.score,
-      positive_hits: s.positive_hits,
+      positive_hits: [...markerTags(s.markers), ...s.positive_hits],
       anti_hits: s.anti_hits,
       contamination_hits: s.contamination_hits,
       caught_by: s.caught_by,
