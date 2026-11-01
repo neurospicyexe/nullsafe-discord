@@ -292,6 +292,8 @@ export interface HermesDeltaExtras {
   background?: string;
   /** Architect facts picked for this message (B3): after the live words, before `frame`. */
   facts?: string;
+  /** Per-turn `[Right now]` packet (frame-packet.ts): after the live words, before facts and the frame. */
+  rightNow?: string;
   frame?: string;
 }
 
@@ -388,7 +390,9 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   // what this room said since the last turn, then the live words, then the seat frame LAST. Nothing
   // that someone else said may sit between the live words and the reply.
   const bg = extras.background ? `${extras.background}\n\n` : "";
-  const frame = (extras.facts ? `\n\n${extras.facts}` : "") + (extras.frame ? `\n\n${extras.frame}` : "");
+  const frame = (extras.rightNow ? `
+
+${extras.rightNow}` : "") + (extras.facts ? `\n\n${extras.facts}` : "") + (extras.frame ? `\n\n${extras.frame}` : "");
   if (folded.length === 0) {
     const liveBlock = bg ? `${bg}[Live message]\n${live}` : live;
     return { messages: [{ ...labelled, content: `${clock}\n${liveBlock}${frame}` }], deliveredThroughTs: outMark };

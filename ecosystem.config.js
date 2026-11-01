@@ -72,6 +72,11 @@ const shared = {
   // have taken the fallback path. CUSTODIAN_DISCORD_USER_ID rides along for symmetry (the health
   // check reads .env directly, but any future worker-side custodian logic must not re-hit this).
   ESCALATION_DISCORD_USER_ID:   process.env.ESCALATION_DISCORD_USER_ID,
+  // Voice drift job (2026-11-01): VOICE_DRIFT=off kills; paths default under /app/logs; cron default 20 8 * * * (UTC).
+  VOICE_DRIFT:                  process.env.VOICE_DRIFT,
+  VOICE_DRIFT_CRON:             process.env.VOICE_DRIFT_CRON,
+  VOICE_DRIFT_PATH:             process.env.VOICE_DRIFT_PATH,
+  VOICE_BASELINE_PATH:          process.env.VOICE_BASELINE_PATH,
   ESCALATION_FALLBACK_CHANNEL_ID: process.env.ESCALATION_FALLBACK_CHANNEL_ID,
   CUSTODIAN_DISCORD_USER_ID:    process.env.CUSTODIAN_DISCORD_USER_ID,
   // 2026-08-07: FOURTH instance of the trap this file keeps documenting. The consolidation
@@ -370,6 +375,8 @@ const shared = {
   // channel (default 21600 = 6h). A rotated/retracted transcript re-injects regardless.
   PK_PROFILE_REPEAT_S:         process.env.PK_PROFILE_REPEAT_S,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
+  // FRAME_PACKET (frame-packet.ts, 2026-11-01): per-turn `[Right now]` block (tasks, own projects, spark, calendar slot). off|shadow|on, CODE DEFAULT shadow (logs counts, injects nothing).
+  FRAME_PACKET:                process.env.FRAME_PACKET,
   // FACTS_PICK_* (B3, 2026-10-18, facts-pick.ts): per human message, Halseth embedding shortlist -> Jev picks the
   // Architect facts this message needs. Default OFF; `shadow` logs picks to FACTS_PICK_SHADOW_LOG (ids/scores only)
   // and injects nothing; `live` injects the picked facts once per transcript. Per-companion overrides win.
@@ -393,6 +400,8 @@ const shared = {
   SERVED_MEMORY_AUDIT:         process.env.SERVED_MEMORY_AUDIT,
   SERVED_MEMORY_LOG:           process.env.SERVED_MEMORY_LOG,
   WRITEBACK_LOWINFO:           process.env.WRITEBACK_LOWINFO,
+  // Voice drift loop (2026-11-01, task 31648f0a): fraction of CLEAN replies posted to voice_scores, default 1.0 (all; 0.1 = old sample).
+  VOICE_SCORE_SAMPLE:          process.env.VOICE_SCORE_SAMPLE,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

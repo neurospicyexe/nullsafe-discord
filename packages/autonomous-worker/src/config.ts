@@ -400,6 +400,10 @@ export const BRIEFING_EVENING_CRON = process.env["BRIEFING_EVENING_CRON"] ?? "45
 // wins that trade. The digest reads ~3h less of the day than at 23:15.
 export const VIBECHECK_CRON = process.env["VIBECHECK_CRON"] ?? "55 19 * * *";
 
+// Nightly voice drift job (task 31648f0a). 08:20 UTC = 03:20 CDT: inside Raziel's 22:00-06:00 window and
+// outside the 01:00-04:00 UTC provider peak. No LLM calls; Halseth read + local JSONL only. Kill: VOICE_DRIFT=off.
+export const VOICE_DRIFT_CRON = process.env["VOICE_DRIFT_CRON"] ?? "20 8 * * *";
+
 // Default home room per companion during autonomous pipeline runs.
 // Written to home_presence at the start of each pipeline execution.
 export const AUTONOMOUS_TIME_ROOMS: Record<CompanionId, string> = {
