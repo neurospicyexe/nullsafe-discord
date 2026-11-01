@@ -126,6 +126,16 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
   };
 }
 
+/**
+ * `<prefix>: dry-run heartbeat [force]` (STATUS B56, heartbeat-dry-run.ts). Owner-only; the handler builds it
+ * from this companion's aliases, like the room-override trigger, so no per-bot wiring is needed. The whole
+ * message: "dre: dry run heartbeat" / "dre, dry-run heartbeat force". Group 1 = `force` when present.
+ * Deliberately NOT in `guard`: "dre: dry" is not a command-shaped word and must stay conversation.
+ */
+export function buildDryRunTrigger(aliases: readonly string[]): RegExp {
+  return new RegExp(`^(?:${aliases.join("|")})\\b[,:]?\\s*dry[-\\s]?run\\s+heartbeat(?:\\s+(force))?\\s*[.!]?\\s*$`, "i");
+}
+
 /** Shortest typed prefix per companion, for usage messages. */
 export const COMMAND_PREFIX: Record<string, string> = {
   cypher: "cy",

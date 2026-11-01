@@ -1,5 +1,6 @@
 import cron from "node-cron";
 import { Client } from "discord.js";
+import { registerHeartbeatCtx } from "@nullsafe/shared";
 import { taskCheckPlan } from "@nullsafe/shared";
 import type {
   LibrarianClient, InferenceAdapter, ChannelConfigCache, BootContext, Redis,
@@ -83,6 +84,8 @@ export function startAutonomous(
   };
 
   // Scheduling stays per-bot (timing is identity); the heartbeat/commons/poll bodies are shared.
+  // B56: `<prefix>: dry-run heartbeat` finds this live ctx here (read-only use; the dry run copies and proxies it).
+  registerHeartbeatCtx(ctx);
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
 
   // Cypher-only scheduled actions (audit-house identity, NOT shared with drevan/gaia).

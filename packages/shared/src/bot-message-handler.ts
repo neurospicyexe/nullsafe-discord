@@ -80,7 +80,7 @@ import {
   isListenEnabled, runListenPipeline, reactToExperience, heardStmMarker, notHeardStmMarker,
   visionEnabled, pickImageAttachments, seenBlock, seenStmMarker, type SeenImage,
   resolveSeenImages, sharedVisionCache, visionTurnBudgetMs, visionPrefetchEnabled, type VisionRedis,
-  commandUsage, COMMAND_PREFIX, mediaCommandTarget, buildCommandTriggers, COMPANION_ALIASES,
+  commandUsage, COMMAND_PREFIX, mediaCommandTarget, buildCommandTriggers, buildDryRunTrigger, COMPANION_ALIASES,
   isWatchEnabled, runWatchPipeline, watchedStmMarker, notWatchedStmMarker, notWatchedBlock, isYouTubeUrl,
   handleClubCommand,
   handleLogCommand,
@@ -126,6 +126,7 @@ import {
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
 import { postProcessReply } from "./reply-postprocess.js";
+import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport } from "./heartbeat-dry-run.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
 import {
   decideRoomTiming, roomTimingMode, appendRoomTimingLine, overrideKey, OVERRIDE_TTL_MS, buildRoomOverrideTrigger,
@@ -556,6 +557,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
   const VIDEO_TRIGGER: RegExp = deps.VIDEO_TRIGGER ?? buildCommandTriggers(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]).video;
   /** "Dre, in" / "Cy, out" -- the whole message, this companion's aliases only (room-timing.ts). */
   const ROOM_OVERRIDE_TRIGGER: RegExp = buildRoomOverrideTrigger(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]);
+  /** "dre: dry-run heartbeat [force]" (B56). Owner-only, heartbeat-dry-run.ts. */
+  const DRY_RUN_TRIGGER: RegExp = buildDryRunTrigger(COMPANION_ALIASES[COMPANION_ID] ?? [COMPANION_ID]);
   // Burst settle (2026-10-10). Empty / 0 when settle is off, a command, a bot post or a pass turn.
   const settleMs = deps.settleMs ?? 0;
   const burst = deps.burst ?? [];
@@ -1046,7 +1049,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // tested here directly.
     const roomOverride = attribution.isOwner ? ROOM_OVERRIDE_TRIGGER.exec(effectiveContent) : null;
     const isOwnerCommand = attribution.isOwner
-      && (!!roomOverride || !!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
+      && (!!roomOverride || DRY_RUN_TRIGGER.test(effectiveContent) || !!COMMAND_GUARD?.test(effectiveContent) || !!WATCH_TRIGGER?.test(effectiveContent)
         || !!MOVIE_TRIGGER?.test(effectiveContent) || !!MOVIE_AT_TRIGGER?.test(effectiveContent)
         || VIDEO_TRIGGER.test(effectiveContent));
     if (!isOwnerCommand) {
@@ -1059,6 +1062,26 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
           : (attribution.isOwner ? cfg.ownerDisplayName : userTier === "intimate" ? BLUE_LABEL : message.author.username),
         timestamp: message.createdTimestamp,
       });
+    }
+
+    // Heartbeat dry run (B56): the REAL heartbeat composition for THIS companion, answered in the channel it was
+    // typed in. Sends, reserves and records nothing (see heartbeat-dry-run.ts); the reply is the report.
+    if (attribution.isOwner) {
+      const dryRun = DRY_RUN_TRIGGER.exec(effectiveContent);
+      if (dryRun) {
+        const live = getHeartbeatCtx(COMPANION_ID);
+        let reply: string;
+        if (!live) {
+          reply = "dry-run heartbeat unavailable: the autonomous runtime has not started on this bot yet.";
+        } else {
+          try { await (message.channel as TextChannel).sendTyping?.(); } catch { /* cosmetic */ }
+          const report = await runDryRunHeartbeat(live, { force: !!dryRun[1] });
+          reply = formatDryRunReport(report);
+        }
+        console.log(`[${COMPANION_ID}] dry-run heartbeat${dryRun[1] ? " force" : ""} in ${message.channelId}`);
+        await sendLong(message.channel as TextChannel, reply);
+        return;
+      }
     }
 
     // Owner model switch command: <prefix>: model <key> | <prefix>: model list
