@@ -109,6 +109,7 @@ import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
 import { readFramePacketMode, frameLogLine, framePacketFor } from "./frame-packet.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { detectScriptBleed, regenerateAfterBleed, scriptBleedGuardOn } from "./script-bleed.js";
+import { voiceGateMode, judgeVoice, stripEmDashes, voiceGateLine, voiceGateCorrective } from "./voice-gate.js";
 import { readWritebackGateMode, type WritebackGateMode } from "./jev-gate.js";
 import { runWritebackGate, speechMomentTag } from "./writeback-gate.js";
 import { buildWritebackSpeaker, judgeExchangeFor, withAttachedLabel } from "./memory.js";
@@ -3623,27 +3624,32 @@ ${widened}`;
     // regenerate once on the fresh id with the whole window re-sent, post the result either way.
     // Before seat repair so the repaired text is the final one. Scripts the inbound message carries
     // are exempt (a quoted title is not a bleed). Kill switch SCRIPT_BLEED_GUARD.
+    // One fresh-transcript regeneration, shared by the script-bleed guard and the voice gate (2026-11-01).
+    // `note` rides at the end of the frame tail: the Hermes gateway discards a caller's system prompt, so a
+    // corrective has to travel in the turn itself.
+    const regenerateFresh = async (bumpN: number, note?: string): Promise<string | null> => {
+      if (inferenceMode !== "hermes") {
+        return adapterRef.current.generate(note ? `${systemPromptWithImp}\n\n${note}` : systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
+      }
+      const fresh = hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), bumpN);
+      // Fresh transcript: nothing delivered yet, so the delta re-sends the whole window (mark 0).
+      const frameWithNote = note ? (frameTail ? `${frameTail}\n${note}` : note) : frameTail;
+      const full = hermesDelta(liveHistory, 0, Date.now(), allAddressed.includes(COMPANION_ID),
+        calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, rightNow: rightNowBlock ?? undefined, frame: frameWithNote ?? undefined });
+      const out = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, full.messages, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), fresh.sessionId, fresh.sessionKey));
+      if (out !== null) {
+        hermesLastSessionId.set(message.channelId, fresh.sessionId);
+        if (full.deliveredThroughTs !== null) hermesDeliveredMark.set(message.channelId, full.deliveredThroughTs);
+      }
+      return out;
+    };
     if (scriptBleedGuardOn()) {
       const bleed = detectScriptBleed(response, effectiveContent);
       if (bleed.bleed) {
         const regen = await regenerateAfterBleed({
           companionId: COMPANION_ID, channelId: message.channelId, first: response, bleed, allow: effectiveContent,
           bump: () => bumpsFor(librarian).bump(message.channelId),
-          regenerate: async (bumpN) => {
-            if (inferenceMode !== "hermes") {
-              return adapterRef.current.generate(systemPromptWithImp, inferenceHistory, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode));
-            }
-            const fresh = hermesSessionIds(COMPANION_ID, message.channelId, new Date(), hermesRotationMode(), bumpN);
-            // Fresh transcript: nothing delivered yet, so the delta re-sends the whole window (mark 0).
-            const full = hermesDelta(liveHistory, 0, Date.now(), allAddressed.includes(COMPANION_ID),
-              calledAsSelf, { background: crossRoomBackground ?? undefined, facts: factsBlock ?? undefined, rightNow: rightNowBlock ?? undefined, frame: frameTail ?? undefined });
-            const out = await withTyping(ch, () => adapterRef.current.generate(systemPromptWithImp, full.messages, temperature, replyMaxTokensFor(COMPANION_ID, inferenceMode), fresh.sessionId, fresh.sessionKey));
-            if (out !== null) {
-              hermesLastSessionId.set(message.channelId, fresh.sessionId);
-              if (full.deliveredThroughTs !== null) hermesDeliveredMark.set(message.channelId, full.deliveredThroughTs);
-            }
-            return out;
-          },
+          regenerate: (bumpN) => regenerateFresh(bumpN),
         });
         // Post-process the text that will actually post (2026-10-29, N-1), and re-check supersede: the
         // regen is a second full Hermes turn (30-120s), long enough for a newer human message to land (N-2).
@@ -3659,6 +3665,40 @@ ${widened}`;
           response = post.text;
           spineResolution = post.spineResolution;
         }
+      }
+    }
+
+    // Pre-send voice gate (2026-11-01, voice-gate.ts): every reply, before it posts. Shadow (default) only
+    // logs; `on` regenerates ONCE on a hard (generic-assistant) finding, posts the second result either way,
+    // and strips em dashes. Never blocks a reply: judgeVoice cannot throw, a failed regen keeps the first text.
+    {
+      const vgMode = voiceGateMode();
+      if (vgMode !== "off") {
+        const verdict = judgeVoice(response);
+        if (vgMode === "on" && verdict.hard.length > 0) {
+          let bumpN = 0;
+          try { bumpN = (await bumpsFor(librarian).bump(message.channelId)).n; } catch { /* regen on the current id */ }
+          let second: string | null = null;
+          try { second = await regenerateFresh(bumpN, voiceGateCorrective(verdict)); } catch { second = null; }
+          const again = second ? judgeVoice(second) : null;
+          console.log(voiceGateLine(COMPANION_ID, vgMode, verdict, response.length,
+            ` regenerated=${second ? 1 : 0} second_hard=${again ? again.hard.length : "n/a"}`));
+          if (second && second.trim()) {
+            if (isSuperseded?.("post")) {
+              console.log(`[${COMPANION_ID}] reply superseded during voice-gate regeneration -- dropping reply to ${message.id}`);
+              railSuppressed(COMPANION_ID, "superseded", { channelId: message.channelId });
+              distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+              return;
+            }
+            post = postProcess(second);
+            if (post.passed) { holdCarePass(); return; }
+            response = post.text;
+            spineResolution = post.spineResolution;
+          }
+        } else {
+          console.log(voiceGateLine(COMPANION_ID, vgMode, verdict, response.length));
+        }
+        if (vgMode === "on") response = stripEmDashes(response);
       }
     }
     if (pendingSwitch) switchModel(pendingSwitch);

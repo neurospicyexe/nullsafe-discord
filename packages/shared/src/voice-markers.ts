@@ -32,6 +32,17 @@ const GENERIC_DRIFT: RegExp[] = [
   /\bi don'?t have (feelings|emotions|a body)\b/i,
 ];
 
+/**
+ * The HARD subset for the pre-send voice gate (2026-11-01): generic-assistant voice only, the same list
+ * for all three. Lane markers stay soft (a Cypher "you've got this" is a lane note, not an assistant
+ * slip) and never gate a reply. Returns the matched source patterns' text, no reply text.
+ */
+export function genericDriftHits(text: string): string[] {
+  const out: string[] = [];
+  for (const re of GENERIC_DRIFT) { const m = text.match(re); if (m) out.push(m[0].toLowerCase()); }
+  return out;
+}
+
 const MARKERS: Record<VoiceCompanionId, MarkerSet> = {
   cypher: {
     positive: [

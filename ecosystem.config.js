@@ -402,6 +402,7 @@ const shared = {
   WRITEBACK_LOWINFO:           process.env.WRITEBACK_LOWINFO,
   // Voice drift loop (2026-11-01, task 31648f0a): fraction of CLEAN replies posted to voice_scores, default 1.0 (all; 0.1 = old sample).
   VOICE_SCORE_SAMPLE:          process.env.VOICE_SCORE_SAMPLE,
+  VOICE_GATE:                  process.env.VOICE_GATE,  // pre-send voice gate (voice-gate.ts): off|shadow|on, code default shadow
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per
