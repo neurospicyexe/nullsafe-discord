@@ -985,7 +985,7 @@ export class LibrarianClient {
       `. They are NOT in front of you. Reach with ask_librarian "search vault for [the topic, in your own words]" if the vault is where the answer would live; your own notes hold what was actually said.`;
   }
 
-  static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now()): string | null {
+  static formatSbRecall(raw: string, excludeChannelId?: string, now: number = Date.now(), servedIds?: string[]): string | null {
     type Chunk = { text?: string; vault_path?: string; created_at?: string | null };
     let parsed: { chunks?: Chunk[]; recall_note?: string };
     // Vault text is web clips, imports and other rooms: control tokens defused (recalled-text.ts).
@@ -1013,6 +1013,8 @@ export class LibrarianClient {
       // truncated line still carries it.
       const source = [age, c.vault_path].filter(Boolean).join(", ");
       lines.push(`- ${text.length > 400 ? `${text.slice(0, 400)}...` : text}${source ? ` (${source})` : ""}`);
+      // Audit (served-memory.ts): the path is the id, never the text.
+      if (servedIds && c.vault_path) servedIds.push(c.vault_path);
       if (lines.length >= 4) break;
     }
     if (lines.length) return lines.join("\n");
@@ -1151,7 +1153,7 @@ export class LibrarianClient {
       `. They are NOT in front of you. Reach with ask_librarian "recall my notes about [the topic, in your own words]" and answer from what comes back; do not guess at what they say.`;
   }
 
-  static formatOwnNotes(notes: OwnNoteRecall[], maxChars = 700): string | null {
+  static formatOwnNotes(notes: OwnNoteRecall[], maxChars = 700, servedIds?: string[]): string | null {
     if (!notes.length) return null;
     const lines: string[] = [];
     for (const n of notes) {
@@ -1168,6 +1170,7 @@ export class LibrarianClient {
       const line = `• (${[age, src].filter(Boolean).join(", ")}) ${body}`;
       if (lines.length && lines.join("\n").length + line.length > maxChars) break;
       lines.push(line);
+      if (servedIds && n.note_id) servedIds.push(n.note_id);
     }
     return lines.length ? lines.join("\n") : null;
   }

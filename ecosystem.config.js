@@ -377,6 +377,13 @@ const shared = {
   FACTS_PICK_REPEAT_S:         process.env.FACTS_PICK_REPEAT_S,
   FACTS_PICK_TIMEOUT_MS:       process.env.FACTS_PICK_TIMEOUT_MS,
   FACTS_PICK_SHADOW_LOG:       process.env.FACTS_PICK_SHADOW_LOG,
+  // Memory gate add-ons (2026-11-01, Halseth task 538ab03b). SERVED_MEMORY_AUDIT (default ON, off/0/false/no
+  // kills it) + SERVED_MEMORY_LOG (default /app/logs/served-memory.jsonl): one ids-only JSONL row per reply
+  // turn of every memory item injected (served-memory.ts). WRITEBACK_LOWINFO off|shadow|on, CODE default
+  // shadow (low-info.ts): skip the writeback judge when BOTH sides are pure acknowledgements.
+  SERVED_MEMORY_AUDIT:         process.env.SERVED_MEMORY_AUDIT,
+  SERVED_MEMORY_LOG:           process.env.SERVED_MEMORY_LOG,
+  WRITEBACK_LOWINFO:           process.env.WRITEBACK_LOWINFO,
   // GUILD_TRIAD_SEED (2026-10-05, guild-seed.ts guildSeedMode): the #the-triad server-scoped seeder. Default
   // OFF; only `shadow` or `on` (trimmed, any case) enable it, anything else is off (fails closed like
   // BAD_NIGHT_PRESENCE). Shadow logs one `[guild-seed] <companion> decision=... supply_msgs=N chars=M` line per

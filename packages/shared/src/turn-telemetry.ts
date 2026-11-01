@@ -28,6 +28,7 @@
 // TURN_TELEMETRY=off/0/false/no turns the line off (the measurements still cost nothing).
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { appendServedRow, buildServedRow, servedMemoryEnabled, type ServedMemoryRow } from "./served-memory.js";
 
 const OFF = new Set(["off", "0", "false", "no"]);
 
@@ -60,6 +61,10 @@ export interface TurnTraceInit {
   enabled?: boolean;
   now?: () => number;
   log?: (line: string) => void;
+  /** Served-memory audit sink (served-memory.ts); default appends the JSONL row. Tests inject. */
+  audit?: (row: ServedMemoryRow) => void;
+  /** Overrides SERVED_MEMORY_AUDIT for tests. */
+  auditEnabled?: boolean;
 }
 
 export class TurnTrace {
@@ -71,6 +76,8 @@ export class TurnTrace {
   private postMs = 0;
   private inTok: number | null = null;
   private emitted = false;
+  private transcriptId: string | null = null;
+  private readonly served = new Map<string, Set<string>>();
   private readonly now: () => number;
   private readonly log: (line: string) => void;
   private readonly enabled: boolean;
@@ -80,6 +87,15 @@ export class TurnTrace {
     this.log = i.log ?? ((l) => console.log(l));
     this.enabled = i.enabled ?? turnTelemetryEnabled();
   }
+
+  /** Ids (never text) of memory items injected into this turn; see served-memory.ts. */
+  addServed(source: string, ids: readonly string[]): void {
+    if (!ids.length) return;
+    let set = this.served.get(source);
+    if (!set) { set = new Set(); this.served.set(source, set); }
+    for (const id of ids) set.add(id);
+  }
+  setTranscript(id: string): void { this.transcriptId = id; }
 
   get hasOutcome(): boolean { return this.outcome !== null; }
 
@@ -101,6 +117,7 @@ export class TurnTrace {
   emit(): void {
     if (this.emitted) return;
     this.emitted = true;
+    this.emitServed();
     if (!this.enabled) return;
     try {
       const now = this.now();
@@ -126,6 +143,20 @@ export class TurnTrace {
       };
       this.log(`[turn] ${JSON.stringify(payload)}`);
     } catch { /* telemetry must never be the reason a turn fails */ }
+  }
+
+  /** One audit row per turn that answered (posted) or served anything; independent of TURN_TELEMETRY. */
+  private emitServed(): void {
+    try {
+      if (!(this.i.auditEnabled ?? servedMemoryEnabled())) return;
+      if (this.served.size === 0 && this.outcome !== "posted") return;
+      const row = buildServedRow({
+        at: new Date(this.now()).toISOString(), companion: this.i.companionId, channelId: this.i.channelId,
+        messageId: this.i.messageId, transcriptId: this.transcriptId, outcome: this.outcome ?? "skipped:other",
+        served: this.served,
+      });
+      (this.i.audit ?? ((r) => appendServedRow(r)))(row);
+    } catch { /* the audit must never be the reason a turn fails */ }
   }
 }
 

@@ -72,6 +72,8 @@ export interface CrossRoomResult {
   deliveredThroughTs: number | null;
   rooms: number;
   lines: number;
+  /** Audit ids of the carried lines, `<channelId>@<epoch ms>` (served-memory.ts). Ids only. */
+  ids?: string[];
 }
 
 function oneLine(text: string, cap: number): string {
@@ -94,7 +96,7 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
   const floor = Math.max(p.deliveredThroughTs ?? -Infinity, p.now - CROSS_ROOM_WINDOW_MS);
   let mark = p.deliveredThroughTs ?? -Infinity;
 
-  const sections: Array<{ newest: number; lines: string[] }> = [];
+  const sections: Array<{ newest: number; lines: string[]; ids: string[] }> = [];
   for (const room of p.rooms) {
     if (room.channelId === p.currentChannelId) continue;
     if (!room.guildId || !p.trusted.has(room.guildId)) continue;
@@ -104,10 +106,11 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
     for (const m of fresh) mark = Math.max(mark, m.timestamp!);
     const newest = kept[kept.length - 1]!.timestamp!;
     const lines = [`${room.label}, last at ${clock(newest)}:`];
+    const ids = kept.map(m => `${room.channelId}@${m.timestamp}`);
     for (const m of kept) {
       lines.push(`[${m.role === "assistant" ? `${p.selfName} (you)` : labelSafe(m.authorName ?? "someone")}]: ${oneLine(neutralizeRecalled(m.content), CROSS_ROOM_ITEM_CAP)}`);
     }
-    sections.push({ newest, lines });
+    sections.push({ newest, lines, ids });
   }
   if (sections.length === 0) return { ...empty, deliveredThroughTs: Number.isFinite(mark) ? mark : p.deliveredThroughTs };
 
@@ -118,7 +121,7 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
   while (kept.length > 1 && render(kept).length > CROSS_ROOM_CHAR_CAP) kept = kept.slice(0, -1);
   // One busy room can still be over: drop its oldest whole lines, keeping the room header and its newest.
   const only = kept[0]!;
-  while (only.lines.length > 2 && render(kept).length > CROSS_ROOM_CHAR_CAP) only.lines.splice(1, 1);
+  while (only.lines.length > 2 && render(kept).length > CROSS_ROOM_CHAR_CAP) { only.lines.splice(1, 1); only.ids.splice(0, 1); }
 
   const header =
     "[Elsewhere since you were last here: your other rooms, same people, same continuity. " +
@@ -128,6 +131,7 @@ export function crossRoomDigest(p: CrossRoomInput): CrossRoomResult {
     deliveredThroughTs: Number.isFinite(mark) ? mark : p.deliveredThroughTs,
     rooms: kept.length,
     lines: kept.reduce((n, s) => n + s.lines.length - 1, 0),
+    ids: kept.flatMap(s => s.ids),
   };
 }
 

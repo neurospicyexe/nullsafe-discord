@@ -16,6 +16,7 @@
 
 import type { InferenceAdapter } from "./inference.js";
 import { judgeWriteback, authorWriteback, type Writeback, type WritebackSpeaker } from "./memory.js";
+import { exchangeIsLowInfo, writebackLowInfoMode } from "./low-info.js";
 import {
   jevWritebackEval, decideFromJev, readJevThresholds,
   type WritebackGateMode, type JevAnswers,
@@ -162,6 +163,14 @@ export async function runWritebackGate(ctx: WritebackGateCtx): Promise<void> {
   const now = ctx.now ?? Date.now;
   const jevEval = ctx.jevEval ?? jevWritebackEval;
   const emit = ctx.shadowLog ?? appendShadowLine;
+
+  // Deterministic low-info drop (low-info.ts, 2026-11-01): a pure acknowledgement on BOTH sides is not
+  // worth a judge/Jev call. Write side only; what the companion says is untouched. Lengths only in the log.
+  const lowInfoMode = writebackLowInfoMode(ctx.env ?? process.env);
+  if (lowInfoMode !== "off" && exchangeIsLowInfo(userMessage, assistantResponse)) {
+    console.log(`[writeback] lowinfo ${lowInfoMode === "on" ? "skip" : "would-skip"} companion=${companionId} ch=${channelId} msg=${messageId} user_len=${userMessage.length} reply_len=${assistantResponse.length} mode=${lowInfoMode}`);
+    if (lowInfoMode === "on") return;
+  }
 
   const dispatch = (wb: Writeback, promoteToWm: boolean) => {
     if (!wb) return;

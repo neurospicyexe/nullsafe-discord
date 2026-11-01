@@ -1,6 +1,7 @@
 import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { currentTurn } from "./turn-telemetry.js";
+import { noteServed, noteTranscript } from "./served-memory.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { claimPkProfile } from "./pk-profile-seen.js";
@@ -2453,6 +2454,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // well past the budget between two-hourly seed ticks. isThreadSpent is channel-gated
     // (commons only, presence exempt) and never suppresses -- it only tells the companion the
     // count and offers [LANDS:] as the alternative to finding one more facet.
+    if (spine) noteServed("thread_spine", [(spine.thread as { id?: unknown }).id]);
     if (spine) contextPrompt += `\n\n${buildSpineBlock(spine, COMPANION_ID, isPresence, isThreadSpent(spine.thread, { isCommons: isTriadCommons(channelEntry), channelId: routingChannelId }))}`;
     // Hermes recent-context restore (2026-07-01): the lean hermes base above REPLACES
     // bootCtx.systemPrompt, which is where composePrompt embeds the live orient block
@@ -2497,6 +2499,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const tripped = consumeTripwires(COMPANION_ID, effectiveContent, cfg.halsethSecret);
       if (tripped.length > 0) {
         contextPrompt += tripwireBlock(tripped);
+        noteServed("tripwire", tripped.map(t => t.id));
         console.log(`[${COMPANION_ID}] tripwire fired: ${tripped.map(t => t.id).join(", ")}`);
       }
     }
@@ -2559,7 +2562,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // ownNotesRecallMode. In `ask` mode this block is deferred to the two-step below, which
     // decides with the own-notes result in hand and falls back to this same payload.
     const recallMode = ownNotesRecallMode(process.env, COMPANION_ID);
-    const sbRecallPayload = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId) : null;
+    const servedVaultIds: string[] = [];
+    const sbRecallPayload = sbHit ? LibrarianClient.formatSbRecall(sbHit, message.channelId, Date.now(), servedVaultIds) : null;
     const sbPayloadBlock = sbRecallPayload
       ? `\n\n[Memory -- Second Brain vault recall for this message (automatic -- your retrieval IS working):\n${sbRecallPayload.slice(0, 1200)}]`
       : "";
@@ -2568,7 +2572,10 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (sbPointer) contextPrompt += `\n\n[Memory -- ${sbPointer}]`;
     } else if (recallMode === "payload") {
       contextPrompt += sbPayloadBlock;
+      if (sbPayloadBlock) noteServed("vault", servedVaultIds);
     }
+    // Pointer mode puts a count and a verb in the prompt, not the excerpts; the same items bear on it.
+    if (recallMode === "pointer" && sbHit) noteServed("vault_pointer", servedVaultIds);
 
     // A SEPARATE block from the vault, deliberately. These are the companion's own notes -- what
     // they wrote down, in their own voice, including everything captured with Raziel on Claude.ai.
@@ -2611,15 +2618,19 @@ ${widened}`;
     // pasted in, the companion never has a reason to reach for his own notes (measured: right
     // answer, five seconds, zero tool calls). Pointer mode hands him the fact that notes exist and
     // the verb, and leaves the reading to him. Default payload; pilot per companion via env.
+    const servedOwnNoteIds: string[] = [];
     const ownNotesPayloadBlock = (() => {
-      const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes);
+      const ownNotes = LibrarianClient.formatOwnNotes(ownRecall.notes, 700, servedOwnNoteIds);
       return ownNotes
         ? `\n\n[Memory -- YOUR OWN notes, recalled by meaning for this message. What you wrote down, across every surface you live on, including what you captured with Raziel on Claude.ai. These are not vault syntheses. Trust the dates:\n${ownNotes}]`
         : "";
     })();
     if (recallMode === "pointer") {
       const pointer = LibrarianClient.formatOwnNotesPointer(ownRecall.notes);
-      if (pointer) contextPrompt += `\n\n[Memory -- ${pointer}]`;
+      if (pointer) {
+        contextPrompt += `\n\n[Memory -- ${pointer}]`;
+        noteServed("own_notes_pointer", ownRecall.notes.map(n => n.note_id));
+      }
     } else if (recallMode === "ask") {
       // THE TWO-STEP (2026-09-25, reach-decision.ts). Ask him what he would look up, in his own
       // words, and run the recall with that. Anything short of a reach (NONE, timeout, error,
@@ -2655,11 +2666,17 @@ ${widened}`;
       // A real NONE under REACH_DECLINE=unread answers without his notes (reach-decision.ts
       // reachDeclineMode). Every other path, and every decline under payload, falls back to the
       // floors (recallBlocksFor): they had hits, or the ask would not have run.
-      contextPrompt += declineUnread && reach.outcome === "declined"
+      const askBlocks = declineUnread && reach.outcome === "declined"
         ? declinedUnreadBlocks(sbPayloadBlock, ownRecall.notes.length)
         : recallBlocksFor(reach, sbPayloadBlock + ownNotesPayloadBlock);
+      contextPrompt += askBlocks;
+      // Only what actually rode: a reach block replaces the floors, an unread decline drops the notes.
+      if (sbPayloadBlock && askBlocks.includes(sbPayloadBlock)) noteServed("vault", servedVaultIds);
+      if (ownNotesPayloadBlock && askBlocks.includes(ownNotesPayloadBlock)) noteServed("own_notes", servedOwnNoteIds);
+      if (reach.outcome === "reached" && reach.block && askBlocks.includes(reach.block)) noteServed("reach", [`reach:${message.id}`]);
     } else {
       contextPrompt += ownNotesPayloadBlock;
+      if (ownNotesPayloadBlock) noteServed("own_notes", servedOwnNoteIds);
     }
 
     // Peer-framing: anchor to triad register rather than Raziel-facing register.
@@ -2800,6 +2817,7 @@ ${widened}`;
     // the [ON SCREEN] block on the live user turn (below, after the liveHistory swap) carries the film.
     const watchalong = await watchalongPending;
     if (watchalong) contextPrompt += watchalong.standingLine;
+    if (watchalong) noteServed("watchalong", [watchalong.session.id]);
     // Today's med state + the dosing rule (spec P-2, P-1), DM only: the block names medications.
     if (isOwnerDm) {
       // Reuse the read from the answer step unless an answer was just recorded (then it is stale).
@@ -3191,7 +3209,7 @@ ${widened}`;
       hermesDeliveredMark.set(message.channelId, 0);
       console.log(`[${COMPANION_ID}] hermes session rotated -> ${inferenceSessionId} (window re-sent)`);
     }
-    hermesLastSessionId.set(message.channelId, inferenceSessionId);
+    hermesLastSessionId.set(message.channelId, inferenceSessionId); noteTranscript(inferenceSessionId);
 
     // Turn-scoped [HEARD]/[NOT HEARD] blocks reach INFERENCE without living in STM (2026-09-01).
     // The 08-29 stranding fix stores only a short marker in STM -- but inference reads STM, so
@@ -3324,6 +3342,7 @@ ${widened}`;
           }
         }
         if (!placed) crossRoom = { ...crossRoom, block: "" };
+        if (placed) noteServed("cross_room", crossRoom.ids ?? []);
         console.log(`[${COMPANION_ID}] cross-room: ${crossRoom.rooms} room(s), ${crossRoom.lines} line(s) ${placed ? "carried in" : "held (live turn not found)"}`);
       }
     }
@@ -3376,7 +3395,11 @@ ${widened}`;
         companion: COMPANION_ID, channelId: message.channelId, transcriptId: inferenceSessionId,
         message: effectiveContent, mode: factsMode, recentTurns, deps: { redis: redis as unknown as FactsPickRedis | null },
       });
-      if (factsMode === "live") factsBlock = (await pick).block;
+      if (factsMode === "live") {
+        const picked = await pick;
+        factsBlock = picked.block;
+        if (picked.block) noteServed("facts", picked.log.would_inject ?? []);
+      }
       else void pick;
     }
     const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;
