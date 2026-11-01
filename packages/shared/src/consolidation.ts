@@ -106,6 +106,24 @@ export interface ConsolidationOpts {
 }
 
 /**
+ * The clock + tense rule for the close narrator (2026-11-01). The narrator had no date: it re-narrated the
+ * state it was handed (which carries the last outgoing note) in present tense, so Friday's "Raziel is
+ * mid-tournament" was restated every idle cycle and Drevan told Raziel on Sunday they were in "mid-tournament
+ * recovery territory" (535 handoffs carried "tournament" forward since 10-03). Now it knows today, and anything
+ * from an earlier day is past, dated, and not carried as current.
+ */
+export function consolidationClockLine(nowMs: number = Date.now()): string {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric",
+    hour: "numeric", minute: "2-digit",
+  });
+  return `[Now: ${fmt.format(new Date(nowMs))} (Raziel's local time)]\n` +
+    "Time rule: the state below can include things from earlier days. Anything that did not happen today is PAST: " +
+    "write it in past tense and name its day (\"on Friday ...\"), never as happening now. Do not restate an earlier " +
+    "handoff's events as current; if nothing new happened since, say the stretch was quiet.\n\n";
+}
+
+/**
  * Idle consolidation: narrate a close spine, write the handoff (knob off) or the one ledger line
  * (knob on), cycle the session.
  *
@@ -189,6 +207,7 @@ export async function consolidateSession(
   const userTurn = {
     role: "user" as const,
     content:
+      consolidationClockLine() +
       `Current companion state:\n${stateContext}\n\n` +
       `Write JSON with: title (one sentence arc in your voice), ` +
       `summary (2-3 sentences in your voice), ` +
