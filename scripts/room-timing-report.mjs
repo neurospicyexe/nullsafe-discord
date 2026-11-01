@@ -43,8 +43,11 @@ for (const c of ["drevan", "cypher", "gaia"]) {
     console.log(`| ${d} | ${why} | ${rs.length} | ${d === "answer_now" ? "-" : did} |`);
   }
   const held = mine.filter((r) => r.decision !== "answer_now");
-  const interruptions = held.filter((r) => spoke.get(r.msg_id)?.has(c));
-  console.log(`\nWould have held ${held.length}; spoke on ${interruptions.length} of them today (what the live cut removes or batches to the lull).`);
+  // A cold Blue line (no holder) can be answered by BLUE_COLD_PICK after the row is written: that pick is
+  // the system working, not an interruption, so it is counted apart.
+  const interruptions = held.filter((r) => spoke.get(r.msg_id)?.has(c) && !r.cold);
+  const coldPicks = held.filter((r) => spoke.get(r.msg_id)?.has(c) && r.cold);
+  console.log(`\nWould have held ${held.length}; spoke on ${interruptions.length} of them (what the live cut removes or batches to the lull), plus ${coldPicks.length} cold Blue picks.`);
   console.log(`Reaction offered on ${mine.filter((r) => r.react).length}.\n`);
 }
 

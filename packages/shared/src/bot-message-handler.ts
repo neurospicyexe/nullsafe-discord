@@ -1876,8 +1876,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       // so the lines the gate already silences are scored too.
       if (roomTimingMode() === "shadow") {
         const speakerSide: "raziel" | "blue" = userTier === "owner" ? "raziel" : "blue";
-        const named = senderCtx.isMentioned || directlyAddressed || !humanUnnamed && verdict.kind === "proceed";
+        // Per-companion only: companionNamedIn() is true when ANY companion is named, so it must not feed this.
+        const named = senderCtx.isMentioned || directlyAddressed;
         const isHolder = speakerSide === "blue" ? blueHolder === COMPANION_ID : senderCtx.activeExchangeWith === COMPANION_ID;
+        // A cold unnamed Blue line (no holder) may still be answered by BLUE_COLD_PICK after this row is
+        // written; flagged so the readout does not count that pick as an interruption.
+        const cold = speakerSide === "blue" && blueHolder === null;
         const at = message.createdTimestamp;
         void (async () => {
           try {
@@ -1907,11 +1911,13 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
               companion: COMPANION_ID as CompanionId, speaker: speakerSide, text: effectiveContent,
               named, replyToMe: isReplyToMe, replyToHuman: replyHuman, isHolder, overrideIn, watchAlong,
               otherHumanAgoMs, selfSpokeAgoMs,
+              replyToSibling: replyTgt?.author.kind === "companion",
+              toOtherHuman: verdict.kind === "silent",
             });
             appendRoomTimingLine({
               kind: "decision", at: new Date().toISOString(), companion: COMPANION_ID, msg_id: message.id,
               channel_id: message.channelId, speaker: speakerSide, decision: r.decision, reason: r.reason, react: r.react,
-              gate: verdict.kind, holder: isHolder, watch_along: watchAlong, reply_to: replyTgt?.author.kind ?? null,
+              gate: verdict.kind, holder: isHolder, cold, watch_along: watchAlong, reply_to: replyTgt?.author.kind ?? null,
               other_human_ago_s: otherHumanAgoMs === null ? null : Math.round(otherHumanAgoMs / 1000),
               self_spoke_ago_s: selfSpokeAgoMs === null ? null : Math.round(selfSpokeAgoMs / 1000),
             });

@@ -102,6 +102,7 @@ describe("Rule 2b: a reply to the other human is theirs", () => {
 describe("room timing: Drevan's rules", () => {
   const base: RoomTimingInput = {
     companion: "drevan", speaker: "blue", text: "Sucks to be Annie", named: false, replyToMe: false, replyToHuman: null,
+    replyToSibling: false, toOtherHuman: false,
     isHolder: true, overrideIn: false, watchAlong: false, otherHumanAgoMs: null, selfSpokeAgoMs: null,
   };
   const d = (over: Partial<RoomTimingInput>) => decideRoomTiming({ ...base, ...over });
@@ -114,6 +115,13 @@ describe("room timing: Drevan's rules", () => {
   });
   it("a reply to the other human stays quiet", () => {
     expect(d({ replyToHuman: "raziel" })).toMatchObject({ decision: "stay_quiet", reason: "reply_to_human" });
+  });
+  it("a line the gate read as to the other human stays quiet, question or not", () => {
+    expect(d({ toOtherHuman: true, text: "Blue, did you catch that?" })).toMatchObject({ decision: "stay_quiet", reason: "to_other_human" });
+  });
+  it("a reply to a sibling's message is that sibling's, not the holder's", () => {
+    expect(d({ replyToSibling: true })).toMatchObject({ decision: "stay_quiet", reason: "reply_to_sibling" });
+    expect(d({ replyToSibling: true, named: true })).toMatchObject({ decision: "answer_now", reason: "named" });
   });
   it("holds human back-and-forth and watch-along remarks for the lull, with a reaction", () => {
     expect(d({ otherHumanAgoMs: 30_000 })).toEqual({ decision: "hold_for_lull", reason: "human_volley", react: true });

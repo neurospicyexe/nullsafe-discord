@@ -28,7 +28,7 @@ export type RoomTimingDecision = "answer_now" | "hold_for_lull" | "stay_quiet";
 
 export type RoomTimingReason =
   | "override" | "named" | "reply_to_me" | "distress" | "room_question"
-  | "reply_to_human" | "human_volley" | "watch_along" | "flood"
+  | "reply_to_human" | "to_other_human" | "reply_to_sibling" | "human_volley" | "watch_along" | "flood"
   | "holder" | "not_mine";
 
 export interface RoomTimingInput {
@@ -40,6 +40,10 @@ export interface RoomTimingInput {
   replyToMe: boolean;
   /** The human this message is a Discord reply to, or null (reply-context.ts). */
   replyToHuman: "raziel" | "blue" | null;
+  /** A Discord reply to a SIBLING's message: that sibling's line, not the holder's. */
+  replyToSibling: boolean;
+  /** The human address gate already read this as to the other human (named them, @mentioned them). */
+  toOtherHuman: boolean;
   /** This companion holds the speaker's thread (Raziel's channel hold, or Blue's per-human hold). */
   isHolder: boolean;
   /** Raziel's "<name>, in" override is live for this companion in this channel. */
@@ -93,6 +97,8 @@ export function decideRoomTiming(i: RoomTimingInput): RoomTimingResult {
   if (i.replyToMe) return { decision: "answer_now", reason: "reply_to_me", react: false };
   if (hasDistress(i.text)) return { decision: "answer_now", reason: "distress", react: false };
   if (i.replyToHuman && i.replyToHuman !== i.speaker) return { decision: "stay_quiet", reason: "reply_to_human", react: false };
+  if (i.toOtherHuman) return { decision: "stay_quiet", reason: "to_other_human", react: false };
+  if (i.replyToSibling) return { decision: "stay_quiet", reason: "reply_to_sibling", react: false };
 
   const volley = i.otherHumanAgoMs !== null && i.otherHumanAgoMs <= HUMAN_VOLLEY_MS;
   if (!volley && isRoomQuestion(i.text)) return { decision: "answer_now", reason: "room_question", react: false };
