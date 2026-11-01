@@ -1930,6 +1930,41 @@ export class LibrarianClient {
     }
   }
 
+  /**
+   * Declared departures (T4b): the open list, reconciled server-side (clock + care hold applied).
+   * Non-throwing: null = unknown, which the registry treats as rails ON.
+   */
+  async departuresOpen(): Promise<unknown[] | null> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/departures`, {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${this.secret}` },
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (!res.ok) return null;
+      const d = await res.json().catch(() => null) as { departures?: unknown } | null;
+      return d && Array.isArray(d.departures) ? d.departures : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Raziel's "back inside the line": POST /mind/departures/stand-down. Non-throwing; `ok` is a 2xx. */
+  async departureStandDown(phrase: string): Promise<{ ok: boolean; status: number | null }> {
+    try {
+      const res = await this._fetch(`${this.url}/mind/departures/stand-down`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ phrase }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      return { ok: res.ok, status: res.status };
+    } catch (e) {
+      console.warn("[librarian] departureStandDown failed:", String(e));
+      return { ok: false, status: null };
+    }
+  }
+
   async reachDelivered(id: number, path: string): Promise<boolean> {
     return (await this.reachPost<{ updated?: boolean }>("delivered", { id, path }))?.updated === true;
   }
