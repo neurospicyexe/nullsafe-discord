@@ -182,3 +182,33 @@ describe("fetchOpenSubtitles", () => {
       .rejects.toThrow(/download refused \(406: You have downloaded/);
   });
 });
+
+// TV episodes (2026-11-01): "dre: movie start The Twilight Zone S2E7" or the episode's own IMDb id.
+describe("TV episodes", () => {
+  const ep = (o: Record<string, unknown>, file = 1) =>
+    ({ attributes: { language: "en", download_count: 5, files: [{ file_id: file }], feature_details: { feature_type: "Episode", parent_title: "The Twilight Zone", ...o } } });
+  it("parses S2E7, s02e07 and 'season 2 episode 7' after the show name", () => {
+    expect(parseTitleQuery("The Twilight Zone S2E7")).toEqual({ title: "The Twilight Zone", year: null, imdbId: null, season: 2, episode: 7 });
+    expect(parseTitleQuery("twilight zone s02e07")).toMatchObject({ title: "twilight zone", season: 2, episode: 7 });
+    expect(parseTitleQuery("The Twilight Zone 1959 season 2 episode 7")).toMatchObject({ title: "The Twilight Zone", year: 1959, season: 2, episode: 7 });
+    expect(parseTitleQuery("Se7en")).toEqual({ title: "Se7en", year: null, imdbId: null });
+  });
+  it("an asked-for episode takes only that episode, never a sibling episode or a film", () => {
+    const want = parseTitleQuery("The Twilight Zone S2E7");
+    const items = [ep({ season_number: 2, episode_number: 6 }, 6), ep({ season_number: 2, episode_number: 7 }, 7),
+      { attributes: { language: "en", download_count: 99, files: [{ file_id: 99 }], feature_details: { feature_type: "Movie", title: "The Twilight Zone" } } }];
+    expect(pickSubtitle(items as any, want)?.fileId).toBe(7);
+  });
+  it("the episode's OWN IMDb id matches (it was rejected against the show id before)", () => {
+    const want = parseTitleQuery("tt0734621");
+    expect(pickSubtitle([ep({ imdb_id: 734621, parent_imdb_id: 52520 }, 5)] as any, want)?.fileId).toBe(5);
+    expect(pickSubtitle([ep({ imdb_id: 734621, parent_imdb_id: 52520 }, 5)] as any, parseTitleQuery("tt0052520"))?.fileId).toBe(5);
+  });
+  it("the search sends season_number and episode_number", async () => {
+    const urls: string[] = [];
+    const fetchFn = (async (u: string) => { urls.push(String(u)); return new Response(JSON.stringify({ data: [] }), { status: 200 }); }) as unknown as typeof fetch;
+    await fetchOpenSubtitles("The Twilight Zone S2E7", { apiKey: "k", fetchFn }).catch(() => {});
+    expect(urls[0]).toContain("season_number=2");
+    expect(urls[0]).toContain("episode_number=7");
+  });
+});

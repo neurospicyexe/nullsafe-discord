@@ -36,8 +36,11 @@ export interface OpenSubtitlesResult {
 export interface TitleQuery {
   title: string;
   year: number | null;
-  /** IMDb id as the API takes it: digits, no "tt". */
+  /** IMDb id as the API takes it: digits, no "tt". May be a film, a show, or ONE episode's own id. */
   imdbId: number | null;
+  /** TV episode (2026-11-01): "The Twilight Zone S2E7" / "s02e07" / "season 2 episode 7". Null for a film. */
+  season?: number | null;
+  episode?: number | null;
 }
 
 /**
@@ -46,6 +49,12 @@ export interface TitleQuery {
  */
 export function parseTitleQuery(raw: string): TitleQuery {
   let s = raw.trim();
+  let season: number | null = null, episode: number | null = null;
+  const ep = /\s+(?:s(\d{1,2})\s*e(\d{1,3})|season\s+(\d{1,2})\s*,?\s*episode\s+(\d{1,3}))\s*$/i.exec(s);
+  if (ep) {
+    season = Number(ep[1] ?? ep[3]); episode = Number(ep[2] ?? ep[4]);
+    s = s.slice(0, ep.index).trim();
+  }
   let imdbId: number | null = null;
   const imdb = /(?:^|\s)(?:tt(\d{5,9})|imdb[:\s]+(?:tt)?(\d{5,9}))\s*$/i.exec(s);
   if (imdb) {
@@ -58,7 +67,7 @@ export function parseTitleQuery(raw: string): TitleQuery {
     year = Number(y[2]);
     s = y[1]!.trim();
   }
-  return { title: s, year, imdbId };
+  return { title: s, year, imdbId, ...(season !== null && episode !== null ? { season, episode } : {}) };
 }
 
 /** Lowercase, punctuation to spaces, leading article dropped: "The Evil Dead" == "Evil Dead". */
@@ -71,6 +80,14 @@ type FilmMatch = "match" | "unknown" | "mismatch";
 function filmMatch(fd: FeatureDetails | undefined, want: TitleQuery): FilmMatch {
   if (!fd) return "unknown";
   const episode = (fd.feature_type ?? "").toLowerCase() === "episode";
+  // An asked-for episode must BE that episode (a show's other episodes are a wrong script, like a wrong film).
+  if (want.season != null && want.episode != null) {
+    if (!episode) return "mismatch";
+    if (typeof fd.season_number === "number" && fd.season_number !== want.season) return "mismatch";
+    if (typeof fd.episode_number === "number" && fd.episode_number !== want.episode) return "mismatch";
+  }
+  // An IMDb id may name the show (parent) or one episode itself: either is a match for that episode.
+  if (want.imdbId !== null && episode && (fd.imdb_id === want.imdbId || fd.parent_imdb_id === want.imdbId)) return "match";
   const imdb = episode ? (fd.parent_imdb_id ?? fd.imdb_id) : fd.imdb_id;
   if (want.imdbId !== null && typeof imdb === "number") return imdb === want.imdbId ? "match" : "mismatch";
   const title = episode ? (fd.parent_title ?? fd.title) : fd.title;
@@ -94,6 +111,8 @@ interface FeatureDetails {
   imdb_id?: number;
   parent_title?: string;
   parent_imdb_id?: number;
+  season_number?: number;
+  episode_number?: number;
 }
 
 interface SubtitleItem {
@@ -203,6 +222,11 @@ export async function fetchOpenSubtitles(title: string, opts: OpenSubtitlesOptio
   if (want.imdbId !== null) params.set("imdb_id", String(want.imdbId));
   else params.set("query", want.title);
   if (want.year !== null && want.imdbId === null) params.set("year", String(want.year));
+  if (want.season != null && want.episode != null) {
+    params.set("season_number", String(want.season));
+    params.set("episode_number", String(want.episode));
+    params.set("type", "episode");
+  }
   const search = await doFetch(`${OPENSUBTITLES_BASE}/subtitles?${params.toString()}`, {
     method: "GET", headers: headers(apiKey, bearer), signal: AbortSignal.timeout(timeout),
   });
