@@ -64,6 +64,7 @@ import { checkFloor } from "./floor.js";
 // Type-only: heartbeat-dry-run.ts imports nothing at runtime from this module (no cycle).
 import type { DryRunSink } from "./heartbeat-dry-run.js";
 import { labelSafe, neutralizeRecalled } from "./recalled-text.js";
+import { runMakeMove, offerMake, makeMoveOn, mayMake } from "./make-move.js";
 import {
   badNightMode, heartbeatEligibility, liveSiblingDm, filterDmMovesForSiblingDm, b32Log,
   COME_AS_YOURSELF_LINE, DREVAN_HOLD_LINE, type RedisLike,
@@ -710,6 +711,21 @@ export async function executeMetronomeAction(
         },
       });
     }
+    case "make": {
+      // B62 step 4: the companion authors the piece in its own turn; the WORKER posts it to Halseth over
+      // HTTP (never Hermes' own tools, which can be missing on a cold heartbeat run). Posts NOTHING to
+      // Discord and is outside the DM classes and the reach caps. NONE costs nothing.
+      const url = process.env["HALSETH_URL"] ?? "";
+      if (!url) { console.warn(`[${companionId}/make] HALSETH_URL unset, nothing made`); break; }
+      await runMakeMove({
+        companionId,
+        halseth: { url, secret: ctx.halsethSecret },
+        generate: (p) => inference.generate(bootCtx.systemPrompt, [{ role: "user", content: p }]),
+        dryRun: Boolean(ctx.dryRun),
+        onDryRun: (summary, body) => ctx.dryRunSink?.compose(summary, "make", body),
+      });
+      break;
+    }
     case "nothing":
       console.log(`[${companionId}/heartbeat] chose nothing: ${reason}`);
       break;
@@ -1142,6 +1158,20 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       });
     }
 
+    // B62 step 4: the make move. A Halseth `make` row (if one was ever seeded) is honoured only when the
+    // companion may make, the kill switch is on and the pace is not flat; otherwise it is removed. With no
+    // row, the builtin is offered under the same gates. It posts nothing to Discord, so it is added AFTER
+    // the DM lane / cap / back-off filters (none of them is its business) and never keeps a tick "empty".
+    {
+      candidateActions = candidateActions.filter(a => a.action_type !== "make");
+      if (mayMake(companionId) && makeMoveOn()) {
+        const halsethUrl = process.env["HALSETH_URL"] ?? "";
+        if (halsethUrl) {
+          const offer = await offerMake(companionId, { url: halsethUrl, secret: ctx.halsethSecret }).catch(() => null);
+          if (offer?.offer && offer.action) candidateActions = [...candidateActions, offer.action];
+        }
+      }
+    }
     // The prompt names a demand move as open only if it is still on the list AFTER care_hold and the
     // DM lane; saying "a reminder is on the list" when care_hold took it is B23 in reverse.
     if (hadDemand) {
@@ -1259,7 +1289,7 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
       if (heldDm && result) {
         mark("held_dm", { action: decision.action.action_type, reason: `${result.outcome}${result.reason ? `:${result.reason}` : ""}` });
       }
-      if (decision.action.action_type !== "nothing" && !heldDm && !ctx.dryRun) {
+      if (decision.action.action_type !== "nothing" && !decision.action.id.startsWith("builtin:") && !heldDm && !ctx.dryRun) {
         await librarian.recordMetronomeActionFired(decision.action.id).catch(onWriteError(companionId, "metronome action fired"));
       }
       if (runId) await librarian.patchAutonomyRun(runId, "completed").catch(onWriteError(companionId, "autonomy run completion"));

@@ -27,6 +27,7 @@ import { runEscalationDeliveryTick } from "./escalation.js";
 import { runBriefingTick } from "./briefing.js";
 import { runVibeCheckTick } from "./vibecheck.js";
 import { runVoiceDriftTick } from "./voice-drift.js";
+import { runRenderTick } from "./makes-render.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON, VOICE_DRIFT_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -198,6 +199,16 @@ export function startScheduler(): void {
   console.log(`[scheduler] forage → cron "${FORAGE_CRON}"`);
   cron.schedule(FORAGE_CRON, () => {
     runForage().catch(e => console.error("[scheduler] forage failed:", e));
+  });
+
+  // B62 makes renderer: every 2 minutes, one make at a time (drawing, scad, music_audio, video). Runs in THIS
+  // process (pm2 `autonomous-worker`, which is on the VPS where rsvg-convert / openscad / xvfb-run live).
+  // Halseth-only: reads /mind/makes/pending, posts /mind/makes/:id/rendered. Never speaks in Discord, no
+  // floor lock. MAKES_RENDERER=off kills it; MAKES_RENDER_CRON overrides the schedule.
+  const makesCron = process.env["MAKES_RENDER_CRON"] ?? "*/2 * * * *";
+  console.log(`[scheduler] makes renderer -> cron "${makesCron}"`);
+  cron.schedule(makesCron, () => {
+    runRenderTick().catch(e => console.error("[scheduler] makes renderer failed:", e));
   });
 
   // The Club -- daily tick advances the current round's phase (open/vote/discuss).

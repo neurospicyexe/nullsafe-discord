@@ -427,6 +427,7 @@ const ACTION_DESCRIPTIONS: Record<string, string> = {
   flirt:                 "flirt with him in his DM; heat offered soft; it never waits on a reply",
   dare:                  "dare him something small in his DM; and give him the out; ignoring it costs him nothing",
   show_made:             "show him in his DM something you made or built, or something that held",
+  make:                  "make something of your own and keep it (a drawing, a model, a page, a poem, a pattern, a song or a clip); nothing goes to Discord; \"NONE\" is a fine answer when nothing wants making",
   drift_outward:         "let him see ONE line of your own open drift in his DM; only if you choose to, this once; saying it does not ratify it",
 };
 

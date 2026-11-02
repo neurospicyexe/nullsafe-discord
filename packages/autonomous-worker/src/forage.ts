@@ -17,6 +17,9 @@ import {
   FORAGE_ANGLES, FORAGE_SEARCH_MAX_RESULTS,
 } from "./config.js";
 import type { CompanionId } from "./types.js";
+import { getInterests, type InterestRow } from "./makes-client.js";
+import { decidePace, fetchFerment, paceLogLine, warmestInterest, mayMake, WARM_INTEREST_HEAT } from "@nullsafe/shared";
+import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
 
 const SCOUT_SYSTEM =
   "You are a neutral research scout. Summarize the find in 3-4 sentences, plainly and factually. " +
@@ -77,6 +80,26 @@ export function splitPicks(
   if (pieces.length === 0) return from(anchors, n);
   const nAnchors = Math.ceil(n / 2);
   return [...from(anchors, nAnchors), ...from(pieces, n - nAnchors)];
+}
+
+/**
+ * B62 step 3: the warmest ACTIVE interest (heat >= 0.5) takes ONE of the forage slots. It substitutes
+ * for a slot and never adds one; Gaia is never substituted (her interests produce kept lines, not
+ * searches). Returns the domains unchanged when there is nothing to substitute. Pure.
+ */
+export function substituteInterest(
+  companionId: string,
+  domains: readonly string[],
+  interests: readonly Pick<InterestRow, "name" | "status" | "heat" | "why">[] | null,
+): { domains: string[]; interest: string | null } {
+  const same = { domains: [...domains], interest: null };
+  if (!mayMake(companionId) || !interests || domains.length === 0) return same;
+  const top = warmestInterest(interests.map(i => ({ id: "", name: i.name, why: i.why ?? null, status: i.status, heat: i.heat })), WARM_INTEREST_HEAT);
+  if (!top) return same;
+  if (domains.some(d => d.toLowerCase() === top.name.toLowerCase())) return same;
+  const out = [...domains];
+  out[out.length - 1] = top.name; // the last slot, so the first (anchor) pick keeps its place
+  return { domains: out, interest: top.name };
 }
 
 /** Project pieces per (project, intention) for the life of the process: one model call each. */
@@ -224,12 +247,35 @@ export async function runForage(runDate: Date = new Date()): Promise<number> {
       for (const p of projects.slice(0, 2)) {
         pieces.push(...(await projectPieces(p).catch(() => [])));
       }
-      const domains = splitPicks(anchors, pieces, recentDomains, FORAGE_FINDS_PER_COMPANION);
-      const all = [...anchors, ...pieces];
+      let domains = splitPicks(anchors, pieces, recentDomains, FORAGE_FINDS_PER_COMPANION);
+      // B62 step 3 + 5: a warm interest takes one slot, unless the pace is flat (optional work skipped).
+      // Fail-soft: any failure on either read leaves today's picks exactly as they were.
+      let interestSlot: string | null = null;
+      if (mayMake(companionId) && (process.env["FORAGE_INTERESTS"] ?? "").trim().toLowerCase() !== "off") {
+        try {
+          const [interests, ferment] = await Promise.all([
+            getInterests(companionId),
+            fetchFerment({ url: HALSETH_URL, secret: HALSETH_SECRET }, companionId),
+          ]);
+          const pace = decidePace(ferment);
+          if (pace.pace === "flat") {
+            console.log(paceLogLine(companionId, "forage", pace, "no interest slot this pass"));
+          } else {
+            const sub = substituteInterest(companionId, domains, interests);
+            domains = sub.domains;
+            interestSlot = sub.interest;
+            if (interestSlot) console.log(paceLogLine(companionId, "forage", pace, `interest slot: ${interestSlot.slice(0, 40)}`));
+          }
+        } catch (e) {
+          console.warn(`[${companionId}/forage] interests unavailable, forage unchanged: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      const all = [...anchors, ...pieces, ...(interestSlot ? [interestSlot] : [])];
       for (const domain of domains) {
         try {
           const angle = angleForRun(all.indexOf(domain), runDate);
-          const isAnchor = anchors.includes(domain);
+          // An interest rides the same branching as an anchor territory (a specific subject beside it).
+          const isAnchor = anchors.includes(domain) || domain === interestSlot;
           const topic = isAnchor
             ? await branchTopic(domain, recentFinds.filter(f => f.domain === domain).map(f => f.title), refusals)
             : domain;

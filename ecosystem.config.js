@@ -258,6 +258,13 @@ const shared = {
   MED_REMINDER:                process.env.MED_REMINDER,
   MED_REMINDER_GEN_TIMEOUT_MS: process.env.MED_REMINDER_GEN_TIMEOUT_MS,
   MED_REMINDER_POLL_MS:        process.env.MED_REMINDER_POLL_MS,
+  // B62 making (2026-11-02): MAKE_MOVE=off kills the `make` heartbeat move (unset = on; Gaia never gets it).
+  // FORAGE_INTERESTS=off stops a warm interest taking one forage slot. MAKES_RENDERER=off stops the VPS
+  // renderer (worker); MAKES_RENDER_CRON overrides its every-2-minutes schedule. Listed per the standing rule above.
+  MAKE_MOVE:                   process.env.MAKE_MOVE,
+  FORAGE_INTERESTS:            process.env.FORAGE_INTERESTS,
+  MAKES_RENDERER:              process.env.MAKES_RENDERER,
+  MAKES_RENDER_CRON:           process.env.MAKES_RENDER_CRON,
   // BLUE_NOTE (2026-11-01, blue-note.ts): off | preview | on, code default preview (DMs Raziel, not Blue).
   BLUE_NOTE:                   process.env.BLUE_NOTE,
   BLUE_NOTE_HOUR:              process.env.BLUE_NOTE_HOUR,
