@@ -168,7 +168,8 @@
     "modes": [
       "open",
       "inter_companion"
-    ]
+    ],
+    "peerAddress": "named"
   },
   "1556336786383310973": {
     "modes": [

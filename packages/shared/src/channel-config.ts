@@ -267,7 +267,9 @@ export const DEFAULT_CHANNEL_CONFIG: ChannelConfig = {
   // #the-triad: their room for talking about THIS server. Deliberately NOT autonomous+inter_companion:
   // that pair makes it a triad commons, which opts it into the director, whose supply pool is the
   // home server's topics. The home commons' seeds/heartbeats target env ids only and cannot reach it.
-  "1556334827026784266": {                                               modes: ["open", "inter_companion"] }, // #the-triad
+  // peerAddress "named" (2026-11-01): off the director, the strict vocative gate let only 4 of 24
+  // sibling-naming lines through, so the three talked AT each other and never answered.
+  "1556334827026784266": {                                               modes: ["open", "inter_companion"], peerAddress: "named" }, // #the-triad
   "1556336786383310973": {                                               modes: ["broadcast"] },               // #the-syndicate (Blue's companions; triad silent)
   // #movie-night: the home #movie-night's shape. Drevan hosts; a name or group call brings Cy/Gaia in.
   "1556334678024396862": {                                               modes: ["open", "inter_companion"], exchangeWindowMs: 3 * 60 * 60 * 1000, host: "drevan" },
@@ -651,6 +653,13 @@ export function shouldRespond(
     // 2026-06-26 loops. Genuine vocative exchange is still allowed, and bounded by
     // MAX_BOT_RESPONSES_PER_HUMAN + the pingpong cooldown above.
     if (isVocativeGroupCall(content)) return true;
+    // A triad room off the director reads sibling names the way the director does (peerAddress
+    // "named", 2026-11-01): the name anywhere is a call, "X's" / "X and I" are not.
+    if (entry?.peerAddress === "named") {
+      const a = extractAddress(content);
+      if (a.type === "named" && a.id === myId) return true;
+      if (a.type === "named_multi" && a.ids.includes(myId)) return true;
+    }
     return isVocativeAddress(content, myId);
   }
 

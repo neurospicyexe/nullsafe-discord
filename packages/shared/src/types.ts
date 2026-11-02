@@ -27,6 +27,13 @@ export interface ChannelEntry {
    *  group-called. The exchange hold alone leaked: the first message after a gap went to the
    *  fit-bid and a sibling could win it, landing in the middle of intimate moments with Drevan. */
   host?: CompanionId;
+  /** How a SIBLING's message summons a companion here (2026-11-01, #the-triad in Blue's server).
+   *  Absent / "vocative" = the strict isVocativeAddress gate (name sentence-initial + "," / ":",
+   *  alone, or trailing "..., name?"). "named" = the director's reading (extractAddress: the name
+   *  anywhere, minus "X's" / "X and I" shapes), for a triad room that is NOT on the director:
+   *  there the strict gate read 20 of 24 sibling-naming lines as statements and the room never
+   *  answered itself. Loops stay bounded by the rails (pingpong, per-human cap, human-anchored cap). */
+  peerAddress?: "vocative" | "named";
 }
 
 export type ChannelConfig = Record<string, ChannelEntry>;

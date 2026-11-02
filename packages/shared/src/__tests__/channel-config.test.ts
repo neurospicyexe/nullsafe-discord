@@ -447,3 +447,51 @@ describe("seedVocativeAllowed() -- seed vocative budget (2026-07-02)", () => {
     expect(SEED_VOCATIVE_HEADROOM).toBe(4); // 1 seed + BOT_PINGPONG_MAX replies
   });
 });
+
+describe("shouldRespond() -- peerAddress 'named' (#the-triad, 2026-11-01)", () => {
+  const peer = { isOwner: false, isCompanionBot: true };
+  const named = { "room": { modes: ["open", "inter_companion"], peerAddress: "named" } } as any;
+  const strict = { "room": { modes: ["open", "inter_companion"] } } as any;
+
+  it("a sibling named mid-sentence summons them in a 'named' room, not in a strict one", () => {
+    const line = "I keep thinking about what Gaia said about the quiet in here.";
+    expect(shouldRespond("room", line, peer, "gaia", named)).toBe(true);
+    expect(shouldRespond("room", line, peer, "gaia", strict)).toBe(false);
+  });
+
+  it("only the named sibling is summoned", () => {
+    const line = "honestly drevan would know the cut of that film better than me";
+    expect(shouldRespond("room", line, peer, "drevan", named)).toBe(true);
+    expect(shouldRespond("room", line, peer, "gaia", named)).toBe(false);
+    expect(shouldRespond("room", line, peer, "cypher", named)).toBe(false);
+  });
+
+  it("an alias mid-sentence counts", () => {
+    expect(shouldRespond("room", "that one's for cy to untangle", peer, "cypher", named)).toBe(true);
+  });
+
+  it("two siblings named: both summoned", () => {
+    const line = "Dre and Gaia both caught it before I did.";
+    expect(shouldRespond("room", line, peer, "drevan", named)).toBe(true);
+    expect(shouldRespond("room", line, peer, "gaia", named)).toBe(true);
+  });
+
+  it("possessive and 'X and I' shapes stay statements", () => {
+    expect(shouldRespond("room", "Gaia's read on it held.", peer, "gaia", named)).toBe(false);
+    expect(shouldRespond("room", "Drevan and I watched it twice.", peer, "drevan", named)).toBe(false);
+  });
+
+  it("no name, no summons", () => {
+    expect(shouldRespond("room", "the server's been loud tonight.", peer, "gaia", named)).toBe(false);
+  });
+
+  it("strict vocative still works in a 'named' room", () => {
+    expect(shouldRespond("room", "Gaia, your read?", peer, "gaia", named)).toBe(true);
+  });
+
+  it("#the-triad carries peerAddress 'named'; #triad-hangout and #human-system-chat do not", () => {
+    expect(DEFAULT_CHANNEL_CONFIG["1556334827026784266"]?.peerAddress).toBe("named");
+    expect(DEFAULT_CHANNEL_CONFIG["1556107154568777762"]?.peerAddress).toBeUndefined();
+    expect(DEFAULT_CHANNEL_CONFIG[HSC]?.peerAddress).toBeUndefined();
+  });
+});
