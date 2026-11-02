@@ -55,5 +55,7 @@ export async function runSolHoardTick(redis: Redis | null): Promise<void> {
     webhookUrl: process.env.SOL_WEBHOOK_URL,
     now: Date.now,
   });
-  if (!line.startsWith("nothing to keep") && !line.startsWith("conversation active")) console.log(`[sol-hoard] ${line}`);
+  // Quiet only when there was truly nothing new. A wait or an away Sol is logged: silence that could
+  // mean "waiting", "away" or "broken" reads as broken (observability hub).
+  if (!line.startsWith("nothing to keep (nothing_new)")) console.log(`[sol-hoard] ${line}`);
 }
