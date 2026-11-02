@@ -5,6 +5,7 @@ import { sealedRecallSources } from "./recall-context.js";
 import { nowLine } from "./now-line.js";
 import { timeHalseth } from "./turn-telemetry.js";
 import { neutralizeRecalled } from "./recalled-text.js";
+import { gateFeelingLine, renderFeelingLine } from "./feeling-line-bot.js";
 
 /**
  * A live shared object a `write_inter_companion` note can reference (thinking-quality fix 4,
@@ -1459,6 +1460,9 @@ export class LibrarianClient {
     // accepted-and-ignored field is worse than a rejected one.
     soma_floats?: SomaFloatWire[];
     soma_provenance?: SomaProvenanceWire[];
+    // The companion's own feeling word (contract 0.26.0), pre-rendered server-side. Gated by FEELING_LINE_BOT
+    // here (live passes it, shadow/off null it), rendered verbatim by formatRecentContext as `[Feels]`.
+    feeling_line?: string | null;
   } | null> {
     try {
       const result = await this.ask("bot orient");
@@ -1509,6 +1513,7 @@ export class LibrarianClient {
         raziel_state?: RazielState | null;
         soma_floats?: SomaFloatWire[];
         soma_provenance?: SomaProvenanceWire[];
+        feeling_line?: unknown;
       } | undefined;
       if (!data) return null;
       return {
@@ -1577,6 +1582,7 @@ export class LibrarianClient {
         raziel_state: data.raziel_state ?? null,
         soma_floats: Array.isArray(data.soma_floats) ? data.soma_floats : [],
         soma_provenance: Array.isArray(data.soma_provenance) ? data.soma_provenance : [],
+        feeling_line: gateFeelingLine(data.feeling_line, this.companionId),
       };
     } catch {
       return null;
@@ -2885,6 +2891,8 @@ function formatRecentContextRaw(orient: {
   // The body (contract 0.13.0): floats + where each number came from. See renderBodyBlock.
   soma_floats?: SomaFloatWire[];
   soma_provenance?: SomaProvenanceWire[];
+  // The companion's own feeling word, already gated by FEELING_LINE_BOT upstream. Rendered verbatim.
+  feeling_line?: string | null;
 } | null): string {
   if (!orient) return "";
   const parts: string[] = [];
@@ -2926,7 +2934,10 @@ function formatRecentContextRaw(orient: {
   // `[Why these numbers]`, the newest move per float with its cause -- the same wording the Claude.ai
   // orient uses, so "heat 0.68, apparently" stops being the only honest thing a bot can say about its
   // own state. Omitted entirely when both arrays are empty. Deliberately NOT pinned (see renderBodyBlock).
-  const bodyBlock = renderBodyBlock(orient.soma_floats, orient.soma_provenance);
+  // `[Feels] <her word>` sits directly ABOVE `[Body]` in the same part: her word first, then the instrument
+  // that reads it, both true. Own line, independent of the floats (it renders when the body block is empty).
+  const feelsLine = renderFeelingLine(orient.feeling_line);
+  const bodyBlock = [feelsLine, renderBodyBlock(orient.soma_floats, orient.soma_provenance)].filter(Boolean).join("\n");
   if (bodyBlock) parts.push(bodyBlock);
   // Gate-PROPOSED supersessions, awaiting this companion's own call (mig 0112). The gate used to
   // auto-retire a belief on cosine >= 0.88, and every read filters superseded rows out -- so a

@@ -384,6 +384,13 @@ const shared = {
   // PEOPLE_FRAME_REFRESH_MS (index refresh, default 900000) / PEOPLE_FRAME_REPEAT_S (once per person per transcript, default 21600).
   PEOPLE_FRAME_REFRESH_MS:     process.env.PEOPLE_FRAME_REFRESH_MS,
   PEOPLE_FRAME_REPEAT_S:       process.env.PEOPLE_FRAME_REPEAT_S,
+  // FEELING_LINE_BOT (feeling-line-bot.ts, Halseth contract 0.26.0): the companion's own feeling word from the bot orient wire,
+  // rendered verbatim as `[Feels]` above `[Body]`. off|shadow|live, CODE DEFAULT shadow (counts-only log, injects nothing);
+  // FEELING_LINE_BOT_<C> wins per bot. A var not listed here never reaches the process.
+  FEELING_LINE_BOT:            process.env.FEELING_LINE_BOT,
+  FEELING_LINE_BOT_CYPHER:     process.env.FEELING_LINE_BOT_CYPHER,
+  FEELING_LINE_BOT_DREVAN:     process.env.FEELING_LINE_BOT_DREVAN,
+  FEELING_LINE_BOT_GAIA:       process.env.FEELING_LINE_BOT_GAIA,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
   // FRAME_PACKET (frame-packet.ts, 2026-11-01): per-turn `[Right now]` block (tasks, own projects, spark, calendar slot). off|shadow|on, CODE DEFAULT shadow (logs counts, injects nothing).
   FRAME_PACKET:                process.env.FRAME_PACKET,
