@@ -369,7 +369,9 @@ export async function runMakeMove(d: MakeMoveDeps): Promise<MakeMoveOutcome> {
 
   const m = reply.make;
   // The interest the companion named wins; else the warm one it was offered, but only if it was actually offered.
-  const interestName = m.forInterest ?? interest?.name;
+  // Halseth's `made` interest event needs a because (400 why_required otherwise), so an
+  // interest is linked only when the companion gave a why; a bare make still lands.
+  const interestName = m.why ? (m.forInterest ?? interest?.name) : undefined;
   const body: MakePost = {
     companion_id: d.companionId, kind: m.kind, title: m.title,
     ...(m.why ? { why: m.why } : {}),
