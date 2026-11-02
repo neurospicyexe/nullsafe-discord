@@ -375,6 +375,15 @@ const shared = {
   // PK_PROFILE_REPEAT_S (pk-profile-seen.ts): seconds before the same member's profile is injected again in the same
   // channel (default 21600 = 6h). A rotated/retracted transcript re-injects regardless.
   PK_PROFILE_REPEAT_S:         process.env.PK_PROFILE_REPEAT_S,
+  // PEOPLE_FRAME (B49 slice 1, people-frame.ts): who a mentioned or non-PK person is, from Raziel's curated list (Halseth
+  // GET /people/frame-index). off|shadow|live, CODE DEFAULT shadow (counts-only log, injects nothing); PEOPLE_FRAME_<C> wins per bot.
+  PEOPLE_FRAME:                process.env.PEOPLE_FRAME,
+  PEOPLE_FRAME_CYPHER:         process.env.PEOPLE_FRAME_CYPHER,
+  PEOPLE_FRAME_DREVAN:         process.env.PEOPLE_FRAME_DREVAN,
+  PEOPLE_FRAME_GAIA:           process.env.PEOPLE_FRAME_GAIA,
+  // PEOPLE_FRAME_REFRESH_MS (index refresh, default 900000) / PEOPLE_FRAME_REPEAT_S (once per person per transcript, default 21600).
+  PEOPLE_FRAME_REFRESH_MS:     process.env.PEOPLE_FRAME_REFRESH_MS,
+  PEOPLE_FRAME_REPEAT_S:       process.env.PEOPLE_FRAME_REPEAT_S,
   CROSS_ROOM:                  process.env.CROSS_ROOM,
   // FRAME_PACKET (frame-packet.ts, 2026-11-01): per-turn `[Right now]` block (tasks, own projects, spark, calendar slot). off|shadow|on, CODE DEFAULT shadow (logs counts, injects nothing).
   FRAME_PACKET:                process.env.FRAME_PACKET,
