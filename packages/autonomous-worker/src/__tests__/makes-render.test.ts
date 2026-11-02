@@ -111,7 +111,7 @@ describe("renderMake", () => {
   it("drawing: the exec timeout becomes a short reason, no stderr", async () => {
     const { deps } = mkDeps();
     deps.exec = vi.fn(async () => { throw Object.assign(new Error("Command failed: timeout ... SECRET STDERR"), { code: 124 }); });
-    const err = await renderMake(job({ kind: "drawing" }), deps).catch(e => e as RenderFail);
+    const err = (await renderMake(job({ kind: "drawing" }), deps).catch(e => e)) as RenderFail;
     expect(err.reason).toBe("svg did not render");
     expect(err.reason).not.toMatch(/STDERR/);
   });
