@@ -88,7 +88,7 @@ import {
   handleLogCommand,
   handleIntoCommand,
   handleWatchCommand,
-  parseWatchPartyChannels, detectWatchProgress, recordWatchProgress,
+  parseWatchPartyChannels, detectWatchProgress, recordWatchProgress, resolveWatchPartyStart,
   handleToolSearch, formatSearchReadIn, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
@@ -1392,6 +1392,30 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       }
     }
 
+    // Shared by the MOVIE_TRIGGER block and the watch-party "watch <title> s#e#" start below: one place
+    // that reads the caption attachment, builds the delivery and sends the literal ack.
+    const runMovieCommand = async (sub: string, title: string): Promise<void> => {
+      const ch = message.channel as TextChannel;
+      let attachment: CaptionAttachment | null = null;
+      if (/^start$/i.test(sub)) {
+        // Captions can take a while (OpenSubtitles, yt-dlp); show the channel something.
+        await ch.sendTyping().catch(() => {});
+        if (message.attachments.size > 0) {
+          attachment = await readCaptionAttachment(
+            [...message.attachments.values()].map(a => ({ name: a.name, url: a.url, size: a.size })),
+          );
+        }
+      }
+      const delivery = watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID);
+      const reply = await handleMovieCommand(sub, title, {
+        secret: cfg.halsethSecret, channelId: message.channelId, companionId: COMPANION_ID,
+        startedBy: cfg.ownerDisplayName,
+        attachment, onChanged: () => delivery.invalidate(message.channelId),
+      }).catch(err => `movie command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
+      console.log(`[${COMPANION_ID}] watchalong movie ${sub.toLowerCase()} in ${message.channelId}${attachment ? ` (attachment ${attachment.name})` : ""}`);
+      await sendLong(ch, reply);
+    };
+
     // Owner watch-shelf command: <prefix>: watching | watched <title> s4e5 [-- note] (0111).
     // Deterministic Halseth write + literal ack -- never the model narrating a shelf change.
     //
@@ -1402,6 +1426,19 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     if (attribution.isOwner && WATCH_TRIGGER) {
       const watchMatch = effectiveContent.match(WATCH_TRIGGER);
       if (watchMatch) {
+        // In a bound watch-party channel "<alias>: watch <title?> s#e#" means START the party at that
+        // episode (2026-11-02: "Dre: Watch Fargo s4e10" was answered with a progress ack that read as a
+        // failure). "watched"/"watching" and status words keep the progress meaning everywhere.
+        const party = parseWatchPartyChannels(process.env["WATCH_PARTY_CHANNELS"]).get(message.channelId);
+        const start = party && party.companion === COMPANION_ID ? resolveWatchPartyStart(effectiveContent, watchMatch[1] ?? "", party) : null;
+        if (start) {
+          void recordWatchProgress(cfg.halsethSecret, {
+            title: start.progressTitle, season: start.season, episode: start.episode, note: start.note,
+            surface: "discord", with_companion: COMPANION_ID,
+          }).catch(() => {});
+          await runMovieCommand("start", start.movieTitle);
+          return;
+        }
         const reply = await handleWatchCommand(watchMatch[1] ?? "", cfg.halsethSecret, COMPANION_ID)
           .catch(err => `watch command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
         await sendLong(message.channel as TextChannel, reply);
@@ -1484,25 +1521,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // Group 4 is the "watch <title>" alias (command-triggers.ts): a start with that title.
         const sub = m[1] ?? m[3] ?? (m[4] ? "start" : "");
         const title = m[2] ?? m[4] ?? "";
-        const ch = message.channel as TextChannel;
-        let attachment: CaptionAttachment | null = null;
-        if (/^start$/i.test(sub)) {
-          // Captions can take a while (OpenSubtitles, yt-dlp); show the channel something.
-          await ch.sendTyping().catch(() => {});
-          if (message.attachments.size > 0) {
-            attachment = await readCaptionAttachment(
-              [...message.attachments.values()].map(a => ({ name: a.name, url: a.url, size: a.size })),
-            );
-          }
-        }
-        const delivery = watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID);
-        const reply = await handleMovieCommand(sub, title, {
-          secret: cfg.halsethSecret, channelId: message.channelId, companionId: COMPANION_ID,
-          startedBy: cfg.ownerDisplayName,
-          attachment, onChanged: () => delivery.invalidate(message.channelId),
-        }).catch(err => `movie command failed: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`);
-        console.log(`[${COMPANION_ID}] watchalong movie ${sub.toLowerCase()} in ${message.channelId}${attachment ? ` (attachment ${attachment.name})` : ""}`);
-        await sendLong(ch, reply);
+        await runMovieCommand(sub, title);
         return;
       }
     }
