@@ -88,7 +88,7 @@ import {
   handleLogCommand,
   handleIntoCommand,
   handleWatchCommand,
-  parseWatchPartyChannels, detectWatchProgress, recordWatchProgress, resolveWatchPartyStart,
+  parseWatchPartyChannels, detectWatchProgress, recordWatchProgress, resolveWatchPartyStart, stripKindWords,
   handleToolSearch, formatSearchReadIn, handleToolImage, handleCouncilConvene,
   handlePetCommand,
   handleImpCommand,
@@ -1520,7 +1520,8 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       if (m) {
         // Group 4 is the "watch <title>" alias (command-triggers.ts): a start with that title.
         const sub = m[1] ?? m[3] ?? (m[4] ? "start" : "");
-        const title = m[2] ?? m[4] ?? "";
+        // "watch movie Fargo" / "watch the movie Fargo": the kind word is how it was said, not the title.
+        const title = m[2] ?? (m[4] !== undefined ? stripKindWords(m[4]) || m[4] : "");
         await runMovieCommand(sub, title);
         return;
       }

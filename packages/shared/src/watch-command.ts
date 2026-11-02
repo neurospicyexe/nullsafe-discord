@@ -188,6 +188,14 @@ export function detectWatchProgress(
  *
  * `content` is the whole message (to read the verb), `arg` is the WATCH_TRIGGER capture after the verb.
  */
+/** Drop leading filler like "movie", "the show", "the episode of", "some", repeated ("the movie the show Fargo"). */
+export function stripKindWords(title: string): string {
+  let t = title.trim();
+  const re = /^(?:(?:the|a|an|some|our|more|next)\s+)?(?:movie|film|show|tv\s+show|series|episode|ep|tv)\b\s*(?:of\s+)?/i;
+  for (let i = 0; i < 3 && re.test(t); i++) t = t.replace(re, "").trim();
+  return t;
+}
+
 export function resolveWatchPartyStart(
   content: string,
   arg: string,
@@ -197,7 +205,9 @@ export function resolveWatchPartyStart(
   const parsed = parseWatchArgs(arg);
   if (parsed.status) return null;
   if (parsed.season === null || parsed.episode === null) return null;
-  const title = parsed.title || party.title;
+  // "Dre: watch movie Fargo s4e10" (2026-11-02) searched OpenSubtitles for "movie Fargo" and found nothing.
+  // A leading kind word is how the sentence is spoken, not part of the show's name.
+  const title = stripKindWords(parsed.title) || party.title;
   return {
     movieTitle: `${title} S${parsed.season}E${parsed.episode}`,
     progressTitle: title,

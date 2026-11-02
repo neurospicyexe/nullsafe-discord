@@ -175,7 +175,7 @@ describe("detectWatchProgress -- passive episode markers in ordinary chat", () =
 });
 
 // ---- 2026-11-02: spelled numbers, either order, watch-party start routing, "already there" ack ----
-import { resolveWatchPartyStart, sameAsShelf } from "../watch-command.js";
+import { resolveWatchPartyStart, sameAsShelf, stripKindWords } from "../watch-command.js";
 import { buildCommandTriggers } from "../command-triggers.js";
 
 describe("parseWatchPosition -- spelled numbers and episode-before-season", () => {
@@ -223,6 +223,19 @@ describe("watch-party start routing", () => {
   });
   it("title defaults to the channel's bound title; spelled numbers work", () => {
     expect(route("dre: watch season four episode ten")).toMatchObject({ movieTitle: "Fargo S4E10" });
+  });
+  it("'Dre: watch movie Fargo s4e10' drops the kind word (2026-11-02 live miss)", () => {
+    expect(route("Dre:  watch movie Fargo s4e10")).toMatchObject({ movieTitle: "Fargo S4E10", progressTitle: "Fargo" });
+    expect(route("dre: watch the show fargo s4e10")).toMatchObject({ movieTitle: "fargo S4E10" });
+    expect(route("dre: watch the episode s4e10")).toMatchObject({ movieTitle: "Fargo S4E10" });
+  });
+  it("stripKindWords leaves real titles alone", () => {
+    expect(stripKindWords("movie Fargo")).toBe("Fargo");
+    expect(stripKindWords("the movie the show Fargo")).toBe("Fargo");
+    expect(stripKindWords("Scary Movie")).toBe("Scary Movie");
+    expect(stripKindWords("The Thing")).toBe("The Thing");
+    expect(stripKindWords("Showgirls")).toBe("Showgirls");
+    expect(stripKindWords("movie")).toBe("");
   });
   it("watched / watching keep the progress meaning", () => {
     expect(route("dre: watched fargo s4e10")).toBeNull();
