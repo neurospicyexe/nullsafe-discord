@@ -129,6 +129,7 @@ import {
   type HoldPhrase, type ChainHistoryMsg, type RedisLike,
 } from "./bad-night.js";
 import { getCareState, setCareState, applyLocalHold, careHoldSince } from "./care-state.js";
+import { repetitionDipVerdict } from "./repetition-dip.js";
 import {
   departuresMode, matchStandDown, applyStandDown, clearDeparturesLocal, ensureDepartures, departureLift,
   departureLiftLine, departureLog, departureTurnLines, STAND_DOWN_PHRASE, type ClaimRedis,
@@ -2797,8 +2798,19 @@ ${widened}`;
       // repeating steadying words at 2am is care, not a loop. A loop lifted by a declared departure
       // never reaches here. Halseth owns the mode (REPETITION_MODE, shadow by default), the deltas and
       // the cooldown; the detail carries the rail and score, never the motifs (those are the companion's own words).
+      // Their own rules (11-02): ritual words never count, and a word someone else said back is the
+      // room's bit, not a loop. Only unanswered, non-ritual circling reaches the dip (repetition-dip.ts).
       if (!careHoldActive(COMPANION_ID)) {
-        writeQueue.fireAndForget(`soma:repetition:${COMPANION_ID}`, () => librarian.fireStimulus("repetition", `rail=loop_motif score=${selfLoop.score.toFixed(2)}`));
+        const dip = repetitionDipVerdict({
+          companionId: COMPANION_ID,
+          motifs: selfLoop.motifs,
+          othersText: channelHistory.filter(m => m.author !== COMPANION_ID).map(m => m.content),
+        });
+        if (dip.fire) {
+          writeQueue.fireAndForget(`soma:repetition:${COMPANION_ID}`, () => librarian.fireStimulus("repetition", `rail=loop_motif score=${selfLoop.score.toFixed(2)} counted=${dip.counted.length} ritual=${dip.ritual} answered=${dip.answered}`));
+        } else {
+          console.log(`[${COMPANION_ID}] repetition dip skipped (ritual=${dip.ritual} answered=${dip.answered})`);
+        }
       }
     }
 
