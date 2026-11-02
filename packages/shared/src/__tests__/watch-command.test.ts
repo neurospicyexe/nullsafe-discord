@@ -173,3 +173,64 @@ describe("detectWatchProgress -- passive episode markers in ordinary chat", () =
     expect(detectWatchProgress("cy: watch fargo finished", party)).toBeNull();
   });
 });
+
+// ---- 2026-11-02: spelled numbers, either order, watch-party start routing, "already there" ack ----
+import { resolveWatchPartyStart, sameAsShelf } from "../watch-command.js";
+import { buildCommandTriggers } from "../command-triggers.js";
+
+describe("parseWatchPosition -- spelled numbers and episode-before-season", () => {
+  it("reads spelled season/episode", () => {
+    expect(parseWatchPosition("season four episode ten")).toMatchObject({ season: 4, episode: 10 });
+    expect(parseWatchPosition("season 4, episode ten")).toMatchObject({ season: 4, episode: 10 });
+    expect(parseWatchPosition("ep ten")).toMatchObject({ season: null, episode: 10 });
+    expect(parseWatchPosition("season twelve")).toMatchObject({ season: 12, episode: null });
+  });
+  it("reads episode-before-season and keeps the title clean", () => {
+    expect(parseWatchPosition("episode 10 of season four")).toMatchObject({ season: 4, episode: 10, rest: "" });
+    expect(parseWatchPosition("fargo episode 10 of season 4").rest).toBe("fargo");
+    expect(parseWatchPosition("ep 3 season 2")).toMatchObject({ season: 2, episode: 3 });
+  });
+  it("never reads times, dates, bare small numbers, or a lone spelled number", () => {
+    for (const t of ["12:04", "9/2", "I have one idea", "it was ten minutes", "number 5", "we are four"]) {
+      expect(parseWatchPosition(t)).toMatchObject({ season: null, episode: null });
+    }
+  });
+  it("the passive tracker now gets both halves of the 10-million-years message", () => {
+    const party = { title: "Fargo", companion: "drevan" as const };
+    expect(detectWatchProgress("do you wanna watch episode 10 of season four?", party)).toEqual({ season: 4, episode: 10 });
+  });
+});
+
+describe("sameAsShelf", () => {
+  it("equal vs behind vs ahead", () => {
+    expect(sameAsShelf("S4E10", 4, 10)).toBe(true);
+    expect(sameAsShelf("S4E10", null, 10)).toBe(true);
+    expect(sameAsShelf("S4E10", 4, 9)).toBe(false);
+    expect(sameAsShelf("S4E10", 3, 10)).toBe(false);
+    expect(sameAsShelf(undefined, 4, 10)).toBe(false);
+  });
+});
+
+describe("watch-party start routing", () => {
+  const party = { title: "Fargo", companion: "drevan" as const };
+  const t = buildCommandTriggers(["dre", "drevan"]);
+  const route = (c: string) => {
+    const m = c.match(t.watch);
+    return m ? resolveWatchPartyStart(c, m[1] ?? "", party) : null;
+  };
+  it("'Dre: Watch Fargo s4e10' starts the party as 'Fargo S4E10'", () => {
+    expect(route("Dre: Watch Fargo s4e10")).toMatchObject({ movieTitle: "Fargo S4E10", season: 4, episode: 10 });
+  });
+  it("title defaults to the channel's bound title; spelled numbers work", () => {
+    expect(route("dre: watch season four episode ten")).toMatchObject({ movieTitle: "Fargo S4E10" });
+  });
+  it("watched / watching keep the progress meaning", () => {
+    expect(route("dre: watched fargo s4e10")).toBeNull();
+    expect(route("dre: watching fargo s4e10")).toBeNull();
+  });
+  it("status words and missing season fall through", () => {
+    expect(route("dre: watch fargo finished")).toBeNull();
+    expect("dre: watch fargo finished".match(t.watch)).not.toBeNull(); // still the status organ
+    expect(route("dre: watch fargo e6")).toBeNull();
+  });
+});

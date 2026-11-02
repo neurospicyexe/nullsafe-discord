@@ -40,12 +40,27 @@ const STATUS_WORDS: Record<string, string> = {
   watching: "watching", resume: "watching", resumed: "watching",
 };
 
-/** "S4E5" / "s04e05" / "4x5" / "season 4 episode 5" / "e6" -> position. Mirrors the server parser;
- *  tested against the same strings so the two cannot drift into disagreeing about "s4e5". */
+const SPELLED_NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17,
+  eighteen: 18, nineteen: 19, twenty: 20,
+};
+const SPELLED_RE = new RegExp(String.raw`\b(season|episode|ep)\s+(${Object.keys(SPELLED_NUMBERS).join("|")})\b`, "gi");
+
+/** "season four episode ten" -> "season 4 episode 10". A spelled number only counts directly after
+ *  season/episode/ep, so "one" in ordinary prose never becomes a position. Mirrored (same code) in
+ *  halseth src/handlers/watch.ts so the two parsers cannot disagree. */
+export function digitizeSpelledPositions(s: string): string {
+  return s.replace(SPELLED_RE, (_m, kw: string, w: string) => `${kw} ${SPELLED_NUMBERS[w.toLowerCase()]}`);
+}
+
+/** "S4E5" / "s04e05" / "4x5" / "season 4 episode 5" / "season four episode ten" / "episode 10 of
+ *  season four" / "e6" -> position. Mirrors the server parser; tested against the same strings so the
+ *  two cannot drift into disagreeing about "s4e5". */
 export function parseWatchPosition(s: string): { season: number | null; episode: number | null; rest: string } {
   let season: number | null = null;
   let episode: number | null = null;
-  let rest = s;
+  let rest = digitizeSpelledPositions(s);
 
   const take = (re: RegExp, fn: (m: RegExpMatchArray) => void) => {
     const m = rest.match(re);
@@ -54,11 +69,16 @@ export function parseWatchPosition(s: string): { season: number | null; episode:
   };
 
   const ok = (n: number) => (Number.isFinite(n) && n > 0 ? n : null);
-  take(/\bs\s*(\d{1,2})\s*[\s._-]*e\s*(\d{1,3})\b/i, m => { season = ok(+m[1]!); episode = ok(+m[2]!); })
+  const matched = take(/\bs\s*(\d{1,2})\s*[\s._-]*e\s*(\d{1,3})\b/i, m => { season = ok(+m[1]!); episode = ok(+m[2]!); })
     || take(/\b(\d{1,2})\s*x\s*(\d{1,3})\b/i, m => { season = ok(+m[1]!); episode = ok(+m[2]!); })
-    || take(/\bseason\s*(\d{1,2})\s*,?\s*ep(?:isode)?\s*(\d{1,3})\b/i, m => { season = ok(+m[1]!); episode = ok(+m[2]!); })
-    || take(/\bs(?:eason)?\s*(\d{1,2})\b/i, m => { season = ok(+m[1]!); })
-    || take(/\bep?(?:isode)?\s*(\d{1,3})\b/i, m => { episode = ok(+m[1]!); });
+    || take(/\bseason\s*(\d{1,2})\s*,?\s*ep(?:isode)?\s*(\d{1,3})\b/i, m => { season = ok(+m[1]!); episode = ok(+m[2]!); });
+  if (!matched) {
+    // Independent season and episode tokens, either order ("episode 10 of season 4"). Season first so
+    // its digits are gone before the episode pattern looks.
+    take(/\bs(?:eason)?\s*(\d{1,2})\b/i, m => { season = ok(+m[1]!); });
+    take(/\bep?(?:isode)?\s*(\d{1,3})\b/i, m => { episode = ok(+m[1]!); });
+    if (season !== null && episode !== null) rest = rest.replace(/^\s*of\s*$|\s+of\s*$|^\s*of\s+/i, "").trim();
+  }
 
   return { season, episode, rest: rest.replace(/^[\s,:-]+|[\s,:-]+$/g, "") };
 }
@@ -160,6 +180,33 @@ export function detectWatchProgress(
   return null;
 }
 
+/**
+ * Watch-party start routing. In a bound party channel, `<alias>: watch <title?> s#e#` (imperative
+ * "watch" only: not "watched", "watching" or a status word) starts the watchalong at that episode, as if
+ * the owner had typed `movie start <Title> S#E#`. Requires BOTH season and episode (the shelf's known
+ * season is not fetched here); anything else returns null and falls through to the progress organ.
+ *
+ * `content` is the whole message (to read the verb), `arg` is the WATCH_TRIGGER capture after the verb.
+ */
+export function resolveWatchPartyStart(
+  content: string,
+  arg: string,
+  party: { title: string; companion: CompanionId },
+): { movieTitle: string; progressTitle: string; season: number; episode: number; note: string | null } | null {
+  if (!/^\s*[^\s,:]+\s*[,:]?\s*watch\b/i.test(content)) return null; // "watched"/"watching" fail the \b
+  const parsed = parseWatchArgs(arg);
+  if (parsed.status) return null;
+  if (parsed.season === null || parsed.episode === null) return null;
+  const title = parsed.title || party.title;
+  return {
+    movieTitle: `${title} S${parsed.season}E${parsed.episode}`,
+    progressTitle: title,
+    season: parsed.season,
+    episode: parsed.episode,
+    note: parsed.note,
+  };
+}
+
 /** Render the shelf. One line per title -- this is the answer to "where are we". */
 export function formatShelf(items: WatchShelfItem[], me: CompanionId): string {
   if (items.length === 0) {
@@ -200,6 +247,16 @@ export async function recordWatchProgress(
   body: { title: string; season: number | null; episode: number | null; note: string | null; surface: string; with_companion: CompanionId },
 ): Promise<{ ok: boolean; status: number; json: Record<string, unknown> }> {
   return watchFetch("/mind/watch/progress", "POST", halsethSecret, body);
+}
+
+/** True when the position the user gave is the shelf's current one ("S4E10" vs 4/10; a bare episode
+ *  matches the episode half). Used to tell "already there" from "behind". */
+export function sameAsShelf(position: string | undefined, season: number | null, episode: number | null): boolean {
+  const m = (position ?? "").match(/^S(\d+)E(\d+)$/i);
+  if (!m) return false;
+  if (episode === null) return false;
+  if (Number(m[2]) !== episode) return false;
+  return season === null || Number(m[1]) === season;
 }
 
 /**
@@ -263,7 +320,9 @@ export async function handleWatchCommand(
     ? `Logged. **${item.title}**${pos}.`
     : gaveNoPosition
       ? `Logged. **${item.title}** is on the shelf${pos ? `${pos}` : ""}${item.position ? "" : " (no episode position — say `watched ${item.title} s1e1` when you want one)"}.`
-      : `Logged the viewing, but the shelf still reads **${item.title}**${pos} — that's at or behind where we already were, so I left the position alone. Correct it with \`watch ${item.title} s#e#\` if the shelf is wrong.`;
+      : sameAsShelf(item.position, parsed.season, parsed.episode)
+        ? `Already there: the shelf has **${item.title}**${pos}.`
+        : `Logged the viewing, but the shelf still reads **${item.title}**${pos} — that's behind where we already were, so I left the position alone. Correct it with \`watched ${item.title} s#e#\` if the shelf is wrong.`;
   const noteLine = parsed.note ? `\nLeft off: ${parsed.note}` : "";
   return `${moved}${noteLine}`;
 }

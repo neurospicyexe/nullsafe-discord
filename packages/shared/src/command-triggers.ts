@@ -92,7 +92,7 @@ export function buildCommandTriggers(aliases: string[]): CommandTriggers {
       `(` +
         `\\s*|` +                                                     // bare: "dre: watching"
         `(?:list|shelf|all)\\s*|` +                                   // explicit list
-        `[\\s\\S]*?\\b(?:s\\s*\\d{1,2}\\s*[\\s._-]*e\\s*\\d{1,3}|\\d{1,2}\\s*x\\s*\\d{1,3}|season\\s*\\d{1,2}|ep(?:isode)?\\s*\\d{1,3})\\b[\\s\\S]*|` +
+        `[\\s\\S]*?\\b(?:s\\s*\\d{1,2}\\s*[\\s._-]*e\\s*\\d{1,3}|\\d{1,2}\\s*x\\s*\\d{1,3}|season\\s*\\d{1,2}|ep(?:isode)?\\s*\\d{1,3}|(?:season|ep(?:isode)?)\\s+(?:${SPELLED_POSITION_WORDS}))\\b[\\s\\S]*|` +
         `[\\s\\S]*?\\b(?:finished|done|complete|completed|paused|pause|hold|abandoned|dropped|abandon|resumed?)\\s*` +
       `)$`,
       "i",
@@ -150,6 +150,8 @@ export const COMMAND_PREFIX: Record<string, string> = {
  * companion apart from a casual "listen to this <url>". Keep in sync with the
  * buildCommandTriggers([...]) calls in bots/<id>/src/config.ts.
  */
+// Spelled numbers one..twenty, valid only right after season/episode/ep (kept in step with watch-command.ts).
+const SPELLED_POSITION_WORDS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty";
 export const COMPANION_ALIASES: Record<string, string[]> = {
   cypher: ["cy", "cypher"],
   drevan: ["drevan", "drev", "dre"],
