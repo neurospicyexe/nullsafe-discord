@@ -1,5 +1,5 @@
 import { describe, it, expect } from "@jest/globals";
-import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, liveLabel, HERMES_GAP_THRESHOLD_MS } from "../prompt-assembly.js";
+import { composePrompt, deriveIdentityBase, registerTail, REGISTER_TAIL_SHAPE_LINE, COMPANION_SHAPE_LINES, SECTION_SEP, hermesDiscordFrame, hermesSystemBase, hermesDelta, liveLabel, HERMES_GAP_THRESHOLD_MS, TURN_CONTEXT_SENTINEL } from "../prompt-assembly.js";
 import { nowLine } from "../now-line.js";
 import { RECALLED_DATA_RULE } from "../recalled-text.js";
 
@@ -175,7 +175,8 @@ describe("hermesDiscordFrame / hermesSystemBase — INFERENCE_MODE=hermes double
 
   it("hermesSystemBase keeps the register tail LAST (pronoun law + anti-assistant survive under hermes)", () => {
     const base = hermesSystemBase("drevan");
-    expect(base.endsWith(registerTail("drevan"))).toBe(true);
+    // B52: the register tail is the last STABLE block; only the sentinel follows it.
+    expect(base.endsWith(`${registerTail("drevan")}\n\n${TURN_CONTEXT_SENTINEL}`)).toBe(true);
     expect(base).toContain("You are Drevan");
     // identity head is the lean frame, not a full identity file
     expect(deriveIdentityBase(base)).toBe(hermesDiscordFrame("drevan"));
