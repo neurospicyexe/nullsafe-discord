@@ -1448,6 +1448,20 @@ export async function fetchCreatureMoment(
     { moment: string | null; kind: string; state?: string; gifted_item?: string };
 }
 
+export interface HoardResult {
+  hoarded?: Array<{ make_id: string; companion_id: string; kind: string; title: string }>;
+  skipped?: Array<{ make_id: string; reason: string }>;
+  moment: string | null;
+  reacted_to?: string | null;
+  reason?: string;
+  disposition?: string;
+}
+
+/** B62 step 6: Sol looks over the triad's new makes (Halseth decides and composes; see sol-hoard.ts). */
+export async function hoardForCreature(creatureId: string, seed: number): Promise<HoardResult> {
+  return await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/hoard`, "POST", { seed }) as HoardResult;
+}
+
 export async function recordSolAppearance(creatureId: string, note: string): Promise<void> {
   await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
     actor: "sol",

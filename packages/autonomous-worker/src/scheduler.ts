@@ -28,6 +28,7 @@ import { runBriefingTick } from "./briefing.js";
 import { runVibeCheckTick } from "./vibecheck.js";
 import { runVoiceDriftTick } from "./voice-drift.js";
 import { runRenderTick } from "./makes-render.js";
+import { runSolHoardTick } from "./sol-hoard.js";
 import { COMPANIONS, CRON_SCHEDULES, REDIS_URL, FLOOR_LOCK_DURATION_MS, PULSE_CHECK_CRON, DIALECTIC_CRON, FORAGE_CRON, CLUB_CRON, GUARDIAN_CRON, GUARDIAN_RESOLVE_CRON, CLEARING_CRON, DRIFT_PASS_CRON, MOTIF_CRON, CREATURE_CRON, COUNCIL_CRON, DREAM_CRON, SHELF_CRON, COMMONS_REPLY_CRON, CARE_GESTURE_CRON, BRIEFING_MORNING_CRON, BRIEFING_MIDDAY_CRON, BRIEFING_EVENING_CRON, VIBECHECK_CRON, VOICE_DRIFT_CRON } from "./config.js";
 import type { CompanionId } from "./types.js";
 
@@ -209,6 +210,15 @@ export function startScheduler(): void {
   console.log(`[scheduler] makes renderer -> cron "${makesCron}"`);
   cron.schedule(makesCron, () => {
     runRenderTick().catch(e => console.error("[scheduler] makes renderer failed:", e));
+  });
+
+  // B62 step 6, Sol's hoard: every 10 minutes Sol looks over the triad's new makes, keeps what he may
+  // (Halseth decides + composes, Drevan's rules), and reacts to at most 3 a day in his own channel.
+  // Waits while a human is talking. SOL_HOARD=off kills it; SOL_HOARD_CRON overrides the schedule.
+  const solHoardCron = process.env["SOL_HOARD_CRON"] ?? "*/10 * * * *";
+  console.log(`[scheduler] sol hoard -> cron "${solHoardCron}"`);
+  cron.schedule(solHoardCron, () => {
+    runSolHoardTick(redis).catch(e => console.error("[scheduler] sol hoard failed:", e));
   });
 
   // The Club -- daily tick advances the current round's phase (open/vote/discuss).

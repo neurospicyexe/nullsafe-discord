@@ -265,6 +265,10 @@ const shared = {
   FORAGE_INTERESTS:            process.env.FORAGE_INTERESTS,
   MAKES_RENDERER:              process.env.MAKES_RENDERER,
   MAKES_RENDER_CRON:           process.env.MAKES_RENDER_CRON,
+  // B62 step 6 (2026-11-02, sol-hoard.ts): SOL_HOARD=off kills Sol's hoard pass (worker; unset = on);
+  // SOL_HOARD_CRON overrides its every-10-minutes schedule. Listed per the standing rule above.
+  SOL_HOARD:                   process.env.SOL_HOARD,
+  SOL_HOARD_CRON:              process.env.SOL_HOARD_CRON,
   // BLUE_NOTE (2026-11-01, blue-note.ts): off | preview | on, code default preview (DMs Raziel, not Blue).
   BLUE_NOTE:                   process.env.BLUE_NOTE,
   BLUE_NOTE_HOUR:              process.env.BLUE_NOTE_HOUR,
