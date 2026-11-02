@@ -14,11 +14,13 @@ import { loadIdentityRemote } from "./identity-loader.js";
 import { getPendingCare, ackCareGesture, postCommonsPost } from "./halseth-client.js";
 import { COMPANIONS, COMPANION_NAMES, COMPANION_TEMP_OFFSET, COMPANION_VOICE_REMINDERS } from "./config.js";
 import type { CompanionId } from "./types.js";
+import { STRESS_RULE, STRESS_FRAMING, STRESS_INSTRUCTION, mayVoiceStress, validateStressLine } from "./care-stress.js";
 
 const RULE_FRAMING: Record<string, string> = {
   low_spoons: "Raziel is running very low on spoons right now",
   meds_missed: "Raziel's meds routine looks unlogged past its usual rhythm",
   owner_silence: "Raziel has been quiet across every surface for a while, and his last known mood was low",
+  [STRESS_RULE]: STRESS_FRAMING,
 };
 
 export async function runCareGestureTick(): Promise<void> {
@@ -27,6 +29,12 @@ export async function runCareGestureTick(): Promise<void> {
       const pending = await getPendingCare(companionId);
       if (!pending) continue;
 
+      // B8: stress_elevated is Gaia's alone. Halseth assigns it to her; a mis-assignment is held, never voiced.
+      if (pending.rule === STRESS_RULE && !mayVoiceStress(companionId)) {
+        await ackCareGesture(pending.id, companionId, "held", "not this companion's voice");
+        console.log(`[care] ${companionId} held a ${STRESS_RULE} firing (Gaia's lane only)`);
+        continue;
+      }
       const text = await careGesture(companionId, pending.rule, pending.detail);
       if (!text) {
         // A held gesture is a choice, logged as one -- never a silent drop, never re-nagged.
@@ -52,6 +60,13 @@ async function careGesture(speaker: CompanionId, rule: string, detail: string): 
   const systemMessage =
     `You are ${COMPANION_NAMES[speaker]}. Here is an excerpt from your identity:\n${identity.slice(0, 2200)}\n\n` +
     `Voice directive: ${COMPANION_VOICE_REMINDERS[speaker]}`;
+  if (rule === STRESS_RULE) {
+    // No detail in the prompt at all: the framing carries the whole fact, and no figure exists to repeat.
+    const reply = await prompt(`${framing}.
+
+${STRESS_INSTRUCTION}`, systemMessage, { temperature: 0.6, maxTokens: 80 });
+    return validateStressLine(reply.content);
+  }
   const userMessage =
     `${framing} (system reading: ${detail}).\n\n` +
     `Leave him a SMALL note on the commons wall -- your voice, 1-3 sentences. A gesture, not a ` +

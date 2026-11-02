@@ -1,0 +1,7 @@
+[Unit]
+Description=Wellness bridge: pull wearable data into Halseth (B8)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/app/nullsafe-discord
+ExecStart=/usr/bin/python3 /app/nullsafe-discord/ops/wellness-bridge.py

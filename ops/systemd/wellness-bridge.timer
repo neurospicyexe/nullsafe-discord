@@ -1,0 +1,11 @@
+[Unit]
+Description=Wellness bridge, 07:30 and 16:00 Chicago time (DST-aware)
+
+[Timer]
+OnCalendar=*-*-* 07:30:00 America/Chicago
+OnCalendar=*-*-* 16:00:00 America/Chicago
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
