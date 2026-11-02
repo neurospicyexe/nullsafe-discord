@@ -105,7 +105,7 @@ import {
 import { selectImp, impRider, type ImpState } from "./imps.js";
 import { ledgerDistillEnabled, preflightLedgerBody, companionDisplayName } from "./ledger-clerk.js";
 import type { LedgerEntryInput } from "./librarian.js";
-import { hermesSystemBase, hermesDelta } from "./prompt-assembly.js";
+import { hermesSystemBase, hermesDelta, insertStable, mapVolatileTail } from "./prompt-assembly.js";
 import { readFramePacketMode, frameLogLine, framePacketFor } from "./frame-packet.js";
 import { hermesSessionIds, hermesRotationMode } from "./hermes-session.js";
 import { detectScriptBleed, regenerateAfterBleed, scriptBleedGuardOn } from "./script-bleed.js";
@@ -2900,7 +2900,7 @@ ${widened}`;
     if (contextPrompt.startsWith(basePrompt)) {
       contextPrompt = basePrompt + neutralizeRecalled(contextPrompt.slice(basePrompt.length));
     }
-    contextPrompt = refreshNowLine(contextPrompt);
+    contextPrompt = mapVolatileTail(contextPrompt, refreshNowLine); // B52: never write into the stable prefix
 
     // Imp flavor layer (wave 2, IMP_GRAMMAR.md): at most one imp tints this reply based on
     // Raziel's logged state. Gaia exempt + disabled-gate live inside selectImp. Never the voice.
@@ -3256,7 +3256,7 @@ ${widened}`;
     // only when he has plainly said the night is bad. Offered while the hold is OFF (moot while on),
     // on his own messages, as standing guidance in the system context rather than on the turn.
     if (b32Mode === "on" && b32OwnerArrival && !careHoldNow && !holdPhrase) {
-      systemPromptWithImp += `\n\n[Care hold] ${COMPANION_SET_HOLD_LINE}`;
+      systemPromptWithImp = insertStable(systemPromptWithImp, `[Care hold] ${COMPANION_SET_HOLD_LINE}`); // B52: static line, keeps system authority before the sentinel
     }
 
     // Per-conversation session ids (2026-07-01, rotation added 2026-09-05): forwarded by the

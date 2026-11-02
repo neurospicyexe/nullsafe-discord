@@ -149,7 +149,53 @@ export function hermesDiscordFrame(companionId: string): string {
  * INFERENCE_MODE=hermes; the handler layers the same per-message blocks on top.
  */
 export function hermesSystemBase(companionId: string): string {
-  return composePrompt({ identityCore: hermesDiscordFrame(companionId), companionId });
+  return composePrompt({ identityCore: hermesDiscordFrame(companionId), companionId }) + TURN_CONTEXT_MARK;
+}
+
+/**
+ * B52 Fix 1 (2026-11-01): stable blocks first, this sentinel line, then the volatile per-turn blocks.
+ *
+ * Hermes appends the bot's `system` message to its own system prompt BEFORE the transcript, so one
+ * changed byte per turn re-bills the whole transcript uncached (Drevan: first-of-turn calls cache 28%,
+ * tool-loop calls 91%). The Hermes plugin `b52-input-diet` (`B52_MOVE_VOLATILE`) cuts everything after
+ * this line out of the system message and appends it to the end of the current user turn, request-time
+ * only. Keep the string in step with `TURN_CONTEXT_SENTINEL` in that plugin.
+ *
+ * Classification (conservative; anything not provably the same every turn is volatile):
+ *   STABLE, before the line: the Discord frame ([DISCORD CONTEXT]), the register law tail (tools rule,
+ *   per-companion shape line, recalled-data rule, "Respond only as"), and the one-sentence care-hold
+ *   lines (`insertStable`), which are static strings that must keep system authority.
+ *   VOLATILE, after the line: front, spine, recent context + [Now], active model, SOMA age, tier
+ *   framing (Blue/guest/Sol), audit mode, voice feedback, tripwires, [Memory] recall and pointers, own
+ *   notes, turn framing, loop-break, form ratchet, rule check, place, watchalong line, med state, floor
+ *   handback, imp rider, room line, B32 follow-up positions.
+ * With the plugin off or absent the line reads as a plain header over the live blocks; nothing breaks.
+ */
+export const TURN_CONTEXT_SENTINEL = "<<TURN-CONTEXT>>";
+const TURN_CONTEXT_MARK = `\n\n${TURN_CONTEXT_SENTINEL}`;
+
+/**
+ * Put a STABLE line before the sentinel (so it keeps system authority and the cached prefix only changes
+ * while that line is on). No sentinel (direct/brain path) = plain append, the old behavior.
+ */
+export function insertStable(prompt: string, stableBlock: string): string {
+  const i = prompt.indexOf(TURN_CONTEXT_MARK);
+  if (i < 0) return `${prompt}\n\n${stableBlock}`;
+  return `${prompt.slice(0, i)}\n\n${stableBlock}${prompt.slice(i)}`;
+}
+
+/**
+ * Apply a transform to the volatile tail only (after the sentinel). Used so `refreshNowLine`, which
+ * PREPENDS a [Now] line when none is present, can never write into the stable prefix. No sentinel =
+ * the transform runs on the whole prompt as before.
+ */
+export function mapVolatileTail(prompt: string, fn: (tail: string) => string): string {
+  const i = prompt.indexOf(TURN_CONTEXT_MARK);
+  if (i < 0) return fn(prompt);
+  const head = prompt.slice(0, i + TURN_CONTEXT_MARK.length);
+  const tail = prompt.slice(i + TURN_CONTEXT_MARK.length).replace(/^\n+/, "");
+  const out = fn(tail);
+  return out ? `${head}\n\n${out}` : head;
 }
 
 /**
