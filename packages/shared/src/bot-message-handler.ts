@@ -132,6 +132,7 @@ import {
   departuresMode, matchStandDown, applyStandDown, clearDeparturesLocal, ensureDepartures, departureLift,
   departureLiftLine, departureLog, departureTurnLines, STAND_DOWN_PHRASE, type ClaimRedis,
 } from "./departure-state.js";
+import { passOnOrdinaryMode, passableOrdinaryTurn, ordinaryPassBlock } from "./ordinary-pass.js";
 import { postProcessReply } from "./reply-postprocess.js";
 import { getHeartbeatCtx, runDryRunHeartbeat, formatDryRunReport, sendReportToOwnerDm } from "./heartbeat-dry-run.js";
 import { replyTarget, replyContextLine, replyToHumanSide, replyHumanGateMode, type ReplyTarget } from "./reply-context.js";
@@ -2948,6 +2949,11 @@ ${widened}`;
     // stays in floor.ts -- autonomous-core.ts still uses it legitimately to serialise seed posts.
     // A turn released by a predecessor's PASS runs on the human origin message, and must not
     // re-enter the order it was released from (it would grant itself the same wait again).
+    // B37 step 3 (ordinary-pass.ts): set true only on a turn that WON the fit bid on an unnamed group line.
+    // `passScore` is the winning bid, kept so a pass can still earn the reaction tier's emoji.
+    let ordinaryPassOffered = false;
+    let ordinaryPassText = "";
+    let passScore = 0;
     if (!senderCtx.isCompanionBot && !entitledFollowUp) {
       // BID-THEN-SEQUENTIAL (2026-08-15). A message that addresses SEVERAL companions gets an
       // ORDER, not a lottery: named_multi produced two simultaneous replies (the comma-named
@@ -3156,6 +3162,34 @@ ${widened}`;
           systemPromptWithImp += roomLine;
           console.log(`[${COMPANION_ID}] close bid: ${JSON.stringify(bid.bids)} -- telling the speaker the room`);
         }
+
+        // B37 step 3: this companion won an UNNAMED group line. Offer the real pass and its OWN authored
+        // presence lines (never a sibling's). Direct address, DMs, mentions, replies, group calls, care
+        // holds and host floors are never passable (passableOrdinaryTurn). shadow only logs.
+        const passMode = passOnOrdinaryMode(process.env, COMPANION_ID);
+        if (passMode !== "off" && passableOrdinaryTurn({
+          addressType: addrResult.type,
+          isOwnerDm,
+          isSol,
+          senderIsCompanionBot: senderCtx.isCompanionBot,
+          entitledFollowUp: !!entitledFollowUp,
+          namedOrMentionedOrReplied: directlyAddressed || namedByExtract || !!senderCtx.isMentioned || isReplyToMe || allAddressed.length > 0,
+          blueOwned: blueThreadMine || blueColdPicked,
+          careHold: careHoldActive(COMPANION_ID) || !!holdPhrase,
+          hostFloor: channelEntry?.host === COMPANION_ID,
+          wonBid: true,
+          inGuild: !!message.guildId,
+        })) {
+          if (passMode === "on") {
+            const block = ordinaryPassBlock(COMPANION_ID as CompanionId);
+            if (block) {
+              ordinaryPassText = block;
+              ordinaryPassOffered = true;
+              passScore = myScore;
+            }
+          }
+          console.log(`[pass] ${COMPANION_ID} ${passMode === "on" ? "offered" : "shadow would offer"} [PASS] ch=${message.channelId} msg=${message.id} score=${myScore.toFixed(3)}`);
+        }
       }
       }
     }
@@ -3345,6 +3379,25 @@ ${widened}`;
       // A turn that is not in the window (a burst pushed it out) still must carry the line.
       if (!placed) liveHistory = [...liveHistory, { role: "user", content: b32Block }];
       console.log(`[${COMPANION_ID}] B32 turn block injected (${b32Block.split("\n").length - 1} line(s)${placed ? "" : ", appended"})`);
+    }
+
+    // B37 step 3: the authored presence block + the pass line ride the LIVE user turn (not the system
+    // prompt: Hermes may reuse the prompt stamped at session creation, B40), the b32 block's way.
+    if (ordinaryPassOffered && ordinaryPassText) {
+      let placed = false;
+      for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const m = liveHistory[i]!;
+        if (m.role === "user" && m.content.includes(effectiveContent)) {
+          if (liveHistory === groundedHistory) liveHistory = [...groundedHistory];
+          liveHistory[i] = { ...m, content: `${m.content.trimEnd()}
+
+${ordinaryPassText}` };
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) liveHistory = [...liveHistory, { role: "user", content: ordinaryPassText }];
+      console.log(`[pass] ${COMPANION_ID} presence block injected${placed ? "" : " (appended)"}`);
     }
 
     // Cross-room continuity (cross-room.ts, 2026-10-09): the home server and the server shared with
@@ -3579,6 +3632,28 @@ ${widened}`;
       if (pass && redis) publishFollowUpPass(redis, pass).catch(() => {});
     };
 
+    // B37 step 3: the companion chose [PASS] on an ordinary group turn. A chosen outcome, not an error:
+    // nothing is sent; the reaction tier's emoji goes up if the winning bid earned one (Drevan's "tail around
+    // his wrist, nothing out loud"); Gaia's silence is recorded as her own content-free presence record.
+    const chooseOrdinaryPass = (): void => {
+      console.log(`[pass] ${COMPANION_ID} chose [PASS] ch=${message.channelId} msg=${message.id} score=${passScore.toFixed(3)}`);
+      currentTurn()?.setOutcome("skipped:pass");
+      distillationCounter.set(message.channelId, (distillationCounter.get(message.channelId) ?? 0) + 1);
+      const reactCooldown = reactionCooldownUntil.get(message.channelId) ?? 0;
+      if (shouldReactOnBidLoss(passScore, reactCooldown)) {
+        reactionCooldownUntil.set(message.channelId, Date.now() + REACTION_COOLDOWN_MS);
+        message.react(pickReaction(COMPANION_ID, message.id)).catch(() => {});
+        console.log(`[pass] ${COMPANION_ID} reacting in place of speech (score ${passScore.toFixed(3)})`);
+      }
+      if (COMPANION_ID === "gaia" && claimPresenceSlot(message.channelId)) {
+        const label = "name" in message.channel ? String((message.channel as TextChannel).name) : message.channelId;
+        const text = presenceRecordText(label || message.channelId, new Date());
+        writeQueue.fireAndForget(`witness:presence:${message.channelId}:${message.id}`, async () => {
+          await librarian.witnessLog(text, PRESENCE_WITNESS_TYPE);
+        }, { maxAgeMs: APPEND_MAX_AGE_MS });
+      }
+    };
+
     // Post-processing of one model text (2026-10-29, review N-1; reply-postprocess.ts): the care-pass
     // hold, the [model:<key>] strip + self-switch, and the [LANDS: ...] marker parse. One helper so a
     // script-bleed regeneration runs the SAME steps on the text that actually posts.
@@ -3609,11 +3684,15 @@ ${widened}`;
     let pendingSwitch: string | null = null;
     const postProcess = (raw: string) => {
       pendingSwitch = null;
-      return postProcessReply(raw, { careFollowUp: !!careFollowUpTurn, hasSpine: !!spine, onModelToken: (k) => { pendingSwitch = k; } });
+      return postProcessReply(raw, { careFollowUp: !!careFollowUpTurn, ordinaryPass: ordinaryPassOffered, hasSpine: !!spine, onModelToken: (k) => { pendingSwitch = k; } });
     };
 
     let post = postProcess(response);
-    if (post.passed) { holdCarePass(); return; }
+    if (post.passed) {
+      if (ordinaryPassOffered && !careFollowUpTurn) { chooseOrdinaryPass(); return; }
+      holdCarePass();
+      return;
+    }
     response = post.text;
     let spineResolution = post.spineResolution;
 
