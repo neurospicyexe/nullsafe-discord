@@ -2792,6 +2792,14 @@ ${widened}`;
     if (selfLoop.looping && !loopLifted) {
       contextPrompt += loopBreakDirective(selfLoop.motifs);
       console.warn(`[${COMPANION_ID}] self-loop detected (score=${selfLoop.score.toFixed(2)}, motifs=[${selfLoop.motifs.join(",")}]) -- injecting loop break`);
+      // B62 step 1 (2026-11-02): circling reaches the body as a small felt dip (`repetition` stimulus).
+      // The window is this companion's OWN recent turns only, never Raziel's. Exempt under a care hold:
+      // repeating steadying words at 2am is care, not a loop. A loop lifted by a declared departure
+      // never reaches here. Halseth owns the mode (REPETITION_MODE, shadow by default), the deltas and
+      // the cooldown; the detail carries the rail and score, never the motifs (those are the companion's own words).
+      if (!careHoldActive(COMPANION_ID)) {
+        writeQueue.fireAndForget(`soma:repetition:${COMPANION_ID}`, () => librarian.fireStimulus("repetition", `rail=loop_motif score=${selfLoop.score.toFixed(2)}`));
+      }
     }
 
     // Form ratchet (2026-09-20). The gate above is lexical -- echo-guard strips punctuation and

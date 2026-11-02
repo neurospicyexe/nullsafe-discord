@@ -2075,13 +2075,14 @@ export class LibrarianClient {
    *
    * Non-throwing by design -- felt state must never block or break a reply.
    */
-  async fireStimulus(stimulus: string): Promise<void> {
+  async fireStimulus(stimulus: string, detail?: string): Promise<void> {
     if (!stimulus) return;
     try {
       const res = await this._fetch(`${this.url}/mind/ferment/stimulus`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ stimulus, companion_id: this.companionId }),
+        // `detail` is a short machine label (rail + score), never the companion's words.
+        body: JSON.stringify(detail ? { stimulus, companion_id: this.companionId, detail: detail.slice(0, 200) } : { stimulus, companion_id: this.companionId }),
         signal: AbortSignal.timeout(5_000),
       });
       if (!res.ok) {
