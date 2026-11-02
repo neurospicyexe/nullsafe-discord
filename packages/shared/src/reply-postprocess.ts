@@ -21,6 +21,8 @@ export interface PostProcessedReply {
 export interface PostProcessOpts {
   /** This turn is a care follow-up (a [PASS] reply is a real choice). */
   careFollowUp: boolean;
+  /** This turn was offered an ordinary [PASS] (ordinary-pass.ts passableOrdinaryTurn, PASS_ON_ORDINARY=on). */
+  ordinaryPass?: boolean;
   /** A thread spine is active (only then is [LANDS: ...] parsed). */
   hasSpine: boolean;
   /** Called with the lowercased key when the text carries a [model:<key>] token (already stripped). */
@@ -29,7 +31,7 @@ export interface PostProcessOpts {
 
 export function postProcessReply(raw: string, o: PostProcessOpts): PostProcessedReply {
   let text = raw;
-  if (o.careFollowUp && text && isPass(text)) return { text, spineResolution: null, passed: true };
+  if ((o.careFollowUp || o.ordinaryPass) && text && isPass(text)) return { text, spineResolution: null, passed: true };
 
   if (text) {
     const tokenMatch = text.match(MODEL_TOKEN_RE);
