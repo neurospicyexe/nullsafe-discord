@@ -75,6 +75,29 @@ export function normalizeTitle(t: string): string {
   return t.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim().replace(/^(?:the|a|an)\s+/, "");
 }
 
+/**
+ * Does the track's film title name the film asked for? Exact (normalized) always counts. OpenSubtitles
+ * files a film by its full title ("Pirates of the Caribbean: The Curse of the Black Pearl"), so two more
+ * shapes count, split only at a colon / dash separator (never a space, so "Evil Dead II" is never
+ * "Evil Dead"):
+ *  - the part BEFORE the separator, but only with a year (or IMDb id) given: alone it names a whole
+ *    series, and a wrong film is worse than asking for the year (the 10-26 rule). The year itself is
+ *    still checked by `filmMatch`.
+ *  - the part AFTER the separator ("The Curse of the Black Pearl"), which names one film.
+ * 2026-11-01: "Pirates of the Caribbean 2003" got 50 right tracks and rejected all of them.
+ */
+export function titleNames(trackTitle: string, want: TitleQuery): boolean {
+  const w = normalizeTitle(want.title);
+  if (!w) return false;
+  if (normalizeTitle(trackTitle) === w) return true;
+  const parts = trackTitle.split(/\s*[:–—]\s+|\s+-\s+/);
+  if (parts.length < 2) return false;
+  const main = normalizeTitle(parts[0]!);
+  const sub = normalizeTitle(parts.slice(1).join(" "));
+  if (sub === w) return true;
+  return main === w && (want.year !== null || want.imdbId !== null);
+}
+
 type FilmMatch = "match" | "unknown" | "mismatch";
 
 function filmMatch(fd: FeatureDetails | undefined, want: TitleQuery): FilmMatch {
@@ -94,7 +117,7 @@ function filmMatch(fd: FeatureDetails | undefined, want: TitleQuery): FilmMatch 
   const imdb = episode ? (fd.parent_imdb_id ?? fd.imdb_id) : fd.imdb_id;
   if (want.imdbId !== null && typeof imdb === "number") return imdb === want.imdbId ? "match" : "mismatch";
   const title = episode ? (fd.parent_title ?? fd.title) : fd.title;
-  if (want.title && typeof title === "string" && normalizeTitle(title) !== normalizeTitle(want.title)) return "mismatch";
+  if (want.title && typeof title === "string" && !titleNames(title, want)) return "mismatch";
   if (want.year !== null && !episode && typeof fd.year === "number" && fd.year !== want.year) return "mismatch";
   return typeof title === "string" || typeof imdb === "number" ? "match" : "unknown";
 }

@@ -88,6 +88,35 @@ describe("pickSubtitle with a film check", () => {
   });
 });
 
+// 2026-11-01: "movie start Pirates of the Caribbean 2003" -> OpenSubtitles returned 50 tracks, all for
+// "Pirates of the Caribbean: The Curse of the Black Pearl" (2003), and the exact-title check rejected every one.
+const PIRATES = (title: string, year: number, imdb: number, id: number) => ({ attributes: {
+  language: "en", hearing_impaired: false, download_count: 1000 + id, files: [{ file_id: id }],
+  feature_details: { feature_type: "Movie", title, year, imdb_id: imdb } } });
+const PIRATES_SEARCH = [
+  PIRATES("Pirates of the Caribbean: On Stranger Tides", 2011, 1298650, 11),
+  PIRATES("Pirates of the Caribbean: Dead Men Tell No Tales", 2017, 1790809, 17),
+  PIRATES("Pirates of the Caribbean: The Curse of the Black Pearl", 2003, 325980, 3),
+];
+
+describe("titles with a subtitle after a colon", () => {
+  test("the short title plus the year finds the film (11-01)", () => {
+    expect(pickSubtitle(PIRATES_SEARCH, parseTitleQuery("Pirates of the Caribbean 2003"))).toMatchObject({
+      fileId: 3, matchedTitle: "Pirates of the Caribbean: The Curse of the Black Pearl", matchedYear: 2003 });
+  });
+  test("the short title with no year is ambiguous across the series -> null (ask for the year)", () => {
+    expect(pickSubtitle(PIRATES_SEARCH, parseTitleQuery("Pirates of the Caribbean"))).toBeNull();
+  });
+  test("the full title or the subtitle alone also match", () => {
+    expect(pickSubtitle(PIRATES_SEARCH, parseTitleQuery("Pirates of the Caribbean: The Curse of the Black Pearl"))?.fileId).toBe(3);
+    expect(pickSubtitle(PIRATES_SEARCH, parseTitleQuery("The Curse of the Black Pearl"))?.fileId).toBe(3);
+  });
+  test("a sequel numeral is not a subtitle: Evil Dead II never matches Evil Dead", () => {
+    const ed2 = PIRATES("Evil Dead II", 1987, 92991, 2);
+    expect(pickSubtitle([ed2], parseTitleQuery("Evil Dead 1987"))).toBeNull();
+  });
+});
+
 describe("fetchOpenSubtitles", () => {
   test("sends year / imdb_id, returns the matched film, refuses a wrong-film-only result", async () => {
     const ok = fakeFetch({
