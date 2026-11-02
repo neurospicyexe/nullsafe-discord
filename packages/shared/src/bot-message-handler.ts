@@ -5,6 +5,7 @@ import { noteServed, noteTranscript } from "./served-memory.js";
 import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { claimPkProfile } from "./pk-profile-seen.js";
+import { peopleForTurn, peopleIndexFor, readPeopleFrameMode, type PeopleCache } from "./people-frame.js";
 import { pickFacts, readFactsPickMode, type FactsPickRedis } from "./facts-pick.js";
 import { BLUE_LABEL, cutImpersonation, describeSpeaker, pkProfileBlock, pkProfileOn, pkRoomLabel, speakerFrame, speakerFrameOn } from "./speaker-frame.js";
 import { GUILD_TRIAD_GUILD_ID } from "./guild-seed.js";
@@ -3479,6 +3480,35 @@ ${ordinaryPassText}` };
         console.log(`[pk-profile] ${COMPANION_ID} member_chars=${pm.description?.length ?? 0} system=${system} repeat=${repeat}`);
       }
     }
+    // People in this turn (people-frame.ts, B49 slice 1): who a MENTIONED or non-PK person is, from Raziel's
+    // curated list via Halseth's frame index (in-memory here, no round trip on the turn). Ids and curated
+    // spellings only, never the PK roster. Guild turns only. PEOPLE_FRAME off|shadow|live, code default shadow
+    // (counts-only log, injects nothing). Never throws; null on any failure.
+    let peopleText: string | null = null;
+    const peopleMode = readPeopleFrameMode(process.env, COMPANION_ID);
+    if (peopleMode !== "off" && message.guildId && !isOwnerDm && !isSol && !senderCtx.isCompanionBot) {
+      try {
+        const idx = peopleIndexFor(COMPANION_ID, redis as unknown as PeopleCache | null);
+        const snap = idx.get();
+        if (snap && snap.entries.length > 0) {
+          const pmSpeaker = pkMemberName ? (pkRoster?.identify(message.author?.username) ?? null) : null;
+          peopleText = await peopleForTurn({
+            index: snap.entries,
+            text: effectiveContent,
+            burstTexts: burst.map(b => b.content),
+            speaker: {
+              pk: pmSpeaker ? { system: pmSpeaker.isOwner ? "raziel" : "blue", name: pmSpeaker.memberName } : null,
+              discordUserId: message.webhookId ? null : (message.author?.id ?? null),
+            },
+            mentionedUserIds: [...new Set([...(message.mentions?.users?.keys?.() ?? []), ...burst.flatMap(b => b.mentionedIds ?? [])])],
+            companion: COMPANION_ID, channelId: message.channelId, sessionId: inferenceSessionId, mode: peopleMode,
+            speakerProfileInjected: pkProfile !== null,
+            redis: redis as unknown as Parameters<typeof peopleForTurn>[0]["redis"],
+            indexAgeS: idx.ageS(),
+          });
+        }
+      } catch { /* the reply never waits on this */ }
+    }
     // B3 facts out of SOUL (facts-pick.ts, 2026-10-18): Halseth embedding shortlist -> Jev picks which
     // Architect facts this message needs. Human turns only, never a DM (sealed) or Sol. Shadow runs
     // detached and injects nothing; live awaits the pick and rides it above the frame. Never throws.
@@ -3515,7 +3545,7 @@ ${ordinaryPassText}` };
         console.warn(`[frame] ${COMPANION_ID} build failed: ${String(e).slice(0, 120)}`);
       }
     }
-    const frameTail = [pkProfile, frame].filter((x): x is string => !!x).join("\n\n") || null;
+    const frameTail = [pkProfile, peopleText, frame].filter((x): x is string => !!x).join("\n\n") || null;
     // Consumed once it rides a frame. STM holds the repaired text, so the rule check never sees the
     // slip; the gateway transcript holds the original, and the model copies its own lines.
     if (frame) seatSlipped.delete(message.channelId);
