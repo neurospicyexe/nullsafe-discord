@@ -14,6 +14,7 @@ import { runDialectic } from "./dialectic.js";
 import { runForage } from "./forage.js";
 import { runClubTick } from "./club.js";
 import { runGuardianTick } from "./guardian.js";
+import { runLiveSyncWatchTick } from "./livesync-watch.js";
 import { runGuardianResolve } from "./phases/guardian-resolve.js";
 import { runClearingTick } from "./clearing.js";
 import { runDriftPassTick } from "./drift-pass.js";
@@ -219,6 +220,16 @@ export function startScheduler(): void {
   console.log(`[scheduler] sol hoard -> cron "${solHoardCron}"`);
   cron.schedule(solHoardCron, () => {
     runSolHoardTick(redis).catch(e => console.error("[scheduler] sol hoard failed:", e));
+  });
+
+  // LiveSync watch: hourly. Is the CouchDB vault replica still fresh? If not, nudge the PC's
+  // Obsidian to sync, and tell Raziel (once a day) when the nudge does not heal it. Runs here, not in
+  // the Halseth Guardian, because only the VPS can reach CouchDB and the PC tunnel.
+  // LIVESYNC_WATCH=off kills it; LIVESYNC_CRON overrides the schedule.
+  const livesyncCron = process.env["LIVESYNC_CRON"] ?? "17 * * * *";
+  console.log(`[scheduler] livesync watch -> cron "${livesyncCron}"`);
+  cron.schedule(livesyncCron, () => {
+    runLiveSyncWatchTick().catch(e => console.error("[scheduler] livesync watch failed:", e));
   });
 
   // The Club -- daily tick advances the current round's phase (open/vote/discuss).
