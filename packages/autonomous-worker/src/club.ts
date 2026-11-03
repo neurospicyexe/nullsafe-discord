@@ -50,6 +50,17 @@ const TICK_EPSILON_DAYS = 1 / 24;
 
 export type PhaseAction = "open" | "vote" | "discuss" | "seal" | "wait";
 
+/**
+ * Epoch ms for a stamp from D1. D1 writes `YYYY-MM-DD HH:MM:SS` in UTC with no zone, and `new Date()` reads
+ * that shape as LOCAL time. The VPS runs America/Chicago, so every phase age came out 5-6h short and each
+ * transition slipped a full day (gathering held 5 days, not 4, and the Guardian flagged every round as
+ * stuck). A stamp that already carries a zone (ISO with Z or an offset) is parsed as written.
+ */
+export function dbStampMs(stamp: string): number {
+  const bare = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(stamp.trim());
+  return new Date(bare ? stamp.trim().replace(" ", "T") + "Z" : stamp).getTime();
+}
+
 /** Decide what this tick should do, from the latest round (any status). */
 export function decidePhaseAction(
   round: ClubRound | null,
@@ -60,7 +71,7 @@ export function decidePhaseAction(
 ): PhaseAction {
   if (!round) return "open";
   const age = (stamp: string | null): number =>
-    stamp ? (now.getTime() - new Date(stamp).getTime()) / DAY_MS + TICK_EPSILON_DAYS : 0;
+    stamp ? (now.getTime() - dbStampMs(stamp)) / DAY_MS + TICK_EPSILON_DAYS : 0;
   switch (round.status) {
     case "closed":
       return age(round.closed_at) >= REOPEN_AFTER_CLOSE_DAYS ? "open" : "wait";
@@ -92,11 +103,11 @@ export function maySealDiscussion(
   discussDays: number,
 ): boolean {
   if (!round.discussing_at) return true;
-  const start = new Date(round.discussing_at).getTime();
+  const start = dbStampMs(round.discussing_at);
   const ageDays = (now.getTime() - start) / DAY_MS;
   if (ageDays >= discussDays + DISCUSS_GRACE_CAP_DAYS) return true; // hard cap: always seal
   if (!lastRazielPostAt) return true;                              // nobody's talking -> seal on timer
-  const sincePostHrs = (now.getTime() - new Date(lastRazielPostAt).getTime()) / 3600_000;
+  const sincePostHrs = (now.getTime() - dbStampMs(lastRazielPostAt)) / 3600_000;
   return sincePostHrs >= 24;                                       // defer only while he's active
 }
 

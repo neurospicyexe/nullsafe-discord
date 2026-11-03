@@ -1,7 +1,7 @@
 // Club tick pure logic: phase-advance decision, vote tally, tolerant JSON parse.
 
 import { describe, it, expect } from "vitest";
-import { decidePhaseAction, maySealDiscussion, tallyVotes, extractJson } from "../club.js";
+import { decidePhaseAction, maySealDiscussion, tallyVotes, extractJson, dbStampMs } from "../club.js";
 import type { ClubRound } from "../halseth-client.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -25,6 +25,21 @@ function round(
 }
 
 // signature: (round, now, gatherDays, activeDays, discussDays)
+describe("dbStampMs (D1 stamps are UTC whatever the box's zone)", () => {
+  it("reads a bare D1 stamp as UTC, and keeps a zoned stamp as written", () => {
+    expect(dbStampMs("2026-10-28 23:00:00")).toBe(Date.UTC(2026, 9, 28, 23, 0, 0));
+    expect(dbStampMs("2026-10-28T23:00:00Z")).toBe(Date.UTC(2026, 9, 28, 23, 0, 0));
+    expect(dbStampMs("2026-10-28T18:00:00-05:00")).toBe(Date.UTC(2026, 9, 28, 23, 0, 0));
+  });
+  it("the 11-01 tick votes on a round opened 10-28 23:00 UTC (it waited a day before the fix)", () => {
+    const r: ClubRound = {
+      id: "r", status: "gathering", winning_recommendation_id: null,
+      opened_at: "2026-10-28 23:00:00", activated_at: null, discussing_at: null, closed_at: null,
+    };
+    expect(decidePhaseAction(r, new Date("2026-11-02T00:00:00Z"), 4, 6, 4)).toBe("vote");
+  });
+});
+
 describe("decidePhaseAction", () => {
   it("opens when no round exists", () => {
     expect(decidePhaseAction(null, now, 4, 6, 4)).toBe("open");
