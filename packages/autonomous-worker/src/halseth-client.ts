@@ -1428,13 +1428,18 @@ export async function tendCreatureAs(
   actor: "cypher" | "drevan" | "gaia",
   action: "feed" | "play" | "talk",
   note: string,
-): Promise<{ milestones_fired: Array<{ id: string; text: string }> }> {
+): Promise<{ milestones_fired: Array<{ id: string; text: string }>; care: { fit: string; reaction_named: string } | null }> {
   const r = await hFetch(`/mind/creatures/${encodeURIComponent(creatureId)}/interact`, "POST", {
     actor,
     action,
     note,
-  }) as { milestones_fired?: Array<{ id: string; text: string }> };
-  return { milestones_fired: Array.isArray(r?.milestones_fired) ? r.milestones_fired : [] };
+  }) as { milestones_fired?: Array<{ id: string; text: string }>; care?: { fit?: string; reaction_named?: string } | null };
+  // Sol's answer to the tend (Halseth sol-care.ts, 2026-11-02), rendered with the tender's
+  // NAME for the room. Absent on an older Halseth: no reaction, no harm.
+  const care = r?.care && typeof r.care.reaction_named === "string" && typeof r.care.fit === "string"
+    ? { fit: r.care.fit, reaction_named: r.care.reaction_named }
+    : null;
+  return { milestones_fired: Array.isArray(r?.milestones_fired) ? r.milestones_fired : [], care };
 }
 
 // Inner life (0100): Halseth composes the appearance from live drives x trust

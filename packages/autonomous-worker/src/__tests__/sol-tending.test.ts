@@ -64,3 +64,17 @@ describe("sol-tending", () => {
     });
   });
 });
+
+describe("tendGesture answers his need (2026-11-02)", () => {
+  it("hungry -> feed, bored -> play, missing -> talk, for every tender and seed", () => {
+    for (const t of ["cypher", "drevan", "gaia"] as const) for (const seed of [0, 1, 2, 5]) {
+      expect(tendGesture(t, seed, "hungry").action).toBe("feed");
+      expect(tendGesture(t, seed, "bored").action).toBe("play");
+      expect(tendGesture(t, seed, "missing").action).toBe("talk");
+    }
+  });
+  it("content / sleepy / unknown keep the day's pick", () => {
+    expect(tendGesture("cypher", 1, "content")).toEqual(tendGesture("cypher", 1));
+    expect(tendGesture("gaia", 2, null)).toEqual(tendGesture("gaia", 2));
+  });
+});

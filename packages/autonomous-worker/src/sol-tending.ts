@@ -63,7 +63,18 @@ const GESTURES: Record<Tender, Gesture[]> = {
   ],
 };
 
-export function tendGesture(tender: Tender, seed: number): Gesture {
+// What Sol's loudest drive asks for (Halseth's dominantState). Before 2026-11-02 the
+// gesture was picked by day index alone, so a hungry Sol could get a story and a
+// lonely one a bottlecap. shouldTend still decides WHETHER; this only decides WHAT.
+const NEED_ACTION: Record<string, TendAction> = { hungry: "feed", bored: "play", missing: "talk" };
+
+/** The tend for today: the action his need asks for, else the day's pick. */
+export function tendGesture(tender: Tender, seed: number, state?: string | null): Gesture {
   const pool = GESTURES[tender];
+  const want = state ? NEED_ACTION[state] : undefined;
+  if (want) {
+    const matching = pool.filter(g => g.action === want);
+    if (matching.length > 0) return matching[Math.abs(Math.floor(seed)) % matching.length]!;
+  }
   return pool[Math.abs(Math.floor(seed)) % pool.length]!;
 }

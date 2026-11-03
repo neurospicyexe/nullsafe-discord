@@ -113,3 +113,13 @@ describe("formatNestReply", () => {
     expect(formatNestReply("Sol", [], [])).toContain("nest is empty");
   });
 });
+
+describe("formatPetReply with Sol's reaction (2026-11-02)", () => {
+  it("puts his answer under the ack, before any milestone", () => {
+    const s = formatPetReply("Sol", "feed", 0.84, [{ id: "x", text: "*milestone*" }], "*Sol eats beside you.*");
+    expect(s.split("\n")).toEqual(["feed Sol (trust 0.84)", "*Sol eats beside you.*", "*milestone*"]);
+  });
+  it("no reaction = the old ack exactly", () => {
+    expect(formatPetReply("Sol", "talk", 0.5, [], null)).toBe("talk Sol (trust 0.50)");
+  });
+});

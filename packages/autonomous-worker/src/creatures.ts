@@ -27,12 +27,16 @@ export async function runCreaturesTick(): Promise<void> {
       if (shouldTend(sol.disposition, sinceDays)) {
         const dayIndex = Math.floor(now / 86_400_000);
         const tender = pickTender(dayIndex);
-        const gesture = tendGesture(tender, dayIndex);
+        // The tend answers his loudest need (hungry -> feed, bored -> play, missing -> talk).
+        const state = typeof sol.state === "string" ? sol.state : null;
+        const gesture = tendGesture(tender, dayIndex, state);
         const tendRes = await tendCreatureAs(sol.id, tender, gesture.action, gesture.note);
-        console.log(`[creatures] ${tender} tended Sol (${gesture.action}) -- ${sol.disposition}, ${Number.isFinite(sinceDays) ? sinceDays.toFixed(1) : "?"}d since contact`);
+        console.log(`[creatures] ${tender} tended Sol (${gesture.action}, he was ${state ?? "?"}, landed ${tendRes.care?.fit ?? "?"}) -- ${sol.disposition}, ${Number.isFinite(sinceDays) ? sinceDays.toFixed(1) : "?"}d since contact`);
         const url = process.env.SOL_WEBHOOK_URL;
         if (url) {
           await postSolMoment(url, gesture.moment).catch(() => false);
+          // Then Sol answers, in his body, to the named tender (never to Raziel in their place).
+          if (tendRes.care) await postSolMoment(url, tendRes.care.reaction_named).catch(() => false);
           // Milestones (0100) fire once ever -- if this tend crossed one, the
           // channel sees it or nobody does.
           for (const m of tendRes.milestones_fired) {

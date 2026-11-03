@@ -64,12 +64,14 @@ export function formatPetReply(
   action: Action,
   trust: number | null,
   milestones: Array<{ id: string; text: string }> = [],
+  reaction: string | null = null,
 ): string {
   const verb = action === "give" ? "gave something to" : action;
   const trustNote = typeof trust === "number" ? ` (trust ${trust.toFixed(2)})` : "";
   const base = `${verb} ${creatureName}${trustNote}`;
-  if (milestones.length === 0) return base;
-  return `${base}\n${milestones.map(m => m.text).join("\n")}`;
+  // Sol's answer to the care (Halseth sol-care.ts, 2026-11-02): his body, one line,
+  // addressed to whoever tended ("you"). Milestones still follow verbatim.
+  return [base, ...(reaction ? [reaction] : []), ...milestones.map(m => m.text)].join("\n");
 }
 
 /** Pure formatter for the nest view. */
@@ -150,6 +152,7 @@ export async function handlePetCommand(arg: string, halsethSecret: string, actor
   });
   const json = await res.json().catch(() => ({})) as {
     trust?: number; error?: string; milestones_fired?: Array<{ id: string; text: string }>;
+    care?: { reaction?: string } | null;
   };
   if (!res.ok) return `couldn't ${parsed.action} ${resolved.creature.name}: ${String(json.error ?? `halseth ${res.status}`)}`;
   return formatPetReply(
@@ -157,5 +160,6 @@ export async function handlePetCommand(arg: string, halsethSecret: string, actor
     parsed.action,
     typeof json.trust === "number" ? json.trust : null,
     Array.isArray(json.milestones_fired) ? json.milestones_fired : [],
+    typeof json.care?.reaction === "string" ? json.care.reaction : null,
   );
 }
