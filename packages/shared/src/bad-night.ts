@@ -303,7 +303,7 @@ export const COMPANION_HOLD_VERB = `ask_librarian "start the care hold"`;
 
 /** D3's on-his-behalf permission, offered while the hold is OFF (it is moot while it is on). */
 export const COMPANION_SET_HOLD_LINE =
-  `If Raziel plainly says tonight is a bad night, in his own words, you may set the care hold for him: ${COMPANION_HOLD_VERB}. ` +
+  `While the care hold is off, if Raziel plainly says tonight is a bad night, in his own words, you may set the care hold for him: ${COMPANION_HOLD_VERB}. ` +
   "Only on his plain word, never on a read of his tone. If you set it, open your reply by telling him the hold is on, so one word from him (\"good now\") can clear it.";
 
 /**

@@ -12,6 +12,7 @@
 // bot-side via botDir — those paths resolve against the bot's own module location.
 
 import { readFramePacketMode, framePacketFor } from "./frame-packet.js";
+import { peopleIndexFor, readPeopleFrameMode, type PeopleCache } from "./people-frame.js";
 import { LibrarianClient, formatRecentContext } from "./librarian.js";
 import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } from "./watch-command.js";
 import { parseCreatedAtTimestamp } from "./relative-time.js";
@@ -190,6 +191,12 @@ export interface RefreshBotStateOptions {
   hermesModelKeys?: Set<string> | null;
   apiKeys: AdapterKeys;
   apiUrls: AdapterUrls;
+}
+
+/** First-tick offset for the orient refresh: cypher 0, drevan 1/3, gaia 2/3 of the period. */
+export function refreshStaggerMs(companionId: string, periodMs: number): number {
+  const slot = companionId === "drevan" ? 1 : companionId === "gaia" ? 2 : 0;
+  return Math.round((periodMs * slot) / 3);
 }
 
 /**
@@ -412,6 +419,9 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   });
   // Per-turn [Right now] packet (frame-packet.ts): build the packet now so the calendar slot is named once at boot.
   { const m = readFramePacketMode(); console.log(`[frame] ${companionId} mode=${m}`); if (m !== "off") framePacketFor(librarian, companionId); }
+  // People index (people-frame.ts): start it at boot. It used to start lazily on the first guild turn, and
+  // that turn always saw an empty index (the load is async), so a quiet bot ran for days with no index.
+  { const m = readPeopleFrameMode(process.env, companionId); console.log(`[people-frame] ${companionId} boot mode=${m}`); if (m !== "off") peopleIndexFor(companionId, redis as unknown as PeopleCache | null); }
 
   let cleanupEventSubs: (() => Promise<void>) | null = null;
   let presenceInterval: ReturnType<typeof setInterval> | null = null;
@@ -633,13 +643,19 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   const currentMoodRef = { value: null as string | null };
   const lastSomaRefreshRef = { value: Date.now() };
 
-  setInterval(() => {
+  // Staggered per companion (2026-11-04): the three bots restart together, so their intervals fired in
+  // the same second and each bot orient fans out 3 Second Brain calls; nine concurrent SB sessions
+  // stalled past the 15s client timeout on ~9% of waves ("refresh: orient unavailable"). Offsetting
+  // the first tick spreads the waves without changing the period.
+  const refreshTick = () => {
     void refreshBotState({
       companionId, librarian, identityBase, bootCtx,
       recentContextRef, currentMoodRef, lastSomaRefreshRef,
       adapterRef, activeModelRef, hermesModelKeys: hermesModelKeysRef.value, apiKeys, apiUrls,
     });
-  }, somaRefreshIntervalMs);
+  };
+  const refreshOffsetMs = refreshStaggerMs(companionId, somaRefreshIntervalMs);
+  setTimeout(() => { refreshTick(); setInterval(refreshTick, somaRefreshIntervalMs); }, somaRefreshIntervalMs + refreshOffsetMs);
 
   // Nightly day-distillation (2026-07-06): fold the day's session-fragment wm notes into
   // ONE first-person day note (salience=high) and demote the fragments -- orient boots on

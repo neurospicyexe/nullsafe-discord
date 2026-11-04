@@ -58,6 +58,14 @@ describe("gateFeelingLine", () => {
     expect(log).not.toHaveBeenCalled();
     expect(gateFeelingLine(null, "cypher", { FEELING_LINE_BOT: "live" }, log)).toBeNull();
   });
+  it("live logs counts only, never the text", () => {
+    const log = jest.fn();
+    gateFeelingLine(LINE, "drevan", { FEELING_LINE_BOT: "live" }, log);
+    expect(log).toHaveBeenCalledWith(`[feeling-line-bot] companion=drevan mode=live present=1 len=${LINE.length}`);
+    expect(String(log.mock.calls[0]![0])).not.toContain("ember");
+    gateFeelingLine(null, "drevan", { FEELING_LINE_BOT: "live" }, log);
+    expect(log).toHaveBeenLastCalledWith("[feeling-line-bot] companion=drevan mode=live present=0 len=0");
+  });
 });
 
 describe("formatRecentContext [Feels]", () => {

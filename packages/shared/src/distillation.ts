@@ -248,6 +248,11 @@ export async function runDistillation(
     human_blocks?: Array<{ block_type: string; content: string }>;
   } | null;
   if (parsed !== null) {
+    // Shape the model's blocks to what Halseth accepts BEFORE the write (2026-11-04): a single
+    // off-list block_type, an empty block or an over-long one 400s the whole batch, and two such
+    // windows were lost on 11-01. Counts only in the log.
+    if (parsed.persona_blocks) parsed.persona_blocks = normalizeBlocks(parsed.persona_blocks, `${channelId} persona`);
+    if (parsed.human_blocks) parsed.human_blocks = normalizeBlocks(parsed.human_blocks, `${channelId} human`);
     if (parsed.persona_blocks?.length) {
       wq.fireAndForget(`persona:${channelId}`, () => librarian.writePersonaBlocks(channelId, parsed.persona_blocks!));
     }
@@ -288,4 +293,38 @@ export async function runDistillation(
       console.warn(`[${channelId}] distillation: dropped ${parsed.human_blocks.length} human block(s) -- owner absent from window`);
     }
   } // else: fail-silent -- malformed JSON from inference is acceptable loss
+}
+
+// Halseth's /persona-blocks and /human-blocks contract (halseth/src/handlers/blocks.ts): block_type in
+// this list (exact), content 1-2000 chars, 1-20 blocks per batch. One bad entry rejects the batch.
+export const BLOCK_TYPES = ["identity", "memory", "relationship", "agent"] as const;
+export const BLOCK_CONTENT_MAX = 2000;
+export const BLOCK_BATCH_MAX = 20;
+
+/** Coerce model-written blocks into Halseth's accepted shape: lowercase/trim the type (unknown -> memory),
+ *  drop non-string/empty content, clamp content, cap the batch. Never throws. */
+export function normalizeBlocks(
+  raw: unknown,
+  label = "",
+  log: (m: string) => void = console.warn,
+): Array<{ block_type: string; content: string }> {
+  if (!Array.isArray(raw)) return [];
+  let retyped = 0, dropped = 0, clamped = 0;
+  const out: Array<{ block_type: string; content: string }> = [];
+  for (const b of raw) {
+    if (typeof b !== "object" || b === null) { dropped++; continue; }
+    const r = b as Record<string, unknown>;
+    const content = typeof r["content"] === "string" ? r["content"].trim() : "";
+    if (!content) { dropped++; continue; }
+    const t = typeof r["block_type"] === "string" ? r["block_type"].trim().toLowerCase() : "";
+    const block_type = (BLOCK_TYPES as readonly string[]).includes(t) ? t : "memory";
+    if (block_type !== r["block_type"]) retyped++;
+    if (content.length > BLOCK_CONTENT_MAX) clamped++;
+    out.push({ block_type, content: content.slice(0, BLOCK_CONTENT_MAX) });
+  }
+  const capped = Math.max(0, out.length - BLOCK_BATCH_MAX);
+  if (retyped || dropped || clamped || capped) {
+    log(`[distillation] ${label} blocks normalized: retyped=${retyped} dropped=${dropped} clamped=${clamped} capped=${capped}`);
+  }
+  return out.slice(0, BLOCK_BATCH_MAX);
 }

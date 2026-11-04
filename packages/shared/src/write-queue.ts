@@ -35,11 +35,20 @@ export function onWriteError(tag: string, label: string): (e: unknown) => void {
  * ack:false, and silent reject/misroute. Transport errors (fetch failed, timeouts, 5xx) do NOT
  * match and stay retryable.
  */
+/** "<writer> 4xx..." from a direct HTTP writer (e.g. `writePersonaBlocks 400: Invalid block entry`).
+ *  A 4xx is the same answer on every retry, except 408 (timeout) and 429 (rate limit). 2026-11-04: plain
+ *  400s used to buffer for 10 minutes and end in an age-out line that blamed time. */
+export function isDeterministicHttp4xx(msg: string): boolean {
+  const m = /^\w+ (4\d\d)(?!\d)/.exec(msg);
+  return !!m && m[1] !== "408" && m[1] !== "429";
+}
+
 export function isPermanentWriteError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return / declined: /.test(msg)
     || msg.includes("write not applied (ack=false)")
-    || msg.includes("no ack (silent reject/misroute)");
+    || msg.includes("no ack (silent reject/misroute)")
+    || isDeterministicHttp4xx(msg);
 }
 
 export interface QueuedWrite {

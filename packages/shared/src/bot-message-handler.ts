@@ -3296,7 +3296,11 @@ ${widened}`;
     // D3 (Drevan): the companion he is talking to may set the hold on his behalf, through Halseth,
     // only when he has plainly said the night is bad. Offered while the hold is OFF (moot while on),
     // on his own messages, as standing guidance in the system context rather than on the turn.
-    if (b32Mode === "on" && b32OwnerArrival && !careHoldNow && !holdPhrase) {
+    // B52 (2026-11-04): emitted on EVERY turn under b32 on, not only owner arrivals with the hold off.
+    // The conditional version put a 313-byte block before the sentinel on some turns only, so the
+    // stable prefix had two shapes and each switch was a prompt-cache miss. The line itself carries the
+    // conditions now ("while the hold is off", "only on his plain word").
+    if (b32Mode === "on") {
       systemPromptWithImp = insertStable(systemPromptWithImp, `[Care hold] ${COMPANION_SET_HOLD_LINE}`); // B52: static line, keeps system authority before the sentinel
     }
 

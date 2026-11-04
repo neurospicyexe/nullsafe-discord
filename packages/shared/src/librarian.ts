@@ -1630,7 +1630,7 @@ export class LibrarianClient {
       body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) throw new Error(`writePersonaBlocks ${res.status}`);
+    if (!res.ok) throw new Error(`writePersonaBlocks ${res.status}${await httpReason(res)}`);
   }
 
   /**
@@ -1650,7 +1650,7 @@ export class LibrarianClient {
       body: JSON.stringify({ companion_id: this.companionId, channel_id: channelId, blocks }),
       signal: AbortSignal.timeout(8_000),
     });
-    if (!res.ok) throw new Error(`writeHumanBlocks ${res.status}`);
+    if (!res.ok) throw new Error(`writeHumanBlocks ${res.status}${await httpReason(res)}`);
   }
 
   // ── STM persistence (direct HTTP, not via MCP -- low-latency write path) ──
@@ -3270,4 +3270,13 @@ function formatRecentContextRaw(orient: {
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+/** ": <first 160 chars of the body>" for an error message, or "" (never throws). Halseth's 4xx bodies are
+ *  short plain-text reasons ("Invalid block entry"), so the log names the rule instead of only the code. */
+async function httpReason(res: { text?: () => Promise<string> }): Promise<string> {
+  try {
+    const t = typeof res.text === "function" ? (await res.text()).replace(/\s+/g, " ").trim() : "";
+    return t ? `: ${t.slice(0, 160)}` : "";
+  } catch { return ""; }
 }

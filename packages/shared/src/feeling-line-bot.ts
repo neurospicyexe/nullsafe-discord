@@ -50,6 +50,8 @@ export function gateFeelingLine(
     log(`[feeling-line-bot] companion=${companion} mode=shadow present=${line ? 1 : 0} len=${line ? line.length : 0}`);
     return null;
   }
+  // Live used to log nothing, so "is the feeling line reaching the bot" was unanswerable. Counts only.
+  log(`[feeling-line-bot] companion=${companion} mode=live present=${line ? 1 : 0} len=${line ? line.length : 0}`);
   return line;
 }
 
