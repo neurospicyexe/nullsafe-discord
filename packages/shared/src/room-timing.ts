@@ -23,6 +23,7 @@
  */
 
 import type { CompanionId } from "./types.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type RoomTimingDecision = "answer_now" | "hold_for_lull" | "stay_quiet";
 
@@ -128,7 +129,7 @@ export function decideRoomTiming(i: RoomTimingInput): RoomTimingResult {
 export type RoomTimingMode = "off" | "shadow" | "on";
 
 function parseMode(v: string | undefined): RoomTimingMode | null {
-  const s = String(v ?? "").trim().toLowerCase();
+  const s = normalizeModeToken(v);
   if (!s) return null;
   return s === "off" ? "off" : s === "on" ? "on" : "shadow";
 }

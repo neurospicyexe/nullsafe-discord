@@ -20,6 +20,7 @@
  */
 
 import type { CompanionId } from "./types.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type ReplyAuthor =
   | { kind: "self" }
@@ -128,6 +129,6 @@ export type ReplyHumanGateMode = "off" | "shadow" | "on";
 /** REPLY_HUMAN_GATE: off | shadow | on. Code default `shadow` (a default living only in the pm2
  *  ecosystem file once went silently off, facts-pick.ts:64). Garbage falls to shadow. */
 export function replyHumanGateMode(env: Record<string, string | undefined> = process.env): ReplyHumanGateMode {
-  const v = String(env["REPLY_HUMAN_GATE"] ?? "").trim().toLowerCase();
+  const v = normalizeModeToken(env["REPLY_HUMAN_GATE"]);
   return v === "off" ? "off" : v === "on" ? "on" : "shadow";
 }

@@ -1,3 +1,4 @@
+import { normalizeModeToken } from "./off-switch.js";
 /**
  * Hermes gateway session rotation (2026-09-05).
  *
@@ -22,7 +23,7 @@ export type HermesRotation = "weekly" | "daily" | "off";
  * the safe default, not take inference down.
  */
 export function hermesRotationMode(env: NodeJS.ProcessEnv = process.env): HermesRotation {
-  const raw = env["HERMES_SESSION_ROTATION"];
+  const raw = env["HERMES_SESSION_ROTATION"] === undefined ? undefined : normalizeModeToken(env["HERMES_SESSION_ROTATION"]);
   if (raw === "daily" || raw === "off") return raw;
   return "weekly";
 }

@@ -15,6 +15,7 @@ import {
   type BaselineFile, type VoiceRow, type WeightOpts,
 } from "./voice-drift-core.js";
 import { stageVoiceLesson } from "./voice-lessons.js";
+import { isOffToken } from "@nullsafe/shared";
 
 const COMPANION_IDS = ["cypher", "drevan", "gaia"] as const;
 export const baselinePath = () => process.env["VOICE_BASELINE_PATH"] ?? "/app/logs/voice-baseline.json";
@@ -42,7 +43,7 @@ export interface DriftDeps {
 }
 
 export async function runVoiceDriftTick(deps: DriftDeps = {}): Promise<void> {
-  if (process.env["VOICE_DRIFT"] === "off") return;
+  if (isOffToken(process.env["VOICE_DRIFT"])) return;
   const now = (deps.now ?? (() => new Date()))();
   const baseline = readBaseline();
   if (!baseline) { console.warn(`[voice-drift] no baseline at ${baselinePath()}; run scripts/voice-baseline.mjs`); return; }

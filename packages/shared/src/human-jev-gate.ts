@@ -41,12 +41,13 @@ import {
 } from "./address-jev.js";
 import type { AddressTurn } from "./address-model.js";
 import { humanMass, COLD_PICK_HUMAN_MASS } from "./blue-cold-pick.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type HumanJevGateMode = "off" | "shadow" | "on";
 
 /** HUMAN_ADDRESS_JEV: default on; `shadow` / `off` honored (trimmed, any case); junk falls back to on. */
 export function humanJevGateMode(env: Record<string, string | undefined> = process.env): HumanJevGateMode {
-  const v = (env["HUMAN_ADDRESS_JEV"] ?? "").trim().toLowerCase();
+  const v = normalizeModeToken(env["HUMAN_ADDRESS_JEV"]);
   return v === "off" || v === "shadow" ? v : "on";
 }
 

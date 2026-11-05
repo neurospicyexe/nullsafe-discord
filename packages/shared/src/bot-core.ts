@@ -62,6 +62,7 @@ import {
   type SupersedePhase, type TurnContext,
 } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
+import { SHUTDOWN_FLUSH_MS, SHUTDOWN_SESSION_CLOSE_MS, SHUTDOWN_SUBS_MS, SHUTDOWN_BACKSTOP_MS } from "./shutdown-budget.js";
 import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
 import { mutedGuildIds, isMutedGuild } from "./guild-mute.js";
 import { sealDmChannel } from "./recall-context.js";
@@ -1260,18 +1261,14 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     });
   }
 
-  // Shutdown budget (P3-14, 2026-10-08). pm2 sends SIGINT, waits kill_timeout (8000 in
+  // Shutdown budget (P3-14, 2026-10-08). pm2 sends SIGINT, waits kill_timeout (15000 in
   // ecosystem.config.js) and SIGKILLs. Every await below is bounded so the sum stays under it:
-  // closure flush 1.5s + session close 5s + subscriber quit 1s = 7.5s worst case. Before this the
+  // closure flush 8s + session close 4s + subscriber quit 1s = 13s worst case (2026-11-05: was 1.5s, which cut every closure distillation off; see git log). Before this the
   // flush was UNBOUNDED -- closeAll() fires one distillSessionOnInactive (a model call) per open
   // session window and the handler awaited them all -- so a bot restarted mid-session blew the
   // old 5000 and was SIGKILLed with its Halseth session never closed. Cypher alone showed it
   // because he is the one with a window open when Raziel restarts from a work session; the
   // stop paths of the three bots are identical. The backstop timer exits regardless.
-  const SHUTDOWN_FLUSH_MS = 1500;
-  const SHUTDOWN_SESSION_CLOSE_MS = 5000;
-  const SHUTDOWN_SUBS_MS = 1000;
-  const SHUTDOWN_BACKSTOP_MS = 7800;
   function bounded<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
     return Promise.race([
       p,

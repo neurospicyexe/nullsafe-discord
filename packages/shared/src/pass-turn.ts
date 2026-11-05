@@ -24,6 +24,7 @@
 import type { SeenImage } from "./vision.js";
 import { FOLLOW_UP_TTL_MS } from "./sequential-floor.js";
 import { careFollowUpFraming } from "./bad-night.js";
+import { isOffToken } from "./off-switch.js";
 
 /** The two facts every decision below turns on. */
 export interface TurnKind {
@@ -152,9 +153,9 @@ export function turnFraming(p: {
   return "";
 }
 
-/** FOLLOWUP_PASS: default on; exactly "off" (trimmed, any case) disables publish and listener. */
+/** FOLLOWUP_PASS: default on; off|0|false|no (trimmed, any case) disables publish and listener. */
 export function followUpPassEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return (env["FOLLOWUP_PASS"] ?? "").trim().toLowerCase() !== "off";
+  return !isOffToken(env["FOLLOWUP_PASS"]);
 }
 
 // ── Arrival media, kept for the pass turn ───────────────────────────────────

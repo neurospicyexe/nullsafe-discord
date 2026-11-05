@@ -32,6 +32,7 @@
 
 import { postJev, type JevAnswers, type JevEvalResult, type JevQuestion } from "./jev-gate.js";
 import type { CompanionId } from "./types.js";
+import { isOffToken, normalizeModeToken } from "./off-switch.js";
 
 export const DIRECTOR_JEV_TAG = "[director-jev]";
 export const DIRECTOR_JEV_TIMEOUT_MS = 6_000;
@@ -39,7 +40,7 @@ const MAX_TURNS = 8;
 const GIST_CHARS = 300;
 
 export function directorJevEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env["DIRECTOR_JEV"] ?? "").trim().toLowerCase() !== "off";
+  return !isOffToken(env["DIRECTOR_JEV"]);
 }
 
 function numEnv(raw: string | undefined, fallback: number): number {
@@ -63,7 +64,7 @@ export type EchoBrakeMode = "on" | "shadow" | "off";
 export interface EchoBrakeConfig { mode: EchoBrakeMode; theta: number; minTurns: number; streak: number }
 
 export function readEchoBrakeConfig(env: NodeJS.ProcessEnv = process.env): EchoBrakeConfig {
-  const raw = (env["DIRECTOR_ECHO_BRAKE"] ?? "").trim().toLowerCase();
+  const raw = normalizeModeToken(env["DIRECTOR_ECHO_BRAKE"]);
   const mode: EchoBrakeMode = raw === "off" || raw === "shadow" ? raw : "on";
   const streak = Math.floor(numEnv(env["DIRECTOR_ECHO_BRAKE_STREAK"], 2));
   return {

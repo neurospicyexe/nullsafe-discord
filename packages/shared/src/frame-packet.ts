@@ -19,6 +19,7 @@
 import { neutralizeRecalled } from "./recalled-text.js";
 import type { LibrarianClient } from "./librarian.js";
 import { liveTasks } from "./task-check.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type FramePacketMode = "off" | "shadow" | "on";
 const VALID_MODES: readonly FramePacketMode[] = ["off", "shadow", "on"];
@@ -26,7 +27,7 @@ let warnedUnknownMode = false;
 
 /** `FRAME_PACKET`, trimmed and lowercased. Unset or garbage falls to the code default, shadow. */
 export function readFramePacketMode(env: NodeJS.ProcessEnv = process.env): FramePacketMode {
-  const raw = (env.FRAME_PACKET ?? "").trim().toLowerCase();
+  const raw = normalizeModeToken(env.FRAME_PACKET);
   if (!raw) return "shadow";
   if ((VALID_MODES as readonly string[]).includes(raw)) return raw as FramePacketMode;
   if (!warnedUnknownMode) {

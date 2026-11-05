@@ -13,11 +13,12 @@
 // `node scripts/voice-gate-report.mjs /app/logs/<c>-bot-out.log`.
 
 import { genericDriftHits } from "./voice-markers.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type VoiceGateMode = "off" | "shadow" | "on";
 
 export function voiceGateMode(env: NodeJS.ProcessEnv = process.env): VoiceGateMode {
-  const v = String(env["VOICE_GATE"] ?? "").trim().toLowerCase();
+  const v = normalizeModeToken(env["VOICE_GATE"]);
   return v === "off" || v === "on" ? v : "shadow";
 }
 

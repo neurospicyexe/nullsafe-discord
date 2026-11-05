@@ -22,13 +22,14 @@
 
 import { normalizeSentence } from "./bad-night.js";
 import { neutralizeRecalled } from "./recalled-text.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 // ── The knob ─────────────────────────────────────────────────────────────────
 
 export type DeparturesMode = "off" | "shadow" | "on";
 
 function parseMode(v: string | undefined): DeparturesMode | null {
-  const t = String(v ?? "").trim().toLowerCase();
+  const t = normalizeModeToken(v);
   return t === "off" || t === "shadow" || t === "on" ? t : null;
 }
 

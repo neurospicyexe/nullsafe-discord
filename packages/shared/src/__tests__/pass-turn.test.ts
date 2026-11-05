@@ -105,11 +105,11 @@ describe("turnFraming", () => {
 });
 
 describe("FOLLOWUP_PASS", () => {
-  it("defaults on; only 'off' (any case, trimmed) disables", () => {
+  it("defaults on; off|0|false|no (any case, trimmed) disable", () => {
     expect(followUpPassEnabled({})).toBe(true);
     expect(followUpPassEnabled({ FOLLOWUP_PASS: "" })).toBe(true);
     expect(followUpPassEnabled({ FOLLOWUP_PASS: "on" })).toBe(true);
-    expect(followUpPassEnabled({ FOLLOWUP_PASS: "false" })).toBe(true);
+    expect(followUpPassEnabled({ FOLLOWUP_PASS: "false" })).toBe(false); // 2026-11-05: off|0|false|no all disable
     expect(followUpPassEnabled({ FOLLOWUP_PASS: "off" })).toBe(false);
     expect(followUpPassEnabled({ FOLLOWUP_PASS: "  OFF " })).toBe(false);
   });

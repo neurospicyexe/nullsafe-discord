@@ -646,7 +646,9 @@ export class LibrarianClient {
    */
   async markQuestionVoiced(questionId: string): Promise<boolean> {
     if (!questionId) return false;
-    try {
+    // Retried (2026-11-05): a swallowed failure here let the same question be voiced twice. The KV
+    // set is idempotent (same key, newest timestamp), so a retry is safe.
+    return this._retryThrottledWrite("markQuestionVoiced", async () => {
       const res = await this._fetch(`${this.url}/companion/settings/${this.companionId}`, {
         method: "POST",
         headers: {
@@ -656,12 +658,30 @@ export class LibrarianClient {
         body: JSON.stringify({ key: `question_voiced:${questionId}`, value: new Date().toISOString() }),
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok) console.warn(`[librarian] markQuestionVoiced ${res.status}`);
-      return res.ok;
-    } catch (e) {
-      console.warn("[librarian] markQuestionVoiced failed:", String(e));
-      return false;
+      return { ok: res.ok, status: res.status };
+    });
+  }
+
+  /**
+   * Run a small idempotent write up to 3 times with short backoff (400ms, 1200ms) and log every
+   * failed attempt (status or error name only, never payload). 404 is final (a normal race on
+   * consume), as is any other 4xx. Returns whether it landed.
+   */
+  async _retryThrottledWrite(label: string, attempt: () => Promise<{ ok: boolean; status: number }>, backoffMs: number[] = [400, 1200]): Promise<boolean> {
+    for (let i = 0; i <= backoffMs.length; i++) {
+      try {
+        const r = await attempt();
+        if (r.ok) return true;
+        if (r.status === 404 && label === "consumeForageFind") return false;
+        console.warn(`[librarian] ${label} ${r.status} (attempt ${i + 1}/${backoffMs.length + 1})`);
+        if (r.status >= 400 && r.status < 500 && r.status !== 429 && r.status !== 408) return false;
+      } catch (e) {
+        console.warn(`[librarian] ${label} failed (attempt ${i + 1}/${backoffMs.length + 1}):`, e instanceof Error ? e.name : "error");
+      }
+      if (i < backoffMs.length) await new Promise((r) => setTimeout(r, backoffMs[i]));
     }
+    console.warn(`[librarian] ${label} gave up after ${backoffMs.length + 1} attempts`);
+    return false;
   }
 
   /**
@@ -678,7 +698,8 @@ export class LibrarianClient {
    */
   async consumeForageFind(id: string): Promise<boolean> {
     if (!id) return false;
-    try {
+    // Retried (2026-11-05); the PATCH is idempotent server-side (404 = already consumed, final).
+    return this._retryThrottledWrite("consumeForageFind", async () => {
       const res = await this._fetch(`${this.url}/mind/forage/${encodeURIComponent(id)}/consume`, {
         method: "PATCH",
         headers: {
@@ -688,14 +709,8 @@ export class LibrarianClient {
         body: JSON.stringify({ consumed_by: this.companionId }),
         signal: AbortSignal.timeout(8_000),
       });
-      if (!res.ok && res.status !== 404) {
-        console.warn(`[librarian] consumeForageFind ${res.status}`);
-      }
-      return res.ok;
-    } catch (e) {
-      console.warn("[librarian] consumeForageFind failed:", String(e));
-      return false;
-    }
+      return { ok: res.ok, status: res.status };
+    });
   }
 
   // ── Sanctioned drift lane (halseth mig 0087/0093) ─────────────────────────

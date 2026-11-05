@@ -461,7 +461,7 @@ module.exports = {
       // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
       // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
       // whenever a session window was open at restart. Same on all three bots.
-      kill_timeout: 8000,
+      kill_timeout: 15000,
       error_file: "/app/logs/cypher-bot-error.log",
       out_file: "/app/logs/cypher-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
@@ -488,7 +488,7 @@ module.exports = {
       // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
       // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
       // whenever a session window was open at restart. Same on all three bots.
-      kill_timeout: 8000,
+      kill_timeout: 15000,
       error_file: "/app/logs/drevan-bot-error.log",
       out_file: "/app/logs/drevan-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
@@ -515,7 +515,7 @@ module.exports = {
       // 8000 (was 5000, 2026-10-08 P3-14): the bot's shutdown() is budgeted at ~7.5s worst case
       // (closure flush 1.5s + session close 5s + subscriber quit 1s); 5000 SIGKILLed Cypher
       // whenever a session window was open at restart. Same on all three bots.
-      kill_timeout: 8000,
+      kill_timeout: 15000,
       error_file: "/app/logs/gaia-bot-error.log",
       out_file: "/app/logs/gaia-bot-out.log",
       log_date_format: "YYYY-MM-DD HH:mm:ss",
@@ -539,7 +539,7 @@ module.exports = {
       restart_delay: 10000,
       max_restarts: 20,
       min_uptime: "30s",
-      kill_timeout: 8000,
+      kill_timeout: 15000,
       exp_backoff_restart_delay: 1000,
       error_file: "/app/logs/autonomous-worker-error.log",
       out_file: "/app/logs/autonomous-worker-out.log",

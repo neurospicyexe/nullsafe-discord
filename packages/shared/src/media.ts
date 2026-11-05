@@ -17,6 +17,7 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { neutralizeRecalled } from "./recalled-text.js";
+import { isOffToken } from "./off-switch.js";
 
 const execFileP = promisify(execFile);
 
@@ -345,7 +346,7 @@ export function extractWebLyrics(snippet: string): string {
 // TAVILY_API_KEY presence (set MEDIA_LYRICS_WEB=false to disable).
 async function fetchLyricsWeb(meta: TrackMeta): Promise<LyricsResult | null> {
   const key = process.env["TAVILY_API_KEY"];
-  if (!key || process.env["MEDIA_LYRICS_WEB"] === "false") return null;
+  if (!key || isOffToken(process.env["MEDIA_LYRICS_WEB"])) return null;
   if (!cleanTrackTitle(meta.title ?? "")) return null;
   const tokens = lyricsContextTokens(meta);
   // No distinctive context AND no artist -> we can't tell this "All Fall Down" from any
