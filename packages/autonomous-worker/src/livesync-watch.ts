@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as https from "node:https";
 import { notifyDiscord } from "./discord-notify.js";
+import { isOffToken } from "@nullsafe/shared";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -276,7 +277,7 @@ let running = false;
 
 /** Scheduler entry. LIVESYNC_WATCH=off kills it. */
 export async function runLiveSyncWatchTick(): Promise<LiveSyncOutcome> {
-  if (process.env["LIVESYNC_WATCH"] === "off") return "skipped";
+  if (isOffToken(process.env["LIVESYNC_WATCH"])) return "skipped";
   if (running) return "skipped";
   const cfg = loadConfig();
   if (!cfg) { console.warn("[livesync] second-brain config unreadable; watch idle"); return "skipped"; }

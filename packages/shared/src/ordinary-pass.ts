@@ -17,11 +17,12 @@
 
 import type { CompanionId } from "./types.js";
 import { AUTHORED_PRESENCE } from "./presence-authored.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type PassOnOrdinaryMode = "off" | "shadow" | "on";
 
 function parseMode(v: string | undefined): PassOnOrdinaryMode | null {
-  const t = String(v ?? "").trim().toLowerCase();
+  const t = normalizeModeToken(v);
   return t === "off" || t === "shadow" || t === "on" ? t : null;
 }
 

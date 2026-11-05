@@ -9,6 +9,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMakesClient, normalizeParams, type MakesClient, type PendingMake, type RenderedFile } from "./makes-client.js";
+import { isOffToken } from "@nullsafe/shared";
 
 export type ExecFn = (file: string, args: string[], opts: { timeoutMs: number; cwd: string }) => Promise<void>;
 
@@ -227,7 +228,7 @@ let ticking = false;
  * (a slow video must not stack a second tick). Returns how many makes it settled.
  */
 export async function runRenderTick(d: RenderDeps = realDeps(), limit = 3): Promise<number> {
-  if ((process.env["MAKES_RENDERER"] ?? "").trim().toLowerCase() === "off") return 0;
+  if (isOffToken(process.env["MAKES_RENDERER"])) return 0;
   if (ticking) return 0;
   ticking = true;
   let settled = 0;

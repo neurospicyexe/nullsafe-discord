@@ -20,6 +20,7 @@ import type { CompanionId } from "./types.js";
 import { getInterests, type InterestRow } from "./makes-client.js";
 import { decidePace, fetchFerment, paceLogLine, warmestInterest, mayMake, WARM_INTEREST_HEAT } from "@nullsafe/shared";
 import { HALSETH_URL, HALSETH_SECRET } from "./config.js";
+import { isOffToken } from "@nullsafe/shared";
 
 const SCOUT_SYSTEM =
   "You are a neutral research scout. Summarize the find in 3-4 sentences, plainly and factually. " +
@@ -251,7 +252,7 @@ export async function runForage(runDate: Date = new Date()): Promise<number> {
       // B62 step 3 + 5: a warm interest takes one slot, unless the pace is flat (optional work skipped).
       // Fail-soft: any failure on either read leaves today's picks exactly as they were.
       let interestSlot: string | null = null;
-      if (mayMake(companionId) && (process.env["FORAGE_INTERESTS"] ?? "").trim().toLowerCase() !== "off") {
+      if (mayMake(companionId) && !isOffToken(process.env["FORAGE_INTERESTS"])) {
         try {
           const [interests, ferment] = await Promise.all([
             getInterests(companionId),

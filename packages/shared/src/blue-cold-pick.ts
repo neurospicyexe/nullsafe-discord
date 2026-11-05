@@ -46,6 +46,7 @@ import {
   type JevAddressCaller, type JevAddressVerdict,
 } from "./address-jev.js";
 import type { AddressTurn } from "./address-model.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type BlueColdPickMode = "off" | "shadow" | "on";
 
@@ -55,7 +56,7 @@ export type BlueColdPickMode = "off" | "shadow" | "on";
  * case); junk falls back to the default.
  */
 export function blueColdPickMode(env: Record<string, string | undefined> = process.env): BlueColdPickMode {
-  const v = (env["BLUE_COLD_PICK"] ?? "").trim().toLowerCase();
+  const v = normalizeModeToken(env["BLUE_COLD_PICK"]);
   return v === "shadow" || v === "off" ? v : "on";
 }
 

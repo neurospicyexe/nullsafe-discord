@@ -1,3 +1,4 @@
+import { isOffToken } from "./off-switch.js";
 // voice-markers.ts -- pattern-based voice drift scoring (0070, CogCor-inspired).
 //
 // The immune-system half of drift detection: basins watch vault embeddings (slow,
@@ -313,7 +314,7 @@ export function reportVoiceScore(
   channelId: string,
   secret: string,
 ): void {
-  if (process.env["VOICE_SCORING"] === "false") return;
+  if (isOffToken(process.env["VOICE_SCORING"])) return;
   const halsethUrl = (process.env["HALSETH_URL"] ?? "").replace(/\/$/, "");
 
   const tracked = scoreReply(companionId, text);

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isOffToken } from "./off-switch.js";
 
 // vision.ts -- shared-experience: Eyes.
 //
@@ -63,7 +64,7 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic)$/i;
  * failure it exists to remove -- a knob nobody set would just reproduce the bug.
  */
 export function visionEnabled(): boolean {
-  return process.env["VISION_ENABLED"] !== "false";
+  return !isOffToken(process.env["VISION_ENABLED"]);
 }
 
 /** The subset of a discord.js Attachment this module needs. Structural, so tests need no client. */

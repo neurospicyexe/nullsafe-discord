@@ -5,12 +5,13 @@
 // Knob VOICE_LESSONS=off kills it (default on: it only stages). A 404 (route not deployed) is tolerated.
 import { readFileSync } from "node:fs";
 import { HALSETH_URL, HALSETH_SECRET, IDENTITY_PATHS } from "./config.js";
+import { isOffToken } from "@nullsafe/shared";
 
 export type LessonKind = "lesson" | "corrective" | "experiment";
 export interface LessonDraft { kind: LessonKind; body: string }
 
 export function voiceLessonsOn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return String(env["VOICE_LESSONS"] ?? "").trim().toLowerCase() !== "off";
+  return !isOffToken(env["VOICE_LESSONS"]);
 }
 
 /** The ask: marker names and z only. Kept in code so the "no reply text" rule is visible at the call. */

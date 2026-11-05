@@ -13,6 +13,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { postJev, type JevQuestion } from "./jev-gate.js";
 import { timeHalseth } from "./turn-telemetry.js";
+import { normalizeModeToken } from "./off-switch.js";
 
 export type FactsPickMode = "off" | "shadow" | "live";
 const VALID_MODES: readonly FactsPickMode[] = ["off", "shadow", "live"];
@@ -58,7 +59,7 @@ function posInt(raw: string | undefined, fallback: number): number {
  */
 export type FactsTrustMode = "off" | "shadow" | "on";
 export function readFactsTrustMode(env: NodeJS.ProcessEnv = process.env): FactsTrustMode {
-  const v = String(env.FACTS_TRUST ?? "").trim().toLowerCase();
+  const v = normalizeModeToken(env.FACTS_TRUST);
   return v === "off" || v === "on" ? v : "shadow";
 }
 export const FACTS_TRUST_HEDGE_BELOW = 0.5;

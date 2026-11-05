@@ -28,6 +28,7 @@ import type { CompanionId } from "./types.js";
 import { ALL_COMPANIONS, type AddressType } from "./channel-config.js";
 import { postJev, type JevAnswers, type JevEvalResult, type JevQuestion } from "./jev-gate.js";
 import type { AddressTo, AddressTurn, AddressVerdict } from "./address-model.js";
+import { isOffToken } from "./off-switch.js";
 
 // ---------------------------------------------------------------------------
 // Mode
@@ -36,7 +37,7 @@ import type { AddressTo, AddressTurn, AddressVerdict } from "./address-model.js"
 /** ADDRESS_JEV=off is the kill switch. Anything else (unset included) runs Jev whenever the
  *  address shadow itself runs (ADDRESS_MODEL=shadow). */
 export function addressJevEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env["ADDRESS_JEV"] ?? "").trim().toLowerCase() !== "off";
+  return !isOffToken(env["ADDRESS_JEV"]);
 }
 
 // ---------------------------------------------------------------------------

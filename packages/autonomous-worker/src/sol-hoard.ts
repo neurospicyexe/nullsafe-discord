@@ -13,9 +13,10 @@ import type { Redis } from "@nullsafe/shared";
 import { getCreatures, hoardForCreature } from "./halseth-client.js";
 import { postSolMoment } from "./sol-presence.js";
 import { isConversationActive } from "./idle-check.js";
+import { isOffToken } from "@nullsafe/shared";
 
 export function solHoardEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return (env["SOL_HOARD"] ?? "").trim().toLowerCase() !== "off";
+  return !isOffToken(env["SOL_HOARD"]);
 }
 
 export interface HoardPassDeps {

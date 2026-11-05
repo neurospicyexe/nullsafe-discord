@@ -1,5 +1,6 @@
 import "./net-tuning.js"; // side-effect: must run before any fetch (VPS->Cloudflare ETIMEDOUT fix)
 export * from "./types.js";
+export * from "./off-switch.js";
 export * from "./floor.js";
 export * from "./fit-bid.js";
 export * from "./recall-context.js";
