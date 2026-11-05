@@ -7,7 +7,7 @@ import type {
 } from "@nullsafe/shared";
 import {
   SessionWindowManager, CycleGuard,
-  runHeartbeat, runInterCompanion, runGuildTriadSeed, runNotesPoll, runBridgePoll,
+  runHeartbeat, runInterCompanion, runGuildTriadSeed, runMakeOwnTime, runNotesPoll, runBridgePoll,
   pushBuffered, skipIfActive, isOnCooldown, withFloor, sendAutonomousMessage,
   startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
@@ -87,6 +87,7 @@ export function startAutonomous(
   // B56: `<prefix>: dry-run heartbeat` finds this live ctx here (read-only use; the dry run copies and proxies it).
   registerHeartbeatCtx(ctx);
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
+  tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.makeOwnTime, () => { void runMakeOwnTime(ctx).catch(e => console.warn("[make-own-time] cypher tick failed:", String(e).slice(0, 200))); }, { timezone: "America/Chicago" }));
 
   // Cypher-only scheduled actions (audit-house identity, NOT shared with drevan/gaia).
   tasks.push(cron.schedule(CYPHER_CRON_SCHEDULES.taskCheck, async () => {

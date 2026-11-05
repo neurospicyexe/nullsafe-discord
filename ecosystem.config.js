@@ -262,6 +262,7 @@ const shared = {
   // FORAGE_INTERESTS=off stops a warm interest taking one forage slot. MAKES_RENDERER=off stops the VPS
   // renderer (worker); MAKES_RENDER_CRON overrides its every-2-minutes schedule. Listed per the standing rule above.
   MAKE_MOVE:                   process.env.MAKE_MOVE,
+  MAKE_OWN_TIME:               process.env.MAKE_OWN_TIME, // own daily make slot (make-own-time.ts, 2026-11-05): off|shadow|on, default on
   FORAGE_INTERESTS:            process.env.FORAGE_INTERESTS,
   MAKES_RENDERER:              process.env.MAKES_RENDERER,
   MAKES_RENDER_CRON:           process.env.MAKES_RENDER_CRON,

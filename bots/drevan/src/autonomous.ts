@@ -6,7 +6,7 @@ import type {
 } from "@nullsafe/shared";
 import {
   SessionWindowManager, CycleGuard,
-  runHeartbeat, runInterCompanion, runGuildTriadSeed, runNotesPoll, runBridgePoll,
+  runHeartbeat, runInterCompanion, runGuildTriadSeed, runMakeOwnTime, runNotesPoll, runBridgePoll,
   pushBuffered, startDirectorListener, directorMode, type AutonomousContext,
 } from "@nullsafe/shared";
 type OwnerDm = NonNullable<AutonomousContext["ownerDm"]>;
@@ -85,6 +85,7 @@ export function startAutonomous(
   // B56: `<prefix>: dry-run heartbeat` finds this live ctx here (read-only use; the dry run copies and proxies it).
   registerHeartbeatCtx(ctx);
   tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.heartbeat, () => runHeartbeat(ctx)));
+  tasks.push(cron.schedule(DREVAN_CRON_SCHEDULES.makeOwnTime, () => { void runMakeOwnTime(ctx).catch(e => console.warn("[make-own-time] drevan tick failed:", String(e).slice(0, 200))); }, { timezone: "America/Chicago" }));
   // #the-triad server-scoped seeder (2026-10-05): OUTSIDE the director branch on purpose. #the-triad is not a
   // director channel, so the director never seeds it; this runs whatever DIRECTOR_ENABLED says. Off by default
   // (GUILD_TRIAD_SEED); the runner returns before any I/O when off.
