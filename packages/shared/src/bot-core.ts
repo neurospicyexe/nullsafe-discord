@@ -18,6 +18,8 @@ import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } fro
 import { parseCreatedAtTimestamp } from "./relative-time.js";
 import { setArmedTriggers } from "./triggers.js";
 import { setCareState, careHoldSince } from "./care-state.js";
+import { setOwnPostRecorder } from "./autonomous-core.js";
+import { SELF_INITIATED_AUTHOR } from "./prompt-assembly.js";
 import { startBlueNoteScheduler, blueDiscordIdFrom, blueNoteMode, type BlueRedis, type RoomLine } from "./blue-note.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
@@ -553,19 +555,29 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
   writeQueue.start();
   const stmStore = new StmStore(
     companionId,
-    (channelId, entry) => librarian.stmWrite(channelId, { role: entry.role as "user" | "assistant", content: entry.content, author_name: entry.authorName }),
+    // A self-initiated assistant line persists its flag in author_name (assistant rows carry none), so a
+    // restart between the send and Raziel's reply keeps the referent (2026-11-05, A1 of the drop scan).
+    (channelId, entry) => librarian.stmWrite(channelId, {
+      // Halseth 400s an empty content (11-04 09:47: one image-only turn lost on all three bots, "DATA LOSS").
+      role: entry.role as "user" | "assistant", content: entry.content.trim() ? entry.content : "[no text]",
+      author_name: entry.role === "assistant" && entry.selfInitiated ? SELF_INITIATED_AUTHOR : entry.authorName,
+    }),
     async (channelId) => {
       const rows = await librarian.stmLoad(channelId);
       // created_at -> timestamp (2026-08-29): without this, history restored after a pm2
       // restart carried no timestamp at all, so stampRelative() silently no-oped on every
       // row and a reload of yesterday's conversation read as freshly-arrived. Parsed
       // defensively -- an unparseable/missing value just omits `timestamp`, same as before.
-      return rows.map(r => ({
-        role: r.role,
-        content: r.content,
-        authorName: r.author_name ?? undefined,
-        timestamp: parseCreatedAtTimestamp(r.created_at),
-      }));
+      return rows.map(r => {
+        const self = r.role === "assistant" && r.author_name === SELF_INITIATED_AUTHOR;
+        return {
+          role: r.role,
+          content: r.content,
+          authorName: self ? undefined : (r.author_name ?? undefined),
+          timestamp: parseCreatedAtTimestamp(r.created_at),
+          ...(self ? { selfInitiated: true as const } : {}),
+        };
+      });
     },
     writeQueue,
   );
@@ -690,6 +702,12 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`[${companionId}] ready as ${c.user.tag}`);
+    // Autonomous channel posts land in this bot's own STM, flagged selfInitiated (autonomous-core.ts
+    // setOwnPostRecorder, 2026-11-05), so the next Hermes turn in that channel knows what it said.
+    setOwnPostRecorder((channelId, content) => {
+      void stmStore.ensureLoaded(channelId).catch(() => {}).then(() =>
+        stmStore.append(channelId, { role: "assistant", content, timestamp: Date.now(), selfInitiated: true }));
+    });
     // registerSentId: autonomous seeds land in the same reply-to-me detector as handler
     // replies, so a sibling's Discord reply to a seed reaches the seeder (2026-07-03).
     autonomous.start(librarian, adapterRef.current, client, configCache, bootCtx, sessionWindows, redis, env.halsethSecret, (id: string) => {

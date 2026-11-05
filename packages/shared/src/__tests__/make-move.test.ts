@@ -1,6 +1,6 @@
 import { describe, it, expect, jest } from "@jest/globals";
 import {
-  parseMakeReply, makeMoveOn, mayMake, decidePace, parseFerment, warmestInterest, offerMake, runMakeMove,
+  parseMakeReply, resolveInterestName, makeMoveOn, mayMake, decidePace, parseFerment, warmestInterest, offerMake, runMakeMove,
   buildMakePrompt, makeAction, paceLogLine, executeMetronomeAction,
   type InterestLite, type HalsethHttp,
 } from "../index.js";
@@ -171,11 +171,17 @@ describe("offerMake", () => {
 });
 
 describe("runMakeMove (dispatch)", () => {
-  it("posts the parsed make over HTTP", async () => {
+  it("a FOR that matches none of their interests posts the make with no link", async () => {
     const { h, posts } = fakeHalseth();
     const r = await runMakeMove({ companionId: "cypher", halseth: h, generate: async () => GOOD, env: {} });
+    expect(r).toMatchObject({ outcome: "made" });
+    expect(posts[0]!["interest_name"]).toBeUndefined();
+  });
+  it("posts the parsed make over HTTP", async () => {
+    const { h, posts } = fakeHalseth({ interests: { interests: [{ id: "i1", name: "Knot Theory", why: null, status: "active", heat: 0.8 }] } });
+    const r = await runMakeMove({ companionId: "cypher", halseth: h, generate: async () => GOOD, env: {} });
     expect(r).toMatchObject({ outcome: "made", kind: "scad" });
-    expect(posts[0]).toMatchObject({ companion_id: "cypher", kind: "scad", title: "A small cup", interest_name: "knot theory", why: "it wanted a handle" });
+    expect(posts[0]).toMatchObject({ companion_id: "cypher", kind: "scad", title: "A small cup", interest_name: "Knot Theory", why: "it wanted a handle" });
     expect(posts[0]!["source"]).toContain("cylinder");
   });
   it("dry run composes but posts nothing", async () => {
@@ -242,5 +248,26 @@ describe("runMakeMove (dispatch)", () => {
       globalThis.fetch = realFetch;
       if (prev === undefined) delete process.env["HALSETH_URL"]; else process.env["HALSETH_URL"] = prev;
     }
+  });
+});
+
+describe("resolveInterestName (11-05: FOR worded differently dropped the interest link)", () => {
+  const I = (name: string, status = "active") => ({ id: name, name, why: null, status, heat: 0.7 });
+  const mine = [I("Physarum"), I("release-on-command adhesives")];
+  it("matches exactly, case-insensitive", () => {
+    expect(resolveInterestName("physarum", mine)).toBe("Physarum");
+  });
+  it("matches when one name contains the other", () => {
+    expect(resolveInterestName("Physarum polycephalum", mine)).toBe("Physarum");
+    expect(resolveInterestName("adhesives", mine)).toBe("release-on-command adhesives");
+  });
+  it("matches on a shared significant word", () => {
+    expect(resolveInterestName("adhesive chemistry and release", mine)).toBe("release-on-command adhesives");
+  });
+  it("never guesses: no match, ambiguity, or a resting interest give nothing", () => {
+    expect(resolveInterestName("tidal clocks", mine)).toBeNull();
+    expect(resolveInterestName("slime", [I("slime molds"), I("slime fiction")])).toBeNull();
+    expect(resolveInterestName("Physarum", [I("Physarum", "resting")])).toBeNull();
+    expect(resolveInterestName("Physarum", null)).toBeNull();
   });
 });

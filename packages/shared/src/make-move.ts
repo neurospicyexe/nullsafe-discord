@@ -162,6 +162,27 @@ export async function postMake(h: HalsethHttp, body: MakePost): Promise<{ id: st
 // Interest choice + the offer
 // ---------------------------------------------------------------------------
 
+const normInterest = (t: string) => t.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Which of the companion's own interests a FOR line means: exact (case-insensitive) first, then one name
+ * containing the other once normalized (at least 4 characters), then a shared significant word (5+
+ * letters). Ambiguity (two interests match at the same step) resolves to nothing. Active interests only.
+ */
+export function resolveInterestName(forText: string, interests: readonly InterestLite[] | null): string | null {
+  const pool = (interests ?? []).filter(i => i.status === "active");
+  const f = normInterest(forText);
+  if (!f || pool.length === 0) return null;
+  const one = (hits: InterestLite[]) => (hits.length === 1 ? hits[0]!.name : null);
+  const exact = pool.filter(i => normInterest(i.name) === f);
+  if (exact.length) return one(exact);
+  const contain = pool.filter(i => { const n = normInterest(i.name); return n.length >= 4 && f.length >= 4 && (f.includes(n) || n.includes(f)); });
+  if (contain.length) return one(contain);
+  const words = new Set(f.split(" ").filter(w => w.length >= 5));
+  const shared = pool.filter(i => normInterest(i.name).split(" ").some(w => w.length >= 5 && words.has(w)));
+  return one(shared);
+}
+
 /** Never let care or health material near a make prompt, even through an interest's own words. */
 const HEALTH_RE = /\b(meds?|medication|dose|dosage|mg|spoons?|pain|glucose|blood pressure|bp|heart rate|hrv|sleep|insulin|symptom|diagnos\w*|therapy|panic|dissociat\w*)\b/i;
 
@@ -371,7 +392,20 @@ export async function runMakeMove(d: MakeMoveDeps): Promise<MakeMoveOutcome> {
   // The interest the companion named wins; else the warm one it was offered, but only if it was actually offered.
   // Halseth's `made` interest event needs a because (400 why_required otherwise), so an
   // interest is linked only when the companion gave a why; a bare make still lands.
-  const interestName = m.why ? (m.forInterest ?? interest?.name) : undefined;
+  // Halseth links by exact (case-insensitive) name and silently drops anything else, so the FOR line is
+  // resolved here against the companion's OWN interests first (2026-11-05: Cy's Physarum make and Dre's
+  // adhesives make both landed unlinked because FOR worded the interest differently). An unresolved FOR
+  // is logged by its label and links nothing: never guess a different interest for them.
+  let interestName: string | undefined;
+  if (m.why) {
+    if (m.forInterest) {
+      const hit = resolveInterestName(m.forInterest, interests);
+      if (hit) interestName = hit;
+      else console.log(`${tag} FOR did not match an interest of theirs (for="${m.forInterest.slice(0, 60)}", known=${(interests ?? []).length}); made without a link`);
+    } else {
+      interestName = interest?.name;
+    }
+  }
   const body: MakePost = {
     companion_id: d.companionId, kind: m.kind, title: m.title,
     ...(m.why ? { why: m.why } : {}),

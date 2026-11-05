@@ -70,7 +70,11 @@ export class StmStore {
         this.memory.set(channelId, entries);
         return;
       }
-    } catch { /* fail-silent -- DB unavailable is acceptable */ }
+    } catch (e) {
+      // Still fail-soft (the Discord fallback below may fill it), but no longer silent: a Halseth blip at
+      // first contact leaves this channel with no history until restart (drop scan 11-05).
+      console.warn(`[stm] load failed ch=${channelId}${discordFallback ? " (trying Discord history)" : " (no fallback; channel starts empty)"}: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     if (discordFallback) {
       try {

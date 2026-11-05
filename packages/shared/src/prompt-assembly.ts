@@ -254,6 +254,8 @@ const HERMES_WITNESS_ITEM_CAP = 1400;  // per-turn slice, head-first so attribut
  */
 /** Label for a line this companion sent unprompted (folded by hermesDelta; see the pool filter). */
 export const SELF_INITIATED_LABEL = "[you, sent on your own earlier]";
+/** STM persistence marker: a self-initiated assistant row is stored with this author_name (bot-core). */
+export const SELF_INITIATED_AUTHOR = "(self-initiated)";
 
 const WITNESS_HEADER =
   "[Witnessed since your last turn -- already happened, absorb as context, do not answer each line. " +

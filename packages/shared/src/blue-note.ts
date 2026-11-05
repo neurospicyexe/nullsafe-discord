@@ -261,18 +261,33 @@ const HOLD_CLAIM_TTL_MS = 7 * 86_400_000;
 /** A hold that began longer ago than this is not "starting"; the claim key is not a catch-up trigger. */
 export const HOLD_FRESH_MS = 3 * 3_600_000;
 
+function sendErr(deps: BlueNoteDeps, to: string): (e: unknown) => false {
+  return (e) => {
+    const code = (e as { code?: unknown })?.code;
+    (deps.log ?? blueLog)(`[blue-note] ${deps.companionId} send_error to=${to}${code !== undefined ? ` code=${String(code)}` : ""} err=${(e instanceof Error ? e.message : String(e)).slice(0, 120)}`);
+    return false;
+  };
+}
+
 /** Route one message per the mode. Returns "preview" | "blue" | null (nothing landed). */
 async function deliver(deps: BlueNoteDeps, mode: BlueNoteMode, text: string, previewPrefix: string): Promise<"preview" | "blue" | null> {
   if (mode === "preview") {
-    return (await deps.sendToOwner(`${previewPrefix}\n\n${text}`).catch(() => false)) ? "preview" : null;
+    return (await deps.sendToOwner(`${previewPrefix}\n\n${text}`).catch(sendErr(deps, "owner"))) ? "preview" : null;
   }
   if (mode === "on") {
-    if (!(await deps.sendToBlue(text).catch(() => false))) return null;
+    if (!(await deps.sendToBlue(text).catch(sendErr(deps, "blue")))) return null;
     // Nothing is hidden from Raziel: a best-effort copy, never a reason to re-send to Blue.
-    await deps.sendToOwner(`Sent to Blue:\n\n${text}`).catch(() => false);
+    await deps.sendToOwner(`Sent to Blue:\n\n${text}`).catch(sendErr(deps, "owner_copy"));
     return "blue";
   }
   return null;
+}
+
+function onceLog(state: BlueNoteState, key: string, log: (l: string) => void, line: string): void {
+  const seen = state.noActivityLogged ?? (state.noActivityLogged = new Set());
+  if (seen.has(key)) return;
+  seen.add(key);
+  log(line);
 }
 
 async function claim(redis: BlueRedis, key: string, who: string, ttl: number): Promise<boolean> {
@@ -295,8 +310,8 @@ export async function runBlueNoteDay(deps: BlueNoteDeps, state: BlueNoteState): 
   const { date, hour } = chicagoParts(nowMs);
   if (noteVoiceFor(date) !== deps.companionId) return "not_my_day";
   if ((deps.hour ? deps.hour() : hour) < blueNoteHour()) return "before_hour";
-  if (!deps.redis) return "no_redis";
-  if ((state.attempts.get(date) ?? 0) >= MAX_ATTEMPTS) return "gave_up";
+  if (!deps.redis) { onceLog(state, `noredis:${date}`, log, `[blue-note] ${deps.companionId} kind=day date=${date} outcome=no_redis (nothing will send)`); return "no_redis"; }
+  if ((state.attempts.get(date) ?? 0) >= MAX_ATTEMPTS) { onceLog(state, `gaveup:${date}`, log, `[blue-note] ${deps.companionId} kind=day date=${date} outcome=gave_up attempts=${MAX_ATTEMPTS}`); return "gave_up"; }
 
   const notes = await deps.ownNotes().catch(() => []);
   const inputs = buildNoteInputs({ today: date, ownerName: deps.ownerName, roomLines: deps.roomLines(), notes });
@@ -366,8 +381,11 @@ export async function runBlueNoteHold(deps: BlueNoteDeps, state: BlueNoteState):
 }
 
 export async function runBlueNoteTick(deps: BlueNoteDeps, state: BlueNoteState): Promise<{ hold: BlueTickOutcome; day: BlueTickOutcome }> {
-  const hold = await runBlueNoteHold(deps, state).catch((): BlueTickOutcome => "send_failed");
-  const day = await runBlueNoteDay(deps, state).catch((): BlueTickOutcome => "gen_failed");
+  // A throw used to vanish here every minute (drop scan 11-05); it now leaves one line per throw.
+  const log = deps.log ?? blueLog;
+  const why = (e: unknown) => (e instanceof Error ? e.message : String(e)).slice(0, 160);
+  const hold = await runBlueNoteHold(deps, state).catch((e): BlueTickOutcome => { log(`[blue-note] ${deps.companionId} kind=hold outcome=threw err=${why(e)}`); return "send_failed"; });
+  const day = await runBlueNoteDay(deps, state).catch((e): BlueTickOutcome => { log(`[blue-note] ${deps.companionId} kind=day outcome=threw err=${why(e)}`); return "gen_failed"; });
   return { hold, day };
 }
 

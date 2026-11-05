@@ -222,6 +222,14 @@ export function journalDirectorReply(
   })();
 }
 
+// Own-post recorder (2026-11-05). A channel post the bot makes on its own (heartbeat, inter_companion,
+// notes poll, bridge, director, guild seed) is not a Hermes gateway reply, and the bot drops its own
+// messages on intake, so it reached neither STM nor the gateway transcript: the 11-04 Blue-note bug in a
+// channel ("yes do that" a few turns later had no referent). bot-core registers ONE recorder per process
+// that appends the post to that channel's STM flagged selfInitiated, which hermesDelta folds once.
+let ownPostRecorder: ((channelId: string, content: string) => void) | null = null;
+export function setOwnPostRecorder(fn: ((channelId: string, content: string) => void) | null): void { ownPostRecorder = fn; }
+
 /**
  * Returns whether the message was actually delivered (at least one chunk sent) -- false on
  * cooldown, a non-text channel, or a send that throws. Existing fire-and-forget callers ignore
@@ -249,6 +257,10 @@ export async function sendAutonomousMessage(
       const sent = await sendLong(channel as TextChannel, content);
       for (const m of sent) { ctx.registerSentId?.(m.id); opts?.onSent?.(m.id); }
       markCooldown(ctx, channelId);
+      if (sent.length > 0 && ownPostRecorder) {
+        try { ownPostRecorder(channelId, content); }
+        catch (e) { console.warn(`[${ctx.companionId}/autonomous] own-post STM record failed ch=${channelId}:`, e instanceof Error ? e.message : String(e)); }
+      }
       // Route the self-post through the SAME daily fold as conversation (2026-07-27).
       //
       // This used to write note_type='continuity', salience='high', permanently. Nothing
@@ -904,7 +916,11 @@ async function runHeartbeatBody(ctx: AutonomousContext, mark: MarkTick, b32: B32
     const silenceHours = lastActivityTs != null ? (Date.now() - lastActivityTs) / 3_600_000 : null;
 
     const palette = await librarian.getEligibleMetronomePalette(silenceHours)
-      .catch(() => ({ actions: [], quietHours: null, reach: null }));
+      .catch((e: unknown) => {
+        // A Halseth failure here used to read as "no palette" with no trace (drop scan 11-05).
+        console.warn(`[${companionId}/heartbeat] palette fetch failed, treating as empty: ${e instanceof Error ? e.message : String(e)}`);
+        return { actions: [], quietHours: null, reach: null };
+      });
     g("palette from Halseth", palette.actions.length > 0, `${palette.actions.length} eligible move(s) server-side${palette.actions.length === 0 ? "; empty means the legacy temperature post or a server-side quiet filter" : ""}`);
     const quiet = palette.quietHours;
     // UNKNOWN IS IN FORCE. A null verdict means Halseth was unreachable or predates the field, and

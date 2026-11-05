@@ -179,3 +179,21 @@ describe("bad-night heads-up", () => {
     expect(await runBlueNoteHold(deps({ holdSince: () => null }).d, newBlueNoteState())).toBe("no_hold");
   });
 });
+
+describe("blue-note failures leave a trace (drop scan 11-05)", () => {
+  it("a failed send logs the error instead of swallowing it", async () => {
+    const lines: string[] = [];
+    const { d } = deps({ redis: fakeRedis() });
+    const out = await runBlueNoteDay({ ...d, log: (l: string) => lines.push(l), sendToOwner: async () => { throw Object.assign(new Error("Cannot send messages to this user"), { code: 50007 }); } }, newBlueNoteState());
+    expect(out).toBe("send_failed");
+    expect(lines.some(l => l.includes("send_error to=owner code=50007"))).toBe(true);
+  });
+  it("no redis is logged once per date", async () => {
+    const lines: string[] = [];
+    const { d } = deps({ redis: null });
+    const st = newBlueNoteState();
+    await runBlueNoteDay({ ...d, log: (l: string) => lines.push(l) }, st);
+    await runBlueNoteDay({ ...d, log: (l: string) => lines.push(l) }, st);
+    expect(lines.filter(l => l.includes("outcome=no_redis"))).toHaveLength(1);
+  });
+});
