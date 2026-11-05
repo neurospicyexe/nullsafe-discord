@@ -101,6 +101,28 @@ check("knob off parsing matches the bots (off|0|false|no)",
       and not any(hc.ledger_distill_off({"LEDGER_DISTILL": v}) for v in ("", "on", "1", "offf"))
       and not hc.ledger_distill_off({}))
 
+# Restart flush (2026-11-05): a pass cut by `shutting down...` never ran the clerk. Not a dead clerk.
+r = run({
+    "gaia": (
+        [RECENT + "[gaia] shutting down...",
+         RECENT + "[gaia] onChannelInactive: channel=1 msgs=9",
+         RECENT + "[gaia] flushing 1 active channel(s)..."],
+        [],
+    ),
+    "cypher": (
+        [RECENT + "[cypher] shutting down...",
+         RECENT + "[cypher] onChannelInactive: channel=1 msgs=9",
+         "2026-09-26 11:00:00: [cypher] onChannelInactive: channel=2 msgs=4"],
+        [],
+    ),
+})
+g = r["ledger:handoffs:gaia"]
+check("restart-flush pass alone is not activity -> ok, noted as cut",
+      g["severity"] == "ok" and "cut by a restart" in g["detail"], g)
+c = r["ledger:handoffs:cypher"]
+check("a real session after the restart still warns",
+      c["severity"] == "warning" and c["detail"].startswith("1 Discord"), c)
+
 if FAILURES:
     print("\n%d FAILED: %s" % (len(FAILURES), ", ".join(FAILURES)))
     sys.exit(1)

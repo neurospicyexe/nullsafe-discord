@@ -1508,9 +1508,17 @@ LEDGER_BOT_LOGS = {
 }
 LEDGER_TAIL_BYTES = 2_000_000   # a busy bot writes well over 400KB a day; this window must span 24h
 
-def _ledger_scan(lines, horizon):
+LEDGER_SHUTDOWN_FLUSH_SECS = 15   # an onChannelInactive this soon after "shutting down..." is the restart flush
+
+
+def _ledger_scan(lines, horizon, interrupted=None):
     """Count, from pm2 log lines newer than `horizon` (a naive LOCAL datetime):
-      activity -- `onChannelInactive: channel=` (a Discord session with messages ended),
+      activity -- `onChannelInactive: channel=` (a Discord session with messages ended) -- EXCEPT the
+                  shutdown flush: a pass started within LEDGER_SHUTDOWN_FLUSH_SECS of `shutting down...`
+                  is cut by process exit (the closure flush gives up after 1500ms), so the clerk
+                  never ran. That is a deploy artefact, not a dead clerk, and it used to hold a
+                  24h warning after every restart (11-04: two Gaia restarts, zero real sessions).
+                  Those are appended to `interrupted` (when given) instead of counted.
       wins     -- accepted DISTILLER ledger lines from Discord passes (consolidation excluded: its
                   deterministic line lands with nobody talking, so it would mask a dead clerk),
       stale    -- `[ledger] STALE_HANDOFF` lines, with their reasons.
@@ -1521,6 +1529,7 @@ def _ledger_scan(lines, horizon):
     win_re = re.compile(r"\[(?!consolidation:)[a-z]+\] ledger distiller: (\d+) accepted")
     reason_re = re.compile(r"STALE_HANDOFF .*reason=(\S+)")
     activity, wins, reasons = 0, 0, []
+    last_shutdown = None
     for line in lines:
         m = ts_re.match(line)
         if not m:
@@ -1531,8 +1540,14 @@ def _ledger_scan(lines, horizon):
             continue
         if ts < horizon:
             continue
+        if "] shutting down..." in line:
+            last_shutdown = ts
         if "onChannelInactive: channel=" in line:
-            activity += 1
+            if last_shutdown is not None and 0 <= (ts - last_shutdown).total_seconds() <= LEDGER_SHUTDOWN_FLUSH_SECS:
+                if interrupted is not None:
+                    interrupted.append(ts)
+            else:
+                activity += 1
         w = win_re.search(line)
         if w:
             wins += int(w.group(1))
@@ -1637,7 +1652,8 @@ def check_ledger_handoffs(rep, logs=None, now=None):
         if not readable:
             rep.add("ledger:handoffs:%s" % cid, "notice", "bot logs unreadable -- ledger handoffs UNVERIFIED")
             continue
-        activity, wins, reasons = _ledger_scan(lines, horizon)
+        cut = []
+        activity, wins, reasons = _ledger_scan(lines, horizon, interrupted=cut)
         why = (" (STALE_HANDOFF x%d: %s)" % (len(reasons), ", ".join(sorted(set(reasons))))) if reasons else ""
         if activity and wins == 0:
             rep.add("ledger:handoffs:%s" % cid, "warning",
@@ -1647,8 +1663,9 @@ def check_ledger_handoffs(rep, logs=None, now=None):
             # Some stale passes among landed ones stay OK (detail only): `no_lines` is also what a quiet
             # session with nothing worth recording produces, and a notice here would flip the throttle
             # fingerprint -- and page Telegram -- on every such pass. The alarm is the ZERO case above.
+            cutnote = (" (%d pass(es) cut by a restart, not counted)" % len(cut)) if cut else ""
             rep.add("ledger:handoffs:%s" % cid, "ok",
-                    "%d session(s), %d accepted distiller line(s) in 24h%s" % (activity, wins, why))
+                    "%d session(s), %d accepted distiller line(s) in 24h%s%s" % (activity, wins, why, cutnote))
 
 
 def ledger_distill_off(denv):
