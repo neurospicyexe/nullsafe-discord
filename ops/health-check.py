@@ -276,9 +276,17 @@ ARCHITECT_INVARIANTS = [
     "show the board",              # the PDA rule all three companions derived independently
     "Rosie is a dog",              # the correction he has had to repeat most often
     "NEVER she/her",               # his own pronoun law
-    "School starts late August",   # why this matters this month
-    "Trigger is a blue heeler",    # a fact he resolved himself; proves the block is current
+    "blue heeler",                 # Trigger's breed, a fact he resolved himself (reworded 2026-10-26)
     "Magpie",                      # proves the roster-is-longer-than-the-list correction is carried
+]
+# 2026-11-05: "School starts late August" was RETIRED in the 10-26 facts pass (the fact, not the
+# copy), and "Trigger is a blue heeler" was reworded; the canaries were never updated, so this
+# warned MISSING on every run for ~10 days about facts that were current everywhere.
+# A SOUL synced with FACTS_SYNC_SCOPE_<C>=core (Drevan since 10-24: his other facts arrive per
+# message through the live facts pick) carries only the core block, so it is held to these alone.
+ARCHITECT_CORE_INVARIANTS = [
+    "show the board",
+    "NEVER she/her",
 ]
 
 
@@ -290,19 +298,20 @@ def check_architect_facts(rep, env):
     comparison would report drift on every run and be ignored within a week. What matters is
     whether the fact reaches the surface.
     """
-    def report(name, text, source_note):
+    def report(name, text, source_note, invariants=None):
+        invariants = invariants or ARCHITECT_INVARIANTS
         if text is None:
             rep.add("architect-facts:" + name, "warning",
                     "could not read %s, so presence is UNKNOWN not absent" % source_note)
             return
-        missing = [p for p in ARCHITECT_INVARIANTS if p.lower() not in text.lower()]
+        missing = [p for p in invariants if p.lower() not in text.lower()]
         if not missing:
             rep.add("architect-facts:" + name, "ok",
-                    "all %d invariants present (%d chars)" % (len(ARCHITECT_INVARIANTS), len(text)))
+                    "all %d invariants present (%d chars)" % (len(invariants), len(text)))
         else:
             rep.add("architect-facts:" + name, "warning",
                     "MISSING %d of %d: %s -- this surface is operating without them"
-                    % (len(missing), len(ARCHITECT_INVARIANTS), ", ".join(repr(m) for m in missing)))
+                    % (len(missing), len(invariants), ", ".join(repr(m) for m in missing)))
 
     # 1. The file the Discord bots load from disk.
     shared_path = "/app/identity/shared_system_context.md"
@@ -318,7 +327,8 @@ def check_architect_facts(rep, env):
         p = os.path.join(home, "SOUL.md")
         try:
             with open(p, "r", encoding="utf-8") as f:
-                report("soul:" + cid, f.read(), p)
+                core_only = (env.get("FACTS_SYNC_SCOPE_" + cid.upper()) or env.get("FACTS_SYNC_SCOPE") or "").strip().lower() == "core"
+                report("soul:" + cid, f.read(), p, ARCHITECT_CORE_INVARIANTS if core_only else None)
         except Exception as e:
             rep.add("architect-facts:soul:" + cid, "warning",
                     "could not read %s: %s" % (p, str(e)[:80]))
