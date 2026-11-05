@@ -70,9 +70,37 @@ export function parseTitleQuery(raw: string): TitleQuery {
   return { title: s, year, imdbId, ...(season !== null && episode !== null ? { season, episode } : {}) };
 }
 
-/** Lowercase, punctuation to spaces, leading article dropped: "The Evil Dead" == "Evil Dead". */
+/**
+ * Lowercase, punctuation to spaces, leading article dropped: "The Evil Dead" == "Evil Dead".
+ * Apostrophes are DELETED, not spaced (2026-11-04): "At Worlds End" typed without one must equal
+ * "At World's End", which spacing turned into "world s end" and rejected all 50 right tracks.
+ */
 export function normalizeTitle(t: string): string {
-  return t.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim().replace(/^(?:the|a|an)\s+/, "");
+  return t.toLowerCase().replace(/['’‘`ʼ]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim().replace(/^(?:the|a|an)\s+/, "");
+}
+
+/** "tt0449088" from 449088: the form `movie start` takes, so the ack can say exactly what to type. */
+export function imdbTag(id: number): string {
+  return `tt${String(id).padStart(7, "0")}`;
+}
+
+/**
+ * The films a search actually returned, most tracks first (max 3), so a refusal can name them with the
+ * IMDb id that loads them. Without this the only way forward was asking Cypher to look it up.
+ */
+export function filmsInResults(items: SubtitleItem[]): Array<{ title: string; year: number | null; imdbId: number; tracks: number }> {
+  const seen = new Map<number, { title: string; year: number | null; imdbId: number; tracks: number }>();
+  for (const i of items) {
+    const fd = i.attributes?.feature_details;
+    if (!fd || typeof fd.imdb_id !== "number" || typeof fd.title !== "string") continue;
+    const ep = (fd.feature_type ?? "").toLowerCase() === "episode";
+    const id = ep ? (fd.parent_imdb_id ?? fd.imdb_id) : fd.imdb_id;
+    const title = ep ? (fd.parent_title ?? fd.title) : fd.title;
+    const cur = seen.get(id);
+    if (cur) cur.tracks++;
+    else seen.set(id, { title, year: typeof fd.year === "number" && !ep ? fd.year : null, imdbId: id, tracks: 1 });
+  }
+  return [...seen.values()].sort((a, b) => b.tracks - a.tracks).slice(0, 3);
 }
 
 /**
@@ -265,9 +293,12 @@ export async function fetchOpenSubtitles(title: string, opts: OpenSubtitlesOptio
   const pick = pickSubtitle(items, want);
   if (!pick) {
     const asked = `"${want.title || q}"${want.year ? ` (${want.year})` : ""}${want.imdbId ? ` tt${want.imdbId}` : ""}`;
-    throw new Error(items.length > 0
-      ? `OpenSubtitles had ${items.length} English track(s) but none for ${asked}; add the year or an IMDb id (tt...), or attach an .srt`
-      : `no English subtitles on OpenSubtitles for ${asked}`);
+    if (items.length === 0) throw new Error(`no English subtitles on OpenSubtitles for ${asked}`);
+    const films = filmsInResults(items);
+    const named = films.map(f => `${f.title}${f.year ? ` (${f.year})` : ""}: \`movie start ${imdbTag(f.imdbId)}\``).join("; ");
+    throw new Error(films.length > 0
+      ? `OpenSubtitles had ${items.length} English track(s) but none matched ${asked} exactly. It found ${named}. Type the one you mean, or attach an .srt`
+      : `OpenSubtitles had ${items.length} English track(s) but none for ${asked}; add the year or an IMDb id (tt...), or attach an .srt`);
   }
 
   const dl = await doFetch(`${OPENSUBTITLES_BASE}/download`, {

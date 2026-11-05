@@ -117,6 +117,25 @@ describe("titles with a subtitle after a colon", () => {
   });
 });
 
+// 2026-11-04: "movie start Pirates of the Caribbean At Worlds End" (no apostrophe) -> 50 right tracks, all rejected.
+describe("apostrophes and the ack that names what was found", () => {
+  const AWE = PIRATES("Pirates of the Caribbean: At World's End", 2007, 449088, 30);
+  test("a missing or curly apostrophe still matches", () => {
+    for (const q of ["Pirates of the Caribbean At Worlds End", "Pirates of the Caribbean at worlds end 2007",
+      "Pirates of the Caribbean At World’s End", "At Worlds End", "Pirates of the Caribbean: Dead Mans Chest 2006"]) {
+      const want = parseTitleQuery(q);
+      const track = q.includes("Chest") ? PIRATES("Pirates of the Caribbean: Dead Man's Chest", 2006, 383574, 31) : AWE;
+      expect(pickSubtitle([track], want)?.fileId).toBe(track.attributes.files[0]!.file_id);
+    }
+    expect(normalizeTitle("Evil Dead II")).not.toBe(normalizeTitle("Evil Dead"));
+  });
+  test("a refusal names the film it found and the exact command that loads it", async () => {
+    const { fn } = fakeFetch({ [`${OPENSUBTITLES_BASE}/subtitles`]: () => jsonRes(200, { data: [AWE, AWE] }) });
+    await expect(fetchOpenSubtitles("Pirates of the Caribbean 3", { apiKey: "k", username: "", password: "", fetchFn: fn }))
+      .rejects.toThrow("It found Pirates of the Caribbean: At World's End (2007): `movie start tt0449088`");
+  });
+});
+
 describe("fetchOpenSubtitles", () => {
   test("sends year / imdb_id, returns the matched film, refuses a wrong-film-only result", async () => {
     const ok = fakeFetch({
@@ -140,7 +159,7 @@ describe("fetchOpenSubtitles", () => {
 
     const wrong = fakeFetch({ [`${OPENSUBTITLES_BASE}/subtitles`]: () => jsonRes(200, { data: [EVIL_DEAD_SEARCH.data[0]] }) });
     await expect(fetchOpenSubtitles("The Evil Dead 1981", { apiKey: "k", username: "", password: "", fetchFn: wrong.fn }))
-      .rejects.toThrow(/none for "The Evil Dead" \(1981\); add the year or an IMDb id/);
+      .rejects.toThrow(/none matched "The Evil Dead" \(1981\) exactly\. It found Some Horse Film \(1981\): `movie start tt0011111`/);
     expect(wrong.calls).toHaveLength(1);
   });
 
