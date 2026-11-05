@@ -1172,13 +1172,22 @@ export async function getForageFindsFor(companionId: string, limit = 2): Promise
 // Mark a find consumed (global on the row -- a shared find won't be re-eaten by a
 // sibling). Idempotent server-side (404 on already-consumed). Returns success.
 export async function consumeForageFind(id: string, consumedBy: string): Promise<boolean> {
-  try {
-    await hFetch(`/mind/forage/${id}/consume`, "PATCH", { consumed_by: consumedBy });
-    return true;
-  } catch (e) {
-    console.warn(`[${consumedBy}/forage] consume ${id} failed:`, e);
-    return false;
+  // Retried (2026-11-05): a dropped stamp let a find be served and voiced again. Short backoff;
+  // 404 (already consumed) is final.
+  const backoff = [400, 1200];
+  for (let i = 0; i <= backoff.length; i++) {
+    try {
+      await hFetch(`/mind/forage/${id}/consume`, "PATCH", { consumed_by: consumedBy });
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[${consumedBy}/forage] consume ${id} failed (attempt ${i + 1}/${backoff.length + 1}):`, msg.slice(0, 200));
+      const code = /→ (\d{3})/.exec(msg)?.[1];
+      if (code && code.startsWith("4") && code !== "408" && code !== "429") return false;
+      if (i < backoff.length) await new Promise(r => setTimeout(r, backoff[i]));
+    }
   }
+  return false;
 }
 
 // ── Unified Guardian (0073) ──────────────────────────────────────────────────
