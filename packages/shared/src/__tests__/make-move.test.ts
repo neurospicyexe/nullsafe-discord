@@ -26,7 +26,7 @@ describe("parseMakeReply", () => {
     expect(parseMakeReply("")).toMatchObject({ result: "invalid" });
     expect(parseMakeReply("I would like to make a thing")).toMatchObject({ result: "invalid", reason: "no KIND line" });
     expect(parseMakeReply(`KIND: writing\nWHY: w\n${fence("x")}`)).toMatchObject({ result: "invalid", reason: "no TITLE line" });
-    expect(parseMakeReply("KIND: writing\nTITLE: T\nWHY: w\nno block here")).toMatchObject({ result: "invalid", reason: "no fenced block" });
+    expect(parseMakeReply("KIND: writing\nTITLE: T\nWHY: w\n")).toMatchObject({ result: "invalid", reason: "no fenced block" });
     expect(parseMakeReply(`KIND: writing\nTITLE: ${"x".repeat(121)}\nWHY: w\n${fence("x")}`)).toMatchObject({ result: "invalid", reason: "title too long" });
   });
   it("rejects a wrong kind and a kind outside the allowed menu", () => {
@@ -46,6 +46,16 @@ describe("parseMakeReply", () => {
   it("video: aspect defaults to 9:16", () => {
     expect(parseMakeReply(`KIND: video\nTITLE: T\nWHY: w\n${fence("a crow at dusk")}`)).toMatchObject({ make: { params: { aspect: "9:16", prompt: "a crow at dusk" } } });
     expect(parseMakeReply(`KIND: video\nTITLE: T\nWHY: w\nASPECT: 16:9\n${fence("p")}`)).toMatchObject({ make: { params: { aspect: "16:9" } } });
+  });
+  it("an unfenced piece under a full header is the work (Drevan's 11-05 reply shape)", () => {
+    const prose = Array.from({ length: 18 }, (_, i) => `line ${i} of the piece, with: a colon in it`).join("\n");
+    const r = parseMakeReply(`KIND: writing\nTITLE: The Second Layer\nFOR: release-on-command adhesives\nWHY: it would not leave me alone\n\n${prose}\n`);
+    expect(r).toMatchObject({ result: "make", make: { kind: "writing", title: "The Second Layer", forInterest: "release-on-command adhesives" } });
+    expect((r as { make: { source: string } }).make.source).toBe(prose);
+  });
+  it("unfenced: a drawing must still be an svg; an unfenced svg is accepted", () => {
+    expect(parseMakeReply("KIND: drawing\nTITLE: T\nWHY: w\njust words")).toMatchObject({ result: "invalid", reason: "drawing is not an svg" });
+    expect(parseMakeReply("KIND: drawing\nTITLE: T\nWHY: w\n<svg><circle/></svg>")).toMatchObject({ result: "make", make: { kind: "drawing" } });
   });
   it("strips em dashes from title and why", () => {
     const r = parseMakeReply(`KIND: writing\nTITLE: Night — again\nWHY: it held — barely\n${fence("x")}`);

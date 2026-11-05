@@ -307,6 +307,21 @@ function fencedBlocks(raw: string): string[] {
   return out;
 }
 
+const HEADER_LINE = /^\W*(KIND|TITLE|FOR|WHY|ASPECT|DURATION)\s*:/i;
+
+/**
+ * The work when the reply carries the header but no fence: every line after the LAST header line,
+ * trimmed. Header lines interleaved with the body are not expected; anything before the last header
+ * is header. Empty when nothing follows.
+ */
+export function unfencedBody(text: string): string {
+  const lines = text.split(/\r?\n/);
+  let last = -1;
+  lines.forEach((l, i) => { if (HEADER_LINE.test(l)) last = i; });
+  if (last < 0) return "";
+  return lines.slice(last + 1).join("\n").trim();
+}
+
 /**
  * Read a companion's make reply without guessing. NONE is a valid answer. Wrong kind, missing title,
  * missing block, a drawing that is not an SVG, or an oversize source is `invalid` (never repaired).
@@ -332,7 +347,14 @@ export function parseMakeReply(raw: string | null | undefined, allowed: readonly
   const forRaw = field("FOR");
   const forInterest = forRaw && !/^(none|n\/a|nothing|-)$/i.test(forRaw.trim()) ? clean(forRaw).slice(0, 120) : null;
 
-  const blocks = fencedBlocks(text);
+  let blocks = fencedBlocks(text);
+  if (blocks.length === 0) {
+    // 2026-11-05: Drevan's second make (KIND/TITLE/WHY plus 4,212 chars of prose, no backticks) was
+    // thrown away whole for a missing fence. The body is not a guess when the header is all there: it is
+    // everything after the header lines. Single-body kinds only, and a drawing must still be an SVG.
+    const body = unfencedBody(text);
+    if (body) blocks = [body];
+  }
   if (blocks.length === 0 || !blocks[0]!.trim()) return { result: "invalid", reason: "no fenced block" };
 
   if (SOURCE_KINDS.has(kind)) {
