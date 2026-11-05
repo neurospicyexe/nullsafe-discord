@@ -78,6 +78,8 @@ export const CYPHER_CRON_SCHEDULES = {
   // #the-triad server-scoped seeder (guild-seed.ts, 2026-10-05). Every 30 min, the three bots 10 min apart so
   // the window claim and the "last seeder yields" rule rotate who opens. Hardcoded on purpose: a *_CRON_* env
   // absent from the ecosystem allowlist is a dead knob. The knob that matters is GUILD_TRIAD_SEED.
+  // Own daily make slot (make-own-time.ts, 2026-11-05), America/Chicago. Hardcoded (dead-knob rule); the knob is MAKE_OWN_TIME.
+  makeOwnTime:    "30 4 * * *",
   guildTriadSeed: "7,37 * * * *",
 };
 

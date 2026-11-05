@@ -48,6 +48,7 @@ export * from "./autonomous-core.js";
 export * from "./response-quality.js";
 export * from "./metronome-decide.js";
 export * from "./make-move.js";
+export * from "./make-own-time.js";
 export * from "./outward.js";
 export * from "./relative-time.js";
 export * from "./sb-live-ingest.js";
