@@ -252,6 +252,9 @@ const HERMES_WITNESS_ITEM_CAP = 1400;  // per-turn slice, head-first so attribut
  * -> 75% (W36, the switch week) -> 100% (W37-W38). Part of this convergence is a shared-model house
  * voice and no prompt string can undo it. That lever is Raziel's ("voice is the model").
  */
+/** Label for a line this companion sent unprompted (folded by hermesDelta; see the pool filter). */
+export const SELF_INITIATED_LABEL = "[you, sent on your own earlier]";
+
 const WITNESS_HEADER =
   "[Witnessed since your last turn -- already happened, absorb as context, do not answer each line. " +
   "Absorb WHAT they said, not HOW they typed it: their line breaks, their dashes, their " +
@@ -378,7 +381,7 @@ export function liveLabel(authorName: string | undefined, addressedToSelf: boole
   return to ? `[${to}]: ` : "";
 }
 
-export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number }>(
+export function hermesDelta<T extends { role: string; content: string; authorName?: string; timestamp?: number; selfInitiated?: true }>(
   history: T[],
   deliveredThroughTs: number | null = null,
   now: number = Date.now(),
@@ -389,7 +392,8 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
   if (history.length === 0) return { messages: [], deliveredThroughTs };
   let lastAssistant = -1;
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i]!.role === "assistant") { lastAssistant = i; break; }
+    // A self-initiated line (selfInitiated, below) was never a gateway reply, so it is not the boundary.
+    if (history[i]!.role === "assistant" && !history[i]!.selfInitiated) { lastAssistant = i; break; }
   }
   const current = history[history.length - 1]!;
   if (current.role === "assistant") return { messages: [current], deliveredThroughTs };
@@ -401,12 +405,18 @@ export function hermesDelta<T extends { role: string; content: string; authorNam
     return idx > lastAssistant;
   };
   const pool = history.slice(0, -1)
-    .filter((m, idx) => m.role === "user" && undelivered(m, idx))
+    // Assistant lines this bot sent ON ITS OWN (Blue note preview, med reminder, metronome DM; flagged at
+    // the owner-DM lane in bot-core) are in STM but never in the gateway transcript, which only holds
+    // replies it generated. 2026-11-04: Raziel answered a Blue note preview with "You can send it cy" and
+    // Cy had no idea what "it" was. They fold once, labelled as the companion's own words.
+    .filter((m, idx) => (m.role === "user" || (m.role === "assistant" && m.selfInitiated === true)) && undelivered(m, idx))
     .slice(-HERMES_WITNESS_CAP);
 
   // Witnessed words are other people's and siblings' text: labels made safe, control tokens defused
   // (recalled-text.ts; invisible on ordinary text, measured 10-27).
-  const folded: string[] = pool.map(m => `[${m.authorName ? labelSafe(m.authorName) : "unattributed"}]: ${neutralizeRecalled(m.content.slice(0, HERMES_WITNESS_ITEM_CAP))}`);
+  const folded: string[] = pool.map(m => m.role === "assistant"
+    ? `${SELF_INITIATED_LABEL}: ${m.content.slice(0, HERMES_WITNESS_ITEM_CAP)}`
+    : `[${m.authorName ? labelSafe(m.authorName) : "unattributed"}]: ${neutralizeRecalled(m.content.slice(0, HERMES_WITNESS_ITEM_CAP))}`);
   // Drop oldest whole turns while over budget -- never tail-slice mid-line (that ate
   // the attribution prefixes and the front of every long peer message).
   while (folded.length > 0 && folded.join("\n").length > HERMES_WITNESS_CHAR_CAP) folded.shift();

@@ -126,6 +126,15 @@ describe("daily note", () => {
     expect(await runBlueNoteDay(d, newBlueNoteState())).toBe("no_activity");
     expect(redis.keys.size).toBe(0);
   });
+  it("logs a no-activity skip once per date, not every minute", async () => {
+    const lines: string[] = [];
+    const { d } = deps({ redis: fakeRedis(), roomLines: () => [] });
+    const st = newBlueNoteState();
+    const dl = { ...d, log: (l: string) => lines.push(l) };
+    await runBlueNoteDay(dl, st);
+    await runBlueNoteDay(dl, st);
+    expect(lines.filter(l => l.includes("outcome=no_activity"))).toHaveLength(1);
+  });
   it("waits for the hour and refuses without redis", async () => {
     expect(await runBlueNoteDay(deps({ hour: () => 12 }).d, newBlueNoteState())).toBe("before_hour");
     expect(await runBlueNoteDay(deps({ redis: null }).d, newBlueNoteState())).toBe("no_redis");

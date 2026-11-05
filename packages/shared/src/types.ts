@@ -59,6 +59,11 @@ export interface ChatMessage {
   // carry it too as of 2026-08-29 (parsed from Halseth's `created_at`, bot-core.ts stmLoad) --
   // only an unparseable/missing value degrades to no time prefix now.
   timestamp?: number;
+  // An assistant line this bot sent ON ITS OWN through the owner-DM lane (Blue note preview/copy, med
+  // reminder, metronome DM), not a reply the Hermes gateway generated. hermesDelta folds these once so
+  // the next turn knows what was sent (2026-11-04). In-memory only: STM rows restored from the DB do
+  // not carry it, so a restart between the send and the reply loses the referent (amendInbound precedent).
+  selfInitiated?: true;
 }
 
 export interface BotConfig {

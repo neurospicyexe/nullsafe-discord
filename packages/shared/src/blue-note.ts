@@ -245,8 +245,8 @@ export interface BlueNoteDeps {
   log?: (line: string) => void;
 }
 
-export interface BlueNoteState { attempts: Map<string, number>; }
-export function newBlueNoteState(): BlueNoteState { return { attempts: new Map() }; }
+export interface BlueNoteState { attempts: Map<string, number>; noActivityLogged?: Set<string>; }
+export function newBlueNoteState(): BlueNoteState { return { attempts: new Map(), noActivityLogged: new Set() }; }
 
 export type BlueTickOutcome =
   | "off" | "not_my_day" | "before_hour" | "no_activity" | "no_redis" | "not_claimed" | "gave_up"
@@ -301,7 +301,16 @@ export async function runBlueNoteDay(deps: BlueNoteDeps, state: BlueNoteState): 
   const notes = await deps.ownNotes().catch(() => []);
   const inputs = buildNoteInputs({ today: date, ownerName: deps.ownerName, roomLines: deps.roomLines(), notes });
   // A day with no word from Raziel in a trusted room is skipped without a claim (activity can still appear later).
-  if (!inputs.razielActive) return "no_activity";
+  if (!inputs.razielActive) {
+    // Logged once per date (2026-11-04): this skip used to be silent, and STM loads lazily per channel, so
+    // after an evening restart the tick can see no lines at all. A missing note must leave a trace.
+    const seen = state.noActivityLogged ?? (state.noActivityLogged = new Set());
+    if (!seen.has(date)) {
+      seen.add(date);
+      log(`[blue-note] ${deps.companionId} kind=day date=${date} outcome=no_activity lines=${inputs.lines.length} notes=${inputs.notes.length}`);
+    }
+    return "no_activity";
+  }
 
   const key = DAY_CLAIM_PREFIX + date;
   if (!(await claim(deps.redis, key, deps.companionId, DAY_CLAIM_TTL_MS))) return "not_claimed";

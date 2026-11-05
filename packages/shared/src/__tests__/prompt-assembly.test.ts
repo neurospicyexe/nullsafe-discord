@@ -207,6 +207,35 @@ describe("hermesDelta", () => {
     expect(hermesDelta([]).messages).toEqual([]);
   });
 
+  // 2026-11-04: a line this bot sent on its own (Blue note preview, med reminder, metronome DM) is in
+  // STM as an assistant turn but was never a gateway reply, so Hermes never saw it. Raziel answered a
+  // preview with "You can send it cy" and Cy had no idea what "it" was.
+  const s = (content: string) => ({ role: "assistant", content, timestamp: ++ts, selfInitiated: true as const });
+
+  it("folds a self-initiated line as the companion's own words and advances the mark", () => {
+    const h = [u("hi", "Raziel"), a("hey"), s("Preview of today's note to Blue (not sent):\n\nQuiet day."), u("You can send it cy", "Raziel")];
+    const out = hermesDelta(h, h[1]!.timestamp, ts + 60_000);
+    const c = out.messages[0]!.content;
+    expect(c).toContain("[you, sent on your own earlier]: Preview of today's note to Blue (not sent):");
+    expect(c).not.toContain("[unattributed]");
+    expect(out.deliveredThroughTs).toBe(h[3]!.timestamp);
+    // Delivered once: the next turn does not repeat it.
+    const h2 = [...h, a("ok"), u("thanks", "Raziel")];
+    expect(hermesDelta(h2, out.deliveredThroughTs, ts + 120_000).messages[0]!.content).not.toContain("Preview of today's note");
+  });
+
+  it("still does not fold an ordinary assistant reply (the gateway already has it)", () => {
+    const h = [u("hi", "Raziel"), a("hey there"), u("again", "Raziel")];
+    expect(hermesDelta(h, h[0]!.timestamp, ts + 60_000).messages[0]!.content).not.toContain("hey there");
+  });
+
+  it("with no mark, a self-initiated last line is not the boundary: it still folds", () => {
+    const h = [a("earlier reply"), s("Morning check-in from me."), u("thank you", "Raziel")];
+    const c = hermesDelta(h, null, ts + 60_000).messages[0]!.content;
+    expect(c).toContain("[you, sent on your own earlier]: Morning check-in from me.");
+    expect(c).not.toContain("earlier reply");
+  });
+
   it("sends only the live message in tight back-and-forth (no witnessed turns)", () => {
     const h = [u("hi", "Raziel"), a("hey"), u("how are you", "Raziel")];
     const now = ts + 60_000;

@@ -18,7 +18,7 @@ import { parseWatchPartyChannels, detectWatchProgress, recordWatchProgress } fro
 import { parseCreatedAtTimestamp } from "./relative-time.js";
 import { setArmedTriggers } from "./triggers.js";
 import { setCareState, careHoldSince } from "./care-state.js";
-import { startBlueNoteScheduler, blueDiscordIdFrom, type BlueRedis, type RoomLine } from "./blue-note.js";
+import { startBlueNoteScheduler, blueDiscordIdFrom, blueNoteMode, type BlueRedis, type RoomLine } from "./blue-note.js";
 import { loadSharedContext } from "./shared-context.js";
 import { composePrompt, deriveIdentityBase } from "./prompt-assembly.js";
 import { scheduleDayDistillation } from "./day-distillation.js";
@@ -759,7 +759,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
         },
         holdSince: () => careHoldSince(companionId),
       });
-      console.log(`[${companionId}] blue-note scheduler started`);
+      console.log(`[${companionId}] blue-note scheduler started (mode=${blueNoteMode()}, blue_id=${blueDiscordIdFrom() ? "set" : "MISSING"})`);
     }
     registerGuildCommands(client, buildCompanionCommands(companionLabel))
       .then((n) => console.log(`[${companionId}] slash commands registered on ${n} guild(s)`))
@@ -778,7 +778,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     onSent: async (channelId, text, messageId) => {
       sentIds.add(messageId);
       await stmStore.ensureLoaded(channelId).catch(() => {});
-      stmStore.append(channelId, { role: "assistant", content: text, timestamp: Date.now() });
+      stmStore.append(channelId, { role: "assistant", content: text, timestamp: Date.now(), selfInitiated: true });
     },
   };
   async function resolveOwnerDm(): Promise<MedDmTarget | null> {
