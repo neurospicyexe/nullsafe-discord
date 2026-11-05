@@ -1215,7 +1215,11 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         // appendInboundOnce, not append: record-on-arrival already stored this message, and a plain
         // append here would duplicate the search query in the transcript.
         stmStore.appendInboundOnce(message.channelId, message.id, { role: "user", content: stmContent, authorName: cfg.ownerDisplayName, timestamp: message.createdTimestamp });
-        stmStore.append(message.channelId, { role: "assistant", content: search.reply, timestamp: Date.now() });
+        // selfInitiated (2026-11-05): search.reply is a deterministic literal ack the gateway never generated,
+        // so it is not in the Hermes transcript; hermesDelta folds it once ("[you, sent on your own earlier]")
+        // and it must not act as the "last gateway reply" boundary. `woven` below IS generated through the
+        // gateway session (sessionId `${COMPANION_ID}:${channelId}`), so it stays an ordinary assistant line.
+        stmStore.append(message.channelId, { role: "assistant", content: search.reply, timestamp: Date.now(), selfInitiated: true });
         if (search.results.length > 0) {
           try {
             await (message.channel as TextChannel).sendTyping();
