@@ -471,7 +471,9 @@ async function movieStart(arg: string, ctx: WatchalongCommandCtx): Promise<strin
     loaded = await loadCaptions(title, att, ctx.captionDeps);
   } catch (err) {
     if (err instanceof NoCaptionsError) {
-      const why = err.message ? ` (${err.message})` : "";
+      // The OpenSubtitles refusal names films as `movie start tt...`; give them this bot's prefix so the
+      // command can be copied as-is.
+      const why = err.message ? ` (${err.message.replace(/`movie start /g, `\`${p}: movie start `)})` : "";
       return `no captions found${why}: attach an .srt to \`${p}: movie start ${title}\``;
     }
     return `couldn't load captions: ${String(err instanceof Error ? err.message : err).slice(0, 200)}`;
