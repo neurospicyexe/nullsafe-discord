@@ -153,7 +153,7 @@ export function turnFraming(p: {
   return "";
 }
 
-/** FOLLOWUP_PASS: default on; exactly "off" (trimmed, any case) disables publish and listener. */
+/** FOLLOWUP_PASS: default on; off|0|false|no (trimmed, any case) disables publish and listener. */
 export function followUpPassEnabled(env: Record<string, string | undefined> = process.env): boolean {
   return !isOffToken(env["FOLLOWUP_PASS"]);
 }
