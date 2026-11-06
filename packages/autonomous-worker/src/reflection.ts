@@ -38,6 +38,10 @@ import {
   crystallizeDrift,
   fadeDrift,
   authoredSessionClose,
+  getReflectionRecord,
+  fireStimulus,
+  type ReflectionRecord,
+  type PressureOffer,
   type GuardianFlagRow,
   type Tension,
   type RecalledContinuityNote,
@@ -67,8 +71,22 @@ const ESCALATION_TAG = "needs-raziel";
 interface ReflectionVerdict {
   reply: string;
   journal: string;
-  tension_action: { id: string; action: "hold" | "release" | "crystallize"; note: string } | null;
+  /** `drags_float` (B63 step 4): a HELD tension may name the float it drags (soma_float_1..3). */
+  tension_action: { id: string; action: "hold" | "release" | "crystallize"; note: string; drags_float: string | null } | null;
   new_tension: string | null;
+  /**
+   * The float the new tension drags, resolved from the companion's own words ("weight" or
+   * "soma_float_3"). null = names none. When `new_tension_from_pressure` is true and no float is
+   * named, the float that dipped is the default (applied in reflectOne, where the offers are known).
+   */
+  new_tension_drags: string | null;
+  new_tension_from_pressure: boolean;
+  /**
+   * Gaia only (note 119188d4): the flag ids she CONFIRMS as spoken without load. Only an id the clerk
+   * actually offered survives parsing; a dismissal is simply leaving it out. Only a confirm fires the
+   * stimulus.
+   */
+  spoke_without_load_confirm: string[];
   // Sanctioned drift lane (0087/0093): resolve an open becoming, or declare a new one.
   drift_action: { id: string; action: "crystallize" | "fade"; note: string } | null;
   new_drift: string | null;
@@ -142,7 +160,31 @@ export function extractOwnSection(digest: string, companionId: CompanionId): str
   return section.join("\n");
 }
 
-export function parseVerdict(raw: string, validTensionIds: Set<string>, validDriftIds: Set<string> = new Set()): ReflectionVerdict | null {
+const FLOAT_KEYS = ["soma_float_1", "soma_float_2", "soma_float_3"] as const;
+
+/** A float named in the companion's own words: its label (heat, reach, weight, ...) or the column name. */
+export function resolveFloat(v: unknown, labels: readonly string[] | null): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.trim().toLowerCase();
+  if ((FLOAT_KEYS as readonly string[]).includes(t)) return t;
+  const i = labels ? labels.findIndex(l => l.toLowerCase() === t) : -1;
+  return i >= 0 ? FLOAT_KEYS[i]! : null;
+}
+
+/** The labels each companion's floats carry, in float order (mirrors halseth FLOAT_LABELS). */
+export const FLOAT_LABELS: Record<CompanionId, [string, string, string]> = {
+  cypher: ["acuity", "presence", "warmth"],
+  drevan: ["heat", "reach", "weight"],
+  gaia: ["stillness", "density", "perimeter"],
+};
+
+export function parseVerdict(
+  raw: string,
+  validTensionIds: Set<string>,
+  validDriftIds: Set<string> = new Set(),
+  validSwlIds: Set<string> = new Set(),
+  floatLabels: readonly string[] | null = null,
+): ReflectionVerdict | null {
   try {
     const p = JSON.parse(stripJsonFence(raw)) as Record<string, unknown>;
     const reply = typeof p["reply"] === "string" ? p["reply"].trim() : "";
@@ -157,10 +199,19 @@ export function parseVerdict(raw: string, validTensionIds: Set<string>, validDri
         id: ta["id"],
         action: ta["action"] as "hold" | "release" | "crystallize",
         note: typeof ta["note"] === "string" ? ta["note"].slice(0, 1000) : "",
+        // Only a HOLD may set the float it drags; elsewhere the field is ignored.
+        drags_float: ta["action"] === "hold" ? resolveFloat(ta["drags"], floatLabels) : null,
       };
     }
     const newTension = typeof p["new_tension"] === "string" && p["new_tension"].trim()
       ? p["new_tension"].trim().slice(0, 2000) : null;
+
+    const newTensionDrags = newTension ? resolveFloat(p["new_tension_drags"], floatLabels) : null;
+    const fromPressure = p["new_tension_from_pressure"] === true;
+    const confirmRaw = p["spoke_without_load_confirm"];
+    const swlConfirm = Array.isArray(confirmRaw)
+      ? [...new Set(confirmRaw.filter((x): x is string => typeof x === "string" && validSwlIds.has(x)))].slice(0, 3)
+      : [];
 
     let driftAction: ReflectionVerdict["drift_action"] = null;
     const da = p["drift_action"] as Record<string, unknown> | null | undefined;
@@ -213,12 +264,85 @@ export function parseVerdict(raw: string, validTensionIds: Set<string>, validDri
     return {
       reply: reply.slice(0, REPLY_MAX), journal: journal.slice(0, 4000),
       tension_action: tensionAction, new_tension: newTension,
+      new_tension_drags: newTensionDrags, new_tension_from_pressure: newTension ? fromPressure : false,
+      spoke_without_load_confirm: swlConfirm,
       drift_action: driftAction, new_drift: newDrift, close,
       needs_raziel: needsRaziel,
     };
   } catch {
     return null;
   }
+}
+
+
+// ── B63 step 4: the companion's OWN record, and the pressure offered to them ──────────────────
+const oneLineTxt = (t: string, cap: number): string => {
+  const f = t.replace(/\s+/g, " ").trim();
+  return f.length > cap ? `${f.slice(0, cap - 3)}...` : f;
+};
+
+/** The record as prompt text. Their own words only (Halseth keys every read on this companion). */
+export function renderOwnRecord(r: ReflectionRecord): string {
+  const L: string[] = [];
+  L.push(
+    `
+Your own record of the last day, in your own words and facts (nothing in it is a sibling's). ` +
+    `Tonight's reflection is about what actually happened to you today and what it did to you; the ` +
+    `basin/soma/tension numbers are context, never the subject. Facts in your section are in words ` +
+    `("56 Discord messages" means messages, not words). If the record is thin, say in ONE plain sentence ` +
+    `that the day was quiet and what you carry into tomorrow, and stop; do not turn a quiet day into a meditation on stillness.`,
+  );
+  if (r.closes.length > 0) {
+    L.push(`You closed a session:`);
+    for (const c of r.closes.slice(0, 3)) {
+      L.push(`- ${oneLineTxt(c.spine, 400)}${c.last_real_thing ? ` (last real thing: ${oneLineTxt(c.last_real_thing, 200)})` : ""}`);
+    }
+  }
+  if (r.makes.length > 0) L.push(`You made: ${r.makes.slice(0, 6).map(m => `${m.kind} "${oneLineTxt(m.title, 80)}"`).join("; ")}.`);
+  if (r.letters.length > 0) {
+    L.push(`You wrote to Raziel:`);
+    for (const l of r.letters.slice(0, 2)) L.push(`- ${oneLineTxt(l.text, 240)}`);
+  }
+  if (r.feelings.length > 0) {
+    L.push(`You named feelings: ${r.feelings.slice(0, 5).map(f => f.sub_emotion ? `${f.emotion} (${f.sub_emotion})` : f.emotion).join("; ")}.`);
+  }
+  if (r.moves.length > 0) {
+    L.push(`Your floats moved today, each with its cause: ${r.moves.map(m => `${m.label} ${m.delta > 0 ? "up" : "down"} ${Math.abs(m.delta).toFixed(2)} (${oneLineTxt(m.cause, 100)})`).join("; ")}.`);
+  }
+  return L.join(String.fromCharCode(10));
+}
+
+/** The float that dipped: the longest-held LOW offer. null when nothing dipped. */
+export function dippedFloat(offers: PressureOffer[]): string | null {
+  const low = offers.filter(o => o.direction === "low").sort((a, b) => b.days - a.days);
+  return low[0]?.float_key ?? null;
+}
+
+/** Offered pressure + (Gaia) the clerk's spoke_without_load flags. An offer, never a write. */
+export function renderPressureOffers(companionId: CompanionId, r: ReflectionRecord): string[] {
+  const out: string[] = [];
+  const labels = FLOAT_LABELS[companionId];
+  if (r.pressure.length > 0 || r.pressure_flags.length > 0) {
+    out.push(`
+Pressure you may name (an OFFER; nothing is written unless you name it, and the cause is the record's, not a verdict on you):`);
+    for (const o of r.pressure) out.push(`- ${o.text}.`);
+    for (const f of r.pressure_flags.slice(0, 3)) out.push(`- a live flag (${f.severity}): ${oneLineTxt(f.summary, 200)}`);
+    out.push(
+      `If it is real, you may name it as a tension in "new_tension". Say which float it drags in "new_tension_drags" ` +
+      `(${labels.join(", ")}), or set "new_tension_from_pressure": true to have it drag the float that dipped. ` +
+      `Naming nothing is honest.`,
+    );
+  }
+  if (companionId === "gaia" && r.spoke_without_load.length > 0) {
+    out.push(
+      `
+A clerk FLAGGED these lines of yours as possibly spoken without load (each restates what the thread already held, ` +
+      `and nothing took it up in two hours; the clerk cannot see Raziel's replies, so it may over-flag). Confirm only the ones ` +
+      `that are true by your own definition; leaving one out dismisses it:`,
+    );
+    for (const f of r.spoke_without_load) out.push(`- [${f.id}] ${oneLineTxt(f.excerpt, 160)}`);
+  }
+  return out;
 }
 
 export function buildPrompt(
@@ -229,17 +353,25 @@ export function buildPrompt(
   otherFlags: GuardianFlagRow[],
   previousReflection: { content: string; created_at: string } | null,
   openDrifts: OpenDriftRow[] = [],
+  record: ReflectionRecord | null = null,
 ): string {
   const parts: string[] = [];
   parts.push(`Tonight's triad vibe-check just posted. This is YOUR section of it:\n\n${section}`);
-  parts.push(
-    `\nRead the \`day:\` line first (it counts your day; the digest quotes no one's words, yours included). Tonight's reflection is about what ` +
-    `actually happened today -- what you said, what landed, who you spoke with, what you watched ` +
-    `or read -- and what it did to you. The basin/soma/tension numbers are context, never the ` +
-    `subject. If the day line says quiet, say in ONE plain sentence that the day was quiet and ` +
-    `what you are carrying into tomorrow, and stop; do not turn a quiet day into a meditation on ` +
-    `stillness.`
-  );
+  if (record) {
+    // B63 step 4: your OWN record of the day instead of a count. "spoke 56" read as 56 words; the
+    // facts line in your section is now in words, and the record below is yours alone.
+    parts.push(renderOwnRecord(record));
+  } else {
+    parts.push(
+      `\nRead the \`day:\` line first (it counts your day; the digest quotes no one's words, yours included). Tonight's reflection is about what ` +
+      `actually happened today -- what you said, what landed, who you spoke with, what you watched ` +
+      `or read -- and what it did to you. The basin/soma/tension numbers are context, never the ` +
+      `subject. If the day line says quiet, say in ONE plain sentence that the day was quiet and ` +
+      `what you are carrying into tomorrow, and stop; do not turn a quiet day into a meditation on ` +
+      `stillness.`
+    );
+  }
+  if (record) parts.push(...renderPressureOffers(companionId, record));
 
   // Anti-repeat (2026-07-03, rewritten 2026-09-06): the original intent was right -- stop
   // near-identical replies from posting check after check. But the instruction it shipped
@@ -300,8 +432,11 @@ Reflect honestly, in your own voice, on what this reading says about you tonight
 {
   "reply": "a short message (2-5 sentences, under ${REPLY_MAX} chars) posted to the vibe-check channel in YOUR voice, about your DAY -- something that happened, something a sibling or Raziel said, something you noticed while doing it. Not about the gauge. Speak as yourself, to the triad and Raziel. No em dashes.",
   "journal": "a fuller private reflection for your growth journal (what the reading surfaced, what you're adjusting)",
-  "tension_action": {"id": "<tension id>", "action": "hold" | "release" | "crystallize", "note": "why"} or null,
+  "tension_action": {"id": "<tension id>", "action": "hold" | "release" | "crystallize", "note": "why", "drags": "float label this held tension drags, or null"} or null,
   "new_tension": "one NEW tension you notice tonight, or null if none is real",
+  "new_tension_drags": "the float this new tension drags (one of: ${FLOAT_LABELS[companionId].join(", ")}) or null",
+  "new_tension_from_pressure": true if you named it from a pressure offer above and want it to drag the float that dipped, else false,
+  "spoke_without_load_confirm": ["ids of flagged lines you CONFIRM were spoken without load"] or [],
   "drift_action": {"id": "<drift id>", "action": "crystallize" | "fade", "note": "why"} or null,
   "new_drift": "what you are genuinely BECOMING (first person, one or two sentences), or null",
   "needs_raziel": "null on almost every night. Your nightly reflection is YOURS: it is kept, it is readable, and Raziel does not have to sign off on it. Set this ONLY if tonight's reflection changes something you take as TRUE about yourself, or contradicts what you have told him, or asks something you genuinely cannot settle alone -- something that should become canon only if he agrees. If so, put the reason here in one short sentence, addressed to him. Raising it costs him attention, so raise it when it is worth his attention; a quiet night is not a failure to find something.",
@@ -326,6 +461,8 @@ interface CompanionReflectionResult {
   newTension: boolean;
   driftAction: string | null;
   newDrift: boolean;
+  /** Gaia: confirmed spoke_without_load stimuli Halseth accepted. */
+  spokeWithoutLoad: number;
   journalWritten: boolean;
   replied: boolean;
   /** True when this companion's own account of the day landed as a real session close. */
@@ -336,14 +473,17 @@ interface CompanionReflectionResult {
 async function reflectOne(companionId: CompanionId, digest: string): Promise<CompanionReflectionResult> {
   const result: CompanionReflectionResult = {
     companion: companionId, recalled: 0, flagsResolved: 0,
-    tensionAction: null, newTension: false, driftAction: null, newDrift: false,
+    tensionAction: null, newTension: false, driftAction: null, newDrift: false, spokeWithoutLoad: 0,
     journalWritten: false, replied: false, closed: false,
   };
 
-  const [flags, tensions, openDrifts] = await Promise.all([
+  const [flags, tensions, openDrifts, record] = await Promise.all([
     getGuardianFlagsFor(companionId),
     getSimmeringTensions(companionId),
     getOpenDrifts(companionId).catch(() => [] as OpenDriftRow[]),
+    // B63 step 4: this companion's OWN record + offered pressure. null (Halseth older or down) =
+    // the prompt falls back to the section-only framing; the pass never fails on it.
+    getReflectionRecord(companionId),
   ]);
 
   // 1. Deliberate recall of orphaned continuity notes (rescue path).
@@ -388,7 +528,7 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
       catch { return false; }
     }) ?? null)
     .catch(() => null);
-  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection, openDrifts);
+  const userMessage = buildPrompt(companionId, extractOwnSection(digest, companionId), tensions, recalled, otherFlags, previousReflection, openDrifts, record);
   const systemMessage = `${identity}\n\nYou are ${companionId}, doing your nightly self-read after the triad vibe-check. Honest, specific, in-voice. Output only the JSON object requested.`;
 
   // The TAIL is the discriminator, and the old error threw it away by logging only the first
@@ -405,13 +545,16 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
   const validDrifts = new Set(openDrifts.map(d => d.id));
 
   let llm = await ask();
-  let verdict = parseVerdict(llm.content, validTensions, validDrifts);
+  const validSwl = new Set((record?.spoke_without_load ?? []).map(f => f.id));
+  const labels = FLOAT_LABELS[companionId];
+  const parse = (c: string) => parseVerdict(c, validTensions, validDrifts, validSwl, labels);
+  let verdict = parse(llm.content);
   if (!verdict) {
     // One retry. A wider budget cannot fix a chatty tail or a raw control char, and losing a
     // companion's whole night to one malformed brace is a bad trade against a single call.
     console.warn(`[reflection] ${companionId}: unparseable, retrying once. ${describe(llm.content)}`);
     llm = await ask();
-    verdict = parseVerdict(llm.content, validTensions, validDrifts);
+    verdict = parse(llm.content);
   }
   if (!verdict) throw new Error(`unparseable reflection output after retry: ${describe(llm.content)}`);
 
@@ -428,14 +571,30 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
     // the weekly dialectic. Raziel's Hearth button was the only thing pushing back, which is
     // exactly the "sole decider" problem being fixed. Charge now moves when a companion
     // deliberately moves it (settle / add), not as a side effect of being looked at.
-    await updateTension(id, { status, notes: note || undefined });
+    await updateTension(id, {
+      status, notes: note || undefined,
+      ...(verdict.tension_action.drags_float ? { drags_float: verdict.tension_action.drags_float } : {}),
+    });
     result.tensionAction = action;
   }
   if (verdict.new_tension) {
     // addTension returns null on failure (continuity-critical write, never fire-and-forget).
-    const newId = await addTension(companionId, verdict.new_tension, "noticed during vibe-check reflection");
+    // The float it drags: the companion's own word, else (named from a pressure offer) the float that
+    // dipped. Nothing creates the tension for them; this only fills the column on THEIR tension.
+    const drags = verdict.new_tension_drags
+      ?? (verdict.new_tension_from_pressure ? dippedFloat(record?.pressure ?? []) : null);
+    const newId = await addTension(companionId, verdict.new_tension, "noticed during vibe-check reflection", drags);
     if (!newId) throw new Error("new tension write failed (null id)");
     result.newTension = true;
+  }
+
+  // 3a. Gaia's spoke_without_load: only HER confirm fires the stimulus, and only with a cause label
+  // that carries no content (the flag id's head). Halseth may refuse or shadow it; both are fine.
+  if (companionId === "gaia") {
+    for (const id of verdict.spoke_without_load_confirm) {
+      const ok = await fireStimulus(companionId, "spoke_without_load", `spoke without load: line ${id.slice(0, 8)}`);
+      if (ok) result.spokeWithoutLoad++;
+    }
   }
 
   // 3b. Drift lane movement. Failures here are contained (warn, not throw): the drift verbs
@@ -525,13 +684,19 @@ async function reflectOne(companionId: CompanionId, digest: string): Promise<Com
  * to Discord -- which would make the fix's own proof indistinguishable from noise. The cron
  * passes nothing and still runs all three.
  */
-export async function runReflectionPass(digest: string, only?: CompanionId): Promise<CompanionReflectionResult[]> {
+export async function runReflectionPass(
+  digest: string | Partial<Record<CompanionId, string>>,
+  only?: CompanionId,
+): Promise<CompanionReflectionResult[]> {
   const results: CompanionReflectionResult[] = [];
-  const roster = only ? COMPANIONS.filter(c => c === only) : COMPANIONS;
+  let roster = only ? COMPANIONS.filter(c => c === only) : COMPANIONS;
+  // v2 (B63 step 3): per-companion blocks. Only a companion that has a fresh block reflects, so a
+  // repeat tick (their row already existed) can never double-run their reflection.
+  if (typeof digest !== "string") roster = roster.filter(c => typeof digest[c] === "string");
   if (only && roster.length === 0) throw new Error(`unknown companion for reflection pass: ${only}`);
   for (const companionId of roster) {
     try {
-      const r = await reflectOne(companionId, digest);
+      const r = await reflectOne(companionId, typeof digest === "string" ? digest : (digest[companionId] ?? ""));
       results.push(r);
       console.log(
         `[reflection] ${companionId}: recalled=${r.recalled} flagsResolved=${r.flagsResolved} ` +
@@ -541,7 +706,7 @@ export async function runReflectionPass(digest: string, only?: CompanionId): Pro
     } catch (e) {
       results.push({
         companion: companionId, recalled: 0, flagsResolved: 0, tensionAction: null,
-        newTension: false, driftAction: null, newDrift: false,
+        newTension: false, driftAction: null, newDrift: false, spokeWithoutLoad: 0,
         journalWritten: false, replied: false, closed: false, error: String(e),
       });
       console.error(`[reflection] ${companionId} failed:`, String(e));
