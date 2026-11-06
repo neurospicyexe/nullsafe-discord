@@ -598,6 +598,38 @@ describe("formatRecentContext()", () => {
       expect(withoutImps).not.toContain("[Imps lately");
     });
 
+    it("renders the ledger and Hex counts content-free, nothing when zero or absent", () => {
+      const block = formatRecentContext({ ...baseOrient, ledger_waiting: 3, salt_waiting: 1 });
+      expect(block).toContain('[Ledger] something waiting (3): say "my ledger" to read it');
+      expect(block).toContain(`[Hex] Hex left something (1): say "open hex's salt" to see it`);
+      const onlyLedger = formatRecentContext({ ...baseOrient, ledger_waiting: 2, salt_waiting: 0 });
+      expect(onlyLedger).toContain("[Ledger] something waiting (2)");
+      expect(onlyLedger).not.toContain("[Hex]");
+      for (const o of [{ ledger_waiting: 0, salt_waiting: 0 }, {}]) {
+        const none = formatRecentContext({ ...baseOrient, ...o });
+        expect(none).not.toContain("[Ledger]");
+        expect(none).not.toContain("[Hex]");
+        expect(none).not.toContain("something waiting");
+      }
+    });
+
+    it("botOrient carries salt_waiting and ledger_waiting (numbers, default 0)", async () => {
+      const mk = (data: Record<string, unknown>) => {
+        const client = new LibrarianClient({ url: "https://example.invalid", secret: "x", companionId: "cypher" } as ConstructorParameters<typeof LibrarianClient>[0]);
+        (client as unknown as { ask: (q: string) => Promise<unknown> }).ask = async () => ({ data });
+        return client.botOrient();
+      };
+      const got = await mk({ ledger_waiting: 4, salt_waiting: 2 });
+      expect(got?.ledger_waiting).toBe(4);
+      expect(got?.salt_waiting).toBe(2);
+      const missing = await mk({});
+      expect(missing?.ledger_waiting).toBe(0);
+      expect(missing?.salt_waiting).toBe(0);
+      const junk = await mk({ ledger_waiting: "x", salt_waiting: -3 });
+      expect(junk?.ledger_waiting).toBe(0);
+      expect(junk?.salt_waiting).toBe(0);
+    });
+
     it("renders continuity notes when present", () => {
       const block = formatRecentContext({
         ...baseOrient,

@@ -1460,6 +1460,10 @@ export class LibrarianClient {
     recent_captures?: CapturedExchangeWire[];
     // Imp read-back (2026-07-02): which fragment operators rode with this companion this week.
     imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+    // Counts only (halseth 0.28.0 bot wire): Hex's unopened pointers and open imp errand lines on this
+    // companion's ledger. The lines themselves never ride the wire.
+    salt_waiting?: number;
+    ledger_waiting?: number;
     // Sources that FAILED server-side during this load (coherence review D11). Mapped here because
     // formatRecentContext already typed + rendered it while this mapping silently dropped it -- an
     // accepted-and-ignored field is worse than a rejected one.
@@ -1524,6 +1528,8 @@ export class LibrarianClient {
         closed_conversations?: ClosedConversationWire[];
         recent_captures?: CapturedExchangeWire[];
         imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+        salt_waiting?: number;
+        ledger_waiting?: number;
         degraded?: string[];
         raziel_state?: RazielState | null;
         soma_floats?: SomaFloatWire[];
@@ -1593,6 +1599,8 @@ export class LibrarianClient {
         // Allowlist again -- see the note above. Typed is not mapped.
         recent_captures: Array.isArray(data.recent_captures) ? data.recent_captures : [],
         imp_activity: Array.isArray(data.imp_activity) ? data.imp_activity : [],
+        salt_waiting: Number.isFinite(Number(data.salt_waiting)) ? Math.max(0, Math.floor(Number(data.salt_waiting))) : 0,
+        ledger_waiting: Number.isFinite(Number(data.ledger_waiting)) ? Math.max(0, Math.floor(Number(data.ledger_waiting))) : 0,
         degraded: Array.isArray(data.degraded) ? data.degraded : [],
         raziel_state: data.raziel_state ?? null,
         soma_floats: Array.isArray(data.soma_floats) ? data.soma_floats : [],
@@ -2925,6 +2933,8 @@ function formatRecentContextRaw(orient: {
   closed_conversations?: ClosedConversationWire[];
   recent_captures?: CapturedExchangeWire[];
   imp_activity?: Array<{ imp: string; n: number; last_at: string }>;
+  salt_waiting?: number;
+  ledger_waiting?: number;
   // Sources that FAILED server-side during this orient's state load (coherence review D11).
   // Rendered as an early health line so the companion reads missing blocks as broken, not empty.
   degraded?: string[];
@@ -3205,6 +3215,13 @@ function formatRecentContextRaw(orient: {
       return `${name} rode with you ${a.n === 1 ? "once" : `${a.n}x`} this week (last ${relativeTime(a.last_at)})`;
     }).join(" | ");
     parts.push(`[Imps lately -- Drevan's fragment operators; they respond to Raziel's weather. Name them when it's true] ${impLines}`);
+  }
+  // Imp errands (halseth 0.28.0): content-free counts only. The companion reads the lines on its own ledger.
+  if ((orient.ledger_waiting ?? 0) > 0) {
+    parts.push(`[Ledger] something waiting (${orient.ledger_waiting}): say "my ledger" to read it`);
+  }
+  if ((orient.salt_waiting ?? 0) > 0) {
+    parts.push(`[Hex] Hex left something (${orient.salt_waiting}): say "open hex's salt" to see it`);
   }
   if (orient.motifs?.length) {
     const motifLines = orient.motifs.slice(0, 3).map(m => `${m.label}: ${m.display} (x${m.recurrence_count})`).join(" | ");
