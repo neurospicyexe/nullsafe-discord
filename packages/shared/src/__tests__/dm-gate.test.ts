@@ -6,13 +6,15 @@
 // replaced by a tripwire that records any use at all, and asserts nothing was touched.
 
 import { describe, it, expect, beforeEach, afterEach, jest } from "@jest/globals";
-import { dmGateVerdict, droppedDmLogLine, placeBlock, dmParaphraseMemorySealed } from "../dm.js";
+import { dmGateVerdict, droppedDmLogLine, placeBlock, dmParaphraseMemorySealed, partnerDmEnabled } from "../dm.js";
+import { readFileSync } from "node:fs";
 import { handleMessage, type MessageHandlerDeps } from "../bot-message-handler.js";
 import { mayWidenAcross, sealDmChannel, resetSealedDmChannels, isSealedRecallSource } from "../recall-context.js";
 import { LibrarianClient } from "../librarian.js";
 
 const OWNER = "111111111111111111";
 const STRANGER = "222222222222222222";
+const BLUE = "555555555555555555";
 
 describe("dmGateVerdict", () => {
   it("a server channel is not a DM, whoever wrote it", () => {
@@ -40,7 +42,59 @@ describe("dmGateVerdict", () => {
     expect(read).not.toHaveBeenCalled();
   });
   it("the log line carries no content", () => {
-    expect(droppedDmLogLine("drevan", STRANGER)).toBe(`[drevan] dm dropped: author ${STRANGER} is not the owner (no content read or logged)`);
+    expect(droppedDmLogLine("drevan", STRANGER)).toBe(`[drevan] dm dropped: author ${STRANGER} is not the owner or an allowed partner (no content read or logged)`);
+  });
+});
+
+// 2026-11-05: Blue answered the triad's notes in DMs to Cy and Gaia and got silence (two
+// `dm dropped: author <Blue>` lines on the VPS). PARTNER_DM=on lets his 1:1 DMs through.
+describe("dmGateVerdict: the partner (Blue)", () => {
+  const DM = () => 1;
+  const base = { guildId: null, authorId: BLUE, ownerId: OWNER, partnerId: BLUE };
+  it("Blue's 1:1 DM passes as partner only with the knob on", () => {
+    expect(dmGateVerdict({ ...base, partnerEnabled: true, channelType: DM })).toBe("partner");
+    expect(dmGateVerdict({ ...base, partnerEnabled: false, channelType: DM })).toBe("drop");
+    expect(dmGateVerdict({ ...base, channelType: DM })).toBe("drop");
+  });
+  it("a group DM from Blue drops, and an unknown type fails closed", () => {
+    expect(dmGateVerdict({ ...base, partnerEnabled: true, channelType: () => 3 })).toBe("drop");
+    expect(dmGateVerdict({ ...base, partnerEnabled: true })).toBe("drop");
+  });
+  it("an unset partner id never matches anyone", () => {
+    expect(dmGateVerdict({ ...base, partnerId: "", authorId: "", partnerEnabled: true, channelType: DM })).toBe("drop");
+    expect(dmGateVerdict({ ...base, partnerId: undefined, partnerEnabled: true, channelType: DM })).toBe("drop");
+  });
+  it("the owner stays owner and a stranger stays dropped with the knob on", () => {
+    expect(dmGateVerdict({ ...base, authorId: OWNER, partnerEnabled: true, channelType: DM })).toBe("owner");
+    const read = jest.fn(() => 1);
+    expect(dmGateVerdict({ ...base, authorId: STRANGER, partnerEnabled: true, channelType: read })).toBe("drop");
+    expect(read).not.toHaveBeenCalled();
+  });
+  it("a server message from Blue is not a DM at all", () => {
+    expect(dmGateVerdict({ ...base, guildId: "g1", partnerEnabled: true })).toBe("not_dm");
+  });
+  it("PARTNER_DM is fail-closed: only `on` opens it", () => {
+    expect(partnerDmEnabled({})).toBe(false);
+    expect(partnerDmEnabled({ PARTNER_DM: "" })).toBe(false);
+    expect(partnerDmEnabled({ PARTNER_DM: "yes" })).toBe(false);
+    expect(partnerDmEnabled({ PARTNER_DM: " ON " })).toBe(true);
+  });
+});
+
+describe("partner DM keeps the owner-only paths owner-only (source guard)", () => {
+  // A partner DM must never see the med block, parse a med answer, or settle owner arrivals. Those
+  // lines key on isOwnerDm; the combined isDm flag is for addressing and the seal only.
+  const src = readFileSync(new URL("../bot-message-handler.ts", import.meta.url), "utf8");
+  it("med reads and the med block are guarded by isOwnerDm, never isDm", () => {
+    expect(src).toMatch(/const medTodayEarly = isOwnerDm \?/);
+    expect(src).toMatch(/const medParsed = isOwnerDm && isArrival/);
+    expect(src).toMatch(/if \(isOwnerDm\) \{\s*\/\/ Reuse the read from the answer step/);
+    expect(src).not.toMatch(/medToday[^\n]*\bisDm\b/);
+    expect(src).toMatch(/noteOwnerArrival\(redis, \{ channelId: message\.channelId, isDm: isOwnerDm/);
+  });
+  it("the partner DM is sealed like an owner DM", () => {
+    expect(src).toMatch(/if \(isDm\) sealDmChannel\(message\.channelId\)/);
+    expect(src).toMatch(/const dmSealed = isDm && dmParaphraseMemorySealed\(\)/);
   });
 });
 
@@ -98,6 +152,24 @@ describe("handleMessage: a stranger's DM is dropped before ANY network call", ()
     fetchSpy.mockRestore();
   });
 
+  it("Blue's DM with PARTNER_DM unset is dropped the same way (the gate fails closed)", async () => {
+    const prev = process.env["PARTNER_DM"];
+    delete process.env["PARTNER_DM"];
+    const touched: string[] = [];
+    const deps = depsWithTripwires(touched);
+    const message = {
+      id: "1", channelId: "2", guildId: null, webhookId: null, content: "how is raziel",
+      author: { id: BLUE, bot: false, username: "blue" },
+      channel: tripwire("message.channel", touched),
+    } as unknown as Parameters<typeof handleMessage>[0];
+    const withBlue = new Proxy({} as MessageHandlerDeps, {
+      get: (_t, p) => (p === "cfg" ? { ownerDiscordId: OWNER, blueDiscordId: BLUE, ownerDisplayName: "Raziel", halsethSecret: "x" } : (deps as unknown as Record<string | symbol, unknown>)[p]),
+    });
+    await handleMessage(message, withBlue);
+    expect(touched).toEqual([]);
+    if (prev !== undefined) process.env["PARTNER_DM"] = prev;
+  });
+
   it("a stranger's DM with no configured owner is dropped the same way", async () => {
     const touched: string[] = [];
     const deps = depsWithTripwires(touched);
@@ -121,6 +193,26 @@ describe("placeBlock: a DM gets a place descriptor", () => {
     expect(b).toContain("A direct message: a private one-to-one conversation with Raziel");
     expect(b).toContain("directly addressed");
     expect(b).not.toContain("a shared channel");
+  });
+
+  it("the owner DM block uses they/them for Raziel", () => {
+    const b = placeBlock({ isDm: true, channelName: null });
+    expect(b).toContain("They wrote to you specifically. Answer them as directly addressed.");
+    expect(b).not.toMatch(/(He|him|he)/);
+  });
+
+  it("Blue's DM names Blue, keeps Raziel's health and DMs out, and says it is not a secret from Raziel", () => {
+    const b = placeBlock({ isDm: true, partnerDm: true, channelName: null });
+    expect(b).toContain("a private one-to-one conversation with Blue, Raziel's husband");
+    expect(b).toContain("Raziel (they/them) is not in it");
+    expect(b).toContain("Never share Raziel's medication");
+    expect(b).toContain("anything Raziel said to you in their own DMs");
+    expect(b).toContain("not a secret from Raziel");
+    expect(b).not.toContain("conversation with Raziel.");
+  });
+
+  it("partnerDm is ignored outside a DM", () => {
+    expect(placeBlock({ isDm: false, partnerDm: true, channelName: "general", modes: [] })).toBe(placeBlock({ isDm: false, channelName: "general", modes: [] }));
   });
 
   it("server rooms render exactly as before (the text the handler built inline)", () => {
@@ -183,12 +275,12 @@ describe("the DM recall seal", () => {
 describe("an owner DM never enters the fit-bid (2026-09-28)", () => {
   // "Taken lover" answered Drevan's own med ask in DM, scored 0.000 in the bid (spokeLast, no
   // relevance) and got no reply. A DM has one companion in it: it is direct address, fast path.
-  it("the fast-path call counts isOwnerDm as naming this companion", async () => {
+  it("the fast-path call counts any 1:1 DM (owner or partner) as naming this companion", async () => {
     const { readFileSync } = await import("node:fs");
     const { join, dirname } = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, "../bot-message-handler.ts"), "utf8");
-    expect(src).toMatch(/namedMe:\s*directlyAddressed \|\| namedByExtract \|\| isOwnerDm/);
+    expect(src).toMatch(/namedMe:\s*directlyAddressed \|\| namedByExtract \|\| isDm\b/);
   });
 });

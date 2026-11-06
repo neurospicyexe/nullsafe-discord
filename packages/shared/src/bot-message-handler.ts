@@ -2,7 +2,7 @@ import type { ChannelConfig } from "./types.js";
 import { railSuppressed } from "./rail-telemetry.js";
 import { currentTurn } from "./turn-telemetry.js";
 import { noteServed, noteTranscript } from "./served-memory.js";
-import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock } from "./dm.js";
+import { dmGateVerdict, droppedDmLogLine, dmParaphraseMemorySealed, placeBlock, partnerDmEnabled } from "./dm.js";
 import { CROSS_ROOM_CLOSE, CROSS_ROOM_CLOSE_AFTER, crossRoomDigest, crossRoomOn, trustedGuildIds } from "./cross-room.js";
 import { claimPkProfile } from "./pk-profile-seen.js";
 import { peopleForTurn, peopleIndexFor, readPeopleFrameMode, type PeopleCache } from "./people-frame.js";
@@ -579,14 +579,26 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // ask_librarian over Raziel's private data. One log line, no content. Also enforced at
     // MessageCreate in bot-core so the message never enters the inbox; this copy is what holds if a
     // future caller skips that. See dm.ts.
-    const dmVerdict = dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: cfg.ownerDiscordId, channelType: () => message.channel?.type });
+    const dmVerdict = dmGateVerdict({
+      guildId: message.guildId, authorId: message.author.id, ownerId: cfg.ownerDiscordId,
+      partnerId: cfg.blueDiscordId, partnerEnabled: partnerDmEnabled(), channelType: () => message.channel?.type,
+    });
     if (dmVerdict === "drop") {
       console.log(droppedDmLogLine(COMPANION_ID, message.author.id));
       return;
     }
-    /** A 1:1 DM from the owner. He wrote to THIS companion: every addressing rail treats it as direct address. */
+    /** A 1:1 DM from the owner. They wrote to THIS companion: every addressing rail treats it as direct address. */
     const isOwnerDm = dmVerdict === "owner";
-    if (isOwnerDm) sealDmChannel(message.channelId);
+    /**
+     * A 1:1 DM from Blue (PARTNER_DM=on, 2026-11-05). Direct address like an owner DM, sealed like one
+     * (blue-note's "nothing from Blue's own private channels" reads the same seal), but NEVER the owner's
+     * med block, med answer parsing, or owner-arrival bookkeeping: those stay on isOwnerDm alone.
+     */
+    const isPartnerDm = dmVerdict === "partner";
+    /** Any private 1:1 the gate let through: nobody else is in it, so it is direct address by definition. */
+    const isDm = isOwnerDm || isPartnerDm;
+    if (isDm) sealDmChannel(message.channelId);
+    if (isPartnerDm) console.log(`[${COMPANION_ID}] partner dm in ch=${message.channelId} msg=${message.id} chars=${(message.content ?? "").length}`);
 
     // INFERENCE_MODE=hermes forces every adapter build to the local Hermes agent (see
     // createAdapter forceHermes). Surfaced here for the reply-token ceiling (full agent runs
@@ -618,7 +630,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     const isArrival = !followUpPass;
     // The origin survived this check when it arrived (it started the chain), so a pass skips it.
     // PluralKit never proxies in a DM, so an owner DM skips the 3s hold and the deleted-check fetch.
-    if (isArrival && !isOwnerDm && !message.webhookId && !message.author.bot) {
+    if (isArrival && !isDm && !message.webhookId && !message.author.bot) {
       const { skip } = await pkDedup.waitForClaim(message.channelId, message.id, PK_HOLD_MS);
       if (skip) return; // PluralKit deleted this and reposted it; the proxy turn owns the reply
       // Content pairing can miss legitimately: an image-only proxy has no text to match, a
@@ -1824,12 +1836,12 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // of Blue's system): Blue is family and a defined addressee, never a guest. Guests never; never a
     // sibling, never Sol, never a DM, never a replayed pass turn. Blue's holder is Blue's own thread
     // hold (per-human, 2026-10-10), never Raziel's.
-    if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+    if (isArrival && !isDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
       && (userTier === "owner" || userTier === "intimate") && addressModelMode() === "shadow") {
       const shadowRefId = message.reference?.messageId ?? null;
       const shadowSide = userTier === "owner" ? "raziel" as const : "blue" as const;
       fireAddressShadow({
-        isDm: isOwnerDm,
+        isDm: isDm,
         companionId: COMPANION_ID,
         messageId: message.id,
         channelId: message.channelId,
@@ -1936,7 +1948,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     let roomTimingP: Promise<RoomTimingResult | null> | null = null;
     const roomTimingNow = roomTimingMode(process.env, COMPANION_ID);
     let blueColdPicked = false;
-    if (isArrival && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+    if (isArrival && !isDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
         && (userTier === "owner" || userTier === "intimate")) {
       const mentionedIds = [...message.mentions.users.keys(), ...burst.flatMap(b => b.mentionedIds ?? [])];
       const mentionedHumans: HumanSide[] = [];
@@ -2108,7 +2120,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // is the hold's, and the fit bid + care follow-up chain decide who speaks first and who may follow.
     const b32SkipsClassifier = b32Mode === "on" && b32OwnerArrival
       && (!!holdPhrase || careHoldActive(COMPANION_ID));
-    const isAmbientOwnerOnly = !isOwnerDm && !b32SkipsClassifier && runsAmbientClassifier({
+    const isAmbientOwnerOnly = !isDm && !b32SkipsClassifier && runsAmbientClassifier({
       ownerOnlyChannel: channelEntry?.modes?.includes("owner_only") === true,
       isCompanionBot: senderCtx.isCompanionBot,
       isMentioned: senderCtx.isMentioned,
@@ -2147,7 +2159,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     } else if (solDecline) {
       console.log(`[${COMPANION_ID}] Sol post ${message.id} not mine to answer (${solDecline}) -- standing down`);
       return;
-    } else if (!isSol && !isOwnerDm && !isReplyToMe && !entitledFollowUp && !blueThreadMine && !shouldRespond(gateChannelId, addressText, senderCtx, COMPANION_ID, channelConfig, [])) {
+    } else if (!isSol && !isDm && !isReplyToMe && !entitledFollowUp && !blueThreadMine && !shouldRespond(gateChannelId, addressText, senderCtx, COMPANION_ID, channelConfig, [])) {
       // If a companion spoke in an inter_companion channel and we're not responding,
       // write a passive witness entry so Halseth has continuity context. Witnessing is
       // Gaia's lane only (2026-07-21) -- previously all three bots wrote this branch, so
@@ -2376,7 +2388,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // the Halseth round trip overlaps the context assembly in between. Placed after every response gate
     // above, so only turns this bot is actually taking pay for it. prepare() never throws and resolves
     // null on any failure: a Halseth outage can never block a reply. DMs never carry a session.
-    const watchalongPending: Promise<PreparedDelivery | null> = !isOwnerDm && watchalongEnabled()
+    const watchalongPending: Promise<PreparedDelivery | null> = !isDm && watchalongEnabled()
       ? watchalongDeliveryFor(cfg.halsethSecret, COMPANION_ID).prepare(message.channelId)
       : Promise.resolve(null);
 
@@ -2403,7 +2415,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
     // A DM is never indexed: with no discord-live/<dm> row, nothing from it can be recalled into any
     // room (the structural half of the DM seal; see recall-context.ts sealDmChannel).
     // Never a Sol moment: the vault would hold the crow's narration as a recallable human line.
-    if (!senderCtx.isCompanionBot && !isSol && isArrival && !isOwnerDm) {
+    if (!senderCtx.isCompanionBot && !isSol && isArrival && !isDm) {
       liveIngest({
         companion: null,
         author: memberLabel,
@@ -2423,7 +2435,7 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       return;
     }
 
-    if (resetsBotRails(railTurn) && !(isOwnerDm && dmParaphraseMemorySealed())) sessionWindows.touch(message.channelId);
+    if (resetsBotRails(railTurn) && !(isDm && dmParaphraseMemorySealed())) sessionWindows.touch(message.channelId);
 
     // med_reminder answer (spec R-10, amended by Raziel's ruling 2026-10-01). In an owner DM, his
     // answer is parsed into statements (parseMedAnswer): "yes" / "took them" / a check mark, a named
@@ -2899,7 +2911,7 @@ ${widened}`;
     const isThreadCh = typeof liveChannel.isThread === "function" && liveChannel.isThread();
     const parentOf = (c: unknown) => (c as { parent?: { name?: string } | null }).parent?.name ?? null;
     contextPrompt += placeBlock({
-      isDm: isOwnerDm,
+      isDm, partnerDm: isPartnerDm,
       channelName: channelName ?? null,
       threadParentName: isThreadCh ? parentOf(liveChannel) : null,
       categoryName: !isThreadCh && "parent" in liveChannel ? parentOf(liveChannel) : null,
@@ -3056,7 +3068,7 @@ ${widened}`;
         // silenced the others), so the host must not then lose an empty bid to the floor (R5).
         // Blue's lines get the same floor (2026-10-25): his 18:56 group call in #movie-night drew
         // three bids of 0.10 against a care-hold floor and the host answered nothing.
-        namedMe: directlyAddressed || namedByExtract || isOwnerDm || blueThreadMine
+        namedMe: directlyAddressed || namedByExtract || isDm || blueThreadMine
           || (channelEntry?.host === COMPANION_ID && (attribution.isOwner || userTier === "intimate")),
         replyToMe: isReplyToMe,
       });
@@ -3217,7 +3229,7 @@ ${widened}`;
         const passMode = passOnOrdinaryMode(process.env, COMPANION_ID);
         if (passMode !== "off" && passableOrdinaryTurn({
           addressType: addrResult.type,
-          isOwnerDm,
+          isOwnerDm: isDm,
           isSol,
           senderIsCompanionBot: senderCtx.isCompanionBot,
           entitledFollowUp: !!entitledFollowUp,
@@ -4068,7 +4080,7 @@ ${ordinaryPassText}` };
     // Per-human thread hold (2026-10-10): a reply to BLUE makes me the holder of Blue's thread in this
     // channel (her own 15-minute hold, never Raziel's) and remembers the ids so Raziel's holder walk
     // skips them. Only turns on Blue's own human message; a pass turn or a sibling post never writes it.
-    if (sent.length > 0 && userTier === "intimate" && !isOwnerDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
+    if (sent.length > 0 && userTier === "intimate" && !isDm && !isSol && !senderCtx.isCompanionBot && !entitledFollowUp
         && takesBlueHold({ host: channelEntry?.host ?? null, me: COMPANION_ID, addressedMe: addressedMeByName })) {
       void recordHumanHold(holdRedis, "blue", message.channelId, COMPANION_ID as CompanionId, sent.map(m => m.id), channelEntry?.exchangeWindowMs ?? ACTIVE_EXCHANGE_WINDOW_MS);
     }
@@ -4079,10 +4091,10 @@ ${ordinaryPassText}` };
     // B37 shadow: the OBSERVED speaker, joined to the address shadow row by origin id in the report.
     // Fire-and-forget file append, no-op unless ADDRESS_MODEL=shadow; never for a DM or Sol.
     // Raziel's and Blue's messages both (step 2): the shadow fires for both, so both need the join.
-    if (sent.length > 0 && !isOwnerDm && !isSol
+    if (sent.length > 0 && !isDm && !isSol
       && (entitledFollowUp || (!senderCtx.isCompanionBot && (userTier === "owner" || userTier === "intimate")))) {
       recordAddressSpoke({
-        isDm: isOwnerDm,
+        isDm: isDm,
         msgId: entitledFollowUp?.originMessageId ?? message.id,
         channelId: message.channelId,
         companionId: COMPANION_ID,
@@ -4121,7 +4133,7 @@ ${ordinaryPassText}` };
     // took a line addressed TO the companion for the speaker's name). It was sent; it is not memory.
     const misseated = sent.length > 0 && misseatedReply(COMPANION_ID as VoiceCompanionId, response);
     if (misseated) console.warn(`[${COMPANION_ID}] reply calls someone by my own name; not journaled, indexed, or judged as my speech`);
-    if (sent.length > 0 && !isOwnerDm) {
+    if (sent.length > 0 && !isDm) {
       if (!misseated) liveIngest({
         companion: COMPANION_ID,
         author: COMPANION_ID,
@@ -4197,7 +4209,7 @@ ${ordinaryPassText}` };
     // Rolling distillation: fire every DISTILLATION_INTERVAL messages (user + assistant = 2 per turn).
     // DM seal: the paraphrasing memory paths (this distillation and the writeback judge below) stay
     // off for a DM unless DM_MEMORY=carry; the raw pulse never runs for a DM at all. See dm.ts.
-    const dmSealed = isOwnerDm && dmParaphraseMemorySealed();
+    const dmSealed = isDm && dmParaphraseMemorySealed();
     const distCount = (distillationCounter.get(message.channelId) ?? 0) + 2;
     distillationCounter.set(message.channelId, distCount);
     if (distCount >= DISTILLATION_INTERVAL && !dmSealed) {
@@ -4209,7 +4221,7 @@ ${ordinaryPassText}` };
     // and Hearth have actual conversation content mid-session without waiting for inactivity.
     const pulseCount = (pulseCounter.get(message.channelId) ?? 0) + 2;
     pulseCounter.set(message.channelId, pulseCount);
-    if (pulseCount >= PULSE_INTERVAL && !isOwnerDm) {
+    if (pulseCount >= PULSE_INTERVAL && !isDm) {
       pulseCounter.set(message.channelId, 0);
       const recentTurns = stmStore.get(message.channelId).slice(-PULSE_INTERVAL)
         .map(m => `${m.authorName ? labelSafe(m.authorName) : m.role}: ${neutralizeRecalled(m.content.slice(0, 200))}`)

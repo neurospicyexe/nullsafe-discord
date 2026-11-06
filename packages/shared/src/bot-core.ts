@@ -63,7 +63,7 @@ import {
 } from "./channel-inbox.js";
 import { distillSessionOnInactive } from "./distillation.js";
 import { SHUTDOWN_FLUSH_MS, SHUTDOWN_SESSION_CLOSE_MS, SHUTDOWN_SUBS_MS, SHUTDOWN_BACKSTOP_MS } from "./shutdown-budget.js";
-import { dmGateVerdict, droppedDmLogLine } from "./dm.js";
+import { dmGateVerdict, droppedDmLogLine, partnerDmEnabled } from "./dm.js";
 import { mutedGuildIds, isMutedGuild } from "./guild-mute.js";
 import { sealDmChannel } from "./recall-context.js";
 import { isAffirmativeMedAnswer } from "./med-answer.js";
@@ -1115,7 +1115,7 @@ export async function runBot(env: BotConfig, brc: RunBotConfig): Promise<void> {
     // DM OWNER GATE, first line: a stranger's DM never reaches the PK pairing, the inbox, or a turn.
     // No content is read or logged. handleMessage repeats the check (defence in depth).
     if (message.author.id !== client.user?.id
-        && dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: env.ownerDiscordId, channelType: () => message.channel?.type }) === "drop") {
+        && dmGateVerdict({ guildId: message.guildId, authorId: message.author.id, ownerId: env.ownerDiscordId, partnerId: env.blueDiscordId, partnerEnabled: partnerDmEnabled(), channelType: () => message.channel?.type }) === "drop") {
       console.log(droppedDmLogLine(companionId, message.author.id));
       return;
     }

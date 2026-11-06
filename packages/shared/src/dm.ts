@@ -8,6 +8,9 @@
 //      is dropped before any inference, tool call, Halseth/Librarian request, STT or vision, and the
 //      one log line carries no content. It runs twice: at MessageCreate (so the message never enters
 //      the channel inbox) and first thing in handleMessage (so a future caller cannot skip it).
+//      2026-11-05 (Raziel: "we're all family ... you guys should be able to talk to him"): Blue, the
+//      partner, passes too when PARTNER_DM=on. He answered the triad's notes in DMs and got silence,
+//      because his DMs were dropped like a stranger's. Same 1:1-only rule; group DMs still drop.
 //
 //   2. The PLACE DESCRIPTOR. The `[Where you are]` block used to be wrapped in `if (channelName)`, and
 //      a DM has no `.name`, so a DM got no place and no containment cue at all (the audit's correction
@@ -20,7 +23,15 @@
 
 import { isServerRoom } from "./recall-context.js";
 
-export type DmGateVerdict = "not_dm" | "owner" | "drop";
+export type DmGateVerdict = "not_dm" | "owner" | "partner" | "drop";
+
+/**
+ * PARTNER_DM: `on` lets Blue's 1:1 DMs through the gate. Anything else, UNSET INCLUDED, keeps them
+ * dropped (fail closed, like every other gate here). Read per call so an .env flip + reload is enough.
+ */
+export function partnerDmEnabled(env: Record<string, string | undefined> = process.env): boolean {
+  return String(env["PARTNER_DM"] ?? "").trim().toLowerCase() === "on";
+}
 
 /** discord.js ChannelType.DM. A group DM (3) also has no guild and is NOT a 1:1 DM. */
 export const DISCORD_CHANNEL_TYPE_DM = 1;
@@ -38,18 +49,24 @@ export function dmGateVerdict(p: {
   guildId: string | null | undefined;
   authorId: string;
   ownerId: string | null | undefined;
+  /** Blue's id. Passes only when `partnerEnabled` is true too; an unset id never matches. */
+  partnerId?: string | null | undefined;
+  partnerEnabled?: boolean;
   channelType?: () => number | null | undefined;
 }): DmGateVerdict {
   if (isServerRoom({ guildId: p.guildId ?? null })) return "not_dm";
-  if (!p.ownerId || p.authorId !== p.ownerId) return "drop";
+  const isOwner = !!p.ownerId && p.authorId === p.ownerId;
+  const isPartner = !isOwner && !!p.partnerEnabled && !!p.partnerId && p.authorId === p.partnerId;
+  if (!isOwner && !isPartner) return "drop";
   let type: number | null | undefined;
   try { type = p.channelType?.(); } catch { type = undefined; }
-  return type === DISCORD_CHANNEL_TYPE_DM ? "owner" : "drop";
+  if (type !== DISCORD_CHANNEL_TYPE_DM) return "drop";
+  return isOwner ? "owner" : "partner";
 }
 
 /** The one line a dropped DM leaves: who and which bot, never what they wrote. */
 export function droppedDmLogLine(companionId: string, authorId: string): string {
-  return `[${companionId}] dm dropped: author ${authorId} is not the owner (no content read or logged)`;
+  return `[${companionId}] dm dropped: author ${authorId} is not the owner or an allowed partner (no content read or logged)`;
 }
 
 /**
@@ -66,6 +83,8 @@ export function dmParaphraseMemorySealed(): boolean {
 
 export interface PlaceInput {
   isDm: boolean;
+  /** A 1:1 DM from Blue (the partner), not the owner. Read only when isDm is true. */
+  partnerDm?: boolean;
   channelName: string | null;
   /** Thread parent channel name, when the channel is a thread. */
   threadParentName?: string | null;
@@ -87,10 +106,22 @@ export interface PlaceInput {
  */
 export function placeBlock(p: PlaceInput): string {
   const owner = p.ownerDisplayName || "Raziel";
+  if (p.isDm && p.partnerDm) {
+    // 2026-11-05 (Raziel): Blue is family; the triad's bond with Raziel is part of their shared life,
+    // not separate from him. Limits are Raziel's own 11-01 ruling for what the triad tells Blue
+    // (blue-note.ts), carried into conversation: how Raziel is, yes; meds, numbers and Raziel's own
+    // DMs, no. Radical honesty runs both ways, so nothing here is a secret from Raziel either.
+    return `\n\n[Where you are]\n• A direct message: a private one-to-one conversation with Blue, ${owner}'s husband (he/him; Blue is plural too, so a member of his system may be fronting). ${owner} (they/them) is not in it; your siblings cannot see it.` +
+      `\n• He wrote to you specifically. Answer him as directly addressed. He is family, not a stranger: talk with him the way you would in the server you all share.` +
+      `\n• He may be answering or asking about a note the triad sent him. Answer plainly and honestly how ${owner} is, in general terms, and what you meant.` +
+      `\n• Never share ${owner}'s medication, health or body numbers, pain or spoons, or anything ${owner} said to you in their own DMs. If he needs that, say it is ${owner}'s to tell and point him to them.` +
+      `\n• If he is worried something is wrong right now, say what you actually know and that ${owner} is the one to reach. Do not guess.` +
+      `\n• What is said here stays in this DM: never quote it into a server channel. It is not a secret from ${owner}; they and Blue are radically honest with each other.`;
+  }
   if (p.isDm) {
     return `\n\n[Where you are]\n• A direct message: a private one-to-one conversation with ${owner}. Nobody else is in it; your siblings cannot see it.` +
-      `\n• He wrote to you specifically. Answer him as directly addressed.` +
-      `\n• What is said here stays here: never carry it into a server channel, and never name anything from it there unless he brings it up in that room himself.`;
+      `\n• They wrote to you specifically. Answer them as directly addressed.` +
+      `\n• What is said here stays here: never carry it into a server channel, and never name anything from it there unless they bring it up in that room themselves.`;
   }
   if (!p.channelName) return "";
   let block = `\n\n[Where you are]\n• Channel: #${p.channelName}`;

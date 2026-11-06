@@ -119,7 +119,7 @@ describe("fireAddressShadow never touches the reply path", () => {
     expect(src.indexOf("fireAddressShadow({")).toBeLessThan(src.indexOf("const isAmbientOwnerOnly"));
     // The DM seal and the human-only gate at the call site.
     const call = src.slice(src.lastIndexOf("if (isArrival", src.indexOf("fireAddressShadow({")), src.indexOf("fireAddressShadow({"));
-    expect(call).toMatch(/!isOwnerDm/);
+    expect(call).toMatch(/!isDm &&/);
     expect(call).toMatch(/!isSol/);
     expect(call).toMatch(/!senderCtx\.isCompanionBot/);
     // Raziel and Blue (step 2); never a guest.
