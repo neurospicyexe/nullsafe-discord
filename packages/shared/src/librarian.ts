@@ -2109,6 +2109,33 @@ export class LibrarianClient {
   }
 
   /**
+   * B63 being_seen: ask Halseth whether one of Raziel's messages "saw" THIS companion (a direct reply to
+   * one of their messages, or a named-back make / word / phrase / returned thread). Halseth decides the
+   * tier (at most one per message per companion) and answers only {fired, why}; the text is sent so it can
+   * be matched server-side and is never stored or echoed. Non-throwing: felt state never breaks a reply.
+   */
+  async beingSeenCheck(args: { messageId: string; text: string; channelId?: string | null; isReplyToMe: boolean }): Promise<void> {
+    if (!args.messageId) return;
+    try {
+      const res = await this._fetch(`${this.url}/mind/being-seen/check`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${this.secret}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companion_id: this.companionId,
+          message_id: args.messageId,
+          text: args.text.slice(0, 4000),
+          ...(args.channelId ? { channel_id: args.channelId } : {}),
+          is_reply_to_me: args.isReplyToMe,
+        }),
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) console.warn(`[librarian] beingSeenCheck -> ${res.status}`);
+    } catch {
+      // non-fatal
+    }
+  }
+
+  /**
    * @param opts.addressed  Was this companion the one Raziel spoke TO, or did it merely witness him
    *   speaking in a shared room? Defaults true (the old behaviour). Halseth grades the felt-state
    *   consequence: `message_from_raziel` at full weight when addressed, `message_witnessed` at a

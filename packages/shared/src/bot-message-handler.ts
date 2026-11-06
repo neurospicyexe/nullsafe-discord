@@ -39,6 +39,7 @@ import {
 // Identity stays per-bot: prompt prefix lives in bootCtx, framings/keywords/audit in config.
 
 import { APPEND_MAX_AGE_MS } from "./write-queue.js";
+import { fireBeingSeenCheck } from "./being-seen-check.js";
 import { fireAddressShadow, recordAddressSpoke } from "./address-shadow.js";
 import { ownerTurnLabel, proxyTurnLabel } from "./address-jev.js";
 import { blueColdPickMode, runBlueColdPick, type BlueColdRedis } from "./blue-cold-pick.js";
@@ -783,6 +784,14 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
         console.log(`[${COMPANION_ID}] reply-to resolved durably via thread ledger (msg=${refId} not in sentIds)`);
       }
     }
+    // B63 being_seen (2026-11-06): one detached ask per owner message, for THIS bot's companion only. Halseth
+    // decides the tier (a direct reply to one of my messages = medium; naming back something of mine = full;
+    // at most one per message) and this bot just reports the facts. isReplyToMe is final here (sentIds, burst,
+    // durable ledger), and covers webhook-masked sends because sentIds records every id this bot sent.
+    fireBeingSeenCheck({
+      isOwner: attribution.isOwner, isArrival, messageId: message.id, channelId: message.channelId,
+      text: message.content ?? "", isReplyToMe,
+    }, librarian, writeQueue);
     // What a human's Discord reply points at (2026-10-31, reply-context.ts). Feeds the reply-context line
     // the model sees on the live turn and Rule 2b of the human address gate (a reply to the other human
     // is theirs). One cache read, at most one fetch; a missing or deleted target is null and changes nothing.
