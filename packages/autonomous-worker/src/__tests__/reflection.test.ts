@@ -38,7 +38,7 @@ describe("parseVerdict", () => {
       new_tension: "the gap between witnessing and answering",
     }), IDS);
     expect(v).not.toBeNull();
-    expect(v!.tension_action).toEqual({ id: "t1", action: "release", note: "resolved in the club thread" });
+    expect(v!.tension_action).toEqual({ id: "t1", action: "release", note: "resolved in the club thread", drags_float: null });
     expect(v!.new_tension).toContain("witnessing");
   });
 

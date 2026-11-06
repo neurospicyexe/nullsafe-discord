@@ -861,6 +861,8 @@ export interface Tension {
   first_noted_at: string;
   notes: string | null;
   charge: number;
+  /** soma_float_1..3 this tension drags (mig 0173); null/absent = names none. */
+  drags_float?: string | null;
 }
 
 export async function getSimmeringTensions(companionId: string): Promise<Tension[]> {
@@ -872,7 +874,7 @@ export async function getSimmeringTensions(companionId: string): Promise<Tension
   }
 }
 
-export async function updateTension(id: string, fields: { status?: string; notes?: string; charge_delta?: number }): Promise<void> {
+export async function updateTension(id: string, fields: { status?: string; notes?: string; charge_delta?: number; drags_float?: string }): Promise<void> {
   await hFetch(`/companion-growth/tensions/${id}`, "PATCH", fields);
 }
 
@@ -886,10 +888,11 @@ export async function surfaceTension(id: string): Promise<void> {
 // Log a genuine in-voice tension (Guardian self-resolution: a companion feeding its
 // own starved tension pool). Returns the new id, or null on failure -- callers must
 // check (continuity-critical write, never fire-and-forget; 2026-06-14 lesson).
-export async function addTension(companionId: string, tensionText: string, notes?: string): Promise<string | null> {
+export async function addTension(companionId: string, tensionText: string, notes?: string, dragsFloat?: string | null): Promise<string | null> {
   try {
     const r = await hFetch("/companion-growth/tensions", "POST", {
       companion_id: companionId, tension_text: tensionText, notes: notes ?? null,
+      ...(dragsFloat ? { drags_float: dragsFloat } : {}),
     }) as { id?: string };
     return r.id ?? null;
   } catch (e) {
@@ -1204,8 +1207,66 @@ export async function postBriefing(kind: "morning" | "midday" | "evening"): Prom
 
 // Vibe-check (triad self-monitoring layer). Compose + deliver lives server-side in Halseth
 // (handlers/vibecheck.ts); always-on, dedup caps one per day. Returns reason='already_sent' on a repeat tick.
-export async function postVibeCheck(): Promise<{ written: boolean; reason: string; journal_id?: string; text: string }> {
-  return await hFetch("/mind/vibecheck/run", "POST", {}) as { written: boolean; reason: string; journal_id?: string; text: string };
+export interface VibePostResult {
+  companion: string;
+  written: boolean;
+  reason: string;
+  journal_id?: string;
+  text: string;
+}
+export async function postVibeCheck(): Promise<{
+  written: boolean; reason: string; journal_id?: string; text: string;
+  /** v2 (B63 step 3): one post per companion; each fresh one is posted under that companion's own token. */
+  posts?: VibePostResult[];
+}> {
+  return await hFetch("/mind/vibecheck/run", "POST", {}) as {
+    written: boolean; reason: string; journal_id?: string; text: string; posts?: VibePostResult[];
+  };
+}
+
+// B63 step 4: a companion's OWN record for the nightly reflection, the pressure it may name as a
+// tension, and (Gaia only) spoke_without_load candidates. Mirrors halseth src/webmind/reflection-record.ts.
+export interface PressureOffer {
+  float_key: "soma_float_1" | "soma_float_2" | "soma_float_3";
+  label: string;
+  direction: "low" | "high";
+  days: number;
+  cause: string;
+  text: string;
+}
+export interface ReflectionRecord {
+  companion_id: string;
+  closes: { spine: string; last_real_thing: string | null; at: string }[];
+  makes: { kind: string; title: string; at: string }[];
+  letters: { text: string; at: string }[];
+  feelings: { emotion: string; sub_emotion: string | null; at: string }[];
+  moves: { label: string; delta: number; cause: string }[];
+  pressure: PressureOffer[];
+  pressure_flags: { severity: string; summary: string }[];
+  spoke_without_load: { id: string; at: string; excerpt: string }[];
+}
+export async function getReflectionRecord(companionId: string): Promise<ReflectionRecord | null> {
+  try {
+    return await hFetch(`/mind/vibecheck/record/${encodeURIComponent(companionId)}`) as ReflectionRecord;
+  } catch (e) {
+    console.warn(`[reflection] ${companionId}: own-record read failed (prompt falls back to the section only):`, String(e).slice(0, 160));
+    return null;
+  }
+}
+
+/**
+ * Fire a named fermentation stimulus for a companion with a CAUSE label (B63 3.1: no anonymous
+ * moves). Used only for a confirm the companion made in their own reply. Halseth may refuse or
+ * shadow it; both are fine. Returns whether Halseth accepted the call.
+ */
+export async function fireStimulus(companionId: string, stimulus: string, detail: string): Promise<boolean> {
+  try {
+    await hFetch("/mind/ferment/stimulus", "POST", { stimulus, companion_id: companionId, detail: detail.slice(0, 200) });
+    return true;
+  } catch (e) {
+    console.warn(`[reflection] ${companionId}: stimulus ${stimulus} not accepted:`, String(e).slice(0, 160));
+    return false;
+  }
 }
 
 export interface CompanionUtteranceRow {
