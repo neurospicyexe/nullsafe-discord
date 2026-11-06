@@ -2533,6 +2533,9 @@ export async function handleMessage(message: Message, deps: MessageHandlerDeps):
       const msgLower = effectiveContent.toLowerCase();
       if (AUDIT_TRIGGERS.some(t => msgLower.includes(t))) {
         contextPrompt += AUDIT_MODE_INJECTION;
+        // B63: the audit gear engaged is the signal for the (never-wired) `audit` stimulus. Cypher only
+        // (AUDIT_TRIGGERS is undefined for the others); weight, cooldown and mode live server-side.
+        writeQueue.fireAndForget(`soma:audit:${COMPANION_ID}`, () => librarian.fireStimulus("audit", "audit gear engaged"));
       }
     }
 
