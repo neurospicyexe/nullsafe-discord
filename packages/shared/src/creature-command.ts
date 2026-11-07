@@ -23,6 +23,28 @@ export interface SolGrudge {
   progress: number;
   of: number;
   step: "open" | "progress" | "resolve" | "none";
+  /** R29: who the grudge is with (the tender) and what the count counts. Absent on an older Halseth. */
+  actor?: string;
+  unit?: string;
+}
+
+const GRUDGE_ACTOR_NAMES: Record<string, string> = { raziel: "Raziel", cypher: "Cy", drevan: "Dre", gaia: "Gaia", imp: "the imps" };
+
+/** R29: a display name for the actor a grudge is with (raziel -> Raziel, cypher -> Cy, ...; else capitalized). */
+export function grudgeActorName(actor: string): string {
+  const a = String(actor).trim().toLowerCase();
+  if (GRUDGE_ACTOR_NAMES[a]) return GRUDGE_ACTOR_NAMES[a]!;
+  return a ? a.charAt(0).toUpperCase() + a.slice(1) : a;
+}
+
+/** R29: "<label>, with <name> (<p> of <of> <unit>)"; actor and unit render only when present (older Halseth). */
+export function formatGrudgeLine(g: SolGrudge): string {
+  const label = sanitizeSolText(g.label, 80);
+  const who = typeof g.actor === "string" && g.actor.trim() ? sanitizeSolText(grudgeActorName(g.actor), 40) : "";
+  const unit = typeof g.unit === "string" && /^[a-z]{1,12}$/.test(g.unit) ? ` ${g.unit}` : "";
+  const p = Number.isFinite(g.progress) ? Math.floor(g.progress) : 0;
+  const of = Number.isFinite(g.of) ? Math.floor(g.of) : 0;
+  return `*${label}${who ? `, with ${who}` : ""} (${p} of ${of}${unit})*`;
 }
 
 interface CreatureRow {
@@ -84,9 +106,13 @@ export function sanitizeSolText(input: string, max: number): string {
   return s.length > max ? s.slice(0, max).trimEnd() : s;
 }
 
-function cleanReaction(reaction: string): string {
-  const m = /^\*([^]*)\*$/.exec(reaction.trim());
-  const body = sanitizeSolText(m ? m[1]! : reaction, 240);
+/**
+ * One Sol line ready to post anywhere (bot reply, worker webhook): sanitizeSolText on the body, with an
+ * outer *italic* wrapper kept (sanitizeSolText alone would strip its asterisks). Empty when nothing is left.
+ */
+export function cleanSolLine(reaction: string, max = 240): string {
+  const m = /^\*([^]*)\*$/.exec(String(reaction).trim());
+  const body = sanitizeSolText(m ? m[1]! : reaction, max);
   if (!body) return "";
   return m ? `*${body}*` : body;
 }
@@ -105,12 +131,11 @@ export function formatPetReply(
   const base = `${verb} ${creatureName}${trustNote}`;
   // Sol's answer to the care (Halseth sol-care.ts, 2026-11-02): his body, one line,
   // addressed to whoever tended ("you"). Milestones still follow verbatim.
-  // B64: an open or progressing grudge shows as one line; on resolve the make-up reaction
-  // already carries it, and an older Halseth sends no grudge at all.
-  const grudgeLine = grudge && (grudge.step === "open" || grudge.step === "progress")
-    ? [`*${sanitizeSolText(grudge.label, 80)}: ${grudge.progress} of ${grudge.of}*`]
-    : [];
-  return [base, ...(reaction ? [cleanReaction(reaction)].filter(Boolean) : []), ...grudgeLine, ...milestones.map(m => m.text)].join("\n");
+  // B64/R29: a grudge still open after this tend (opened, progressed, or untouched: step "none")
+  // shows as one line naming who it is with; on resolve the make-up reaction already carries it,
+  // and an older Halseth sends no grudge at all.
+  const grudgeLine = grudge && grudge.step !== "resolve" ? [formatGrudgeLine(grudge)] : [];
+  return [base, ...(reaction ? [cleanSolLine(reaction)].filter(Boolean) : []), ...grudgeLine, ...milestones.map(m => m.text)].join("\n");
 }
 
 /** Pure formatter for the nest view. */

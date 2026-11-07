@@ -30,7 +30,8 @@ export async function postSolMoment(webhookUrl: string, text: string, retryDelay
       const r = await fetch(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
+        // R27: a webhook post resolves @everyone/@here/role/user mentions unless told not to.
+        body: JSON.stringify({ content: text, allowed_mentions: { parse: [] } }),
         signal: AbortSignal.timeout(10_000),
       });
       if (r.status === 204) return true;

@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { shouldSolAppear, APPEAR_CHANCE } from "../sol-presence.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { shouldSolAppear, APPEAR_CHANCE, postSolMoment } from "../sol-presence.js";
 
 describe("shouldSolAppear", () => {
   it("absent never appears", () => {
@@ -23,5 +23,15 @@ describe("shouldSolAppear", () => {
   it("watchful appears on roll below threshold", () => {
     expect(shouldSolAppear("watchful", 0.1)).toBe(true);
     expect(shouldSolAppear("watchful", 0.99)).toBe(false);
+  });
+});
+
+describe("postSolMoment (R27)", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it("sends allowed_mentions with an empty parse list, so no mention in a Sol line can ping", async () => {
+    const bodies: any[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); });
+    expect(await postSolMoment("https://discord.com/api/webhooks/1/x", "*Sol.*")).toBe(true);
+    expect(bodies).toEqual([{ content: "*Sol.*", allowed_mentions: { parse: [] } }]);
   });
 });

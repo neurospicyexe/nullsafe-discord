@@ -1450,6 +1450,29 @@ export async function tickCreatures(): Promise<{ ok: boolean; ticked: number; to
   return await hFetch("/mind/creatures/tick", "POST", {}) as { ok: boolean; ticked: number; total: number };
 }
 
+/** Halseth's SleepResult (B64): whether Sol's night ran, why, and the six counts. Never text. */
+export interface SolSleepResult {
+  ran: boolean; reason: string;
+  created: number; reinforced: number; decayed: number; promoted: number; softened: number; retired: number;
+}
+
+// B64 sleep pass (R25): its own route, called after the daily tick. A night is one model call that can take
+// tens of seconds, so this uses a 90s timeout instead of hFetch's 15s (Halseth's model budget is 75s, under it).
+export async function sleepCreature(creatureId: string): Promise<SolSleepResult> {
+  const path = `/mind/creatures/${encodeURIComponent(creatureId)}/sleep`;
+  const res = await fetch(`${HALSETH_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${HALSETH_SECRET}` },
+    body: "{}",
+    signal: AbortSignal.timeout(90_000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Halseth POST ${path} → ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return await res.json() as SolSleepResult;
+}
+
 // ── Council (0080, take 8) ────────────────────────────────────────────────────
 
 export async function getNextCouncilQuestion(): Promise<{ id: string; question: string; asked_by: string } | null> {

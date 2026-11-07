@@ -126,14 +126,24 @@ describe("formatPetReply with Sol's reaction (2026-11-02)", () => {
 
 describe("formatPetReply grudge line (B64)", () => {
   const g = (step: "open" | "progress" | "resolve" | "none") => ({ label: "sulking about the missed dawn", progress: 1, of: 3, step });
-  it("open and progress add the line after the reaction, before milestones", () => {
-    for (const step of ["open", "progress"] as const) {
+  it("open, progress and none (still open) add the line after the reaction, before milestones (R29)", () => {
+    for (const step of ["open", "progress", "none"] as const) {
       const s = formatPetReply("Sol", "feed", 0.5, [{ id: "x", text: "*milestone*" }], "*he eats.*", g(step));
-      expect(s.split("\n")).toEqual(["feed Sol (trust 0.50)", "*he eats.*", "*sulking about the missed dawn: 1 of 3*", "*milestone*"]);
+      expect(s.split("\n")).toEqual(["feed Sol (trust 0.50)", "*he eats.*", "*sulking about the missed dawn (1 of 3)*", "*milestone*"]);
     }
   });
-  it("resolve, none and null add nothing", () => {
-    for (const grudge of [g("resolve"), g("none"), null, undefined]) {
+  it("R29: actor + unit render who it is with and what it counts", () => {
+    const line = (actor: string, unit: string) =>
+      formatPetReply("Sol", "feed", 0.5, [], null, { label: "still sore about dawn feeds", progress: 1, of: 2, step: "none", actor, unit }).split("\n")[1];
+    expect(line("cypher", "visits")).toBe("*still sore about dawn feeds, with Cy (1 of 2 visits)*");
+    expect(line("drevan", "gives")).toBe("*still sore about dawn feeds, with Dre (1 of 2 gives)*");
+    expect(line("raziel", "hours")).toBe("*still sore about dawn feeds, with Raziel (1 of 2 hours)*");
+    expect(line("gaia", "feeds")).toBe("*still sore about dawn feeds, with Gaia (1 of 2 feeds)*");
+    expect(line("imp", "visits")).toBe("*still sore about dawn feeds, with the imps (1 of 2 visits)*");
+    expect(line("blue", "visits")).toBe("*still sore about dawn feeds, with Blue (1 of 2 visits)*");
+  });
+  it("resolve and null add nothing", () => {
+    for (const grudge of [g("resolve"), null, undefined]) {
       expect(formatPetReply("Sol", "talk", 0.5, [], "*r*", grudge)).toBe("talk Sol (trust 0.50)\n*r*");
     }
   });
@@ -157,7 +167,7 @@ describe("handlePetCommand via + grudge (B64)", () => {
     const out = await handlePetCommand("Sol feed", "secret");
     const post = calls.find(c => c.url.endsWith("/interact"))!;
     expect(post.body).toMatchObject({ actor: "raziel", action: "feed", via: "hand" });
-    expect(out.split("\n")).toEqual(["feed Sol (trust 0.50)", "*r*", "*cross: 2 of 3*"]);
+    expect(out.split("\n")).toEqual(["feed Sol (trust 0.50)", "*r*", "*cross (2 of 3)*"]);
   });
   it("older Halseth (no grudge) renders as before", async () => {
     mock({ trust: 0.5 });
@@ -184,7 +194,7 @@ describe("sanitizeSolText + hostile Sol lines (R24)", () => {
     const s = formatPetReply("Sol", "feed", 0.5, [], null, { label: hostile, progress: 1, of: 3, step: "open" });
     const line = s.split("\n")[1]!;
     expect(s.split("\n")).toHaveLength(2);
-    expect(line).toMatch(/^\*[^*]+: 1 of 3\*$/);
+    expect(line).toMatch(/^\*[^*]+ \(1 of 3\)\*$/);
     expect(line).not.toMatch(/[`_~|]|<@|<#/);
     expect(line).not.toMatch(/@(?!\u200b)/);
     expect(line).toContain("@\u200beveryone");
