@@ -166,12 +166,14 @@ describe("handlePetCommand via + grudge (B64)", () => {
 });
 
 describe("LibrarianClient.interactCreature via (B64)", () => {
-  it("a companion's metronome tend goes as hand", async () => {
+  it("a metronome tend defaults to autonomous; a caller may pass via", async () => {
     const { LibrarianClient } = await import("../librarian.js");
     const bodies: any[] = [];
     const fetchFn = async (_u: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response("{}"); };
     const c = new LibrarianClient({ url: "https://h", secret: "s", companionId: "cypher", fetch: fetchFn as never });
     await c.interactCreature("c1", "cypher", "feed");
-    expect(bodies[0]).toEqual({ actor: "cypher", action: "feed", via: "hand" });
+    expect(bodies[0]).toEqual({ actor: "cypher", action: "feed", via: "autonomous" });
+    await c.interactCreature("c1", "cypher", "feed", "hand");
+    expect(bodies[1].via).toBe("hand");
   });
 });

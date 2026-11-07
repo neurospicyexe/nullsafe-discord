@@ -2347,7 +2347,7 @@ export class LibrarianClient {
    * actor should be the companion id (e.g. "cypher"). action is one of feed/play/talk/give.
    * Throws on non-2xx response (caller should .catch(() => {})).
    */
-  async interactCreature(id: string, actor: string, action: string): Promise<void> {
+  async interactCreature(id: string, actor: string, action: string, via: "hand" | "errand" | "imp" | "autonomous" | "appear" | "backfill" = "autonomous"): Promise<void> {
     const res = await this._fetch(
       `${this.url}/mind/creatures/${encodeURIComponent(id)}/interact`,
       {
@@ -2356,7 +2356,7 @@ export class LibrarianClient {
           "Authorization": `Bearer ${this.secret}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ actor, action, via: "hand" }),
+        body: JSON.stringify({ actor, action, via }),
         signal: AbortSignal.timeout(15_000),
       },
     );
