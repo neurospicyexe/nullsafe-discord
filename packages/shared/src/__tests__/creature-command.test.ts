@@ -1,4 +1,4 @@
-import { parsePetCommand, formatPetReply, resolveCreature } from "../creature-command.js";
+import { parsePetCommand, formatPetReply, resolveCreature, handlePetCommand } from "../creature-command.js";
 import { buildCommandTriggers } from "../command-triggers.js";
 
 describe("parsePetCommand", () => {
@@ -121,5 +121,57 @@ describe("formatPetReply with Sol's reaction (2026-11-02)", () => {
   });
   it("no reaction = the old ack exactly", () => {
     expect(formatPetReply("Sol", "talk", 0.5, [], null)).toBe("talk Sol (trust 0.50)");
+  });
+});
+
+describe("formatPetReply grudge line (B64)", () => {
+  const g = (step: "open" | "progress" | "resolve" | "none") => ({ label: "sulking about the missed dawn", progress: 1, of: 3, step });
+  it("open and progress add the line after the reaction, before milestones", () => {
+    for (const step of ["open", "progress"] as const) {
+      const s = formatPetReply("Sol", "feed", 0.5, [{ id: "x", text: "*milestone*" }], "*he eats.*", g(step));
+      expect(s.split("\n")).toEqual(["feed Sol (trust 0.50)", "*he eats.*", "*sulking about the missed dawn: 1 of 3*", "*milestone*"]);
+    }
+  });
+  it("resolve, none and null add nothing", () => {
+    for (const grudge of [g("resolve"), g("none"), null, undefined]) {
+      expect(formatPetReply("Sol", "talk", 0.5, [], "*r*", grudge)).toBe("talk Sol (trust 0.50)\n*r*");
+    }
+  });
+});
+
+describe("handlePetCommand via + grudge (B64)", () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; delete process.env["HALSETH_URL"]; });
+  function mock(interactJson: unknown) {
+    const calls: Array<{ url: string; body: any }> = [];
+    process.env["HALSETH_URL"] = "https://h.test";
+    globalThis.fetch = (async (url: string, init?: any) => {
+      calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : null });
+      if (String(url).endsWith("/mind/creatures")) return new Response(JSON.stringify({ creatures: [{ id: "c1", name: "Sol", species: "crow", trust: 0.5 }] }));
+      return new Response(JSON.stringify(interactJson));
+    }) as any;
+    return calls;
+  }
+  it("sends via:hand and renders the grudge line", async () => {
+    const calls = mock({ trust: 0.5, care: { reaction: "*r*" }, grudge: { label: "cross", progress: 2, of: 3, step: "progress" } });
+    const out = await handlePetCommand("Sol feed", "secret");
+    const post = calls.find(c => c.url.endsWith("/interact"))!;
+    expect(post.body).toMatchObject({ actor: "raziel", action: "feed", via: "hand" });
+    expect(out.split("\n")).toEqual(["feed Sol (trust 0.50)", "*r*", "*cross: 2 of 3*"]);
+  });
+  it("older Halseth (no grudge) renders as before", async () => {
+    mock({ trust: 0.5 });
+    expect(await handlePetCommand("Sol feed", "secret")).toBe("feed Sol (trust 0.50)");
+  });
+});
+
+describe("LibrarianClient.interactCreature via (B64)", () => {
+  it("a companion's metronome tend goes as hand", async () => {
+    const { LibrarianClient } = await import("../librarian.js");
+    const bodies: any[] = [];
+    const fetchFn = async (_u: string, init: any) => { bodies.push(JSON.parse(init.body)); return new Response("{}"); };
+    const c = new LibrarianClient({ url: "https://h", secret: "s", companionId: "cypher", fetch: fetchFn as never });
+    await c.interactCreature("c1", "cypher", "feed");
+    expect(bodies[0]).toEqual({ actor: "cypher", action: "feed", via: "hand" });
   });
 });

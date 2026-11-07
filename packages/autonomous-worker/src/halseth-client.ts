@@ -1503,6 +1503,7 @@ export async function tendCreatureAs(
     actor,
     action,
     note,
+    via: "autonomous",
   }) as { milestones_fired?: Array<{ id: string; text: string }>; care?: { fit?: string; reaction_named?: string } | null };
   // Sol's answer to the tend (Halseth sol-care.ts, 2026-11-02), rendered with the tender's
   // NAME for the room. Absent on an older Halseth: no reaction, no harm.
@@ -1542,6 +1543,7 @@ export async function recordSolAppearance(creatureId: string, note: string): Pro
     actor: "sol",
     action: "appear",
     note,
+    via: "appear",
   });
 }
 

@@ -2356,7 +2356,7 @@ export class LibrarianClient {
           "Authorization": `Bearer ${this.secret}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ actor, action }),
+        body: JSON.stringify({ actor, action, via: "hand" }),
         signal: AbortSignal.timeout(15_000),
       },
     );

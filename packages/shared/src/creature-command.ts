@@ -17,6 +17,14 @@ const NEST_KEYWORD = "nest";
 // fired because nobody appends a second verb), default a bare name to a gentle affection act.
 const DEFAULT_PET_ACTION: Action = "play";
 
+/** B64: the grudge a tend response may carry (Halseth sol mind). */
+export interface SolGrudge {
+  label: string;
+  progress: number;
+  of: number;
+  step: "open" | "progress" | "resolve" | "none";
+}
+
 interface CreatureRow {
   id: string;
   name: string;
@@ -65,13 +73,19 @@ export function formatPetReply(
   trust: number | null,
   milestones: Array<{ id: string; text: string }> = [],
   reaction: string | null = null,
+  grudge: SolGrudge | null = null,
 ): string {
   const verb = action === "give" ? "gave something to" : action;
   const trustNote = typeof trust === "number" ? ` (trust ${trust.toFixed(2)})` : "";
   const base = `${verb} ${creatureName}${trustNote}`;
   // Sol's answer to the care (Halseth sol-care.ts, 2026-11-02): his body, one line,
   // addressed to whoever tended ("you"). Milestones still follow verbatim.
-  return [base, ...(reaction ? [reaction] : []), ...milestones.map(m => m.text)].join("\n");
+  // B64: an open or progressing grudge shows as one line; on resolve the make-up reaction
+  // already carries it, and an older Halseth sends no grudge at all.
+  const grudgeLine = grudge && (grudge.step === "open" || grudge.step === "progress")
+    ? [`*${grudge.label}: ${grudge.progress} of ${grudge.of}*`]
+    : [];
+  return [base, ...(reaction ? [reaction] : []), ...grudgeLine, ...milestones.map(m => m.text)].join("\n");
 }
 
 /** Pure formatter for the nest view. */
@@ -147,12 +161,13 @@ export async function handlePetCommand(arg: string, halsethSecret: string, actor
   const res = await fetch(`${env.base}/mind/creatures/${encodeURIComponent(resolved.creature.id)}/interact`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${env.secret}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ actor, action: parsed.action, note: parsed.note }),
+    body: JSON.stringify({ actor, action: parsed.action, note: parsed.note, via: "hand" }),
     signal: AbortSignal.timeout(15_000),
   });
   const json = await res.json().catch(() => ({})) as {
     trust?: number; error?: string; milestones_fired?: Array<{ id: string; text: string }>;
     care?: { reaction?: string } | null;
+    grudge?: SolGrudge | null;
   };
   if (!res.ok) return `couldn't ${parsed.action} ${resolved.creature.name}: ${String(json.error ?? `halseth ${res.status}`)}`;
   return formatPetReply(
@@ -161,5 +176,6 @@ export async function handlePetCommand(arg: string, halsethSecret: string, actor
     typeof json.trust === "number" ? json.trust : null,
     Array.isArray(json.milestones_fired) ? json.milestones_fired : [],
     typeof json.care?.reaction === "string" ? json.care.reaction : null,
+    json.grudge && typeof json.grudge.label === "string" ? json.grudge : null,
   );
 }
