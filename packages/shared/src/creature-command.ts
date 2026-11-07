@@ -66,6 +66,31 @@ export function parsePetCommand(
   return { name, action, note };
 }
 
+/**
+ * Sol's lines are model-written and go out through channel.send with no allowedMentions, so
+ * they are cleaned here (R24): no markdown that breaks the italic wrapper, no mention that
+ * can resolve, no newlines, bounded length.
+ */
+export function sanitizeSolText(input: string, max: number): string {
+  const s = String(input)
+    .replace(/<(?:@[!&]?|#)\d*>/g, "")
+    .replace(/<(?:@[!&]?|#)[^>\s]*>/g, "")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[*_`~|]/g, "")
+    .replace(/^\s*>+\s*/, "")
+    .replace(/@/g, "@\u200b")
+    .replace(/\s+/g, " ")
+    .trim();
+  return s.length > max ? s.slice(0, max).trimEnd() : s;
+}
+
+function cleanReaction(reaction: string): string {
+  const m = /^\*([^]*)\*$/.exec(reaction.trim());
+  const body = sanitizeSolText(m ? m[1]! : reaction, 240);
+  if (!body) return "";
+  return m ? `*${body}*` : body;
+}
+
 /** Pure deterministic ack for a completed interaction. Milestones append verbatim -- they fire once ever. */
 export function formatPetReply(
   creatureName: string,
@@ -83,9 +108,9 @@ export function formatPetReply(
   // B64: an open or progressing grudge shows as one line; on resolve the make-up reaction
   // already carries it, and an older Halseth sends no grudge at all.
   const grudgeLine = grudge && (grudge.step === "open" || grudge.step === "progress")
-    ? [`*${grudge.label}: ${grudge.progress} of ${grudge.of}*`]
+    ? [`*${sanitizeSolText(grudge.label, 80)}: ${grudge.progress} of ${grudge.of}*`]
     : [];
-  return [base, ...(reaction ? [reaction] : []), ...grudgeLine, ...milestones.map(m => m.text)].join("\n");
+  return [base, ...(reaction ? [cleanReaction(reaction)].filter(Boolean) : []), ...grudgeLine, ...milestones.map(m => m.text)].join("\n");
 }
 
 /** Pure formatter for the nest view. */

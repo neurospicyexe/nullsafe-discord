@@ -1,4 +1,4 @@
-import { parsePetCommand, formatPetReply, resolveCreature, handlePetCommand } from "../creature-command.js";
+import { parsePetCommand, formatPetReply, resolveCreature, handlePetCommand, sanitizeSolText } from "../creature-command.js";
 import { buildCommandTriggers } from "../command-triggers.js";
 
 describe("parsePetCommand", () => {
@@ -175,5 +175,32 @@ describe("LibrarianClient.interactCreature via (B64)", () => {
     expect(bodies[0]).toEqual({ actor: "cypher", action: "feed", via: "autonomous" });
     await c.interactCreature("c1", "cypher", "feed", "hand");
     expect(bodies[1].via).toBe("hand");
+  });
+});
+
+describe("sanitizeSolText + hostile Sol lines (R24)", () => {
+  const hostile = "sulk*ing* `x` @everyone <@123> <@&9> <#5>\nsecond_line ~~z~~ | @here";
+  it("a hostile grudge label cannot break the wrapper or ping", () => {
+    const s = formatPetReply("Sol", "feed", 0.5, [], null, { label: hostile, progress: 1, of: 3, step: "open" });
+    const line = s.split("\n")[1]!;
+    expect(s.split("\n")).toHaveLength(2);
+    expect(line).toMatch(/^\*[^*]+: 1 of 3\*$/);
+    expect(line).not.toMatch(/[`_~|]|<@|<#/);
+    expect(line).not.toMatch(/@(?!\u200b)/);
+    expect(line).toContain("@\u200beveryone");
+  });
+  it("label is capped at 80 chars", () => {
+    expect(sanitizeSolText("a".repeat(500), 80)).toHaveLength(80);
+  });
+  it("a hostile reaction is cleaned and keeps its single italic wrap", () => {
+    const s = formatPetReply("Sol", "feed", 0.5, [], "*he eats **loud** @everyone <@123>\nnow*");
+    expect(s.split("\n")).toHaveLength(2);
+    expect(s.split("\n")[1]).toBe("*he eats loud @\u200beveryone now*");
+  });
+  it("an unwrapped hostile reaction stays unwrapped and is cleaned", () => {
+    expect(formatPetReply("Sol", "talk", null, [], "hi `x` @here").split("\n")[1]).toBe("hi x @\u200bhere");
+  });
+  it("an ordinary reaction is byte-identical", () => {
+    expect(formatPetReply("Sol", "feed", 0.84, [], "*Sol eats beside you.*")).toBe("feed Sol (trust 0.84)\n*Sol eats beside you.*");
   });
 });
